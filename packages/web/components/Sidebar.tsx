@@ -1,7 +1,7 @@
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useMemo, useCallback, useRef, memo } from "react";
+import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { AvatarImg } from "../lib/avatarCache";
@@ -22,7 +22,6 @@ import { useThreadUnread } from "../hooks/useThreadsSync";
 import { ChannelContextMenu } from "./chat/ChannelMenu";
 import { useChannelMenu } from "../hooks/useChannelMenu";
 import { channelDisplayName, chatViewRoomKey, dmCounterpart, memberName, suggestedDmMembers } from "../lib/chatViews";
-import { OccupancyChip } from "./calls/OccupancyChip";
 import { memberAvatarUrl } from "../lib/liveEntities";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { CommentAvatar } from "./comments/CommentAvatar";
@@ -36,18 +35,32 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { toast } from "sonner";
-import { CreateTaskModal } from "./CreateTaskModal";
-import { CreateDocModal } from "./CreateDocModal";
-import { CreateChannelModal } from "./CreateChannelModal";
-import { NewMessageModal } from "./chat/NewMessageModal";
-import { Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
-import { LiveNowRail } from "./calls/LiveNow";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { requestStagePlacement, startPaneDrag } from "../lib/stage";
+
+const CreateTaskModal = lazy(() =>
+  import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
+);
+const CreateDocModal = lazy(() =>
+  import("./CreateDocModal").then((module) => ({ default: module.CreateDocModal })),
+);
+const CreateChannelModal = lazy(() =>
+  import("./CreateChannelModal").then((module) => ({ default: module.CreateChannelModal })),
+);
+const NewMessageModal = lazy(() =>
+  import("./chat/NewMessageModal").then((module) => ({ default: module.NewMessageModal })),
+);
+const OccupancyChip = lazy(() =>
+  import("./calls/OccupancyChip").then((module) => ({ default: module.OccupancyChip })),
+);
+const LiveNowRail = lazy(() =>
+  import("./calls/LiveNow").then((module) => ({ default: module.LiveNowRail })),
+);
 
 const api = _api as any;
 
@@ -399,7 +412,9 @@ function ChannelSignals({
 }) {
   return (
     <>
-      <OccupancyChip roomKey={chatViewRoomKey(channel, viewer, teamMembers)} className="flex-shrink-0" />
+      <Suspense fallback={null}>
+        <OccupancyChip roomKey={chatViewRoomKey(channel, viewer, teamMembers)} className="flex-shrink-0" />
+      </Suspense>
       {(channel.mentionCount ?? 0) > 0 ? (
         <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-orange text-sol-bg" small />
       ) : (channel.unreadCount ?? 0) > 0 ? (
@@ -1218,7 +1233,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           {/* The huddles running right now, one row each — an occupied room
               is a door you can walk through from here. Renders nothing when
               none is live. */}
-          {callsOn && <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />}
+          {callsOn && (
+            <Suspense fallback={null}>
+              <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />
+            </Suspense>
+          )}
         </div>
 
         {/* What you are working on. Projects leads: it is the container the rest
@@ -1275,6 +1294,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={[]}
+          />
+          <NavSection
+            label="Code"
+            href="/repo"
+            isActive={pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || "")}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            icon={<FolderGit2 className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
           />
           <NavSection
             label="Files"
@@ -1534,25 +1561,27 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           <span>Get Desktop App</span>
         </a>
       )}
-      {createModal === "task" && (
-        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers ?? []} currentUser={currentUser} defaults={createModalDefaults} />
-      )}
-      {createModal === "plan" && (
-        <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
-      )}
-      {createModal === "chat" && chatOn && (
-        <CreateChannelModal
-          onClose={() => closeCreateModal()}
-          // The stub id is what the rail already shows; the tab path follows the
-          // supersede when the server row lands (rekeyId).
-          onCreated={(channelId) => router.push(`/chat/${channelId}`)}
-        />
-      )}
-      {/* "New huddle" is the new-message field with a huddle intent: the
-          same people/rooms search, ending in a ring instead of a room. */}
-      {createModal === "huddle" && callsOn && (
-        <NewMessageModal intent="huddle" onClose={() => closeCreateModal()} />
-      )}
+      <Suspense fallback={null}>
+        {createModal === "task" && (
+          <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers ?? []} currentUser={currentUser} defaults={createModalDefaults} />
+        )}
+        {createModal === "plan" && (
+          <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
+        )}
+        {createModal === "chat" && chatOn && (
+          <CreateChannelModal
+            onClose={() => closeCreateModal()}
+            // The stub id is what the rail already shows; the tab path follows the
+            // supersede when the server row lands (rekeyId).
+            onCreated={(channelId) => router.push(`/chat/${channelId}`)}
+          />
+        )}
+        {/* "New huddle" is the new-message field with a huddle intent: the
+            same people/rooms search, ending in a ring instead of a room. */}
+        {createModal === "huddle" && callsOn && (
+          <NewMessageModal intent="huddle" onClose={() => closeCreateModal()} />
+        )}
+      </Suspense>
     </nav>
   );
 }

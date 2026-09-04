@@ -1,10 +1,12 @@
 "use client";
 
+import { resolvePaletteTarget } from "../lib/paletteTarget";
+
 import { useCallback } from "react";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { usePathname, useRouter } from "next/navigation";
 import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
-import { isInboxSessionView } from "../lib/inboxRouting";
+import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
@@ -47,6 +49,26 @@ export function useGlobalShortcutActions() {
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
   const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
   const openSession = useOpenSession();
+
+  useShortcutAction('palette.toggle', useCallback(() => {
+    const state = useInboxStore.getState();
+    if (state.palette.open) {
+      state.closePalette();
+      return;
+    }
+    const target = resolvePaletteTarget(state, pathname);
+    if (target) { state.openPalette(target); return; }
+    if (isInboxRoute(pathname)) {
+      const focusedId = focusedActionSessionId(state, true);
+      const session = focusedId ? state.sessions[focusedId] ?? state.conversations[focusedId] : null;
+      if (session) {
+        state.openPalette({ targets: [session], targetType: 'session' });
+        return;
+      }
+    }
+    if (pathname === '/tasks' || pathname === '/docs') return false;
+    state.togglePalette();
+  }, [pathname]));
 
   useShortcutAction('session.next', useCallback(() => {
     const store = useInboxStore.getState();

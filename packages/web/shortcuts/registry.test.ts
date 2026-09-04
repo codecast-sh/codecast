@@ -101,7 +101,7 @@ describe("inputGuardBypass", () => {
 // stole Ctrl+M into the background composer and let bare letters approve
 // permissions on the conversation underneath.
 describe("worksInModal is restricted to app-chrome shortcuts", () => {
-  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "zoom.in", "zoom.out", "zoom.reset"];
+  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "palette.toggle", "zoom.in", "zoom.out", "zoom.reset"];
 
   test("only the allowlisted actions fire while a modal is open", () => {
     const flagged = SHORTCUTS.filter((s) => s.worksInModal).map((s) => s.action);

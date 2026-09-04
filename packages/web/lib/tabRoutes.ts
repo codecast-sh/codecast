@@ -50,7 +50,11 @@ const NON_TAB_EXACT = new Set([
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a"];
+// "/r" is the standalone form of every repository page: its own window, guest
+// readable, no shell. The tab shell intercepting one would rewrite that
+// window's URL and paint a blank pane. "/repo" is a different route and stays
+// tab-routable — the rule below matches "/r" and "/r/…" only.
+const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a", "/r"];
 
 // Every single-segment top-level route that lives INSIDE the dashboard (a tab
 // page or a standalone shell page). Public profiles live at the root as a bare
@@ -65,6 +69,8 @@ const IN_SHELL_ROOT_SEGMENTS = new Set([
   "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
   // Standalone shell pages (own <Route>, not in TabContent)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
+  // The repository index (its history, source and commit pages are deeper paths)
+  "repo",
 ]);
 
 export function isNonTabRoute(path: string): boolean {

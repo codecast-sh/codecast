@@ -22,17 +22,13 @@ export function useAccountRecoveryToggles(device: {
   device_id: string;
   auto_switch: boolean;
   auto_continue?: boolean;
-  /** Absent on servers that predate the field — treated as off. */
-  session_tokens?: boolean;
-}): { autoSwitch: RecoveryToggle; autoContinue: RecoveryToggle; sessionTokens: RecoveryToggle } {
+}): { autoSwitch: RecoveryToggle; autoContinue: RecoveryToggle } {
   const setAutoSwitch = useMutation(api.accountSwitch.setAutoSwitchAccounts);
   const setAutoContinue = useMutation(api.accountSwitch.setAutoContinueAccounts);
-  const setSessionTokens = useMutation(api.accountSwitch.setSessionTokens);
   // Local echo while a toggle round-trips (the flags live on the device row,
   // so the query refresh is the source of truth once it lands).
   const [pendingSwitch, setPendingSwitch] = useState<boolean | null>(null);
   const [pendingContinue, setPendingContinue] = useState<boolean | null>(null);
-  const [pendingTokens, setPendingTokens] = useState<boolean | null>(null);
 
   const flip =
     (
@@ -68,15 +64,6 @@ export function useAccountRecoveryToggles(device: {
         on
           ? "Resume at reset on — limit-parked sessions continue when their window resets"
           : "Resume at reset off — limit-parked sessions stay parked until you continue them",
-      ),
-    },
-    sessionTokens: {
-      on: pendingTokens ?? device.session_tokens === true,
-      pending: pendingTokens !== null,
-      set: flip(setSessionTokens, setPendingTokens, (on) =>
-        on
-          ? "Per-session accounts on — codecast will mint a token for the current login (approve it in the browser)"
-          : "Per-session accounts off — new sessions follow the machine's login again",
       ),
     },
   };

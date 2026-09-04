@@ -2,7 +2,7 @@
 // what the talk toggle looks like, so the composer, a hover card and the receiver banner
 // can each dress the same press differently.
 import { useRef } from "react";
-import { Headphones, Mic } from "lucide-react";
+import { Headphones, Mic, type LucideIcon } from "lucide-react";
 import {
   talkToggleProps,
   usePushToTalk,
@@ -25,6 +25,7 @@ export function WalkiePttButton({
   className,
   title,
   size = "md",
+  icon: Icon = Mic,
   ring,
 }: {
   roomKey: string | undefined;
@@ -36,9 +37,10 @@ export function WalkiePttButton({
   className?: string;
   /** Overrides the idle tooltip; a blocked reason always wins over it. */
   title?: string;
-  /** How big the key is: 28px where it is one of several row actions, 40px in
+  /** How big the key is: 24px where it is one of several row actions, 40px in
    *  a composer, 52px where it IS the control — the strip. */
   size?: "sm" | "md" | "lg";
+  icon?: LucideIcon;
   /** Ring lives UNDER the key, never beside it. Present, a right click or a
    *  long press on the key opens one menu whose one item rings these people
    *  and starts a huddle in the same room: a ring is a talk that skips the
@@ -138,7 +140,7 @@ export function WalkiePttButton({
       onPointerCancel={ring ? cancelLongPress : undefined}
     >
       <span className="walkie-key-ring" aria-hidden="true" />
-      <Mic className="walkie-key-glyph" />
+      <Icon className="walkie-key-glyph" aria-hidden="true" />
       {/* Filled once the track has reached the room and a teammate at their desk
           is hearing this as it is spoken; hollow while it is only being kept.
           Both are true states of a working burst, so neither is a warning — the

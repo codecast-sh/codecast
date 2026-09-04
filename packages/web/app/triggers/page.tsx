@@ -16,8 +16,14 @@ import {
   describeTaskCadence,
   taskStateLabel,
   isTaskOverdue,
-  TRIGGER_EVENT_LABELS,
 } from "../../components/triggerCadence";
+// The `--on <event>` vocabulary is shared with the CLI so the two cannot drift.
+import {
+  TRIGGER_EVENT_SHORTHANDS,
+  TRIGGER_EVENT_NAMES,
+  TRIGGER_EVENT_LABELS,
+  triggerEventShorthand,
+} from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { isTriggerFailing, taskDisplayTitle } from "../../components/triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
@@ -88,24 +94,6 @@ function timeAgo(ts?: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-
-// Mirrors the CLI's EVENT_SHORTHANDS so web-created event tasks match `--on <event>`.
-const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> = {
-  pr_comment: { event_type: "pull_request_review_comment", action: "created" },
-  pr_opened: { event_type: "pull_request", action: "opened" },
-  pr_merged: { event_type: "pull_request", action: "closed" },
-  push: { event_type: "push" },
-};
-
-function eventLabel(filter?: { event_type: string; action?: string }): string {
-  if (!filter) return "event";
-  for (const [name, def] of Object.entries(EVENT_SHORTHANDS)) {
-    if (def.event_type === filter.event_type && (def.action ?? undefined) === (filter.action ?? undefined)) {
-      return name;
-    }
-  }
-  return filter.action ? `${filter.event_type}:${filter.action}` : filter.event_type;
-}
 
 function projectName(path?: string): string {
   if (!path) return "";
@@ -293,7 +281,7 @@ function TriggerChip({ task }: { task: any }) {
     );
   }
   if (task.schedule_type === "event") {
-    const ev = eventLabel(task.event_filter);
+    const ev = triggerEventShorthand(task.event_filter) ?? "event";
     return (
       <span className={`${chipCls} bg-sol-yellow/10 text-sol-yellow`}>
         <Zap className="w-3 h-3" />on {TRIGGER_EVENT_LABELS[ev] ?? ev}
@@ -420,23 +408,25 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   // &edit=1 (the detail page's Edit verb) lands with the edit form already open
   // instead of a read-only expanded row.
   const deepLinkEdit = searchParams.get("edit") === "1";
+  const deepLinkDuplicate = searchParams.get("duplicate") === "1";
   const isDeepLinked =
     !!deepLinkRef && (deepLinkRef === task._id || deepLinkRef.toLowerCase() === task.short_id);
   const [expanded, setExpanded] = useState(isDeepLinked);
   const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(
-    isDeepLinked && deepLinkEdit ? "edit" : null,
+    isDeepLinked && deepLinkEdit ? "edit" : isDeepLinked && deepLinkDuplicate ? "duplicate" : null,
   );
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (isDeepLinked) {
       setExpanded(true);
       if (deepLinkEdit) setFormMode("edit");
+      else if (deepLinkDuplicate) setFormMode("duplicate");
       rowRef.current?.scrollIntoView({ block: "center" });
     }
     // Keyed on the param VALUE so each new ?task= target re-fires; a row that
     // stops being the target keeps whatever state the user left it in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deepLinkRef]);
+  }, [deepLinkRef, deepLinkEdit, deepLinkDuplicate]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Verbs are store actions (local-first): the agent_tasks row flips on the
   // draft synchronously and the dispatch side effect runs the real mutation.
@@ -901,12 +891,10 @@ function deriveInitial(t: any | undefined) {
     duration = msToDurationToken(t.interval_ms);
   } else if (t.schedule_type === "event") {
     kind = "on";
-    eventKey =
-      Object.keys(EVENT_SHORTHANDS).find(
-        (k) =>
-          EVENT_SHORTHANDS[k].event_type === t.event_filter?.event_type &&
-          (EVENT_SHORTHANDS[k].action ?? undefined) === (t.event_filter?.action ?? undefined)
-      ) ?? "pr_comment";
+    // A filter nothing names reads back as its raw pair, which is not one of
+    // the options, so fall back to a real key rather than blanking the select.
+    const named = triggerEventShorthand(t.event_filter ?? undefined);
+    eventKey = named && TRIGGER_EVENT_SHORTHANDS[named] ? named : "pr_comment";
   } else if (t.schedule_type === "once" && t.run_at) {
     kind = "in";
     duration = msToDurationToken(Math.max(t.run_at - Date.now(), 60_000));
@@ -984,7 +972,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       };
       if (kind === "on") {
         args.schedule_type = "event";
-        args.event_filter = EVENT_SHORTHANDS[eventKey];
+        args.event_filter = TRIGGER_EVENT_SHORTHANDS[eventKey];
       } else if (kind === "every") {
         args.schedule_type = "recurring";
         args.interval_ms = parsed;
@@ -1080,8 +1068,8 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         )}
         {kind === "on" && (
           <SelectBox variant="bare" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
-            {Object.keys(EVENT_SHORTHANDS).map((k) => (
-              <option key={k} value={k}>{k}</option>
+            {TRIGGER_EVENT_NAMES.map((k) => (
+              <option key={k} value={k}>{TRIGGER_EVENT_LABELS[k] ?? k}</option>
             ))}
           </SelectBox>
         )}

@@ -1,9 +1,16 @@
+import { sessionRepository } from "../lib/repoNavigation";
+import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
+import { BranchCodeLink } from "./repo/RepositoryLinks";
+import { captureException } from "@sentry/react";
+import { RefreshCw as PaletteRestart, Copy as PaletteCopy, Search as PaletteSearch, Eye as PaletteEye, Pin as PalettePin, GitBranch as PaletteBranch, Rows3 as PaletteRows } from "lucide-react";
+import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
+import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
 import Link from "next/link";
 import { dragCarriesPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, lazy, Suspense, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -93,8 +100,10 @@ import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
 import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
 import { ReviewComposerContext } from "./reviewContext";
-import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
+import { useSyncConversationExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../hooks/useSyncExternalEvents";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
@@ -149,7 +158,6 @@ import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill, useAttachCopy } from "./TmuxAttachPill";
 import { SessionDaemonChip } from "./DaemonStatusChip";
 import { SessionFilesButton } from "./SessionFilesButton";
-import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
@@ -159,15 +167,15 @@ import { findEntityInStore } from "../lib/liveEntities";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
 import { usePendingMessageStatus, usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
+import { MarkdownRenderer, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
+import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
-import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
-import { SessionHuddleButton } from "./calls/OccupancyChip";
+import { EntityIdPill, EntityAwareCode, EntityAwareLink, TextWithMentions } from "./EntityIdPill";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { THREAD_STATE_STATUS_META } from "../lib/threadState";
@@ -225,17 +233,25 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
-import { useTeamFeature } from "../lib/teamFeatures";
+import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
-import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
+import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, deviceWakesOnUse, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
+import { defaultSessionMachineId, type SessionMachine } from "../lib/sessionMachines";
+import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
-import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
+import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
+
+const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
+const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));
+const ConversationTerminalSplit = lazy(() => import("./terminal/ConversationTerminal").then((m) => ({ default: m.ConversationTerminalSplit })));
+const SessionHuddleButton = lazy(() => import("./calls/OccupancyChip").then((m) => ({ default: m.SessionHuddleButton })));
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
+import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 import { devRenderCount, devCountElements } from "../lib/devRenderCount";
@@ -1090,14 +1106,20 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     if (!sess) return undefined;
     return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id };
   }));
-  const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
+  const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
+  const cloudMode = useInboxStore((s) => s.cloudSessionMode);
+  // A cloud session always runs in its own worktree — on the HOST. So the
+  // isolated toggle reads as on while cloud mode is, but the flag itself is
+  // never written from here: turning cloud off must not strand the user with an
+  // isolated setting they never chose.
+  const isolated = isolatedToggle || cloudMode;
   const convCommand = useInboxStore((s) => s.convCommand);
 
   // --- machine row --------------------------------------------------------
   // Devices heartbeat every ~30s, so this subscription re-renders the switcher a
   // couple of times a minute — cheap next to the per-second churn the narrowed
   // store selector above avoids, and the row can't be drawn without it.
-  const { devices } = useDevices();
+  const devices = useSessionMachines();
   // listDevices comes back sorted by last_seen, so the row would reshuffle every
   // time a machine heartbeats. Chips hold still instead: locals first, then name.
   const machineChips = useMemo(
@@ -1136,7 +1158,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const existingStamp = storeSession?.target_device_id ?? null;
   const { selectedDeviceId, scopeProjectsToDeviceId } = resolveMachineSelection(devices, {
     ...machineOpts,
-    picked: pickedDeviceId,
+    picked: pickedDeviceId ?? defaultSessionMachineId(devices, machineOpts),
     existingStamp,
   });
 
@@ -1147,7 +1169,12 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // would land on a machine that can't cd into its own project path. (Previously
   // the same list was safe because an unstamped session could be re-routed to
   // whichever machine actually held the checkout.)
-  const scopedDeviceId = scopeProjectsToDeviceId;
+  // Cloud mode is the one case where the folder list must NOT follow the
+  // selected machine: the host has no checkout of its own — it clones whichever
+  // repo you pick — so scoping the list at it would offer an empty row. Null
+  // scoping falls back to the union across your own machines, which is the
+  // honest set of repos a host can be told to fetch.
+  const scopedDeviceId = cloudMode ? null : scopeProjectsToDeviceId;
   // The unscoped query stays mounted regardless — it's the shared subscription
   // that keeps the store's recentProjects cache (which the other pickers read)
   // warm. The scoped one deliberately never feeds that cache.
@@ -1347,14 +1374,17 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     convCommand(convexId, "reconfigureSession", {
       project_path: trimmed,
       git_root: trimmed,
-      isolated: (forceIsolated ?? isolated) || undefined,
+      // A cloud session's worktree is made on the HOST by the daemon that
+      // prepares it. Asking the local daemon for one here would make a second,
+      // unused worktree on this machine and route the session at it.
+      isolated: cloudMode ? undefined : (forceIsolated ?? isolated) || undefined,
       ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
     }).catch((err) => {
       if (isParkedDispatchError(err)) return;
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
-  }, [storeSession, conversation._id, convCommand, currentPath, isolated, scopedDeviceId]);
+  }, [storeSession, conversation._id, convCommand, currentPath, isolated, cloudMode, scopedDeviceId]);
 
   // Picking a machine moves the (still blank) session there right away rather
   // than waiting on a folder pick the user may never make. That reconfigure only
@@ -1362,8 +1392,9 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // surface defers its create, so the stamp below is what usually carries the
   // choice — see createSessionFromStub.
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
-  const handleMachinePick = useCallback((d: Device) => {
+  const handleMachinePick = useCallback((d: SessionMachine) => {
     setPickedDeviceId(d.device_id);
+    if (d.bot_name !== undefined) useInboxStore.getState().setCloudSessionMode(false);
     // Remember the choice: it becomes the picker's default for subsequent NEW
     // sessions, which is what makes "explicit every time" cost one click total
     // rather than one click per session.
@@ -1375,6 +1406,23 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     const remapped = d.local_project_roots?.find((r) => repoName(r) === repoName(currentPath)) ?? currentPath;
     handleSwitch(remapped, undefined, d.device_id);
   }, [currentPath, handleSwitch, updateClientUI]);
+
+  // The cloud host to offer, if the user has one. Only the first: one cloud box
+  // per account is the shape the product has, and choosing among several belongs
+  // in the machine row, which already lists them.
+  const cloudHost = useMemo(() => machineChips.find((d) => d.bot_name === undefined && deviceWakesOnUse(d)) ?? null, [machineChips]);
+
+  // "Run in the cloud" points the machine selection at the host through
+  // pickedDeviceId ONLY — deliberately not handleMachinePick, whose job is to
+  // remember an explicit pick as the standing default for later sessions. A mode
+  // toggle must not repoint every future new session at the cloud box. It also
+  // fires no reconfigure: the host's worktree is made when the daemon places the
+  // row, not by switching a still-local session's folder.
+  const toggleCloudMode = useCallback(() => {
+    const turningOn = !cloudMode;
+    useInboxStore.getState().setCloudSessionMode(turningOn);
+    setPickedDeviceId(turningOn ? (cloudHost?.device_id ?? null) : null);
+  }, [cloudMode, cloudHost]);
 
   // Stamp the selection on the stub row so it rides the deferred create — the
   // machine shown in the row is the machine it runs on, whether or not the user
@@ -1470,7 +1518,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
               } ${d.online ? "" : "opacity-50"}`}
             >
               <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
-              <span className="truncate max-w-[10rem]">{deviceDisplayName(d)}</span>
+              <span className="truncate max-w-[14rem]">{deviceDisplayName(d)}{d.bot_name !== undefined && ` · ${d.bot_name || "agent box"}`}</span>
               <DeviceDot online={d.online} />
             </button>
           );
@@ -1483,7 +1531,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
       >
         <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />
-        <span className="truncate max-w-[10rem]">{deviceDisplayName(routedMachine)}</span>
+        <span className="truncate max-w-[14rem]">{deviceDisplayName(routedMachine)}{routedMachine.bot_name !== undefined && ` · ${routedMachine.bot_name || "agent box"}`}</span>
         <DeviceDot online={routedMachine.online} />
         <ChevronDown className="w-3 h-3 shrink-0 opacity-50 group-hover/machine:opacity-100 transition-opacity" />
       </button>
@@ -1642,20 +1690,37 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
 
         <button
           onClick={() => {
+            if (cloudMode) return;
             const turningOn = !isolated;
             useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
             if (turningOn && currentPath) {
               handleSwitch(currentPath, true);
             }
           }}
-          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
-          title="Create session in an isolated git worktree"
+          disabled={cloudMode}
+          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:cursor-default disabled:hover:text-sol-text-dim"
+          title={cloudMode
+            ? "A cloud session always gets its own worktree, made on the host"
+            : "Create session in an isolated git worktree"}
         >
           <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
             <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
           </span>
           <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
         </button>
+
+        {cloudHost && (
+          <button
+            onClick={toggleCloudMode}
+            className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+            title={`Run this session on ${deviceDisplayName(cloudHost)}, in its own worktree there. The host boots itself when the session starts.`}
+          >
+            <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${cloudMode ? "bg-sol-violet/30" : "bg-sol-bg-alt"}`}>
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${cloudMode ? "left-3.5 bg-sol-violet" : "left-0.5 bg-sol-text-dim"}`} />
+            </span>
+            <span className={cloudMode ? "text-sol-violet" : ""}>run in the cloud</span>
+          </button>
+        )}
 
         {!picking && recentProjects.length > 0 && (
           <button
@@ -2234,6 +2299,10 @@ type ParsedApiError = {
   // died mid-transmission; a plain "continue" resumes it. Rendered as a
   // distinct "connection dropped" card.
   isConnection?: boolean;
+  // True for a burst throttle (the parser's "Rate limited ·" form of a
+  // transient 429) — the per-minute cap rejected the request; codecast
+  // continues it after a short wait. Rendered as a "rate limited" card.
+  isThrottle?: boolean;
   // True for a statusful failure the CLI won't retry (400 invalid request,
   // 404, 413…) — the turn died at the prompt and stays dead until nudged.
   // Rendered as the generic error card, but the footer hint says "send
@@ -2283,9 +2352,10 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const isAuth = bannerKind === "auth";
   const isLimit = bannerKind === "limit";
   const isConnection = bannerKind === "connection";
+  const isThrottle = bannerKind === "throttle";
   const isFatal = bannerKind === "fatal";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !isLimit && !isConnection && !isFatal && !match) return null;
+  if (!isAuth && !isLimit && !isConnection && !isThrottle && !isFatal && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -2343,12 +2413,16 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
       // The card heading already says the error part, so keep just the detail
       // ("Connection closed mid-response. The response above may be incomplete.").
       message = trimmed.replace(/^api error:?\s*/i, "").trim() || "The connection to the provider dropped.";
+    } else if (isThrottle) {
+      // The heading says "rate limited"; keep the explanation and what the pane showed.
+      const detail = trimmed.replace(/^rate limited\s*·\s*/i, "").trim();
+      message = detail ? detail.charAt(0).toUpperCase() + detail.slice(1) : "The provider's per-minute rate limit rejected the request.";
     } else {
       message = statusCode === 500 ? "Internal server error" : "API request failed";
     }
   }
 
-  return { statusCode, message, errorType, requestId, isAuth, isLimit, isConnection, isFatal };
+  return { statusCode: isThrottle ? 429 : statusCode, message, errorType, requestId, isAuth, isLimit, isConnection, isThrottle, isFatal };
 }
 
 // A copyable command chip — the command in a mono pill with a copy affordance, so
@@ -2400,7 +2474,7 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
   const now = useCoarseNow(30_000);
   const resetAt = error.isLimit ? parseLimitResetAt(error.message, timestamp) : undefined;
   const resetPassed = resetAt != null && now >= resetAt;
-  const isServerError = !error.isAuth && !error.isLimit && !error.isConnection && (error.statusCode ?? 0) >= 500;
+  const isServerError = !error.isAuth && !error.isLimit && !error.isConnection && !error.isThrottle && (error.statusCode ?? 0) >= 500;
 
   // Tone: amber (or red for a provider 5xx) while the block is in force;
   // muted once the session moved past it, so a stale banner reads as history.
@@ -2446,6 +2520,22 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
         {resetPassed
           ? <>The limit window reset {formatRelativeTime(resetAt!)} — send a message to pick up where it left off.</>
           : "The session is paused until the limit resets — send a message after that to pick up where it left off."}
+      </p>
+    );
+  } else if (error.isThrottle) {
+    heading = "Rate limited";
+    icon = (
+      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+    hint = (
+      <p className="mt-1.5 text-xs text-sol-text-dim">
+        A burst of requests hit the account&apos;s per-minute cap, not a usage window — codecast continues throttled
+        sessions a few at a time after about a minute. Send{" "}
+        <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
+        to retry now.
       </p>
     );
   } else if (error.isConnection) {
@@ -3060,6 +3150,7 @@ function GrokIcon() {
 }
 
 function AssistantIcon({ agentType }: { agentType?: string }) {
+  if (!agentType) return <Bot className="w-6 h-6 text-sol-text-dim" />;
   if (agentType === "codex") return <CodexIcon />;
   if (agentType === "cursor") return <CursorIcon />;
   if (agentType === "gemini") return <GeminiIcon />;
@@ -3070,6 +3161,7 @@ function AssistantIcon({ agentType }: { agentType?: string }) {
 }
 
 function assistantLabel(agentType?: string): string {
+  if (!agentType) return "Assistant";
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
@@ -6676,7 +6768,7 @@ function CommandMessageBlock({
           <div className={`text-sol-text text-sm break-words ${argsIsMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}>
             {argsIsMarkdown
               ? <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={CMD_MD_COMPONENTS}>{args}</ReactMarkdown>
-              : renderWithMentions(args)}
+              : <TextWithMentions text={args} />}
           </div>
         )}
 
@@ -7987,7 +8079,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           </>
         )}
       </ContextMenu>
-      <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
+      <div data-cc-user-message-toolbar className={`absolute -top-2 right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
         {onStartShareSelection && (
           <button
             onClick={() => onStartShareSelection(messageId)}
@@ -8082,14 +8174,14 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       >
         {(() => {
           const hasTeammate = displayContent.includes('<teammate-message');
-          if (effectivelyCollapsed && !hasTeammate) return <>{renderWithMentions(displayContent)}</>;
+          if (effectivelyCollapsed && !hasTeammate) return <TextWithMentions text={displayContent} />;
           if (effectivelyCollapsed && hasTeammate) {
             const tmParts = parseTeammateMessages(displayContent);
             return (
               <div className="space-y-1">
                 {tmParts.map((part, i) => part.type === 'teammate' ? (
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
-                ) : <span key={i} className="whitespace-pre-wrap">{renderWithMentions(part.content)}</span>)}
+                ) : <span key={i} className="whitespace-pre-wrap"><TextWithMentions text={part.content} /></span>)}
               </div>
             );
           }
@@ -8871,7 +8963,7 @@ function AssistantBlockImpl({
         </button>
       )}
       {(hasContent || visibleThinking || hasToolCalls) && (
-        <div className={`absolute ${toolbarTop} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        <div data-cc-assistant-message-toolbar className={`absolute ${toolbarTop} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
               gutter — see MessageReview. This corner is META only: a plain row
               of icon buttons, distinct icons + tooltips so link vs share read clearly. */}
@@ -8932,12 +9024,11 @@ function AssistantBlockImpl({
 
       {shouldShowHeader && (
         <div className="flex items-center gap-2 mb-2 mt-4">
-          {/* Model rides as a hover tooltip on the agent identity — per-message
-              when the transcript carried it, conversation-level otherwise. */}
           <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
             <AssistantIcon agentType={agentType} />
             <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
           </span>
+          {model && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -9086,7 +9177,7 @@ function AssistantBlockImpl({
           aria-label="Fork from this message"
         >
           <Split className="w-3.5 h-3.5" />
-          <span>Fork here</span>
+          <span>Fork</span>
         </button>
       )}
 
@@ -12101,16 +12192,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               {composeMode ? (
                 <div className="flex flex-col flex-1 min-h-0">
                   <div className="flex-1 min-h-0 overflow-y-auto">
-                    <ComposeEditor
-                      ref={composeRef}
-                      initialContent={message}
-                      onMentionQuery={composeMentionQuery}
-                      onImagePaste={uploadImage}
-                      onSubmit={() => handleFormSubmit({ preventDefault: () => {} } as any)}
-                      onExit={toggleCompose}
-                      onContentChange={setComposeHasContent}
-                      placeholder="Compose your message... / for commands, @ to mention"
-                    />
+                    <Suspense fallback={null}>
+                      <ComposeEditor
+                        ref={composeRef}
+                        initialContent={message}
+                        onMentionQuery={composeMentionQuery}
+                        onImagePaste={uploadImage}
+                        onSubmit={() => handleFormSubmit({ preventDefault: () => {} } as any)}
+                        onExit={toggleCompose}
+                        onContentChange={setComposeHasContent}
+                        placeholder="Compose your message... / for commands, @ to mention"
+                      />
+                    </Suspense>
                   </div>
                   <div className="flex items-center justify-between pt-2 mt-1 border-t border-sol-border/20">
                     <span className="text-[10px] text-sol-text-dim/50 select-none">
@@ -12396,11 +12489,15 @@ function settleTimelineItemAtOffset(
 
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
-// The body is a plain function (not the forwardRef callback itself) so the dev
-// wrapper below can size the element tree each pass returns.
+// The forwardRef render function itself. Never call it as a plain function
+// from another component: its hooks would then run on the caller's fiber, and
+// Fast Refresh signs the caller, whose own hook list never changes, so an edit
+// that adds a hook here keeps the fiber and crashes on the shifted hook slot
+// ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
+  const renderStart = performance.now();
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
@@ -12555,6 +12652,7 @@ const ConversationViewInner = (
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
   const [shareIncludeConversation, setShareIncludeConversation] = useState(false);
   const chatOn = useTeamFeature("chat");
+  const callsAvailable = useCallsAvailable();
   const [isImageLightboxActive, setIsImageLightboxActive] = useState(false);
   const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
   const [stickyExpanded, setStickyExpanded] = useState(false);
@@ -12706,7 +12804,16 @@ const ConversationViewInner = (
   // Pipe this conversation's comment thread into the inbox cache once; the dock
   // and the inline per-message threads all read from the store.
   useConversationCommentsSync(conversation?._id?.toString());
+  // Git activity for this conversation: the feeder subscribes, the store keeps
+  // the rows, and the timeline memo below reads them. Same shape as comments.
+  useSyncConversationExternalEvents(conversation?._id?.toString());
   const effectiveConversationId = conversation?._id;
+  const convIdForEvents = conversation?._id?.toString();
+  const externalEventsWhere = useMemo(
+    () => (convIdForEvents ? (e: ExternalEventRecord) => e.conversation_id === convIdForEvents : () => false),
+    [convIdForEvents],
+  );
+  const conversationExternalEvents = useExternalEvents(externalEventsWhere, externalEventsOldestFirst);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -12863,6 +12970,11 @@ const ConversationViewInner = (
       return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
     });
   }, [messagesFromConv]);
+
+  const messageAuthors = useMemo(
+    () => messageAgentTypes(messages, conversation?.agent_type),
+    [messages, conversation?.agent_type],
+  );
 
   // Most clients redact thinking server-side now — only opencode (and
   // occasionally pi) still send real reasoning text. Only surface the
@@ -13319,7 +13431,8 @@ const ConversationViewInner = (
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
     | { type: 'commit'; data: Commit; timestamp: number }
-    | { type: 'pull_request'; data: PullRequest; timestamp: number };
+    | { type: 'pull_request'; data: PullRequest; timestamp: number }
+    | { type: 'external_event'; data: ExternalEventRecord; timestamp: number };
 
   // Pending messages: read directly so they ALWAYS render, regardless of what
   // setMessages/mergeMessages/buildCompositeTimeline do to the server message arrays.
@@ -13344,6 +13457,7 @@ const ConversationViewInner = (
       messages,
       commits,
       pullRequests,
+      conversationExternalEvents,
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
@@ -13389,7 +13503,7 @@ const ConversationViewInner = (
     }
     if (toAdd.length === 0) return base;
     return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
-  }, [messages, commits, pullRequests, pendingMsgs, serverPending, pendingConvId]);
+  }, [messages, commits, pullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -13592,7 +13706,7 @@ const ConversationViewInner = (
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'command', 'plan', 'session_message', 'chat_wake']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'command', 'plan', 'session_message', 'chat_wake', 'agent_switch']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -13601,6 +13715,7 @@ const ConversationViewInner = (
     const absorbed = new Set<string>();                // msgId folded into an earlier receipt
     let curKey: string | null = null;
     let ownerId: string | null = null;                 // current segment's receipt owner
+    let previousAssistant: Message | null = null;
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
@@ -13620,6 +13735,11 @@ const ConversationViewInner = (
       const tools = msg.tool_calls ?? [];
       const hasVisible = hasText || tools.length > 0 || (!!msg.images?.length);
       if (!hasVisible) continue;
+      if (previousAssistant && !sameMessageAuthor(previousAssistant, msg, messageAuthors)) {
+        curKey = null;
+        ownerId = null;
+      }
+      previousAssistant = msg;
       if (curKey === null) {
         curKey = msg._id;
         firstAssistOf.set(curKey, msg._id);
@@ -13651,7 +13771,7 @@ const ConversationViewInner = (
       }
     }
     return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed };
-  }, [timeline, userMsgKindMap]);
+  }, [timeline, userMsgKindMap, messageAuthors]);
 
   // Pair each slash-command invocation with its expansion (the body of the command's
   // .md file, emitted by Claude Code as the next user message). They render as one
@@ -14153,6 +14273,7 @@ const ConversationViewInner = (
   const rowKeys = useMemo(() => uniqueRowKeys(timeline.map((item) => {
     if (item.type === 'message') return messageRowKey(item.data as Message);
     if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+    if (item.type === 'external_event') return `event-${(item.data as any)._id}`;
     return `pr-${(item.data as any)._id}`;
   })), [timeline]);
   const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
@@ -14184,6 +14305,10 @@ const ConversationViewInner = (
     if (cachedHeight !== undefined) return cachedHeight;
 
     if (item.type === 'commit') return 80;
+    // A git event is one line plus its pill row. Everything below this point
+    // reads item.data as a Message, so a non-message type must return here.
+    if (item.type === 'external_event') return 44;
+    if (item.type === 'pull_request') return 120;
 
     const msg = item.data as Message;
     // Compact: a collapsed turn is one card on the first assistant message; the
@@ -15449,6 +15574,33 @@ const ConversationViewInner = (
     notify: restartNotify,
   });
 
+  const togglePublicProfilePin = () => {
+    if (!conversation || !isOwner) return;
+    const pinned = !!conversation.profile_pinned_at;
+    void (pinned ? unpinFromProfile({ conversation_id: conversation._id as any }) : pinToProfile({ conversation_id: conversation._id as any }))
+      .then(() => toast.success(pinned ? "Removed from your public profile" : "Pinned — this session is now public on your profile"))
+      .catch((error) => { captureException(error); toast.error(error instanceof Error ? error.message : "Failed to update profile pin"); });
+  };
+
+  const codeRouter = useRouter();
+  const codeRepository = conversation ? sessionRepository(conversation) : null;
+  usePaletteSessionCommands(conversation?._id, [
+    { key: "view_restart", label: "Restart session", icon: PaletteRestart, available: !!isOwner && !!conversation?.session_id, run: handleRestartSession },
+    { key: "view_profile_pin", label: conversation?.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile", icon: PalettePin, available: !!isOwner, run: togglePublicProfilePin },
+    { key: "view_copy_all", label: "Copy all messages", icon: PaletteCopy, run: handleCopyAll },
+    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("claude"); } },
+    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("codex"); } },
+    { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
+    { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
+    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, available: hasAnyThinking, run: () => setShowThinking(s => !s) },
+    { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
+    { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
+    { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
+    { key: "view_diff", label: diffExpanded ? "Hide git diff" : "Show git diff", icon: PaletteBranch, available: !!conversation?.git_branch, run: () => setDiffExpanded(s => !s) },
+    { key: "view_branches", label: "Branch map", icon: PaletteBranch, available: !!isOwner, run: toggleMap },
+    { key: "view_density", label: "Cycle message density", icon: PaletteRows, run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
+  ]);
+
   useWatchEffect(() => {
     // A detached tab window's OS title is owned by DashboardLayout
     // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
@@ -15704,11 +15856,11 @@ const ConversationViewInner = (
   // they were derived from, and reuse the previous array when its contents
   // did not change (a new timeline array from an unrelated append must not
   // hand every row a fresh runMessageIds).
-  const assistantRowCacheRef = useRef(new WeakMap<Message, { timeline: TimelineItem[]; showThinking: boolean; isFirstInSequence: boolean; runMessageIds: string[] }>());
+  const assistantRowCacheRef = useRef(new WeakMap<Message, { timeline: TimelineItem[]; messageAuthors: typeof messageAuthors; showThinking: boolean; isFirstInSequence: boolean; runMessageIds: string[] }>());
   const assistantRowDerived = (msg: Message, index: number) => {
     const cache = assistantRowCacheRef.current;
     const hit = cache.get(msg);
-    if (hit && hit.timeline === timeline && hit.showThinking === showThinking) return hit;
+    if (hit && hit.timeline === timeline && hit.messageAuthors === messageAuthors && hit.showThinking === showThinking) return hit;
     // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
     // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
     let prevIdx = index - 1;
@@ -15727,7 +15879,7 @@ const ConversationViewInner = (
     }
     const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
     const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
-    const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
+    const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant" || !sameMessageAuthor(prevMsg, msg, messageAuthors);
     // Compute all message IDs in the current run (for sharing)
     let runMessageIds: string[] = [];
     for (let i = index; i >= 0; i--) {
@@ -15747,7 +15899,7 @@ const ConversationViewInner = (
       if (checkMsg.role === "assistant") runMessageIds.push(checkMsg._id);
     }
     if (hit && sameStringArray(hit.runMessageIds, runMessageIds)) runMessageIds = hit.runMessageIds;
-    const entry = { timeline, showThinking, isFirstInSequence, runMessageIds };
+    const entry = { timeline, messageAuthors, showThinking, isFirstInSequence, runMessageIds };
     cache.set(msg, entry);
     return entry;
   };
@@ -15831,6 +15983,19 @@ const ConversationViewInner = (
           updated_at={pr.updated_at}
           merged_at={pr.merged_at}
         />
+      );
+    }
+
+    if (item.type === 'external_event') {
+      const row = item.data as ExternalEventRecord;
+      return (
+        <div key={row._id} className="mx-auto conv-col px-2 sm:px-4 py-0.5">
+          <ExternalEventRow
+            event={externalEventRowToExternalEvent(row)}
+            density="transcript"
+            omitRefs={["session_id"]}
+          />
+        </div>
       );
     }
 
@@ -15999,7 +16164,7 @@ const ConversationViewInner = (
           isSelectedForShare={selectedMessageIds.has(msg._id)}
           onToggleShareSelection={handleToggleMessageSelection}
           onStartShareSelection={handleStartShareSelection}
-          agentType={conversation?.agent_type}
+          agentType={messageAuthors.get(msg._id)}
           taskSubjectMap={taskSubjectMap}
           taskRecordMap={taskRecordMap}
           onForkFromMessage={forkHandler}
@@ -16009,7 +16174,7 @@ const ConversationViewInner = (
           loadingBranchId={loadingBranchId}
           mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined}
           mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined}
-          model={msg.model ?? conversation?.model}
+          model={msg.model}
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
@@ -16088,7 +16253,7 @@ const ConversationViewInner = (
     </div>
   ) : null;
 
-  return (
+  const el = (
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
@@ -16305,27 +16470,7 @@ const ConversationViewInner = (
                   );
                 })()}
 
-                {conversation.git_branch && (
-                  <span
-                    data-simple-hide
-                    className="cq-header-collapse hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
-                    title={conversation.git_branch}
-                    onClick={() => {
-                      if (conversation.git_remote_url) {
-                        const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
-                        if (match) {
-                          window.open(`https://github.com/${match[1]}/tree/${conversation.git_branch}`, '_blank');
-                        }
-                      }
-                    }}
-                    style={conversation.git_remote_url ? { cursor: 'pointer' } : undefined}
-                  >
-                    <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                    </svg>
-                    <span className="truncate">{conversation.git_branch}</span>
-                  </span>
-                )}
+                <BranchCodeLink session={conversation} />
 
                 {/* Simple view keeps the assignment pill but drops the names —
                     device icon + dot + avatar still say where it runs and whose
@@ -16357,8 +16502,10 @@ const ConversationViewInner = (
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
                     unconfigured — SessionHuddleButton gates itself). */}
-                {conversation._id && !guest && (
-                  <SessionHuddleButton conversationId={String(conversation._id)} />
+                {conversation._id && !guest && callsAvailable && (
+                  <Suspense fallback={null}>
+                    <SessionHuddleButton conversationId={String(conversation._id)} />
+                  </Suspense>
                 )}
 
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
@@ -16595,22 +16742,7 @@ const ConversationViewInner = (
                       </DropdownMenuItem>
                     )}
                     {isOwner && (
-                      <DropdownMenuItem onSelect={() => {
-                        const pinned = !!conversation.profile_pinned_at;
-                        setTimeout(async () => {
-                          try {
-                            if (pinned) {
-                              await unpinFromProfile({ conversation_id: conversation._id as any });
-                              toast.success("Removed from your public profile");
-                            } else {
-                              await pinToProfile({ conversation_id: conversation._id as any });
-                              toast.success("Pinned — this session is now public on your profile");
-                            }
-                          } catch (e: any) {
-                            toast.error(e?.message?.replace(/^.*Error:\s*/, "") || "Failed to update profile pin");
-                          }
-                        });
-                      }}>
+                      <DropdownMenuItem onSelect={togglePublicProfilePin}>
                         <svg className={`w-3 h-3 mr-1.5 ${conversation.profile_pinned_at ? "text-sol-cyan" : ""}`} fill={conversation.profile_pinned_at ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M16 4v6l3 3v2H5v-2l3-3V4M9 19h6m-3 0v3" />
                         </svg>
@@ -16672,13 +16804,7 @@ const ConversationViewInner = (
                                 <DropdownMenuItem
                                   key={`switch-${t}`}
                                   onClick={() => {
-                                    const id = conversation._id.toString();
-                                    useInboxStore.getState().setConversationAgent(id, t);
-                                    convCommand(id, "switchSessionAgent", { agent_type: t }).catch((err) => {
-                                      if (isParkedDispatchError(err)) return;
-                                      useInboxStore.getState().setConversationAgent(id, conversation.agent_type || "claude_code");
-                                      toast.error(err instanceof Error ? err.message : "Failed to switch agent");
-                                    });
+                                    void switchSessionAgent(conversation as any, t).catch((error) => toast.error(error instanceof Error ? error.message : "Failed to switch agent"));
                                   }}
                                 >
                                   <AgentTypeIcon agentType={t} />
@@ -16700,61 +16826,9 @@ const ConversationViewInner = (
                                 <DropdownMenuItem
                                   key={`fork-${t}`}
                                   onClick={() => {
-                                    const parentId = conversation._id.toString();
-                                    const forkSessionId =
-                                      typeof crypto !== "undefined" && crypto.randomUUID
-                                        ? crypto.randomUUID()
-                                        : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-                                            const r = (Math.random() * 16) | 0;
-                                            return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
-                                          });
-                                    const now = Date.now();
-                                    const store = useInboxStore.getState();
-                                    store.syncRecord("conversations", forkSessionId, {
-                                      _id: forkSessionId,
-                                      session_id: forkSessionId,
-                                      title: conversation.title,
-                                      agent_type: t,
-                                      project_path: conversation.project_path ?? undefined,
-                                      git_root: conversation.git_root ?? undefined,
-                                      started_at: now,
-                                      updated_at: now,
-                                      status: "active",
-                                      message_count: 0,
-                                      forked_from: parentId,
-                                      parent_conversation_id: parentId,
-                                      parent_message_uuid: "agent-switch",
-                                      fork_status: "copying",
-                                      _forkTargetAgentType: t,
-                                    });
-                                    seedForkSession(forkSessionId, {
-                                      session_id: forkSessionId,
-                                      title: conversation.title,
-                                      started_at: now,
-                                      agent_type: t,
-                                      forked_from: parentId,
-                                      parent_conversation_id: parentId,
-                                      parent_message_uuid: "agent-switch",
-                                      _forkTargetAgentType: t,
-                                    } as any);
-                                    moveDraft(parentId, forkSessionId);
-
-                                    const ready = convCommand(parentId, "forkFromMessage", {
-                                      target_agent_type: t,
-                                      session_id: forkSessionId,
-                                    }).then((result) => {
-                                      resolveForkSessionId(forkSessionId, result.conversation_id);
-                                      return result.conversation_id as string;
-                                    });
-                                    store.trackSessionCreate(forkSessionId, ready);
-                                    ready.catch((err) => {
-                                      if (isParkedDispatchError(err)) return;
-                                      // Ordinary failures never consume the original
-                                      // draft or strand a navigated local fork.
-                                      useInboxStore.getState().moveDraft(forkSessionId, parentId);
-                                      useInboxStore.getState().discardForkStub(forkSessionId, parentId);
-                                      toast.error(err instanceof Error ? err.message : "Failed to fork");
-                                    });
+                                    const fork = forkSessionAsAgent(conversation as any, t);
+                                    useInboxStore.getState().requestNavigate(fork.sessionId);
+                                    void fork.ready.catch((error) => toast.error(error instanceof Error ? error.message : "Failed to fork session"));
                                   }}
                                 >
                                   <AgentTypeIcon agentType={t} />
@@ -16851,7 +16925,9 @@ const ConversationViewInner = (
             drag. */}
         {conversation && (
           <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
-            <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+            <Suspense fallback={null}>
+              <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+            </Suspense>
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} />
           </ErrorBoundary>
         )}
@@ -17057,7 +17133,7 @@ const ConversationViewInner = (
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
-              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : `pr-${(item.data as any)._id}`;
+              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
               const isBelowForkSelection = forkSelectionIdx !== null && virtualItem.index > forkSelectionIdx;
@@ -17383,7 +17459,9 @@ const ConversationViewInner = (
       )}
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
       {conversation && (
-        <CommentDock conversationId={conversation._id.toString()} />
+        <Suspense fallback={null}>
+          <CommentDock conversationId={conversation._id.toString()} />
+        </Suspense>
       )}
     </main>
     </ReviewComposerContext.Provider>
@@ -17393,17 +17471,12 @@ const ConversationViewInner = (
     </FilePathContext.Provider>
     </HighlightContext.Provider>
   );
+  devCountElements("ConversationView2", el, performance.now() - renderStart);
+  return el;
 }
 );
 
 // memo: the parents (InboxConversation, ConversationDiffLayout) re-run several
 // times per session switch on their own hooks; without memo every one of those
 // passes re-ran this 5k-line body (measured 44 body executions per switch).
-export const ConversationView = memo(forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView(props, ref) {
-    const t0 = performance.now();
-    const el = ConversationViewInner(props, ref);
-    devCountElements("ConversationView2", el, performance.now() - t0);
-    return el;
-  },
-));
+export const ConversationView = memo(forwardRef<ConversationViewHandle, ConversationViewProps>(ConversationViewInner));
