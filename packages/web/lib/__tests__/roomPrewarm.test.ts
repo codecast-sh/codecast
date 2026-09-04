@@ -29,6 +29,9 @@ import { useInboxStore } from "../../store/inboxStore";
 // else in the suite constructs a Room (the enums and events stay real).
 
 const realLivekit = await import("livekit-client");
+const realAnalyser = realLivekit.createAudioAnalyser;
+let meterProbe = false;
+let meterStarts = 0;
 
 class FakeRoom {
   static made: FakeRoom[] = [];
@@ -121,7 +124,20 @@ class FakeRoom {
   }
 }
 
-mock.module("livekit-client", () => ({ ...realLivekit, Room: FakeRoom }));
+mock.module("livekit-client", () => ({
+  ...realLivekit,
+  Room: FakeRoom,
+  createAudioAnalyser: (...args: Parameters<typeof realAnalyser>) => {
+    if (!meterProbe) return realAnalyser(...args);
+    meterStarts++;
+    return {
+      analyser: { fftSize: 256, getByteTimeDomainData: (bytes: Uint8Array) => {
+        for (let i = 0; i < bytes.length; i++) bytes[i] = 128 + (i % 2 ? 8 : -8);
+      } },
+      cleanup: () => {},
+    };
+  },
+}));
 
 const prewarm = await import("../calls/roomPrewarm");
 const callManager = await import("../calls/callManager");
@@ -632,4 +648,34 @@ describe("a press landing inside the prewarm's publish", () => {
     expect(clone.stopped).toBe(false);
     expect(prewarm.prewarmedRoomKey()).toBe(null);
   });
+});
+
+
+test("a prepublished warm microphone starts the live meter without a publication event", async () => {
+  const realInterval = globalThis.setInterval;
+  let tick = () => {};
+  globalThis.setInterval = ((fn: () => void, ms: number) => {
+    if (ms === 50) { tick = fn; return realInterval(() => {}, 60_000); }
+    return realInterval(fn, ms);
+  }) as any;
+  meterProbe = true;
+  meterStarts = 0;
+  try {
+    prewarm.bindPrewarmMic(async () => fakeMicTrack());
+    await warmUp(ROOM);
+    expect(FakeRoom.made[0].micPublication).not.toBeNull();
+    expect(meterStarts).toBe(0);
+    useInboxStore.getState().setCallState({ muted: false });
+    await callManager.joinCall(ROOM);
+    expect(meterStarts).toBe(1);
+    tick();
+    expect(callManager.getMicLevel()).toBeGreaterThan(0.5);
+    await callManager.setMuted(true, { remember: false });
+    tick();
+    expect(callManager.getMicLevel()).toBe(0);
+  } finally {
+    await callManager.leaveCall();
+    globalThis.setInterval = realInterval;
+    meterProbe = false;
+  }
 });

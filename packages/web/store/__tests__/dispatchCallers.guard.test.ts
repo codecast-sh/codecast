@@ -45,21 +45,33 @@ describe("durable dispatch call-site guards", () => {
       "props.allowUnhydratedGuest &&",
     );
     expect(layout).toContain(
-      "if (!hydrated && !isSettledGuest) return <AppLoader />;",
+      "if (!hydrated && !isSettledGuest) return <AppLoader deferIndicator />;",
     );
   });
 
   test("in-place agent switch is the default; forks stay an explicit opt-in", async () => {
-    const source = await Bun.file(
+    const conversation = await Bun.file(
       new URL("../../components/ConversationView.tsx", import.meta.url),
     ).text();
+    const palette = await Bun.file(
+      new URL("../../components/CommandPalette.tsx", import.meta.url),
+    ).text();
+    const actions = await Bun.file(
+      new URL("../../lib/sessionAgentActions.ts", import.meta.url),
+    ).text();
 
-    expect(source).toContain('convCommand(id, "switchSessionAgent"');
-    expect(source).toContain("Fork as");
-    expect(source).toContain("target_agent_type: t,");
-    expect(source).toContain("session_id: forkSessionId,");
-    expect(source).toContain("_forkTargetAgentType: t");
-    expect(source).toContain("trackSessionCreate(forkSessionId, ready)");
+    expect(conversation).toContain("Switch agent");
+    expect(conversation).toContain("Fork as");
+    expect(conversation).toContain("switchSessionAgent(conversation");
+    expect(conversation).toContain("forkSessionAsAgent(conversation");
+    expect(palette).toContain("switchSessionAgent(target");
+    expect(palette).toContain("forkSessionAsAgent(target");
+    expect(actions).toContain('convCommand(id, "switchSessionAgent"');
+    expect(actions).toContain('convCommand(parentId, "forkFromMessage"');
+    expect(actions).toContain("target_agent_type: targetAgentType,");
+    expect(actions).toContain("session_id: sessionId,");
+    expect(actions).toContain("_forkTargetAgentType: targetAgentType");
+    expect(actions).toContain("trackSessionCreate(sessionId, dispatch)");
   });
 
   test("result-dependent creates use durable receipts and persist their post-create intent", async () => {
