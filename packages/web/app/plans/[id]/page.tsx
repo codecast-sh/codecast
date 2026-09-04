@@ -1,4 +1,5 @@
 "use client";
+import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -19,6 +20,7 @@ import {
   OrchestrationTab,
   StartWorkflowButton,
   DriveRoundIndicator,
+  PlanExternalEvents,
   PLAN_STATUS_CONFIG,
 } from "../../../components/PlanDetailPanel";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
@@ -226,9 +228,10 @@ export default function PlanDetailPage() {
           placeholder="Write plan details, notes, or documentation..."
           contextType="plan"
           leadContent={
-            plan.goal ? (
-              <p className="text-base text-sol-text-muted leading-relaxed">{plan.goal}</p>
-            ) : null
+            <>
+              <RepositoryLinks planId={plan._id} sessions={plan.sessions || []} conversationIds={plan.conversation_ids || []} />
+              {plan.goal && <p className="text-base text-sol-text-muted leading-relaxed">{plan.goal}</p>}
+            </>
           }
           topBarLeft={
             <>
@@ -360,6 +363,8 @@ export default function PlanDetailPage() {
               <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
               <EntryTimeline entries={plan.comments} />
+
+              <PlanExternalEvents planId={plan._id} />
             </>
           ) : (
             <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />

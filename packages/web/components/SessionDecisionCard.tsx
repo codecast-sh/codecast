@@ -15,6 +15,7 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
+import { ChevronUp, ChevronDown } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The decision card lives INSIDE the conversation — it is how a session asks
@@ -324,10 +325,6 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       >
         <KeyCap size="xs">x</KeyCap><span>dismiss</span>
       </button>
-      <button onClick={full ? shrink : grow} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
-        <KeyCap size="xs">{full ? "↑" : "↓"}</KeyCap>
-        <span>{full ? "read the thread" : "back to the question"}</span>
-      </button>
       {!full && (
         <button onClick={() => setSize("line")} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
           <span>fold away</span>
@@ -339,6 +336,24 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </button>
       )}
     </div>
+  );
+
+  // The one control that changes the card's size sits where a sheet's grip
+  // would: centred on the top edge. Docked, the card grows upward to own the
+  // pane, so the arrow points up; full, it points down to hand the pane back.
+  const sizeToggle = (
+    <button
+      onClick={full ? shrink : grow}
+      className={`mx-auto flex items-center gap-1 pl-2 pr-3 py-0.5 rounded-full border text-[11px] transition-colors ${
+        full
+          ? "border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-card"
+          : "border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg"
+      }`}
+      title={full ? "Shrink the question and read the thread" : "Open the question full screen, with its context"}
+    >
+      {full ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+      <span>{full ? "Read the thread" : "Full screen"}</span>
+    </button>
   );
 
   const optionRow = (
@@ -443,8 +458,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           if (e.deltaY < 0 && (bodyRef.current?.scrollTop ?? 0) <= 0) shrink();
         }}
       >
-        <div className="px-6 shrink-0 pt-3">
-          <button onClick={shrink} className="mx-auto block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors mb-2" title="Show the conversation" />
+        <div className="px-6 shrink-0 pt-2">
+          <div className="mb-2">{sizeToggle}</div>
           {stepperRail}
         </div>
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
@@ -500,8 +515,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       style={{ maxHeight: maxDock }}
       onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}
     >
-      <div className="px-6 shrink-0 pt-2">
-        <button onClick={grow} className="mx-auto block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors mb-1.5" title="Back to the question" />
+      <div className="px-6 shrink-0 pt-1.5">
+        <div className="mb-1.5">{sizeToggle}</div>
         {stepperRail ?? <div className="mb-1.5">{whoIsAsking}</div>}
       </div>
       <div className="px-6 shrink-0">

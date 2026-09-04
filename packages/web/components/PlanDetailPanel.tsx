@@ -1,3 +1,4 @@
+import { RepositoryLinks } from "./repo/RepositoryLinks";
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
@@ -13,6 +14,9 @@ import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { EntryTimeline } from "./EntryTimeline";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
+import { useSyncPlanExternalEvents, useExternalEvents, externalEventsNewestFirst } from "../hooks/useSyncExternalEvents";
 import { toast } from "sonner";
 import {
   Circle,
@@ -1009,6 +1013,43 @@ export function StartWorkflowButton({ workflowId, planId }: { workflowId: string
 
 type PlanTab = "overview" | "orchestration" | "board" | "graph";
 
+/**
+ * What happened in git while this plan ran: commits, pushes, pull request
+ * moves, reviews and checks on the plan's tasks.
+ *
+ * It mounts its own feeder and reads the store, so a caller passes the plan id
+ * and nothing else. It draws nothing when the plan has no events, which is
+ * the common case for a plan that has not reached code yet. Both plan surfaces
+ * (this panel and the plan page) render it under their comment timeline.
+ */
+export function PlanExternalEvents({ planId }: { planId: string }) {
+  useSyncPlanExternalEvents(planId);
+  const where = useMemo(
+    () => (row: ExternalEventRecord) => !!planId && !!row.plan_ids?.includes(planId),
+    [planId],
+  );
+  const events = useExternalEvents(where, externalEventsNewestFirst);
+  if (events.length === 0) return null;
+  return (
+    <div className="mb-6">
+      <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
+        <GitBranch className="w-4 h-4 text-sol-text-dim" />
+        Git &amp; issues ({events.length})
+      </h2>
+      <div className="space-y-1">
+        {events.map((e) => (
+          <ExternalEventRow
+            key={e._id}
+            event={externalEventRowToExternalEvent(e)}
+            density="feed"
+            omitRefs={["plan_id"]}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const queryPlan = useQuery(api.plans.webGet, queryArgs);
@@ -1090,6 +1131,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
             <DriveRoundIndicator driveState={plan.drive_state} />
           )}
         </div>
+        <RepositoryLinks planId={plan._id} sessions={plan.sessions || []} conversationIds={plan.conversation_ids || []} />
         {plan.goal && (
           <p className="mt-3 text-sm text-sol-text-muted leading-relaxed">{plan.goal}</p>
         )}
@@ -1187,6 +1229,8 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
           <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
           <EntryTimeline entries={plan.comments} />
+
+          <PlanExternalEvents planId={plan._id} />
         </>
       ) : (
         <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />

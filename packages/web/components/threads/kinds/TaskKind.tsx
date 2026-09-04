@@ -6,6 +6,7 @@ import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
 import { Badge } from "../../ui/badge";
 import { Avatar, TaskCommentStream, TimeAgo } from "../../tasks/TaskCommentStream";
+import { IssueLink } from "../../tasks/IssueLink";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
@@ -38,7 +39,7 @@ function taskIdOf(card: ThreadCardModel): string {
 function taskSig(t: TaskDetail | undefined): string {
   if (!t) return "";
   const last = t.comments?.[t.comments.length - 1];
-  return `${t.short_id}|${t.title}|${t.status}|${t.priority ?? ""}|${t.assignee_info?.name ?? ""}|${t.plan?.short_id ?? ""}|${(t.description ?? "").length}|${t.comments?.length ?? 0}|${last?._id ?? ""}|${last?.text?.length ?? 0}`;
+  return `${t.short_id}|${t.external?.identifier ?? ""}|${t.external?.synced_at ?? ""}|${t.external?.last_error ?? ""}|${t.title}|${t.status}|${t.priority ?? ""}|${t.assignee_info?.name ?? ""}|${t.plan?.short_id ?? ""}|${(t.description ?? "").length}|${t.comments?.length ?? 0}|${last?._id ?? ""}|${last?.text?.length ?? 0}`;
 }
 
 function useTaskRow(taskId: string): TaskDetail | undefined {
@@ -53,6 +54,7 @@ export function TaskLabel({ card }: { card: ThreadCardModel }) {
   return (
     <>
       <span className="font-mono th-card-task-id">{task?.short_id ?? "task"}</span>
+      {task?.external && <IssueLink external={task.external} />}
       {task?.title && <span className="th-card-task-name">{task.title}</span>}
     </>
   );

@@ -7,7 +7,7 @@ import { Id, Doc } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
-import { canAccessDoc } from "./lib/access";
+import { canAccessConversation, canAccessDoc } from "./lib/access";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
@@ -1246,6 +1246,7 @@ export const webGetTaskDetail = query({
             agent_type: conv.agent_type,
             outcome_type: (conv as any).outcome_type,
             git_branch: (conv as any).git_branch,
+            git_remote_url: await canAccessConversation(ctx, userId, conv) ? conv.git_remote_url : undefined,
             // Triage/visibility stamps: the client seeds these snapshots into its
             // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
             // must not seed as an active row (ct-42666).
@@ -1291,6 +1292,7 @@ export const webGetTaskDetail = query({
         agent_type: conv.agent_type,
         outcome_type: (conv as any).outcome_type,
         git_branch: (conv as any).git_branch,
+        git_remote_url: await canAccessConversation(ctx, userId, conv) ? conv.git_remote_url : undefined,
         // Triage/visibility stamps: the client seeds these snapshots into its
         // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
         // must not seed as an active row (ct-42666).

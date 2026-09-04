@@ -21,6 +21,9 @@ export type ProgressSeries = {
   scope: number;
   started: number;
   done: number;
+  /** Sorted completion timestamps (≤ now), for pace math that must not
+   *  inherit the chart's bucket widths. */
+  doneTimes: number[];
 };
 
 type TaskLike = {
@@ -49,16 +52,83 @@ function doneTime(task: TaskLike): number | undefined {
   return task.status === "done" ? task.closed_at : undefined;
 }
 
+export type BurndownPoint = { t: number; remaining: number };
+
+export type Burndown = {
+  /** Historical remaining work (scope − done), one point per progress bucket. */
+  points: BurndownPoint[];
+  /** Remaining as of now. */
+  remaining: number;
+  /** Completions per day, measured over the recent window. */
+  velocity: number;
+  /** When remaining hits zero at the current velocity. Absent when velocity is zero. */
+  projectedEnd?: number;
+  deadline?: number;
+  /**
+   * done — nothing remains. hit/miss — the projection lands before/after the
+   * deadline. no_velocity — work remains but nothing finished recently, so
+   * there is no honest line to draw. no_deadline — a projection exists but
+   * there is no date to judge it against.
+   */
+  verdict: "done" | "hit" | "miss" | "no_velocity" | "no_deadline";
+};
+
+/** How far back completions count toward the pace. Two weeks: long enough to
+ *  smooth a quiet weekend, short enough that an old sprint cannot flatter a
+ *  stalled project. */
+const VELOCITY_WINDOW = 14 * DAY;
+
+export function buildBurndown(
+  series: ProgressSeries,
+  deadline: number | undefined,
+  now: number,
+): Burndown {
+  const points: BurndownPoint[] = series.points.map((p) => ({
+    t: p.t,
+    remaining: p.scope - p.done,
+  }));
+  // Anchor "remaining" to the series' last point so the projection hinges
+  // exactly where the drawn line ends — a task closed with a future timestamp
+  // (client clock skew) must not open a gap between the two.
+  const remaining = points.length
+    ? points[points.length - 1].remaining
+    : series.scope - series.done;
+
+  // Pace from the raw completion timestamps, not the bucketed points — an old
+  // project's buckets are weeks wide, and snapping the window to a bucket edge
+  // would count month-old completions as recent pace. A younger project
+  // measures over its whole life.
+  let velocity = 0;
+  if (series.points.length) {
+    const windowStart = Math.max(now - VELOCITY_WINDOW, series.points[0].t);
+    const recentDone = series.doneTimes.filter((t) => t > windowStart && t <= now).length;
+    const spanDays = Math.max((now - windowStart) / DAY, 1);
+    velocity = recentDone / spanDays;
+  }
+
+  const base = { points, remaining, velocity, deadline };
+  if (remaining <= 0 && series.scope > 0) return { ...base, verdict: "done" };
+  if (velocity <= 0) return { ...base, verdict: "no_velocity" };
+  const projectedEnd = now + (remaining / velocity) * DAY;
+  if (deadline === undefined) return { ...base, projectedEnd, verdict: "no_deadline" };
+  return { ...base, projectedEnd, verdict: projectedEnd <= deadline ? "hit" : "miss" };
+}
+
 export function buildProgressSeries(tasks: TaskLike[], now: number): ProgressSeries {
   // Dropped work leaves scope entirely rather than counting as never-finished —
   // a cancelled task is not a debt, and leaving it in makes every project look
   // permanently behind.
   const live = tasks.filter((t) => t.status !== "dropped" && typeof t.created_at === "number");
 
+  const doneTimes = live
+    .map(doneTime)
+    .filter((v): v is number => v !== undefined && v <= now)
+    .sort((a, b) => a - b);
   const totals = {
     scope: live.length,
     started: live.filter((t) => startedTime(t) !== undefined).length,
     done: live.filter((t) => doneTime(t) !== undefined).length,
+    doneTimes,
   };
   if (live.length === 0) return { points: [], ...totals };
 
@@ -69,7 +139,7 @@ export function buildProgressSeries(tasks: TaskLike[], now: number): ProgressSer
 
   const created = live.map((t) => t.created_at as number).sort((a, b) => a - b);
   const started = live.map(startedTime).filter((v): v is number => v !== undefined).sort((a, b) => a - b);
-  const done = live.map(doneTime).filter((v): v is number => v !== undefined).sort((a, b) => a - b);
+  const done = doneTimes;
 
   // Each series is sorted, so one walking index per series counts everything at
   // or before the current bucket without rescanning the list per point.

@@ -779,10 +779,15 @@ describe("hook path off the loop: async readers and the persist chain", () => {
   test("persistHookStatus writes through one ordered promise chain, and the boot replay reads the status dir async", () => {
     const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "daemon.ts"), "utf8");
     const main = src.indexOf("async function main(");
+    // The chain moved out to module scope when the boot gate got a second
+    // writer for the same files: one chain, shared, is what keeps two statuses
+    // for a session in order (queueAgentStatusWrite).
     const persist = functionBlock(src, "persistHookStatus", { from: main }).text;
-    expect(persist).toContain("persistChain = persistChain");
-    expect(persist).toContain("fs.promises.writeFile(");
-    expect(persist).not.toContain("writeFileSync");
+    expect(persist).toContain("queueAgentStatusWrite(");
+    const queue = functionBlock(src, "queueAgentStatusWrite").text;
+    expect(queue).toContain("agentStatusWriteChain = agentStatusWriteChain");
+    expect(queue).toContain("fs.promises.writeFile(");
+    expect(queue).not.toContain("writeFileSync");
     const statusFile = functionBlock(src, "handleStatusFile", { from: main }).text;
     expect(statusFile).toContain("fs.promises.readFile(");
     expect(statusFile).not.toContain("readFileSync");
@@ -801,7 +806,7 @@ describe("hook path off the loop: async readers and the persist chain", () => {
     const hop = handle.indexOf("persistHookStatus(sessionId, settle)");
     expect(hop).toBeGreaterThan(0);
     expect(handle.indexOf("return true;")).toBeGreaterThan(hop);
-    const callback = blockAt(src, src.indexOf("hookServer = startHookServer(", main)).text;
+    const callback = blockAt(src, src.indexOf("setHookStatusSink(", main)).text;
     expect(callback).toContain("const deferred = handleStatusData(sessionId, data);");
     expect(callback).toContain("if (!deferred) persistHookStatus(sessionId, data);");
   });

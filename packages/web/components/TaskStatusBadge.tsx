@@ -41,9 +41,7 @@ export const TASK_STATUS: Record<TaskStatus, { icon: StatusIcon; label: string; 
 export const taskVisual = (status?: string | null) =>
   TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
 
-/** Work-first ordering: what you are doing, then what you could pick up, then
- *  what is finished. Drives status group order and the sort tie-breaker. */
-export const TASK_STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
+export const TASK_STATUS_ORDER: TaskStatus[] = ["done", "in_review", "in_progress", "open", "backlog", "dropped"];
 
 const EXEC_STATUS: Record<ExecutionStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
   done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },
