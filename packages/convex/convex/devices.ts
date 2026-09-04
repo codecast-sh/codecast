@@ -18,6 +18,7 @@ import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { fromConvexAgentType, findModelOption } from "@codecast/shared/contracts";
+import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -99,10 +100,7 @@ export async function getDeviceLocalRoots(
   userId: Id<"users">,
   deviceId: string,
 ): Promise<string[] | null> {
-  const device = await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
-    .first();
+  const device = await resolveSessionLaunchDevice(ctx, userId, deviceId);
   if (!device) return null;
   return device.local_project_roots ?? [];
 }
@@ -234,21 +232,19 @@ export async function enqueueStartSession(
   if (opts.prompt) args.prompt = opts.prompt;
   if (model) args.model = model;
   if (opts.effort) args.effort = opts.effort;
-  // Per-session accounts: with the device flag on, a Claude launch that names
-  // no account is pinned to the profile covering that machine's current login
-  // (when it has a live setup-token). Stamped on the row too, so the pin
-  // survives every resume. Resolved here, the single start chokepoint.
+  // A Claude launch that names no account is pinned to the profile covering
+  // that machine's current login when it has a live setup-token. Stamped on
+  // the row too, so the pin survives every resume. Resolved here, the single
+  // start chokepoint.
   let ccAccount = opts.ccAccount;
   if (!ccAccount && opts.agentType === "claude" && target) {
     const targetDevice = await ctx.db
       .query("devices")
       .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", target))
       .first();
-    if (targetDevice?.cc_session_tokens === true) {
-      ccAccount = activeTokenProfile(targetDevice.cc_accounts, Date.now());
-      if (ccAccount && conv && conv.cc_account !== ccAccount) {
-        await ctx.db.patch(opts.conversationId, { cc_account: ccAccount });
-      }
+    ccAccount = activeTokenProfile(targetDevice?.cc_accounts, Date.now());
+    if (ccAccount && conv && conv.cc_account !== ccAccount) {
+      await ctx.db.patch(opts.conversationId, { cc_account: ccAccount });
     }
   }
   if (ccAccount) args.cc_account = ccAccount;
@@ -971,6 +967,20 @@ export const listDevices = query({
         // Per-device daemon health (web: useDaemonHealth).
         daemon_started_at: d.daemon_started_at ?? undefined,
         loop_freeze_ms: d.loop_freeze_ms ?? undefined,
+        // Rounded again on the way out. The daemon already rounds before it
+        // beats, and that is what keeps the row itself from churning; this is
+        // the guard for any future writer that sends raw milliseconds, since a
+        // moving number here re-renders every viewer's roster.
+        loop_freeze_1h_ms:
+          d.loop_freeze_1h_ms === undefined ? undefined : Math.round(d.loop_freeze_1h_ms / 5000) * 5000,
+        loop_freeze_max_ms: d.loop_freeze_max_ms ?? undefined,
+        // Stripped again for the same reason the hour value is rounded again.
+        // The web builds a roster signature by joining fields with "|" and rows
+        // with newlines, then decodes it by position, so one row carrying
+        // either character misreads every OTHER device in the roster too.
+        loop_freeze_top: d.loop_freeze_top
+          ? d.loop_freeze_top.replace(/[|\r\n]+/g, " ").slice(0, 120)
+          : undefined,
         pending_sync_count: d.pending_sync_count ?? undefined,
         oldest_pending_ms: d.oldest_pending_ms ?? undefined,
         pending_sync_messages: d.pending_sync_messages ?? undefined,
@@ -1141,10 +1151,6 @@ export const listAgentBoxes = query({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return [];
-    const memberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
     const now = Date.now();
     const out: Array<{
       device_id: string;
@@ -1159,35 +1165,24 @@ export const listAgentBoxes = query({
       ssh_host: string | undefined;
       online: boolean;
       last_seen: number;
+      local_project_roots: string[];
     }> = [];
-    for (const m of memberships) {
-      const bots = await ctx.db
-        .query("users")
-        .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
-        .collect();
-      for (const bot of bots) {
-        if (!(bot as any).is_bot) continue;
-        const devices = await ctx.db
-          .query("devices")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", bot._id))
-          .collect();
-        for (const d of devices) {
-          out.push({
-            device_id: d.device_id,
-            owner_user_id: bot._id,
-            bot_name: (bot as any).name ?? null,
-            team_id: m.team_id,
-            can_edit: m.role === "admin",
-            label: d.label,
-            hostname: d.hostname ?? undefined,
-            platform: d.platform,
-            is_remote: d.is_remote ?? false,
-            ssh_host: d.ssh_host ?? undefined,
-            online: now - d.last_seen < DEVICE_ONLINE_MS,
-            last_seen: bucketTs(d.last_seen)!,
-          });
-        }
-      }
+    for (const { device: d, bot, teamId, canEdit } of await listAgentBoxDevices(ctx, userId)) {
+      out.push({
+        device_id: d.device_id,
+        owner_user_id: bot._id,
+        bot_name: bot.name ?? null,
+        team_id: teamId,
+        can_edit: canEdit,
+        label: d.label,
+        hostname: d.hostname ?? undefined,
+        platform: d.platform,
+        is_remote: d.is_remote ?? false,
+        ssh_host: d.ssh_host ?? undefined,
+        online: now - d.last_seen < DEVICE_ONLINE_MS,
+        last_seen: bucketTs(d.last_seen)!,
+        local_project_roots: d.local_project_roots ?? [],
+      });
     }
     return out.sort((a, b) => b.last_seen - a.last_seen);
   },

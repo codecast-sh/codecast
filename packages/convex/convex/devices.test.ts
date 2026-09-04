@@ -178,6 +178,61 @@ describe("enqueueStartSession codecast default model", () => {
   });
 });
 
+describe("enqueueStartSession Claude account token", () => {
+  const USER = "users_1" as any;
+  const CONVERSATION = "conversations_1" as any;
+  const DEVICE = "local-1";
+
+  const seed = (profiles: any[]) =>
+    makeFakeDb({
+      users: [{ _id: USER }],
+      conversations: [{
+        _id: CONVERSATION,
+        user_id: USER,
+        project_path: "/work/project",
+        owner_device_id: DEVICE,
+      }],
+      devices: [{
+        _id: "device_1",
+        user_id: USER,
+        device_id: DEVICE,
+        label: "Mac",
+        last_seen: Date.now(),
+        cc_session_tokens: false,
+        cc_accounts: { active_email: "a@x.com", profiles },
+      }],
+      daemon_commands: [],
+    });
+
+  test("pins a new Claude session whenever the active account has a live token", async () => {
+    const db = seed([{
+      name: "account-a",
+      email: "a@x.com",
+      token: { stored_at: 1, expires_at: Date.now() + 60_000 },
+    }]);
+
+    await enqueueStartSession({ db } as any, USER, {
+      conversationId: CONVERSATION,
+      agentType: "claude",
+    });
+
+    expect(JSON.parse(db._tables.daemon_commands[0].args).cc_account).toBe("account-a");
+    expect(db._tables.conversations[0].cc_account).toBe("account-a");
+  });
+
+  test("falls back to the keychain when the active account has no live token", async () => {
+    const db = seed([{ name: "account-a", email: "a@x.com" }]);
+
+    await enqueueStartSession({ db } as any, USER, {
+      conversationId: CONVERSATION,
+      agentType: "claude",
+    });
+
+    expect(JSON.parse(db._tables.daemon_commands[0].args).cc_account).toBeUndefined();
+    expect(db._tables.conversations[0].cc_account).toBeUndefined();
+  });
+});
+
 describe("resolveOwnerDeviceView", () => {
   // A session Mr Bot's account RUNS (conv.user_id) but Ashot OWNS. The device
   // row lives under the runner, so a lookup scoped to the viewer finds nothing

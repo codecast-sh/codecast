@@ -1,5 +1,6 @@
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Shield, SlidersHorizontal } from "lucide-react";
 import { Button } from "../../../components/ui/button";
@@ -28,9 +29,10 @@ const geminiOptions: { value: GeminiMode; label: string; description: string; fl
 ];
 
 export default function AgentsPage() {
-  const modes = useQuery(api.users.getAgentPermissionModes);
+  const { user } = useCurrentUser();
+  const modes = user?.agent_permission_modes;
   const updateModes = useMutation(api.users.updateAgentPermissionModes);
-  const defaultParams = useQuery(api.users.getAgentDefaultParams);
+  const defaultParams = user?.agent_default_params;
   const updateDefaultParamsMutation = useMutation(api.users.updateAgentDefaultParams);
 
   const claude = modes?.claude ?? "default";

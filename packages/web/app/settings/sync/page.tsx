@@ -1,4 +1,7 @@
-import { useQuery, useMutation } from "convex/react";
+import { useSettingsData } from "../../../hooks/useSyncSettings";
+import { useInboxStore } from "../../../store/inboxStore";
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
@@ -61,11 +64,11 @@ const visibilityOptions: { value: TeamVisibility; label: string; description: st
 ];
 
 export default function SyncPage() {
-  const user = useQuery(api.users.getCurrentUser);
-  const syncSettings = useQuery(api.users.getSyncSettings);
-  const userTeams = useQuery(api.teams.getUserTeams);
-  const projects = useQuery(api.users.getRecentProjectsWithGitInfo, { limit: 100 });
-  const directoryMappings = useQuery(api.users.getDirectoryTeamMappings);
+  const { user } = useCurrentUser();
+  const syncSettings = user ? { sync_mode: user.sync_mode ?? "all", sync_projects: user.sync_projects ?? [] } : null;
+  const userTeams = useInboxStore((s) => s.teams);
+  const { data: projects } = useSettingsData("syncProjects");
+  const { data: directoryMappings } = useSettingsData("directoryMappings");
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);

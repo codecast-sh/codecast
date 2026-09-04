@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
@@ -9,27 +9,41 @@ import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useIsDesktop } from "../../lib/desktop";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { AppLoader } from "../AppLoader";
 import type { SettingsSectionId } from "../../lib/settingsSections";
+import { useDesktopSettings } from "../../hooks/useDesktopSettings";
 
-// Panels are the former /settings/* pages, loaded on demand — only the active
-// section's chunk is fetched, and nothing mounts until the modal opens.
-const PANELS: Record<SettingsSectionId, React.LazyExoticComponent<React.ComponentType>> = {
-  general: lazy(() => import("../../app/settings/profile/page")),
-  accounts: lazy(() => import("../../app/settings/accounts/page")),
-  notifications: lazy(() => import("../../app/settings/notifications/page")),
-  sounds: lazy(() => import("../../app/settings/sounds/page")),
-  calls: lazy(() => import("../../app/settings/calls/page")),
-  team: lazy(() => import("../../app/settings/team/page")),
-  sync: lazy(() => import("../../app/settings/sync/page")),
-  integrations: lazy(() => import("../../app/settings/integrations/github-app/page")),
-  agents: lazy(() => import("../../app/settings/agents/page")),
-  "agent-features": lazy(() => import("../../app/settings/agent-features/page")),
-  "provider-keys": lazy(() => import("../../app/settings/provider-keys/page")),
-  "claude-accounts": lazy(() => import("../../app/settings/claude-accounts/page")),
-  cli: lazy(() => import("../../app/settings/cli/page")),
-  devices: lazy(() => import("../../app/settings/devices/page")),
-  desktop: lazy(() => import("../../app/settings/desktop/page")),
+import ProfilePanel from "../../app/settings/profile/page";
+import AccountsPanel from "../../app/settings/accounts/page";
+import NotificationsPanel from "../../app/settings/notifications/page";
+import SoundsPanel from "../../app/settings/sounds/page";
+import CallsPanel from "../../app/settings/calls/page";
+import TeamPanel from "../../app/settings/team/page";
+import SyncPanel from "../../app/settings/sync/page";
+import IntegrationsPanel from "../../app/settings/integrations/page";
+import AgentsPanel from "../../app/settings/agents/page";
+import AgentFeaturesPanel from "../../app/settings/agent-features/page";
+import ProviderKeysPanel from "../../app/settings/provider-keys/page";
+import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
+import CliPanel from "../../app/settings/cli/page";
+import DevicesPanel from "../../app/settings/devices/page";
+import DesktopPanel from "../../app/settings/desktop/page";
+
+const PANELS: Record<SettingsSectionId, React.ComponentType> = {
+  "general": ProfilePanel,
+  "accounts": AccountsPanel,
+  "notifications": NotificationsPanel,
+  "sounds": SoundsPanel,
+  "calls": CallsPanel,
+  "team": TeamPanel,
+  "sync": SyncPanel,
+  "integrations": IntegrationsPanel,
+  "agents": AgentsPanel,
+  "agent-features": AgentFeaturesPanel,
+  "provider-keys": ProviderKeysPanel,
+  "claude-accounts": ClaudeAccountsPanel,
+  "cli": CliPanel,
+  "devices": DevicesPanel,
+  "desktop": DesktopPanel,
 };
 
 interface SectionDef {
@@ -59,7 +73,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
-      { id: "integrations", label: "Integrations", icon: Plug, desc: "GitHub app installs and connected services", keywords: "github app repositories install" },
+      { id: "integrations", label: "Integrations", icon: Plug, desc: "Slack, GitHub, Linear, Google and Notion, and the issues they sync", keywords: "slack github linear google gmail notion connect oauth install repositories issues sync apps" },
     ],
   },
   {
@@ -79,6 +93,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
 const ALL_SECTIONS = GROUPS.flatMap((g) => g.sections);
 
 export function SettingsModal() {
+  useDesktopSettings();
   const s = useTrackedStore([(s) => s.settingsModalSection]);
   const isDesktop = useIsDesktop();
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -263,9 +278,7 @@ export function SettingsModal() {
           </header>
           <div key={active.id} className="scrollbar-auto flex-1 overflow-y-auto px-4 sm:px-6 py-5 animate-fadeSlideIn">
             <ErrorBoundary name="SettingsPanel" level="panel">
-              <Suspense fallback={<AppLoader className="min-h-0 h-full bg-transparent" size={28} />}>
-                <Panel />
-              </Suspense>
+              <Panel />
             </ErrorBoundary>
           </div>
         </div>

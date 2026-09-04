@@ -1,4 +1,5 @@
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState } from "react";
 import { Download, Terminal } from "lucide-react";
@@ -34,11 +35,7 @@ const CLI_COMMANDS = [
 ];
 
 export default function CliSettingsPage() {
-  const { isAuthenticated } = useConvexAuth();
-  const currentUser = useQuery(
-    api.users.getCurrentUser,
-    isAuthenticated ? {} : "skip"
-  );
+  const { user: currentUser } = useCurrentUser();
   const [copied, setCopied] = useState<string | null>(null);
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
