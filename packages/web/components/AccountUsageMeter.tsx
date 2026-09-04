@@ -5,7 +5,7 @@
 // usage credits). Shared by the header chip's popover and the Claude Accounts
 // settings page so both always tell the same story.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -13,6 +13,8 @@ import { RefreshCw } from "lucide-react";
 import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, formatCountdown } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 export type { CcUsage };
 
@@ -176,10 +178,10 @@ export function UsageRefreshButton({ device, className }: { device: RefreshableD
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newest = newestReading(device);
   const spinning = awaiting !== null && newest <= awaiting;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!spinning && awaiting !== null) setAwaiting(null);
   }, [spinning, awaiting]);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  useMountEffect(() => () => { if (timer.current) clearTimeout(timer.current); });
   const online = device.online !== false && device.is_remote !== true;
 
   const click = async () => {
