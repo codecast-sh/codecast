@@ -21,11 +21,16 @@ describe("consumeStableContextSpool", () => {
     const db = makeFakeDb({
       conversations: [{ _id: "conversations_1", user_id: USER, session_id: "uuid-real" }],
       stable_context_spool: [spoolRow()],
+      conversation_context: [],
     });
 
     await consumeStableContextSpool({ db }, USER, "uuid-real", "conversations_1" as any);
 
-    expect(db._tables.conversations[0].stable_context).toContain('"mode":"team"');
+    // The record lives on the conversation_context side row, not the hot doc.
+    expect(db._tables.conversation_context).toHaveLength(1);
+    expect(db._tables.conversation_context[0].conversation_id).toBe("conversations_1");
+    expect(db._tables.conversation_context[0].stable_context).toContain('"mode":"team"');
+    expect(db._tables.conversations[0].stable_context).toBeUndefined();
     expect(db._tables.stable_context_spool).toHaveLength(0);
   });
 
@@ -33,11 +38,13 @@ describe("consumeStableContextSpool", () => {
     const db = makeFakeDb({
       conversations: [{ _id: "conversations_1", user_id: USER, session_id: "uuid-real", stable_context: "existing" }],
       stable_context_spool: [spoolRow()],
+      conversation_context: [],
     });
 
     await consumeStableContextSpool({ db }, USER, "uuid-real", "conversations_1" as any);
 
     expect(db._tables.conversations[0].stable_context).toBe("existing");
+    expect(db._tables.conversation_context).toHaveLength(0);
     // Consumed regardless — the spool is transient.
     expect(db._tables.stable_context_spool).toHaveLength(0);
   });
@@ -46,11 +53,13 @@ describe("consumeStableContextSpool", () => {
     const db = makeFakeDb({
       conversations: [{ _id: "conversations_1", user_id: USER, session_id: "uuid-real" }],
       stable_context_spool: [spoolRow({ session_id: "some-other-session" })],
+      conversation_context: [],
     });
 
     await consumeStableContextSpool({ db }, USER, "uuid-real", "conversations_1" as any);
 
     expect(db._tables.conversations[0].stable_context).toBeUndefined();
+    expect(db._tables.conversation_context).toHaveLength(0);
     expect(db._tables.stable_context_spool).toHaveLength(1);
   });
 });

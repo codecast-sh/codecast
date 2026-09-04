@@ -2,8 +2,7 @@
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
 import { internalQuery, internalMutation, internalAction } from "./functions";
 import { anyApi } from "convex/server";
-import { internalMutation as rawInternalMutation } from "./_generated/server";
-import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions, setConvGitDiff, setConvStableContext } from "./conversations";
+import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions } from "./conversations";
 import { shouldShowInInbox } from "./inboxFilters";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
@@ -981,49 +980,6 @@ export const inboxScanCensus = internalQuery({
 });
 
 
-// TEMPORARY: conversation doc diet. Sheds the two legacy blobs the inbox scan
-// paid for on every recompute but nothing reads — available_skills (dropped;
-// user_skills is the source) and git_status (moved to the conversation_git_diffs
-// side row). Paced: one page per mutation, resumable by cursor. Safe to delete
-// once every row has been swept.
-//
-// Raw (un-wrapped) internalMutation on purpose: the wrapped one appends every
-// conversation patch to the sync log, which bumps a shared sync_heads row and
-// OCC-collides with the live addMessages firehose on every retry. Nothing a
-// client renders changes here, so there is no delta worth logging.
-export const dietConversationPage = rawInternalMutation({
-  args: { cursor: v.union(v.string(), v.null()), numItems: v.number(), dryRun: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor, numItems: args.numItems });
-    let patched = 0;
-    let bytesShed = 0;
-    for (const conv of page.page) {
-      const hasSkills = conv.available_skills !== undefined;
-      const hasStatus = conv.git_status !== undefined;
-      const hasStable = conv.stable_context !== undefined;
-      if (!hasSkills && !hasStatus && !hasStable) continue;
-      bytesShed += (conv.available_skills?.length ?? 0) + (conv.git_status?.length ?? 0) + (conv.stable_context?.length ?? 0);
-      patched++;
-      if (args.dryRun) continue;
-      if (hasStatus && conv.git_status) {
-        const row = await ctx.db
-          .query("conversation_git_diffs")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-          .first();
-        await setConvGitDiff(ctx, conv._id, row?.git_diff, row?.git_diff_staged, row?.git_status ?? conv.git_status);
-      }
-      if (hasStable && conv.stable_context) {
-        const row = await ctx.db
-          .query("conversation_context")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-          .first();
-        if (!row?.stable_context) await setConvStableContext(ctx, conv._id, conv.stable_context);
-      }
-      await ctx.db.patch(conv._id, { available_skills: undefined, git_status: undefined, stable_context: undefined });
-    }
-    return { scanned: page.page.length, patched, bytesShed, continueCursor: page.continueCursor, isDone: page.isDone };
-  },
-});
 
 export const dietConversationDocs = internalAction({
   args: { cursor: v.optional(v.string()), maxPages: v.optional(v.number()), dryRun: v.optional(v.boolean()) },
@@ -1036,7 +992,7 @@ export const dietConversationDocs = internalAction({
       let r: any = null;
       for (let attempt = 0; attempt < 5 && !r; attempt++) {
         try {
-          r = await ctx.runMutation(anyApi.debugTmp.dietConversationPage, { cursor, numItems: 50, dryRun: args.dryRun });
+          r = await ctx.runMutation(anyApi.debugTmpDiet.dietConversationPage, { cursor, numItems: 50, dryRun: args.dryRun });
         } catch (err) {
           if (attempt === 4) throw err;
           await new Promise((res) => setTimeout(res, 500 * (attempt + 1)));
