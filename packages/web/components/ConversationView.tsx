@@ -8888,9 +8888,7 @@ function AssistantBlockImpl({
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  // Hooks sit above BOTH visibility early-returns — hooks can't be conditional.
   const chatOn = useTeamFeature("chat");
-  // Right-click mirrors the corner toolbar (meta actions only).
   const ctxMenu = useContextMenu<void>();
 
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
