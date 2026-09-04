@@ -8,6 +8,7 @@ import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
+import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -88,7 +89,15 @@ export async function spawnSessionCore(
     ccAccount?: string;
     isolated?: boolean;
     worktreeName?: string;
+    // A worktree that already exists on the target device (`cast spawn
+    // --cloud` acquires it over SSH before creating the row): stamped on the
+    // row so the header and the host list show it from the first frame.
+    worktree?: { name: string; branch?: string; path?: string };
+    // Team/privacy resolve from THIS path when project_path lives on another
+    // machine — the directory mappings are keyed by the laptop's checkouts.
+    privacyPath?: string;
     targetDeviceId?: string | null;
+    spawnerConversationId?: Id<"conversations">;
     subagentFields?: { parent_conversation_id: Id<"conversations">; is_subagent: true } | null;
     prompt?: string;
   },
@@ -96,11 +105,13 @@ export async function spawnSessionCore(
   const now = Date.now();
   const sessionId = crypto.randomUUID();
   const agentType = opts.agentType || "claude_code";
+  const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.targetDeviceId);
 
-  const privacy = await resolveCreationPrivacy(ctx, userId, opts.gitRoot || opts.projectPath);
+  const privacy = await resolveCreationPrivacy(ctx, userId, opts.privacyPath || opts.gitRoot || opts.projectPath);
 
   const conversationId = await ctx.db.insert("conversations", {
-    user_id: userId,
+    user_id: runnerUserId,
+    ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
     agent_type: agentType,
     session_id: sessionId,
     project_path: opts.projectPath,
@@ -110,15 +121,25 @@ export async function spawnSessionCore(
     message_count: 0,
     ...privacy,
     ...(opts.subagentFields ?? {}),
+    ...(opts.spawnerConversationId ? { spawned_by_conversation_id: opts.spawnerConversationId } : {}),
     ...(opts.ccAccount ? { cc_account: opts.ccAccount } : {}),
+    ...(opts.worktree
+      ? {
+          worktree_name: opts.worktree.name,
+          worktree_branch: opts.worktree.branch,
+          worktree_path: opts.worktree.path,
+          worktree_status: "active" as const,
+        }
+      : {}),
     status: "active",
   });
 
   const shortId = conversationId.toString().slice(0, 7);
   await ctx.db.patch(conversationId, { short_id: shortId });
+  await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
 
   const daemonAgentType = fromConvexAgentType(agentType);
-  await enqueueStartSession(ctx, userId, {
+  await enqueueStartSession(ctx, runnerUserId, {
     conversationId,
     agentType: daemonAgentType,
     projectPath: opts.projectPath || opts.gitRoot,
@@ -181,6 +202,11 @@ export const createSessionFromCli = mutation({
     cc_account: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
+    // A worktree the CLI already acquired on the target device (--cloud).
+    worktree_branch: v.optional(v.string()),
+    worktree_path: v.optional(v.string()),
+    // Local git root for team/privacy resolution when project_path is remote.
+    privacy_path: v.optional(v.string()),
     // A device_id or label; routes start_session at that machine (see
     // resolveDeviceSelector).
     device: v.optional(v.string()),
@@ -188,6 +214,7 @@ export const createSessionFromCli = mutation({
     // conversation id). When set, the new session is created as a subagent row
     // nested under it (see resolveSpawnParent).
     parent_session: v.optional(v.string()),
+    spawner_session: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -201,11 +228,15 @@ export const createSessionFromCli = mutation({
         .query("devices")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
-      targetDeviceId = resolveDeviceSelector(devices, args.device);
+      const boxes = await listAgentBoxDevices(ctx, userId);
+      targetDeviceId = resolveDeviceSelector([...devices, ...boxes.map(({ device }) => device)], args.device);
     }
 
     const subagentFields = args.parent_session
       ? await resolveSpawnParent(ctx, userId, args.parent_session)
+      : null;
+    const spawner = args.spawner_session
+      ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
       : null;
 
     const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
@@ -217,8 +248,13 @@ export const createSessionFromCli = mutation({
       ccAccount: args.cc_account,
       isolated: args.isolated,
       worktreeName: args.worktree_name,
+      worktree: args.worktree_path && args.worktree_name
+        ? { name: args.worktree_name, branch: args.worktree_branch, path: args.worktree_path }
+        : undefined,
+      privacyPath: args.privacy_path,
       targetDeviceId,
       subagentFields,
+      spawnerConversationId: spawner?._id,
       prompt: args.prompt,
     });
 
