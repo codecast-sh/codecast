@@ -4212,7 +4212,7 @@ function SessionListPanelImpl({
     topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className="border-t border-sol-border/30">
-        <div className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
+        <div data-sv-hidden-head className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
           <button
             onClick={onToggle}
             className="flex-1 min-w-0 pl-3 py-1.5 flex items-center text-left"

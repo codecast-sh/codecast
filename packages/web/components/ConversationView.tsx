@@ -6641,7 +6641,7 @@ function CommandMessageBlock({
   );
 
   return (
-    <div id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
+    <div data-cc-message="user" id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
       <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
         <button onClick={handleCopy} className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary" title="Copy command" aria-label="Copy command">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
@@ -6716,7 +6716,7 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
   };
 
   return (
-    <div id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
+    <div data-cc-message="user" id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
       <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
         <button onClick={handleCopy} className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary" title="Copy command" aria-label="Copy command">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
@@ -7965,7 +7965,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const ctxMenu = useContextMenu<void>();
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 -mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
+    <div data-cc-message="user" id={`msg-${messageId}`} className={`group relative scroll-mt-20 -mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -8507,6 +8507,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   }, [entries, images, globalImageMap]);
   const header = (
     <div
+      data-cc-tool-receipt
       role="button"
       tabIndex={0}
       aria-expanded={expanded}
@@ -8545,6 +8546,7 @@ const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, t
   if (toolCount > 0) bits.push(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
   return (
     <button
+      data-cc-compact-turn
       onClick={onExpand}
       className="group/turn not-prose w-full flex items-center gap-2.5 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 hover:bg-sol-bg-alt/70 hover:border-sol-cyan/40 pl-2.5 pr-3 py-2 text-left transition-colors"
       title="Expand this turn"
@@ -8834,7 +8836,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -9077,6 +9079,7 @@ function AssistantBlockImpl({
 
       {onForkFromMessage && messageUuid && !onlyToolCalls && !shareSelectionMode && !(forkChildren && forkChildren.length) && (
         <button
+          data-cc-message-action
           onClick={() => onForkFromMessage(messageUuid)}
           className="absolute right-2 -bottom-3 z-10 inline-flex items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-dashed border-sol-border/60 bg-sol-bg text-sol-text-dim shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all duration-150"
           title="Fork the conversation from this message"
@@ -11704,7 +11707,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               left side carries the live status (or nothing); the right side
               is the send-options "?" and the permission mode dot. */}
           {!bareComposer && (
-            <div className={`mx-auto px-2 sm:px-4 mb-1 min-h-[18px] flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+            <div data-cc-composer-meta className={`mx-auto px-2 sm:px-4 mb-1 min-h-[18px] flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -16072,15 +16075,17 @@ const ConversationViewInner = (
   // the feed/composer seam (see the render below).
   const ownerComposerMounted = !!(showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && effectiveIsOwner);
   const threadStatePanel = conversation ? (
-    <ThreadStatePanel
-      conversationId={conversation._id.toString()}
-      threadState={conversation.thread_state}
-      threadStateAt={conversation.thread_state_at}
-      threadStateMsgCount={conversation.thread_state_msg_count}
-      threadStateStatus={conversation.thread_state_status}
-      messageCount={conversation.message_count}
-      canClear={effectiveIsOwner}
-    />
+    <div data-cc-thread-state>
+      <ThreadStatePanel
+        conversationId={conversation._id.toString()}
+        threadState={conversation.thread_state}
+        threadStateAt={conversation.thread_state_at}
+        threadStateMsgCount={conversation.thread_state_msg_count}
+        threadStateStatus={conversation.thread_state_status}
+        messageCount={conversation.message_count}
+        canClear={effectiveIsOwner}
+      />
+    </div>
   ) : null;
 
   return (
@@ -16090,7 +16095,7 @@ const ConversationViewInner = (
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -16144,13 +16149,13 @@ const ConversationViewInner = (
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
 
             {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
+              <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
                 <span className="sm:hidden">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
               </span>
             ) : isSessionDisconnected ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
+              <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
                 <span className="hidden sm:inline">Disconnected</span>
                 <span className="sm:hidden">Disc</span>
@@ -16158,7 +16163,7 @@ const ConversationViewInner = (
             ) : null}
 
             {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "waiting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 ${
+              <span data-cc-conv-status className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 ${
                 managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
                 managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
                 managedSession?.agent_status === "waiting" ? "bg-sol-blue/10 text-sol-blue border border-sol-blue/30" :
@@ -16197,7 +16202,7 @@ const ConversationViewInner = (
               // Simple view keeps the metadata cluster functional (it owns the
               // model picker) but pulls it back visually; the plan/task badges
               // drop away entirely.
-              <span data-simple-dim className="cq-header-collapse contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+              <span data-cc-conv-meta data-simple-dim className="cq-header-collapse contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -16242,7 +16247,7 @@ const ConversationViewInner = (
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
+              <div data-cc-conv-actions className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
 
                 {(() => {
                   // Subagents carry parent_conversation_id; visible children
@@ -17221,7 +17226,7 @@ const ConversationViewInner = (
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115), transform: commentRailW ? `translateX(-${commentRailW}px)` : undefined, transition: "transform 160ms ease" }}>
+        <div data-cc-scroll-tools className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115), transform: commentRailW ? `translateX(-${commentRailW}px)` : undefined, transition: "transform 160ms ease" }}>
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
@@ -17305,6 +17310,7 @@ const ConversationViewInner = (
           {(isScrollable || hasMoreAbove || hasMoreBelow) && (
             <div className="hidden sm:block w-2 self-stretch bg-sol-base02 rounded-full overflow-hidden">
               <div
+                data-cc-scroll-progress
                 ref={scrollProgressRef}
                 className="w-full bg-sol-green/80 rounded-full"
                 style={{ height: '0%', transition: 'height 0.15s ease-out' }}
