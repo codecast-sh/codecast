@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "bun run src/main.ts",
-    "build": "bun scripts/stamp-daemon-build-id.ts && bun build src/main.ts src/daemon.ts --outdir dist --target node",
+    "build": "bun scripts/stamp-daemon-build-id.ts && bun build src/main.ts src/daemon.ts --outdir dist --target node --splitting",
     "build:binary": "bash scripts/guard-no-src-shadow.sh && bun build src/main.ts --compile --outfile codecast",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "bun test src/"

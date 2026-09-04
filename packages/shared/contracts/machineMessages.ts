@@ -19,6 +19,14 @@ export function stripInjectionNoise(text: string): string {
     .replace(/^[\x00-\x1f\s]+/, "");
 }
 
+export function isAgentContextMessage(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  const text = stripInjectionNoise(rawContent);
+  return /^<(?:recommended_plugins|environment_context|INSTRUCTIONS|collaboration_mode|app-context)>/.test(text)
+    || /^<permissions(?:\s|>)/.test(text)
+    || text.startsWith("# AGENTS.md instructions");
+}
+
 // Lightweight detection that a user message is actually an inbound
 // session→session message (delivered by `cast send`). Keys off the OPENING tag
 // only, so it still fires on a truncated preview (last_message_preview is
@@ -84,7 +92,7 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
 // scheduled-task injection, a harness task notification, or a team-chat
 // mention waking the anchor.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

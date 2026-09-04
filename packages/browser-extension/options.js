@@ -6,11 +6,21 @@ async function save(token, port) {
   setTimeout(refreshStatus, 600);
 }
 
+/** While a pairing offer is on screen the periodic refresh must not paint over it. */
+let pairingOffer = null;
+
 /**
  * `cast browser extension setup` opens this page as
  * options.html#token=T&port=P so nothing has to be typed. A fragment never
  * leaves the browser, and it is cleared from the address bar as soon as it
  * is read so the token does not linger in history or a screenshot.
+ *
+ * Setup reaches this page through a file: page (the only way to land in the
+ * right Chrome without the token on a command line), so any local HTML file
+ * the human opens could arrive here too. This page cannot tell the two apart;
+ * the human can, because they just ran the command. So a token this extension
+ * already holds reconnects on its own (a Chrome or host restart), and a new
+ * one is shown with its port and waits for one click.
  */
 async function pairFromFragment() {
   const frag = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -18,12 +28,37 @@ async function pairFromFragment() {
   if (!token) return false;
   const port = parseInt(frag.get("port") || "", 10) || CAST_DEFAULT_PORT;
   history.replaceState(null, "", location.pathname);
-  // Shown until the worker reports; refreshStatus then owns the block.
-  renderBridgeStatus($("status"), { state: "connecting", attached: [] }, port);
-  $("status").querySelector("[data-title]").textContent = "Pairing from the terminal";
-  await save(token, port);
+  const { bridge } = await chrome.storage.local.get("bridge");
+  if (bridge && bridge.token === token && bridge.port === port) {
+    // Shown until the worker reports; refreshStatus then owns the block.
+    renderBridgeStatus($("status"), { state: "connecting", attached: [] }, port);
+    $("status").querySelector("[data-title]").textContent = "Pairing from the terminal";
+    await save(token, port);
+    return true;
+  }
+  pairingOffer = { token, port };
+  const root = $("status");
+  root.classList.remove("state-ok", "state-wait", "state-bad", "state-none");
+  root.classList.add("state-wait");
+  root.querySelector("[data-title]").textContent = "Pair with cast?";
+  root.querySelector("[data-text]").textContent =
+    `A terminal on this machine asked to pair this extension with the bridge host on port ${port}. ` +
+    "Continue only if you just ran cast browser extension setup.";
+  $("reconnect").hidden = true;
+  $("pair").hidden = false;
   return true;
 }
+
+$("pair").addEventListener("click", async () => {
+  const offer = pairingOffer;
+  if (!offer) return;
+  pairingOffer = null;
+  $("pair").hidden = true;
+  renderBridgeStatus($("status"), { state: "connecting", attached: [] }, offer.port);
+  $("status").querySelector("[data-title]").textContent = "Pairing from the terminal";
+  await save(offer.token, offer.port);
+  await load();
+});
 
 async function load() {
   const { bridge } = await chrome.storage.local.get("bridge");
@@ -63,6 +98,7 @@ async function renderTabs(ids) {
 
 
 async function refreshStatus() {
+  if (pairingOffer) return;
   const s = await readBridgeStatus();
   const port = parseInt($("port").value, 10) || CAST_DEFAULT_PORT;
   const d = renderBridgeStatus($("status"), s, port);

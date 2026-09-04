@@ -52,7 +52,7 @@ export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<
   };
 }
 
-export type TmuxRunResult = { status: number | null; stdout: string; stderr: string };
+export type TmuxRunResult = { status: number | null; stdout: string; stderr: string; code?: string; signal?: string | null; killed?: boolean };
 
 // The promise twin of tmuxRun for callers on the daemon's event loop (the
 // loopback HTTP and WebSocket paths): same contract, never throws, status
@@ -68,9 +68,12 @@ export async function tmuxRunAsync(args: string[], opts?: { timeout?: number; en
     });
     return { status: 0, stdout, stderr };
   } catch (err) {
-    const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown };
+    const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: string | null; killed?: boolean };
     return {
       status: typeof e.code === "number" ? e.code : null,
+      ...(typeof e.code === "string" ? { code: e.code } : {}),
+      ...(e.signal !== undefined ? { signal: e.signal } : {}),
+      ...(e.killed !== undefined ? { killed: e.killed } : {}),
       stdout: typeof e.stdout === "string" ? e.stdout : "",
       stderr: typeof e.stderr === "string" ? e.stderr : "",
     };

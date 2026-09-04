@@ -1,3 +1,7 @@
+import { HibernatedMarker } from "../../components/HibernatedMarker";
+import { useHibernationCommands } from "../../hooks/useHibernationCommands";
+import { fleetBucket, hibernationCandidate, hibernationResultCounts } from "../../lib/hibernation";
+import { sessionCommandOutcome } from "@codecast/shared/contracts";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -17,17 +21,23 @@ import { deriveTriageFlags } from "./triageFlags";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { useCollectionRows } from "../../hooks/useCollectionRows";
+import { sessionStructuralSig } from "../../store/inboxStore";
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
 // Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
 // the agent's self-reported status (which says nothing about whether the OS
 // process exists, and conflates "done" with "frozen").
-type Bucket = "active" | "idle" | "dead";
+type Bucket = "active" | "idle" | "dead" | "hibernated";
 // The agent's relationship to YOU — a separate axis from process liveness above.
 // "needs input" = blocked on you (open poll / permission); "working" = busy;
 // "idle" = at rest. Pinned/dismissed are orthogonal flags layered on top.
 type WorkState = "needs_input" | "done" | "working" | "dormant" | "idle";
 type ClassifiedSession = Session & {
+  has_pending: boolean;
+  awaiting_input: boolean;
+  pending_api_error: boolean;
+  session_error?: string;
   isAlive: boolean;
   bucket: Bucket;
   awakeIdleMs: number;
@@ -53,6 +63,7 @@ type ClassifiedSession = Session & {
 };
 
 const BUCKET_STYLES: Record<Bucket, { label: string; text: string; dot: string }> = {
+  hibernated: { label: "hibernated", text: "text-sol-blue", dot: "bg-sol-blue" },
   active: { label: "active",       text: "text-sky-400",   dot: "bg-sky-500" },
   idle:   { label: "idle · kill?", text: "text-amber-400", dot: "bg-amber-500" },
   dead:   { label: "dead",         text: "text-zinc-600",  dot: "bg-zinc-700" },
@@ -75,8 +86,7 @@ type TriageFilter = "all" | "needs_input" | "working" | "pinned" | "dismissed";
 // throttles that write to once per 5min, so a live session would otherwise flip to
 // "dead" for most of every 5-minute window.
 const HEARTBEAT_ALIVE_MS = 90 * 1000;
-// Awake-idle time (sleep excluded) after which a live session is safe to kill.
-const KILLABLE_IDLE_MS = 2 * 60 * 60 * 1000;
+const triageSig = (s: InboxSession) => `${sessionStructuralSig(s)}|${!!s.has_pending}|${!!s.awaiting_input}|${!!s.pending_api_error}|${s.session_error ?? ""}|${!!s.is_pinned}`;
 
 type SortKey = "lastActive" | "uptime" | "messages" | "memory" | "cpu" | "name";
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -312,7 +322,11 @@ function AggregateChart({ metrics }: { metrics: AggregatePoint[] }) {
 
 // ---- Main View ----
 
-function SessionsView() {
+export function SessionsView() {
+  const { commands, request: requestHibernate, error: parkResultError } = useHibernationCommands();
+  const viewerId = useInboxStore(s => s.currentUser?._id);
+  const [parkConfirm, setParkConfirm] = useState(false);
+  const [parkRequests, setParkRequests] = useState<string[]>([]);
   // Store-fed (hooks/useSyncManagedSessions): the fleet table paints from the
   // cached rows synchronously; "loading" shows only for a genuinely cold cache.
   const { sessions: managedRows, ready: managedReady } = useManagedSessions();
@@ -321,7 +335,7 @@ function SessionsView() {
   // Triage state (pinned / needs-input / working / dismissed) lives on the
   // conversation row — the inbox's own synced sessions collection, joined by
   // id, so no second listInboxSessions subscription duplicates the sync.
-  const storeSessions = useInboxStore((st) => st.sessions);
+  const inboxRows = useCollectionRows<InboxSession>("sessions", { sig: triageSig });
   const convCommand = useInboxStore((s) => s.convCommand);
   const pruneSession = useMutation(api.managedSessions.unregisterManagedSession);
   // Local-first: patchConversation mutates conversations[id] synchronously and
@@ -346,20 +360,20 @@ function SessionsView() {
 
   // Reset the kill-all confirm whenever the visible set changes, so a pending
   // confirm can't apply to a different list than the one the user was looking at.
-  useEffect(() => { setBulkConfirm(false); }, [filter, triageFilter]);
+  useEffect(() => { setBulkConfirm(false); setParkConfirm(false); }, [filter, triageFilter]);
 
   const inboxById = useMemo(() => {
     const m = new Map<string, InboxSession>();
-    for (const id in storeSessions) m.set(id, storeSessions[id] as InboxSession);
+    for (const row of inboxRows) m.set(row._id, row);
     return m;
-  }, [storeSessions]);
+  }, [inboxRows]);
 
   const classified = useMemo((): ClassifiedSession[] => {
     if (!sessions) return [];
     return sessions.map((s: Session) => {
-      const isAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
+      const isAlive = s.agent_status !== "hibernated" && now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
       const awakeIdleMs = s.awake_idle_ms ?? 0;
-      const bucket: Bucket = !isAlive ? "dead" : awakeIdleMs >= KILLABLE_IDLE_MS ? "idle" : "active";
+      const bucket = fleetBucket(s, now);
       // "Last active" = the most recent moment anything happened. conversation
       // updated_at tracks real activity; fall back to the heartbeat for
       // conversation-less (tmux-only) rows, then to start time.
@@ -380,11 +394,11 @@ function SessionsView() {
       } else if (s.agent_status) {
         // Fallback for rows with no inbox join (tmux-only / not in recent set).
         needsInput = s.agent_status === "permission_blocked";
-        workState = needsInput ? "needs_input" : ACTIVE_AGENT_STATUSES.has(s.agent_status) ? "working" : "idle";
+        workState = needsInput ? "needs_input" : s.agent_status === "hibernated" ? "dormant" : ACTIVE_AGENT_STATUSES.has(s.agent_status) ? "working" : "idle";
       }
 
       return {
-        ...s, isAlive, bucket, awakeIdleMs, uptime: now - s.started_at, lastActiveAt,
+        ...s, has_pending: !!inbox?.has_pending, awaiting_input: !!inbox?.awaiting_input, pending_api_error: !!inbox?.pending_api_error, session_error: inbox?.session_error, isAlive, bucket, awakeIdleMs, uptime: now - s.started_at, lastActiveAt,
         lastActiveMs: now - lastActiveAt, pinned, dismissed, killed, needsInput, workState,
       };
     });
@@ -412,7 +426,7 @@ function SessionsView() {
   }, [classified, filter, triageFilter, sortKey, sortDir]);
 
   const counts = useMemo(() => {
-    const c = { active: 0, idle: 0, dead: 0, total: 0 };
+    const c = { active: 0, idle: 0, dead: 0, hibernated: 0, total: 0 };
     for (const s of classified) { c.total++; c[s.bucket]++; }
     return c;
   }, [classified]);
@@ -520,12 +534,17 @@ function SessionsView() {
     { value: "all" as const, label: "All", count: counts.total },
     { value: "active" as const, label: "Active", count: counts.active },
     { value: "idle" as const, label: "Idle 2h+", count: counts.idle },
+    { value: "hibernated" as const, label: "Hibernated", count: counts.hibernated },
     { value: "dead" as const, label: "Dead", count: counts.dead },
   ];
 
   // Kill-all acts on the ENTIRE current view — whatever liveness/triage filters
   // are applied. Conversation rows get a real kill (tmux + tree); the rest prune.
   const bulkRows = filtered;
+  const parkCandidates = filtered.filter(row => hibernationCandidate(row, viewerId, now) &&
+    !commands.some(c => c.conversation_id === row.conversation_id && !c.executed_at)).slice(0, Math.max(0, 100 - commands.filter(c => !c.executed_at).length));
+  const parkResults = commands.filter(c => parkRequests.includes(c._id));
+  const parkCounts = hibernationResultCounts(parkResults);
   const bulkKillCount = bulkRows.filter((s) => s.conversation_id).length;
   const bulkPruneCount = bulkRows.length - bulkKillCount;
 
@@ -533,23 +552,34 @@ function SessionsView() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="max-w-[1200px] mx-auto px-6 py-6">
         {/* Header */}
-        <div ref={titlebarRef} className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
+        <div ref={titlebarRef} className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <div className="flex flex-wrap items-center gap-4">
             <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
               </svg>
             </Link>
             <h1 className="text-lg font-medium tracking-tight">Sessions</h1>
-            <div className="flex items-center gap-3 text-xs text-zinc-500 font-mono">
+            <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500 font-mono">
               <span><span className="text-sky-400">{counts.active}</span> active</span>
               <span className="text-zinc-700">|</span>
               <span><span className={counts.idle > 0 ? "text-amber-400" : "text-zinc-600"}>{counts.idle}</span> idle 2h+</span>
               <span className="text-zinc-700">|</span>
               <span><span className="text-zinc-600">{counts.dead}</span> dead</span>
+              <span className="text-zinc-700">|</span>
+              <span><span className="text-sol-blue">{counts.hibernated}</span> hibernated</span>
             </div>
           </div>
 
+          <div className="flex items-center gap-2 flex-wrap">
+          {parkConfirm ? <div className="flex flex-wrap items-center gap-2 text-xs text-sol-text-dim">
+            <span>Request parking for {parkCandidates.length} idle sessions? The daemon may skip unsafe targets.</span>
+            <button className="px-3 py-1.5 rounded border border-sol-blue/40 text-sol-blue" disabled={!parkCandidates.length} onClick={() => {
+              setParkRequests(parkCandidates.map(row => requestHibernate(String(row.conversation_id), row.session_id, row.owner_device_id!)));
+              setParkConfirm(false);
+            }}>Confirm hibernate</button>
+            <button onClick={() => setParkConfirm(false)}>cancel</button>
+          </div> : <button className="px-3 py-1.5 text-xs rounded border border-sol-blue/30 text-sol-blue disabled:opacity-40" disabled={!parkCandidates.length} onClick={() => setParkConfirm(true)} title="Request parking for your idle sessions in this view; the daemon checks safety again">Hibernate idle ({parkCandidates.length})</button>}
           {bulkRows.length > 0 && (
             bulkConfirm ? (
               <div className="flex items-center gap-2 text-xs font-mono">
@@ -579,11 +609,18 @@ function SessionsView() {
               </button>
             )
           )}
+          </div>
         </div>
 
+        {parkRequests.length > 0 && <div role="status" className="mb-4 rounded border border-sol-border p-3 text-xs text-sol-text-dim">
+          {parkCounts.pending} parking requested · {parkCounts.succeeded} hibernated · {parkCounts.skipped} skipped · {parkCounts.failed} failed
+          {parkResultError && parkCounts.pending > 0 && <div className="mt-1">Command results unavailable; parking is not confirmed.</div>}
+          {parkResults.filter(c => ["skipped", "failed"].includes(sessionCommandOutcome(c).state)).map(c => <div key={c._id} className="mt-1">{classified.find(s => s.conversation_id === c.conversation_id)?.conversation_title ?? c.conversation_id}: {sessionCommandOutcome(c).message}</div>)}
+        </div>}
+
         {/* Filters + sort */}
-        <div className="flex items-center gap-2 mb-4">
-          <div className="flex rounded-md border border-zinc-800/60 overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <div className="flex flex-wrap rounded-md border border-zinc-800/60 overflow-hidden">
             {filterButtons.map(({ value, label, count }) => (
               <button
                 key={value}
@@ -622,9 +659,9 @@ function SessionsView() {
 
         {/* Triage filter — the agent's relationship to you (orthogonal to the
             process-liveness filter above). */}
-        <div className="flex items-center gap-2 mb-4 -mt-1">
+        <div className="flex flex-wrap items-center gap-2 mb-4 -mt-1">
           <span className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono w-12 shrink-0">state</span>
-          <div className="flex rounded-md border border-zinc-800/60 overflow-hidden">
+          <div className="flex flex-wrap rounded-md border border-zinc-800/60 overflow-hidden">
             {([
               { value: "all", label: "All", count: counts.total },
               { value: "needs_input", label: "Needs input", count: triageCounts.needs_input },
@@ -682,9 +719,9 @@ function SessionsView() {
                       }}
                     >
                       {/* Top row: title, status, idle, actions */}
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-3">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} />
-                        <div className="flex-1 min-w-0">
+                        <div className="min-w-0 basis-[calc(100%-2rem)] sm:basis-0 sm:flex-1">
                           {session.conversation_id ? (
                             <Link
                               href={`/conversation/${session.conversation_id}`}
@@ -708,6 +745,9 @@ function SessionsView() {
                           <span className="text-sm text-zinc-100">{formatDuration(session.lastActiveMs)}</span>
                           <span className="text-[10px] text-zinc-500">ago</span>
                         </span>
+
+                        <HibernatedMarker status={session.agent_status} />
+                        {commands.some(c => c.conversation_id === session.conversation_id && !c.executed_at) && <span className="text-[11px] text-sol-blue">parking requested</span>}
 
                         {/* Pinned marker */}
                         {session.pinned && (

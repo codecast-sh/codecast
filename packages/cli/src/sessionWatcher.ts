@@ -60,6 +60,7 @@ export class SessionWatcher extends EventEmitter {
 
     this.watcher = new RecursiveWatcher({
       path: this.projectsPath,
+      scanPolicy: { dirs: "claudeWatch", files: "claudeWatch" },
       filter: watchFilter,
       dirFilter: watchDirFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
@@ -83,12 +84,16 @@ export class SessionWatcher extends EventEmitter {
   // Files the watcher's priming walk found (one walk serves both), newest
   // first, limited to ones touched recently: the rest are already synced and
   // the watchdog's stale sweep covers any that are not.
-  private emitExistingFilesSorted(files: WalkFile[]): void {
+  private async emitExistingFilesSorted(files: WalkFile[]): Promise<void> {
+    const watcher = this.watcher;
     const RECENT_THRESHOLD_MS = 10 * 60 * 1000;
     const now = Date.now();
     const recentFiles = files.filter(f => now - f.stat.mtimeMs < RECENT_THRESHOLD_MS);
     recentFiles.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-    for (const file of recentFiles) {
+    for (let i = 0; i < recentFiles.length; i++) {
+      if (i % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.watcher !== watcher) return;
+      const file = recentFiles[i];
       this.handleFileEvent(file.path, "add");
     }
   }

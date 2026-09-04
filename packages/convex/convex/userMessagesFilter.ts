@@ -9,7 +9,7 @@
 // be returned here. Keeping that invariant at the source means no client has to
 // re-filter by role (a guard that has been silently dropped by refactors twice).
 
-import { AGENT_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
+import { AGENT_SWITCH_NOTICE_PREFIX, isAgentContextMessage } from "@codecast/shared/contracts";
 
 export type FilterableMessage = {
   _id: string;
@@ -77,6 +77,7 @@ export function filterUserMessages(
       if (!m.content || !m.content.trim()) return false;
       const t = stripContextTags(m.content);
       if (!t) return false;
+      if (isAgentContextMessage(t)) return false;
       if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
       if (t.includes(SUMMARY_MARKER)) return false;
       if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;

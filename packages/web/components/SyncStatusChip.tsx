@@ -1,8 +1,9 @@
 import { Check, Loader2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 // A healthy cold-open sync settles in a few seconds, and a catch-up after
 // hours away replays its backlog in well under twenty. Past this the backend
@@ -141,21 +142,6 @@ export function SyncStatusChip() {
   const [mounted, setMounted] = useState(false);
   useMountEffect(() => setMounted(true));
 
-  // Hover panel with a short close grace timer, same as AccountUsageChip: a
-  // diagonal pointer path can briefly exit the dot on its way into the panel,
-  // and an instant close makes that read as a dropped hover.
-  const [open, setOpen] = useState(false);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openNow = () => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-    setOpen(true);
-  };
-  const closeSoon = () => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = setTimeout(() => setOpen(false), 160);
-  };
-
   // Arm a timer when sync starts; trip the slow state if it's still going past
   // the threshold. Reset the moment sync settles (the timer is cleared too).
   useWatchEffect(() => {
@@ -173,26 +159,33 @@ export function SyncStatusChip() {
   const active = mounted && (coldLoad || stalled);
   const color = !active ? "var(--sol-text-dim)" : stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
   return (
-    <div
-      className="relative hidden md:flex h-7 w-4 flex-shrink-0 items-center justify-center cursor-default"
-      onMouseEnter={openNow}
-      onMouseLeave={closeSoon}
-      aria-label={!active ? "Up to date" : stalled ? "Sync is slow" : "Syncing"}
-    >
-      <span className="relative flex h-2 w-2">
-        {active && (
-          <span
-            className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40"
-            style={{ background: color }}
-          />
-        )}
-        <span
-          className="relative inline-flex h-2 w-2 rounded-full transition-colors duration-300"
-          style={{ background: color, opacity: active ? 1 : 0.3 }}
-        />
-      </span>
-      {open && mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} />}
-    </div>
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="relative hidden md:flex h-7 w-4 flex-shrink-0 items-center justify-center rounded cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
+            aria-label={`Sync status: ${!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing"}`}
+          >
+            <span aria-hidden="true" className="relative flex h-2 w-2">
+              {active && (
+                <span
+                  className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40"
+                  style={{ background: color }}
+                />
+              )}
+              <span
+                className="relative inline-flex h-2 w-2 rounded-full transition-colors duration-300"
+                style={{ background: color, opacity: active ? 1 : 0.3 }}
+              />
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" sideOffset={6} collisionPadding={8} className="w-[300px] max-w-[calc(100vw-16px)] border bg-popover p-0 text-popover-foreground shadow-md">
+          {mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} />}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -224,8 +217,8 @@ function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalle
     .filter(([, p]) => p.loading)
     .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   return (
-    <div className="absolute right-0 top-full z-50 pt-1.5">
-      <div className="w-[300px] rounded-md border bg-popover text-popover-foreground shadow-md">
+    <div>
+        <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">Sync status</div>
         <div className="flex items-center gap-2 border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
           <span className="whitespace-nowrap">
             {!syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing the latest data"}
@@ -237,6 +230,7 @@ function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalle
           )}
         </div>
         <div className="px-3 py-2 space-y-1.5">
+          {!syncing && <p className="text-xs text-sol-text-dim">New changes arrive automatically.</p>}
           {(applyStats.direct > 0 || applyStats.refetch > 0) && (
             <div className="flex items-center gap-2 text-xs">
               <span className="whitespace-nowrap text-sol-text">Log applied</span>
@@ -298,7 +292,6 @@ function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalle
             until this settles.
           </div>
         )}
-      </div>
     </div>
   );
 }

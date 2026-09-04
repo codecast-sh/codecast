@@ -1,6 +1,9 @@
 #!/usr/bin/env node
+import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
+import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
@@ -533,6 +536,7 @@ interface DaemonState {
   cursorAccess?: "granted" | "denied";
   /** Loop freeze budget written by the daemon's 30s monitor tick (see LoopFreezeLedger). */
   loopFreeze?: LoopFreezeState;
+  fleetCounts?: FleetCounts;
   /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
   timestamp?: number;
 }
@@ -1055,20 +1059,7 @@ function showWelcome(): void {
 }
 
 function getDaemonPid(): number | null {
-  if (!fs.existsSync(PID_FILE)) {
-    return getLaunchdDaemonPid();
-  }
-  const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-  if (isNaN(pid)) {
-    return getLaunchdDaemonPid();
-  }
-  try {
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    fs.unlinkSync(PID_FILE);
-    return getLaunchdDaemonPid();
-  }
+  return readDaemonPid(PID_FILE, getLaunchdDaemonPid);
 }
 
 function isDaemonRunning(): boolean {
@@ -1101,13 +1092,7 @@ function getMacLaunchdDaemonStatus(): { configured: boolean; state: string | nul
 
 function getLaunchdDaemonPid(): number | null {
   const status = getMacLaunchdDaemonStatus();
-  if (!status?.pid || Number.isNaN(status.pid)) return null;
-  try {
-    process.kill(status.pid, 0);
-    return status.pid;
-  } catch {
-    return null;
-  }
+  return status?.pid ? probeDaemonPid(status.pid) : null;
 }
 
 function kickstartManagedDaemon(): boolean {
@@ -1142,7 +1127,7 @@ function ensureDaemonRunning(): void {
           if (daemonBuildUnchanged(readRunningBuildId(), DAEMON_BUILD_ID)) return;
           const pid = getDaemonPid();
           if (pid) {
-            try { process.kill(pid, "SIGTERM"); } catch {}
+            try { process.kill(pid, "SIGTERM"); } catch { return; }
             try { fs.unlinkSync(PID_FILE); } catch {}
             startDaemonQuiet();
           }
@@ -3179,43 +3164,7 @@ program
     console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
-program
-  .command("hibernate")
-  .description(
-    "Park a session: kill its pane now, keep everything else\n\n" +
-    "The daemon tears the agent's tmux session and process tree down and marks\n" +
-    "the session parked. The transcript, the card and the history all stay, and\n" +
-    "the next message wakes it. Use it to give a loaded machine its memory back\n" +
-    "without retiring anything. `cast wake` brings it back immediately.\n\n" +
-    "Example:\n" +
-    "  cast hibernate jx7c6zk"
-  )
-  .argument("<session>", "Session short ID (e.g. jx7c6zk)")
-  .action(async (session: string) => {
-    const result = await cliPost("/cli/sessions/hibernate", { session });
-    // The daemon parks it a moment later, and refuses if the session turns out
-    // to be mid-turn, watched, or holding a live subagent — so this reports the
-    // ask, not the outcome. Same shape as `cast wake` below.
-    console.log(`${c.green}ok${c.reset} parking ${c.cyan}${result.short_id}${c.reset} ${c.dim}— the next message wakes it${c.reset}`);
-  });
-
-program
-  .command("wake")
-  .description(
-    "Wake a parked session: bring its agent back up now\n\n" +
-    "The undo of `cast hibernate`, and the same thing the next message would do\n" +
-    "on its own. Safe on a session that is already live: the daemon reuses a\n" +
-    "healthy pane rather than replacing it.\n\n" +
-    "Example:\n" +
-    "  cast wake jx7c6zk"
-  )
-  .argument("<session>", "Session short ID (e.g. jx7c6zk)")
-  .action(async (session: string) => {
-    // Waking IS resuming, so this posts to the resume route rather than earning
-    // a second name for one behavior.
-    const result = await cliPost("/cli/sessions/resume", { session });
-    console.log(`${c.green}ok${c.reset} waking ${c.cyan}${result.short_id}${c.reset}${result.deduplicated ? ` ${c.dim}(already on its way)${c.reset}` : ""}`);
-  });
+registerSessionParkingCommands(program, { post: cliPost, print: text => console.log(text) });
 
 // ── cast keys ─────────────────────────────────────────────────────────────────
 // Manage provider API keys codecast injects into opencode/pi launches. Keys live
@@ -5378,7 +5327,12 @@ program
     // Event loop freeze budget. A frozen loop delays every delivery and echo,
     // so a late message reads as "the daemon was blocked", not "the session
     // dropped it". The daemon writes this on its 30s monitor tick.
-    const freezeState = readDaemonState()?.loopFreeze;
+    const healthState = readDaemonState();
+    console.log(`  ${fmt.muted("Tracked sessions")}`);
+    row("Live", fleetCountText(healthState?.fleetCounts, "live"), 2);
+    row("Hibernated", fleetCountText(healthState?.fleetCounts, "hibernated"), 2);
+    console.log("");
+    const freezeState = healthState?.loopFreeze;
     console.log(`  ${fmt.muted("Event Loop")}`);
     if (!freezeState) {
       row("Freeze (1h)", fmt.muted("not reported yet"), 2);
@@ -6631,7 +6585,7 @@ program
     "  cast sessions --by-label -a    # group all sessions by label"
   )
   .option("-w, --watch", "Stream changes live instead of a one-shot snapshot (state transitions, or messages with -M); silent until something changes")
-  .option("--state <state>", "Filter: needs-input | done | working | dormant | idle | pinned | live (with -w: new/gone events fire as sessions enter/leave the filter)")
+  .option("--state <state>", "Filter: needs-input | done | working | dormant | hibernated | idle | pinned | live (with -w: new/gone events fire as sessions enter/leave the filter)")
   .option("-t, --team", "Show the team's sessions (default: just yours)")
   .option("-g, --global", "All teams (implies --team)")
   .option("-m, --member <name>", "Filter by team member (implies --team)")
@@ -10881,7 +10835,7 @@ program
           const name = freshWorktreeName();
           if (!options.json) console.log(`  acquiring worktree ${name} on ${cloud.prepared.cloud.id}`);
           try {
-            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
             worktreeName = ws.name;
             cloudPlacement = {
               cloud_device_id: cloud.prepared.deviceId,
@@ -11188,7 +11142,7 @@ program
         say(`acquiring worktree ${name} on ${cloud.prepared.cloud.id} (install runs there)`);
         let ws: import("./cloud/prepare.js").RemoteWorkspace;
         try {
-          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
         } catch (err) {
           console.error(`Spawn failed for "${promptGist(prompt)}": ${err instanceof Error ? err.message : String(err)}`);
           process.exit(1);

@@ -371,7 +371,7 @@ const agentStatusValidator = v.union(
 // Shared by heartbeat + heartbeatBatch: compute one session's heartbeat patch.
 // last_heartbeat always advances. The heartbeat carries the daemon's current
 // agent_status so the server self-heals a dropped transition — but only
-// overwrites when the incoming client_ts isn't older than the stored change
+// overwrites when the incoming client_ts isn't older than the last applied write
 // time, and only advances agent_status_updated_at on an ACTUAL status change
 // (the heartbeat re-sends the current status, so bumping it unconditionally
 // would track "last heard" instead of "entered this status", which idle
@@ -382,13 +382,13 @@ const agentStatusValidator = v.union(
 // heartbeat sources — was a needless invalidation/OCC firehose. The liveness
 // window is 90s everywhere (HEARTBEAT_ALIVE_MS), so throttling the timestamp
 // write to 45s keeps the row at most ~60s stale: always live with a full beat
-// of margin. A status change always writes through immediately.
+// of margin. Status observations still persist their ordering stamp immediately:
+// even an active reassertion must defeat a delayed older park write.
 const HEARTBEAT_REFRESH_MS = 45 * 1000;
 
-// Returns null when there is nothing worth writing (status unchanged AND the
-// heartbeat timestamp is still fresh) so callers can skip the patch entirely.
+// Returns null when neither status ordering nor heartbeat freshness advances.
 function buildHeartbeatPatch(
-  session: { agent_status?: string; agent_status_updated_at?: number; last_heartbeat?: number },
+  session: { agent_status?: string; agent_status_updated_at?: number; agent_status_write_at?: number; last_heartbeat?: number },
   agentStatus: string | undefined,
   clientTs: number | undefined,
   now: number,
@@ -396,7 +396,10 @@ function buildHeartbeatPatch(
   const patch: Record<string, any> = {};
   let statusChanged = false;
   if (agentStatus) {
-    const tsStale = clientTs && session.agent_status_updated_at && clientTs < session.agent_status_updated_at;
+    const tsStale = statusWriteIsStale(session, agentStatus, clientTs);
+    if (!tsStale && (clientTs ?? now) > (session.agent_status_write_at ?? 0)) {
+      patch.agent_status_write_at = clientTs ?? now;
+    }
     // Only write agent_status when it actually changes — re-writing the same
     // value is a no-op mutation that still invalidates every reader.
     if (!tsStale && agentStatus !== session.agent_status) {
@@ -626,6 +629,7 @@ export const isSessionManaged = query({
       last_heartbeat: session.last_heartbeat,
       tmux_session: session.tmux_session,
       agent_status: session.agent_status,
+      hibernated_at: session.hibernated_at,
       agent_status_updated_at: session.agent_status_updated_at,
       permission_mode: session.permission_mode,
     };
@@ -752,10 +756,14 @@ export const updateAgentStatus = mutation({
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
       .first();
 
-    if (!session) return;
-    if (session.user_id.toString() !== authUserId.toString()) return;
+    if (!session) return { applied: false, reason: "missing_session" };
+    if (session.user_id.toString() !== authUserId.toString()) return { applied: false, reason: "not_owner" };
+    if (statusWriteIsStale(session, args.agent_status, args.client_ts)) return { applied: false, reason: "stale_status" };
 
-    const patch: Record<string, any> = {};
+    const patch: Record<string, any> = {
+      agent_status: args.agent_status,
+      agent_status_write_at: args.client_ts ?? Date.now(),
+    };
 
     if (args.permission_mode !== undefined) {
       patch.permission_mode = args.permission_mode;
@@ -773,16 +781,12 @@ export const updateAgentStatus = mutation({
       patch.open_tasks_at = Date.now();
     }
 
-    const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;
-    if (!tsStale) {
-      patch.agent_status = args.agent_status;
-      // Advance the change-time only on an actual change so the field stays a
-      // "when did the agent enter this status" signal (idle detection relies on
-      // it). Redundant same-status updates — e.g. PreToolUse re-firing "working"
-      // each tool call — must not reset it.
-      if (args.agent_status !== session.agent_status) {
-        patch.agent_status_updated_at = args.client_ts || Date.now();
-      }
+    // Advance the change-time only on an actual change so the field stays a
+    // "when did the agent enter this status" signal (idle detection relies on
+    // it). Redundant same-status updates — e.g. PreToolUse re-firing "working"
+    // each tool call — must not reset it.
+    if (args.agent_status !== session.agent_status) {
+      patch.agent_status_updated_at = args.client_ts ?? Date.now();
     }
 
     // Active status updates prove the daemon is alive — refresh heartbeat too.
@@ -826,8 +830,19 @@ export const updateAgentStatus = mutation({
         }
       }
     }
+    return { applied: true };
   },
 });
+
+function statusWriteIsStale(
+  session: { agent_status?: string; agent_status_updated_at?: number; agent_status_write_at?: number },
+  status: string,
+  clientTs?: number,
+): boolean {
+  const previous = session.agent_status_write_at ?? session.agent_status_updated_at;
+  return clientTs !== undefined && previous !== undefined &&
+    (clientTs < previous || (clientTs === previous && status !== session.agent_status));
+}
 
 export const reportMetrics = mutation({
   args: {
@@ -919,7 +934,11 @@ export const reportMetrics = mutation({
 // The row set behind the /sessions page. Split from the query wrapper (like
 // performRegisterManagedSession) so the projection is testable without auth.
 export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, userId: Id<"users">) {
-  const sessions = await listLiveManagedSessions(ctx, userId, { aliveMs: 24 * 60 * 60 * 1000 });
+  const recent = await listLiveManagedSessions(ctx, userId, { aliveMs: 24 * 60 * 60 * 1000 });
+  const parked = await ctx.db.query("managed_sessions")
+    .withIndex("by_user_status", q => q.eq("user_id", userId).eq("agent_status", "hibernated"))
+    .collect();
+  const sessions = [...new Map([...recent, ...parked].map(s => [s._id, s])).values()];
 
   const results = [];
   for (const session of sessions) {
@@ -937,6 +956,7 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
     let lastMessagePreview: string | undefined;
     let lastMessageRole: string | undefined;
     let isKilled = false;
+    let ownerDeviceId: string | undefined;
 
     if (session.conversation_id) {
       const conv = await ctx.db.get(session.conversation_id);
@@ -949,6 +969,7 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
         // The 24h last_heartbeat cutoff above is the bound: a session whose
         // teardown succeeded stops beating and ages out on its own.
         isKilled = !!conv.inbox_killed_at;
+        ownerDeviceId = conv.user_id === userId ? conv.owner_device_id : undefined;
         conversationTitle = conv.title;
         projectPath = conv.project_path;
         agentType = conv.agent_type;
@@ -1001,6 +1022,9 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
       last_heartbeat: session.last_heartbeat,
       agent_status: session.agent_status,
       agent_status_updated_at: session.agent_status_updated_at,
+      hibernated_at: session.hibernated_at,
+      user_id: session.user_id,
+      owner_device_id: ownerDeviceId,
       permission_mode: session.permission_mode,
       // Prefer the freshest sample; fall back to the throttled snapshot only
       // when no time-series row survives the 2h retention (e.g. long-idle).
@@ -1162,13 +1186,14 @@ export const reapStaleManagedSessions = internalMutation({
       .collect();
     const readMs = Date.now() - readStart;
 
-    for (const s of dead) await ctx.db.delete(s._id);
+    const reapable = dead.filter(s => s.agent_status !== "hibernated");
+    for (const s of reapable) await ctx.db.delete(s._id);
 
-    if (dead.length > 0) {
+    if (reapable.length > 0) {
       console.log(
-        `reapStaleManagedSessions: deleted ${dead.length} dead session(s) (scan ${readMs}ms)`
+        `reapStaleManagedSessions: deleted ${reapable.length} dead session(s) (scan ${readMs}ms)`
       );
     }
-    return { deleted: dead.length };
+    return { deleted: reapable.length };
   },
 });

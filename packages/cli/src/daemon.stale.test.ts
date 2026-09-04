@@ -1,3 +1,4 @@
+import { daemonWorkersEnabled } from "./workers/bridge.js";
 import { describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
@@ -111,20 +112,20 @@ describe("findStaleCursorSessions", () => {
       expect(first.map((s) => s.sessionId)).toEqual(["abc123"]);
       expect(first[0].workspacePath).toBe("/tmp/proj");
       expect(first[0].dbPath).toBe(dbPath);
-      expect(opens()).toBe(1);
+      expect(opens()).toBe(daemonWorkersEnabled() ? 0 : 1);
 
       // Synced to the last row: nothing to report, and no mtime moved, so
       // the db is not opened again.
       setPosition(dbPath, 2);
       expect(await findStaleCursorSessions()).toEqual([]);
-      expect(opens()).toBe(1);
+      expect(opens()).toBe(daemonWorkersEnabled() ? 0 : 1);
 
       // A new row moves the db (or its wal): opened and reported again.
       await new Promise((r) => setTimeout(r, 20));
       db.run("INSERT INTO ItemTable (key, value) VALUES (?, ?)", [CHAT_KEY, "{}"]);
       const again = await findStaleCursorSessions();
       expect(again.map((s) => s.sessionId)).toEqual(["abc123"]);
-      expect(opens()).toBe(2);
+      expect(opens()).toBe(daemonWorkersEnabled() ? 0 : 2);
     } finally {
       setSlowSyncSink(null);
       setSlowSyncFsThresholdForTests(null);

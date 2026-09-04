@@ -3,6 +3,7 @@
 // the browser. PURE isomorphic data only — no Node or DOM APIs — so the Convex
 // runtime can import them.
 export * from "./agentStatus";
+export * from "./hibernation";
 export * from "./openTasks";
 export * from "./pendingStatus";
 export * from "./daemonCommands";

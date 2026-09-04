@@ -16,6 +16,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
@@ -31,6 +32,7 @@ async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Prom
 }
 
 type WakeableDevice = {
+  user_id?: string;
   device_id: string;
   label?: string;
   last_seen: number;
@@ -52,6 +54,7 @@ export function wakeDevicesFor(
     .filter(
       (d) =>
         d.is_remote === true &&
+        !serverOwnsCloudWake(d.user_id ?? "", d.device_id) &&
         typeof d.wake_requested_at === "number" &&
         d.wake_requested_at > d.last_seen &&
         now - d.last_seen >= DEVICE_ONLINE_MS,
@@ -61,11 +64,11 @@ export function wakeDevicesFor(
 
 /**
  * Work was queued for a conversation. If its owner is a remote device that is
- * offline — a cloud host that powered itself off — stamp the device so a local
- * daemon boots it on its next heartbeat. Returns whether a wake is pending.
+ * offline — a cloud host that powered itself off — retain wake intent until
+ * its next heartbeat. Returns whether a wake is pending.
  * Never stamps a local device: nothing can open a closed laptop.
  */
-export async function requestRemoteWake(ctx: { db: any }, conversation: any): Promise<boolean> {
+export async function requestRemoteWake(ctx: { db: any; scheduler?: { runAfter(delay: number, fn: any, args: any): Promise<unknown> } }, conversation: any): Promise<boolean> {
   const owner = conversation?.owner_device_id as string | undefined;
   if (!owner) return false;
   const device = await ctx.db
@@ -74,9 +77,11 @@ export async function requestRemoteWake(ctx: { db: any }, conversation: any): Pr
     .first();
   if (!device?.is_remote) return false;
   const now = Date.now();
-  if (now - device.last_seen < DEVICE_ONLINE_MS) return false;
-  if (typeof device.wake_requested_at === "number" && device.wake_requested_at > device.last_seen) return true;
-  await ctx.db.patch(device._id, { wake_requested_at: now });
+  const pending = typeof device.wake_requested_at === "number" && device.wake_requested_at > device.last_seen;
+  const retryFailed = device.cloud_wake?.status === "failed" && serverOwnsCloudWake(device.user_id, device.device_id);
+  const requestAt = pending && !retryFailed ? device.wake_requested_at : Math.max(now, device.last_seen + 1, (device.wake_requested_at ?? 0) + 1);
+  if (requestAt !== device.wake_requested_at) await ctx.db.patch(device._id, { wake_requested_at: requestAt });
+  await scheduleCloudWake(ctx, device, requestAt);
   return true;
 }
 

@@ -13,6 +13,7 @@ import {
   Lock,
   MessageSquare,
   MicOff,
+  Minimize2,
   MonitorUp,
   Plus,
   Radio,
@@ -78,7 +79,7 @@ function CallErrorNotice({ error, fix }: { error: string; fix: OsPermissionKind 
   const readiness = fix ? permissions[fix] : null;
   const action = fix && readiness ? permissionActionLabel(readiness) : null;
   return (
-    <div className="mx-auto mb-1 flex max-w-lg items-start gap-2 rounded-full bg-sol-orange/10 px-3.5 py-1.5 text-[12px] text-sol-orange">
+    <div className="mx-auto mt-2 flex max-w-lg items-start gap-2 rounded-full bg-sol-orange/10 px-3.5 py-1.5 text-[12px] text-sol-orange">
       <span className="min-w-0 flex-1">{error}</span>
       {fix && readiness && action && (
         <button
@@ -164,11 +165,15 @@ export function CallStage({
   onCollapse,
   panel = false,
   onSetSize,
+  onHide,
 }: {
   onCollapse?: () => void;
   panel?: boolean;
   /** Panel only: shrink the window to a row of circles, or to one. */
   onSetSize?: (size: CallWindowSize) => void;
+  /** Panel only: put the call away. The voice host keeps the call and shows
+   *  the team (or nothing) instead; without this the shell hides the window. */
+  onHide?: () => void;
 }) {
   // Memoized because it feeds an effect's dependency list: a fresh no-op every
   // render would re-bind the key listener on every render.
@@ -265,73 +270,78 @@ export function CallStage({
       className={`dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text${
         // The window is see-through and frameless, so the stage's own surface
         // is the only surface there is: a rounded card, clipped so the video
-        // inside it does not square off the corners.
-        chromeless ? " overflow-hidden rounded-xl" : ""
+        // inside it does not square off the corners — and EDGED, because the
+        // card sits over the app's own dark surfaces and without a line the
+        // eye cannot tell where the window stops.
+        chromeless
+          ? " overflow-hidden rounded-xl border border-white/[0.13] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+          : ""
       }`}
     >
-      {/* Header: where this huddle lives, the ways out, and the view. One
-          quiet line — no boxes; the selected view reads by weight alone. */}
-      <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 px-4">
-        <span className="truncate font-mono text-[12.5px] text-sol-text-secondary">
-          {parsed?.kind === "session" ? `huddle · ${label}` : label}
-        </span>
-        {roster.length > 0 && (
-          <span className="ml-1 shrink-0 font-mono text-[11.5px] text-sol-text-muted">
-            {roster.length} {roster.length === 1 ? "person" : "people"}
+      {/* Header: four groups on one line, thin rules between them. WHERE this
+          is (the room, its links, its door); HOW it is seen (the view, as one
+          segmented control); WHAT ELSE is open (the rails); and the WINDOW's
+          own controls (shrink, hide). Nothing else earns a place here. */}
+      <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 border-b border-white/[0.06] px-3">
+        <div className="flex min-w-0 shrink items-center gap-0.5">
+          <span className="min-w-0 truncate px-1 font-mono text-[12.5px] text-sol-text-secondary">
+            {parsed?.kind === "session" ? `huddle · ${label}` : label}
           </span>
-        )}
-        {parsed?.kind === "session" && (
-          <StageChromeButton
-            onClick={() => {
-              if (panel) return void navigateMainWindow(`/conversation/${parsed.conversationId}`);
-              useInboxStore.getState().navigateToSession(parsed.conversationId);
-              collapse();
-            }}
-            title="Open the session this huddle is about"
-            className="ml-1"
-          >
-            <ExternalLink className="h-3 w-3" />
-            session
-          </StageChromeButton>
-        )}
-        {live &&
-          (panel ? (
+          {roster.length > 0 && (
+            <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted">
+              {roster.length}
+            </span>
+          )}
+          {parsed?.kind === "session" && (
             <StageChromeButton
-              onClick={() => void navigateMainWindow(`/calls/${live.transcript_id}`)}
-              className="text-sol-green hover:bg-sol-green/10 hover:text-sol-green"
-              title="Open the call page in the main window — full transcript, summary, chat"
+              onClick={() => {
+                if (panel) return void navigateMainWindow(`/conversation/${parsed.conversationId}`);
+                useInboxStore.getState().navigateToSession(parsed.conversationId);
+                collapse();
+              }}
+              title="Open the session this huddle is about"
+              aria-label="Open the session this huddle is about"
             >
-              <Radio className="h-3 w-3" />
-              call page
+              <ExternalLink className="h-3.5 w-3.5" />
             </StageChromeButton>
-          ) : (
-            <Link
-              href={`/calls/${live.transcript_id}`}
-              onClick={collapse}
-              className={`${CHROME_BTN} text-sol-green hover:bg-sol-green/10 hover:text-sol-green`}
-              title="Open the call page — full transcript, summary, chat"
-            >
-              <Radio className="h-3 w-3" />
-              call page
-            </Link>
-          ))}
-        {/* The door. An open huddle is the default — any teammate can walk in
-            — so the lock is the exception, and it reads as one: lit violet
-            while the room is closed, quiet chrome while it is open. */}
-        <StageChromeButton
-          onClick={lock.toggle}
-          active={lock.locked}
-          accent="violet"
-          title={lock.title}
-          className="ml-1"
-        >
-          {lock.locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-          {lock.locked ? "locked" : "open"}
-        </StageChromeButton>
-        <div className="flex-1" />
+          )}
+          {live &&
+            (panel ? (
+              <StageChromeButton
+                onClick={() => void navigateMainWindow(`/calls/${live.transcript_id}`)}
+                className="text-sol-green hover:bg-sol-green/10 hover:text-sol-green"
+                title="Open the call page in the main window — full transcript, summary, chat"
+                aria-label="Open the call page"
+              >
+                <Radio className="h-3.5 w-3.5" />
+              </StageChromeButton>
+            ) : (
+              <Link
+                href={`/calls/${live.transcript_id}`}
+                onClick={collapse}
+                className={`${CHROME_BTN} text-sol-green hover:bg-sol-green/10 hover:text-sol-green`}
+                title="Open the call page — full transcript, summary, chat"
+                aria-label="Open the call page"
+              >
+                <Radio className="h-3.5 w-3.5" />
+              </Link>
+            ))}
+          {/* The door. An open huddle is the default — any teammate can walk
+              in — so the lock is the exception, and it reads as one: lit
+              violet while the room is closed, quiet chrome while it is open. */}
+          <StageChromeButton onClick={lock.toggle} active={lock.locked} accent="violet" title={lock.title}>
+            {lock.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+            {lock.locked ? "locked" : "open"}
+          </StageChromeButton>
+        </div>
+        <div className="min-w-2 flex-1" />
 
-        {/* View switcher: three words, the live one lit. */}
-        <div className="mr-2 flex shrink-0 items-center gap-0.5">
+        {/* The view: one control with three positions, the live one raised. */}
+        <div
+          role="radiogroup"
+          aria-label="View"
+          className="flex shrink-0 items-center gap-px rounded-md bg-white/[0.05] p-0.5"
+        >
           {(
             [
               { key: "auto", icon: Wand2, hint: "Auto — shares take the stage" },
@@ -339,19 +349,27 @@ export function CallStage({
               { key: "grid", icon: LayoutGrid, hint: "Grid — everyone equal" },
             ] as const
           ).map((v) => (
-            <StageChromeButton
+            <button
               key={v.key}
+              role="radio"
+              aria-checked={view === v.key}
               onClick={() => setView(v.key)}
-              active={view === v.key}
               title={v.hint}
+              className={`flex items-center gap-1.5 rounded px-2 py-[3px] font-mono text-[11px] transition-colors ${
+                view === v.key
+                  ? "bg-white/[0.12] text-sol-text shadow-[0_1px_0_rgba(0,0,0,0.25)]"
+                  : "text-sol-text-muted hover:text-sol-text"
+              }`}
             >
               <v.icon className="h-3.5 w-3.5" />
               {v.key}
-            </StageChromeButton>
+            </button>
           ))}
         </div>
 
-        {/* Rails. */}
+        <HeaderRule />
+
+        {/* The rails: what else is open beside the stage. */}
         <StageChromeButton
           onClick={() => toggleRail("transcript")}
           active={rail === "transcript"}
@@ -370,58 +388,39 @@ export function CallStage({
           <MessageSquare className="h-3.5 w-3.5" />
           chat
         </StageChromeButton>
+
+        <HeaderRule />
+
         {/* Give the call a window of its own. Desktop only, and deliberately
             absent in a browser rather than degraded: the ladder behind this
             has no browser rung, because a call in a Chrome popup is the bug
             this panel exists to make impossible. */}
         {canPopOutCall() && (
-          <StageChromeButton
-            onClick={() => void popOutCall()}
-            className="ml-2"
-            title={POP_OUT_CALL_TITLE}
-          >
+          <StageChromeButton onClick={() => void popOutCall()} title={POP_OUT_CALL_TITLE}>
             <AppWindow className="h-3.5 w-3.5" />
             pop out
           </StageChromeButton>
         )}
-        {/* The small sizes of this same window: everybody as a row of circles,
-            one circle of whoever is talking, or that circle the size of a menu
-            bar icon. The window keeps its media across the change — that is why they are sizes and not
-            windows — so this is only a reshape. */}
-        {panel &&
-          onSetSize &&
-          SMALL_CALL_WINDOW_SIZES.map((size, i) => {
-            const chrome = SMALL_SIZE_CHROME[size];
-            return (
-              <StageChromeButton
-                key={size}
-                onClick={() => onSetSize(size)}
-                className={i === 0 ? "ml-2" : undefined}
-                title={chrome.hint}
-              >
-                <chrome.icon className="h-3.5 w-3.5" />
-                {chrome.label}
-              </StageChromeButton>
-            );
-          })}
+        {/* The small sizes of this same window, behind one control: everybody
+            as a row of circles, one circle of whoever is talking, or that
+            circle the size of a menu bar icon. The window keeps its media
+            across the change — that is why they are sizes and not windows —
+            so this is only a reshape. */}
+        {panel && onSetSize && <ShrinkMenu onSetSize={onSetSize} />}
         {/* The window's own close. There is no traffic light to do it. Hide,
             like the palette: the huddle stays in this window. Hang-up is the
             red button on the control bar below. */}
         {panel && chromeless && (
           <StageChromeButton
-            onClick={() => void closeCallPanel({})}
-            className="ml-2"
+            onClick={() => (onHide ? onHide() : void closeCallPanel({}))}
             title="Hide this window — the huddle keeps going"
+            aria-label="Hide this window — the huddle keeps going"
           >
             <X className="h-3.5 w-3.5" />
           </StageChromeButton>
         )}
         {!panel && (
-          <StageChromeButton
-            onClick={collapse}
-            className="ml-2"
-            title="Collapse to the pill — the call continues (Esc)"
-          >
+          <StageChromeButton onClick={collapse} title="Collapse to the pill — the call continues (Esc)">
             <ChevronDown className="h-3.5 w-3.5" />
             collapse
           </StageChromeButton>
@@ -439,7 +438,7 @@ export function CallStage({
       )}
 
       {/* The stage itself. */}
-      <div className="flex min-h-0 flex-1 gap-2 px-3 pb-1">
+      <div className="flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
         <div key={view} className="flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200">
           {view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
@@ -470,13 +469,73 @@ export function CallStage({
         )}
       </div>
 
-      {rail !== "transcript" && <CaptionsOverlay live={live ?? null} />}
-
-      {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
-
-      <ControlBar call={call} />
+      {/* The foot: a band of its own under a rule, so the words and the
+          controls have a floor to stand on rather than floating up into the
+          video. Captions first — a lane, left-aligned, the speaker in a
+          column — then the notice, then the one control bar. */}
+      <div className="shrink-0 border-t border-white/[0.06] bg-black/[0.12]">
+        {rail !== "transcript" && <CaptionsLane live={live ?? null} />}
+        {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
+        <ControlBar call={call} />
+      </div>
     </div>,
     document.body,
+  );
+}
+
+/** A thin rule between the header's groups. */
+function HeaderRule() {
+  return <span aria-hidden="true" className="mx-1.5 h-4 w-px shrink-0 bg-white/[0.08]" />;
+}
+
+/**
+ * The three small sizes of the window, behind one button. They are one
+ * decision — how little of this call to keep on screen — and three buttons
+ * on the header line made it read as three unrelated things.
+ */
+function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative">
+      <StageChromeButton
+        onClick={() => setOpen((o) => !o)}
+        active={open}
+        title="Shrink this window to faces floating over your work"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Minimize2 className="h-3.5 w-3.5" />
+        shrink
+      </StageChromeButton>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-20 mt-1.5 w-[248px] rounded-lg bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-white/[0.08]"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {SMALL_CALL_WINDOW_SIZES.map((size) => {
+            const chrome = SMALL_SIZE_CHROME[size];
+            return (
+              <button
+                key={size}
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onSetSize(size);
+                }}
+                className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                <chrome.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-text-muted" />
+                <span className="min-w-0">
+                  <span className="block font-mono text-[11.5px] text-sol-text">{chrome.label}</span>
+                  <span className="block text-[10.5px] leading-snug text-sol-text-muted">{chrome.hint}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -1113,10 +1172,17 @@ function TranscriptRail({
   );
 }
 
-// Attributed captions along the stage bottom — for everyone in the room, not
-// just the scribe: the scribe reads its own local tail, everyone else the
-// synced one. Lines age out so a lull never shows stale words.
-function CaptionsOverlay({
+// Attributed captions in a lane of their own at the foot of the stage — for
+// everyone in the room, not just the scribe: the scribe reads its own local
+// tail, everyone else the synced one. Lines age out so a lull never shows
+// stale words.
+//
+// A LANE, not a caption burned into the picture: the words are left-aligned
+// with the speaker in a column, the way a transcript reads, and the lane
+// keeps its height while a transcript is live so the control bar under it
+// does not jump with every sentence. Nothing is drawn when nobody is
+// transcribing — an empty lane is a promise the stage cannot keep.
+function CaptionsLane({
   live,
 }: {
   live: { tail: Array<{ speaker_name: string; text: string; at: number }> } | null;
@@ -1128,22 +1194,29 @@ function CaptionsOverlay({
     : (live?.tail ?? [])
         .filter((c) => now - c.at < 45_000)
         .map((c) => ({ speaker: c.speaker_name, text: c.text }));
-  if (lines.length === 0) return null;
+  if (!live && !scribe.active) return null;
+  const shown = lines.slice(-3);
   return (
-    <div className="pointer-events-none mx-auto mb-1 w-full max-w-3xl px-5 pt-1">
-      <div className="space-y-0.5">
-        {lines.slice(-3).map((c, i, arr) => (
-          <div
-            key={i}
-            className={`text-center text-[13px] leading-snug transition-colors ${
-              i === arr.length - 1 ? "text-sol-text" : "text-sol-text-muted"
-            }`}
-          >
-            <span className="font-mono text-[11px] text-sol-cyan">{firstName(c.speaker)}</span>{" "}
-            {c.text}
-          </div>
-        ))}
-      </div>
+    <div className="pointer-events-none min-h-[4.25rem] border-b border-white/[0.06] px-5 py-2">
+      {shown.length === 0 ? (
+        <div className="font-mono text-[11px] text-sol-text-dim">listening…</div>
+      ) : (
+        <div className="space-y-1">
+          {shown.map((c, i, arr) => (
+            <div
+              key={i}
+              className={`flex items-baseline gap-3 text-[13px] leading-snug transition-colors ${
+                i === arr.length - 1 ? "text-sol-text" : "text-sol-text-muted"
+              }`}
+            >
+              <span className="w-16 shrink-0 truncate text-right font-mono text-[11px] text-sol-cyan">
+                {firstName(c.speaker)}
+              </span>
+              <span className="min-w-0 truncate">{c.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1158,8 +1231,8 @@ function ControlBar({ call }: { call: any }) {
   const [devicesOpen, setDevicesOpen] = useState(false);
 
   return (
-    <div className="flex items-center justify-center px-5 pb-3 pt-2">
-      <div className="flex items-center gap-1 rounded-full bg-white/[0.04] px-2 py-1.5">
+    <div className="flex items-center justify-center px-5 py-2.5">
+      <div className="flex items-center gap-1 rounded-full bg-white/[0.05] px-2 py-1.5 ring-1 ring-white/[0.06]">
         <MicButton muted={call.muted} />
         <button
           onClick={() => void setCamera(!call.camera)}

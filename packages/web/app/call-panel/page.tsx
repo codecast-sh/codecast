@@ -8,7 +8,11 @@ import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useChatChannelsSync } from "../../hooks/useChatSync";
 import { useSyncReplication } from "../../hooks/useSyncRole";
 import { useSyncTeams } from "../../hooks/useSyncTeams";
+import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
+import { useSyncTeamInboxSessions } from "../../hooks/useSyncTeamInboxSessions";
 import { useCallSync } from "../../hooks/useCallSync";
+import { useWalkieSync } from "../../hooks/useWalkieSync";
+import { isVoiceHost } from "../../lib/desktop";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 /**
@@ -24,12 +28,15 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
  * exists to end.
  *
  * Its pumps are deliberately the SHORT list. This window is not the phone: the
- * ring, the knock and the walkie belong to the people window (or the main
- * window), which is where a person answers things. Mounting them here would
- * put a second answerer on the same events for as long as a call runs. What it
- * does need is the call plane itself — `useCallSync` is also what binds the
- * Convex client into callManager, so without it this window could not join at
- * all — plus the few collections the stage names a room from.
+ * ring and the knock belong to the people window (or the main window), which
+ * is where a person answers things. Mounting them here would put a second
+ * answerer on the same events for as long as a call runs. What it does need is
+ * the call plane itself — `useCallSync` is also what binds the Convex client
+ * into callManager, so without it this window could not join at all — plus
+ * the few collections the stage names a room from. On a shell that keeps this
+ * window alive as the voice host it also mounts the walkie's ear
+ * (VoiceHostSyncEffects): the burst has to be heard in the window the call
+ * will grow in.
  */
 export default function CallPanelPage() {
   return (
@@ -49,8 +56,15 @@ function CallPanelWindow() {
   // the small sizes this window is a few circles over somebody's work, and
   // a loading card floating on top of their screen is worse than the empty
   // moment it replaces. Nothing at all is the honest first frame there.
+  //
+  // The voice host is a see-through window that is hidden, a strip or a few
+  // circles for most of its life: nothing at all is its honest first frame
+  // too. It shows a loader only when it opened straight onto a stage.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
-  const small = typeof window !== "undefined" && /[?&]size=(circles|speaker)/.test(window.location.search);
+  const small =
+    typeof window !== "undefined" &&
+    (/[?&]size=(circles|speaker|tiny)/.test(window.location.search) ||
+      (isVoiceHost() && !/[?&]room=/.test(window.location.search)));
   if (!hydrated) return small ? null : <AppLoader />;
   return (
     <>
@@ -84,5 +98,29 @@ function CallPanelSyncEffects() {
   // The call plane: occupancy, live rooms, the lock — and `bindConvex`, which
   // is what lets this window take the call over in the first place.
   useCallSync();
-  return <TeamMembersPump teamId={activeTeamId} />;
+  return (
+    <>
+      {isVoiceHost() && <VoiceHostSyncEffects />}
+      <TeamMembersPump teamId={activeTeamId} />
+    </>
+  );
+}
+
+/**
+ * What the voice host mounts on top of the call plane.
+ *
+ * THE WALKIE'S EAR. On a shell with a voice host this window is the one the
+ * door elects (lib/calls/walkieDoor), so a teammate's burst is heard here and
+ * the seat it takes is the seat the call grows in. The ring and the knock
+ * stay with the people window and the main window: they are answered there,
+ * and the answer arrives here as a command.
+ *
+ * And the sessions, because the idle faces draw each teammate's activity
+ * line — the same pair /people and /faces mount.
+ */
+function VoiceHostSyncEffects() {
+  useSyncInboxSessions();
+  useSyncTeamInboxSessions();
+  useWalkieSync();
+  return null;
 }
