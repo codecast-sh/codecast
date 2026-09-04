@@ -27,6 +27,9 @@ export function getApplyPatchInput(toolInput: string): string {
       if (typeof record.patch === "string" && record.patch.trim()) {
         return record.patch;
       }
+      if (typeof record.patchText === "string" && record.patchText.trim()) {
+        return record.patchText;
+      }
     }
   } catch {
     // Raw tool input may itself be patch text.
@@ -143,7 +146,7 @@ export function parseApplyPatchSections(input: string): ApplyPatchSection[] {
     const oldContent = section.operation === "Add" ? "" : extractDeletedContent(section.lines);
     const newContent = section.operation === "Delete" ? "" : extractAddedContent(section.lines);
 
-    if (!oldContent && !newContent) {
+    if (!oldContent && !newContent && section.operation === "Update") {
       return [];
     }
 

@@ -73,6 +73,47 @@ export async function enqueueResumeSession(
   return { deduplicated: false, command_id };
 }
 
+/**
+ * Ask the session's daemon to park the pane: kill the tmux session and its
+ * process tree, keep the transcript, stamp the agent "hibernated". The next
+ * message wakes it through the ordinary auto-resume path, so this is a cheap,
+ * fully reversible way to give the machine its resources back.
+ *
+ * There is no matching enqueueWakeSession. Waking IS a resume, and
+ * enqueueResumeSession already does every part of it, so `cast wake` routes to
+ * the resume mutation instead of earning a second name for one behavior.
+ *
+ * Runner-addressed like every other session command: the daemon holding the
+ * pane polls by conv.user_id.
+ */
+export async function enqueueHibernateSession(
+  ctx: DbCtx,
+  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id">,
+): Promise<{ deduplicated: boolean; command_id?: Id<"daemon_commands"> }> {
+  const pendingCommands = await ctx.db
+    .query("daemon_commands")
+    .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
+    .collect();
+
+  if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+    conversationId: conv._id.toString(),
+    command: "hibernate_session",
+  })) {
+    return { deduplicated: true };
+  }
+
+  const command_id = await ctx.db.insert("daemon_commands", {
+    user_id: conv.user_id,
+    command: "hibernate_session" as const,
+    args: JSON.stringify({
+      session_id: conv.session_id,
+      conversation_id: conv._id,
+    }),
+    created_at: Date.now(),
+  });
+  return { deduplicated: false, command_id };
+}
+
 // Authorize a session command and return its live target. A session may be
 // commanded by its RUNNER (conv.user_id — the account whose daemon executes
 // commands) or its second-party owner (conv.owner_user_id — e.g. a Mr-Bot-run

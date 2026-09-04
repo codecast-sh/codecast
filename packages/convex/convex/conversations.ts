@@ -1,6 +1,7 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
+import { enqueueCloudSpawn } from "./cloud";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere, findConversationByAnyRef } from "./conversationSessionLookup";
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
@@ -43,7 +44,7 @@ import { latestImagePreviewUrl } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, formatAgentSwitchNotice, findModelOption } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
@@ -1143,6 +1144,9 @@ export const createQuickSession = mutation({
     session_id: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
+    // "Run in the cloud": the row is parked on this remote device until a local
+    // daemon prepares the host and places it (cloud_spawn → cast cloud start).
+    cloud_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1169,11 +1173,19 @@ export const createQuickSession = mutation({
       message_count: 0,
       ...privacy,
       status: "active",
+      ...(args.cloud_device_id
+        ? { owner_device_id: args.cloud_device_id, cloud_placement: "pending" as const }
+        : {}),
     });
 
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+
+    if (args.cloud_device_id) {
+      await enqueueCloudSpawn(ctx, userId, { conversationId, cloudDeviceId: args.cloud_device_id });
+      return conversationId;
+    }
 
     const daemonAgentType = fromConvexAgentType(agentType);
     await enqueueStartSession(ctx, userId, {
@@ -2645,6 +2657,7 @@ export const listConversations = query({
             active_plan_id: c.active_plan_id || null,
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
+            cloud_placement: c.cloud_placement || null,
           };
         }
 
@@ -2673,6 +2686,7 @@ export const listConversations = query({
             active_plan_id: c.active_plan_id || null,
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
+            cloud_placement: c.cloud_placement || null,
           };
         }
 
@@ -2729,6 +2743,7 @@ export const listConversations = query({
             active_plan_id: c.active_plan_id || null,
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
+            cloud_placement: c.cloud_placement || null,
           };
         }
 
@@ -2877,6 +2892,7 @@ export const listConversations = query({
           active_plan_id: c.active_plan_id || null,
           worktree_name: c.worktree_name || null,
           worktree_branch: c.worktree_branch || null,
+          cloud_placement: c.cloud_placement || null,
         };
       })
     );
@@ -4566,6 +4582,76 @@ export const conversationMessagesForCLI = query({
   },
 });
 
+/** Messages one readConversationMessages call returns at most. */
+export const READ_PAGE_SIZE = 50;
+
+/**
+ * The lines one page of a read covers.
+ *
+ * An explicit range means every line in it: the page cap only decides how many
+ * a single query returns, and `nextLine` tells the caller where the next page
+ * starts, so a wide range is paged rather than silently cut at the cap. A start
+ * with no end reads to the last message, as `cast read` documents. With no
+ * range at all a read is the first twenty lines, and an anchored read is a
+ * window around the anchor small enough to fit in one page.
+ */
+export function readWindow(
+  nonEmptyCount: number,
+  args: { start_line?: number; end_line?: number; context?: number },
+  targetLine: number | undefined,
+): { startLine: number; count: number; nextLine?: number } {
+  let startLine: number;
+  let endLine: number;
+  if (targetLine !== undefined && args.start_line === undefined && args.end_line === undefined) {
+    const ctxN = Math.min(Math.floor((READ_PAGE_SIZE - 1) / 2), Math.max(0, args.context ?? 10));
+    startLine = Math.max(1, targetLine - ctxN);
+    endLine = Math.min(nonEmptyCount, targetLine + ctxN);
+  } else if (args.start_line === undefined && args.end_line === undefined) {
+    startLine = 1;
+    endLine = Math.min(nonEmptyCount, 20);
+  } else {
+    startLine = Math.max(1, args.start_line ?? 1);
+    endLine = args.end_line ?? nonEmptyCount;
+  }
+  const lastLine = Math.min(endLine, nonEmptyCount);
+  const count = Math.max(0, Math.min(lastLine - startLine + 1, READ_PAGE_SIZE));
+  const nextLine = count > 0 && startLine + count <= lastLine ? startLine + count : undefined;
+  return { startLine, count, nextLine };
+}
+
+type ReadRangeArgs = {
+  api_token: string;
+  conversation_id: string;
+  start_line?: number;
+  end_line?: number;
+  full_content?: boolean;
+  around_message_id?: string;
+  context?: number;
+};
+
+/**
+ * Read a whole range by paging readConversationMessages until it reports no
+ * `next_line`. Pages after the first keep every argument but the start, so an
+ * open end keeps reading to the last message and the anchor still marks its
+ * line in the first page.
+ */
+export async function readConversationRange(
+  runPage: (args: ReadRangeArgs) => Promise<any>,
+  args: ReadRangeArgs,
+): Promise<any> {
+  const first = await runPage(args);
+  if (first?.error || first?.next_line === undefined) return first;
+  const messages = [...first.messages];
+  let next: number | undefined = first.next_line;
+  while (next !== undefined) {
+    const page = await runPage({ ...args, start_line: next });
+    if (page?.error) return page;
+    messages.push(...page.messages);
+    next = page.next_line;
+  }
+  return { ...first, messages, next_line: undefined };
+}
+
 export const readConversationMessages = query({
   args: {
     api_token: v.string(),
@@ -4658,21 +4744,9 @@ export const readConversationMessages = query({
       else targetMissing = true;
     }
 
-    let startLine: number;
-    let endLine: number;
-    if (targetLine !== undefined && args.start_line === undefined && args.end_line === undefined) {
-      // Window of `context` messages on each side of the anchor, clamped to 24 so
-      // the anchor always stays inside the 50-message cap enforced below.
-      const ctxN = Math.min(24, Math.max(0, args.context ?? 10));
-      startLine = Math.max(1, targetLine - ctxN);
-      endLine = Math.min(nonEmptyCount, targetLine + ctxN);
-    } else {
-      startLine = args.start_line ?? 1;
-      endLine = args.end_line ?? Math.min(nonEmptyCount, 20);
-    }
-
-    const startIdx = Math.max(0, startLine - 1);
-    const count = Math.min(endLine - startLine + 1, 50);
+    const window = readWindow(nonEmptyCount, args, targetLine);
+    const startIdx = window.startLine - 1;
+    const count = window.count;
 
     const slicedMessages = nonEmptyMessages.slice(startIdx, startIdx + count);
 
@@ -4726,6 +4800,9 @@ export const readConversationMessages = query({
       target_line: targetLine,
       target_message_id: targetLine !== undefined ? args.around_message_id : undefined,
       target_missing: targetMissing || undefined,
+      // First line of the requested range this page did not reach. The HTTP
+      // route keeps asking from here until the whole range is covered.
+      next_line: window.nextLine,
     };
   },
 });
@@ -5443,6 +5520,18 @@ export const forkFromMessage = mutation({
       v.literal("pi"),
       v.literal("grok")
     )),
+    // `cast fork --cloud`: the branch runs on the cloud host, in a worktree the
+    // CLI already acquired there. Routing goes to that device, the row and the
+    // daemon args carry the worktree as project path, and the JSONL-copy fast
+    // path is off (the parent's transcript is not on that machine — the
+    // deferred resume rebuilds the branch from the server copy).
+    cloud_device_id: v.optional(v.string()),
+    cloud_project_path: v.optional(v.string()),
+    cloud_worktree: v.optional(v.object({
+      name: v.string(),
+      branch: v.optional(v.string()),
+      path: v.optional(v.string()),
+    })),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -5580,17 +5669,18 @@ export const forkFromMessage = mutation({
     // The fork lives where the parent's transcript lives: route daemon commands
     // to the parent's owner device (it has the JSONL and the checkout). Falls
     // back to project-root routing when the parent has no live owner.
-    const ownerTarget = await resolveOwnerDevice(ctx, userId, {
+    const ownerTarget = args.cloud_device_id ?? await resolveOwnerDevice(ctx, userId, {
       projectPath: original.project_path,
       gitRoot: original.git_root,
       ownerDeviceId: original.owner_device_id ?? null,
     });
+    const forkProjectPath = args.cloud_project_path ?? original.project_path;
     // Fast path applies when the fork's history is the parent's transcript
     // verbatim AND the same claude binary will resume it — the daemon copies
     // the parent's JSONL instead of waiting for the server copy + rebuild.
     const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
     const fastPathEligible = atTip && isPlainFork && daemonAgentType === "claude" &&
-      (original.agent_type === "claude_code" || !original.agent_type);
+      (original.agent_type === "claude_code" || !original.agent_type) && !args.cloud_device_id;
     // opencode forks through its serve sidecar: POST /session/:id/fork mints a
     // REAL, resumable ses_ id from the parent session (a synthetic forked-<id>
     // never resolves in opencode.db — that's the bug this fixes). The daemon needs
@@ -5620,7 +5710,7 @@ export const forkFromMessage = mutation({
       })(),
       subtitle: original.subtitle,
       project_hash: original.project_hash,
-      project_path: original.project_path,
+      project_path: forkProjectPath,
       model: isAgentSwitch ? undefined : original.model,
       started_at: now,
       updated_at: now,
@@ -5636,10 +5726,10 @@ export const forkFromMessage = mutation({
       git_remote_url: original.git_remote_url,
       git_root: original.git_root,
       cli_flags: original.cli_flags,
-      worktree_name: original.worktree_name,
-      worktree_branch: original.worktree_branch,
-      worktree_path: original.worktree_path,
-      worktree_status: original.worktree_status,
+      worktree_name: args.cloud_worktree?.name ?? original.worktree_name,
+      worktree_branch: args.cloud_worktree ? args.cloud_worktree.branch : original.worktree_branch,
+      worktree_path: args.cloud_worktree ? args.cloud_worktree.path : original.worktree_path,
+      worktree_status: args.cloud_worktree ? ("active" as const) : original.worktree_status,
       fork_status: "copying",
       fork_copy_total: totalToCopy,
       fork_copied: 0,
@@ -5653,7 +5743,7 @@ export const forkFromMessage = mutation({
       session_id: forkSessionId,
       agent_type: daemonAgentType,
       conversation_id: newConversationId,
-      project_path: original.project_path || original.git_root,
+      project_path: forkProjectPath || original.git_root,
       // Copy-the-JSONL hints. The deferred (post-copy) command may also use
       // them: copy-first is cache-stable even when the rebuild would be safe.
       ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
@@ -8082,6 +8172,7 @@ async function enrichInboxSessionRow(
     project_path: conv.project_path,
     git_root: conv.git_root,
     git_branch: conv.git_branch,
+    git_remote_url: conv.git_remote_url,
     agent_type: conv.agent_type,
     model: conv.model ?? null,
     effort: conv.effort ?? null,
@@ -8164,6 +8255,7 @@ async function enrichInboxSessionRow(
     active_task,
     worktree_name: conv.worktree_name,
     worktree_branch: conv.worktree_branch,
+    cloud_placement: (conv as any).cloud_placement ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
@@ -8179,6 +8271,10 @@ async function enrichInboxSessionRow(
     // Denormalized armed inject-trigger state (see schema) — the classifier's
     // structural dormancy input, read off the row instead of agent_tasks.
     armed_trigger_kind: conv.armed_trigger_kind ?? null,
+    // The pull request this session shepherds (see schema). Folded onto the row
+    // so the inbox card and the thread state panel can show its state without
+    // reading pull_requests per card.
+    pr_status: conv.pr_status ?? null,
     // Harness /loop state (see loopState.ts) — an armed self-wakeup makes this
     // session a standing machine intent, so the trigger set can row it like an
     // armed trigger. Stopped loops are a server-side tombstone only.
@@ -8248,6 +8344,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     project_path: child.project_path,
     git_root: child.git_root,
     git_branch: child.git_branch,
+    git_remote_url: child.git_remote_url,
     agent_type: child.agent_type,
     model: child.model ?? null,
     message_count: child.message_count,
@@ -10076,6 +10173,7 @@ export const setSessionError = mutation({
   args: {
     conversation_id: v.string(),
     error: v.optional(v.string()),
+    force: v.optional(v.boolean()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -10090,7 +10188,7 @@ export const setSessionError = mutation({
     // even for un-upgraded daemons) when a live managed session exists — that's a
     // second machine lacking the checkout racing the one that already started it.
     // Clearing the error (error=undefined) always passes through.
-    if (args.error) {
+    if (args.error && !args.force) {
       const managed = await ctx.db
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
@@ -10212,6 +10310,10 @@ export const getConversationLifecycle = query({
       inbox_stashed_at: conv.inbox_stashed_at ?? null,
       inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
       inbox_pinned_at: conv.inbox_pinned_at ?? null,
+      // Undelivered work is waiting for this session. The hibernation pass
+      // refuses to park such a session, because parking it would trade a live
+      // pane for a resume the very next tick.
+      has_pending_messages: conv.has_pending_messages ?? false,
     };
   },
 });
@@ -10429,6 +10531,32 @@ export const cliResumeSession = mutation({
       deduplicated,
       was_hidden: wasHidden,
       rearmed_schedules: rearmed,
+    };
+  },
+});
+
+// Agent-facing hibernate (cast hibernate <session> via /cli/sessions/hibernate).
+// Asks the session's daemon to park the pane now, without waiting for the fleet
+// cap to pick it: same teardown, same wake. The card is left exactly where it
+// is — parking a session is not a reason to pull a hidden one back into the
+// inbox, which is the one thing this does that cliResumeSession does not.
+export const cliHibernateSession = mutation({
+  args: {
+    session: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await resolveCommandableSession(ctx, userId, args.session, "hibernate");
+    const { deduplicated } = await enqueueHibernateSession(ctx, conv);
+
+    return {
+      ...sessionCommandResult(conv),
+      deduplicated,
     };
   },
 });
@@ -10856,7 +10984,7 @@ export const reconfigureSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not found");
+    if (!conv || (conv.user_id !== userId && !(await isSessionOwner(ctx, conv._id, userId)))) throw new Error("Not found");
     if ((conv.message_count ?? 0) > 0) throw new Error("Cannot reconfigure session with messages");
 
     const patch: Record<string, any> = { updated_at: Date.now() };
@@ -10924,7 +11052,7 @@ export const reconfigureSession = mutation({
       const key = modelAgentKey(daemonAgentType === "codex" ? "codex" : "claude_code") === "claude" && m.startsWith("claude-") ? m.slice("claude-".length) : m;
       return launchCfg?.models.some((o) => o.key === key && o.cliAlias) ? key : undefined;
     })();
-    await enqueueStartSession(ctx, userId, {
+    await enqueueStartSession(ctx, conv.user_id, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
       projectPath: updated.project_path || updated.git_root,
@@ -10984,7 +11112,8 @@ export const switchSessionAgent = mutation({
     const prevAgent = conv.agent_type || "claude_code";
     const nextAgent = args.agent_type || prevAgent;
     const agentChanged = !!args.agent_type && args.agent_type !== prevAgent;
-    if (!agentChanged && args.model === undefined && args.effort === undefined) {
+    const retryCodexSwitch = args.agent_type === "codex" && prevAgent === "codex";
+    if (!agentChanged && !retryCodexSwitch && args.model === undefined && args.effort === undefined) {
       throw new Error("Nothing to switch");
     }
 
@@ -11035,29 +11164,33 @@ export const switchSessionAgent = mutation({
     }
 
     if (reconstitutes) {
-      const notice = formatAgentSwitchNotice({
-        toAgent: nextAgent,
-        fromAgent: prevAgent,
-        toModel: args.model ?? (agentChanged ? undefined : conv.model),
-        fromModel: agentChanged ? conv.model : (args.model !== undefined ? conv.model : undefined),
-      });
-      await ctx.db.insert("messages", {
-        conversation_id: conv._id,
-        role: "user",
-        content: notice,
-        subtype: "agent_switch",
-        message_uuid: crypto.randomUUID(),
-        timestamp: Date.now(),
-      });
-      await ctx.db.patch(conv._id, {
-        message_count: (conv.message_count ?? 0) + 1,
-        last_message_role: "user",
-        updated_at: Date.now(),
-      });
+      if (!retryCodexSwitch) {
+        const notice = formatAgentSwitchNotice({
+          toAgent: nextAgent,
+          fromAgent: prevAgent,
+          toModel: args.model ?? (agentChanged ? undefined : conv.model),
+          fromModel: agentChanged ? conv.model : (args.model !== undefined ? conv.model : undefined),
+        });
+        await ctx.db.insert("messages", {
+          conversation_id: conv._id,
+          role: "user",
+          content: notice,
+          subtype: "agent_switch",
+          message_uuid: crypto.randomUUID(),
+          timestamp: Date.now(),
+        });
+        await ctx.db.patch(conv._id, {
+          message_count: (conv.message_count ?? 0) + 1,
+          last_message_role: "user",
+          updated_at: Date.now(),
+        });
+      }
       if (!updated.session_id) throw new Error("No session to switch");
       await enqueueKillAndResume(ctx, conv.user_id, updated, {
-        forceReconstitute: true,
-        switchAgent: true,
+        forceReconstitute: agentChanged || nextAgent === "codex",
+        switchAgent: agentChanged || nextAgent === "codex",
+        model: args.model ?? updated.model,
+        effort: args.effort ?? updated.effort,
       });
       return { ...sessionCommandResult(updated), switched: true, reconstituted: true };
     }
@@ -11901,7 +12034,7 @@ export async function enqueueKillAndResume(
   ctx: MutationCtx,
   userId: Id<"users">,
   conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string },
-  opts: { forceReconstitute?: boolean; switchAgent?: boolean } = {},
+  opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string } = {},
 ) {
   const now = Date.now();
   const pendingCommands = await ctx.db
@@ -11909,11 +12042,27 @@ export async function enqueueKillAndResume(
     .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
     .collect();
 
-  if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+  const changesModel = opts.model !== undefined || opts.effort !== undefined;
+  const candidates = changesModel ? pendingCommands.filter(command => !command.claimed_by) : pendingCommands;
+  if (hasRecentPendingDaemonCommand(candidates as any, {
     conversationId: conv._id.toString(),
     command: "resume_session",
     now,
   })) {
+    if (changesModel) {
+      const queued = candidates.find(command => hasRecentPendingDaemonCommand([command], {
+        conversationId: conv._id.toString(), command: "resume_session", now,
+      }));
+      if (queued) {
+        await ctx.db.patch(queued._id, {
+          args: JSON.stringify({
+            ...JSON.parse(queued.args || "{}"),
+            ...(opts.model !== undefined ? { model: opts.model } : {}),
+            ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
+          }),
+        });
+      }
+    }
     await resetConversationPendingMessages(ctx, conv._id);
     return { deduplicated: true };
   }
@@ -11935,6 +12084,8 @@ export async function enqueueKillAndResume(
       agent_type: fromConvexAgentType(conv.agent_type),
       ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
       ...(opts.switchAgent ? { switch_agent: true, force_reconstitute: true } : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
     }),
     created_at: now + 1,
   });
