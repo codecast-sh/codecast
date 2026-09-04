@@ -9,11 +9,16 @@ import { beforeEach, describe, expect, it } from "bun:test";
 // empty. The module's catch-path instead picks up this global, set BEFORE the
 // import below so the eval-time PERSISTENCE_AVAILABLE const sees it.
 const kv = new Map<string, string>();
+// Every setItem lands here; a test can hold the gate to simulate a slow disk.
+const setItemCalls: string[] = [];
+let setItemGate: Promise<void> = Promise.resolve();
 (globalThis as any).__CODECAST_TEST_KV_STORAGE__ = {
   async getItem(key: string): Promise<string | null> {
     return kv.has(key) ? (kv.get(key) as string) : null;
   },
   async setItem(key: string, value: string): Promise<void> {
+    setItemCalls.push(key);
+    await setItemGate;
     kv.set(key, value);
   },
   async removeItem(key: string): Promise<void> {
@@ -33,6 +38,7 @@ const {
   isPersistedStoreKey,
   PERSISTENCE_AVAILABLE,
   _resetPersistedShadow,
+  flushPersistence,
 } = await import("../idbCache.native");
 
 describe("idbCache.native", () => {
@@ -64,7 +70,7 @@ describe("idbCache.native", () => {
     };
     writePatchesToIDB([{ op: "replace", path: ["sessions", "a"], value: {} } as any], state);
     // setItem is async/non-blocking; let the microtask flush.
-    await Promise.resolve();
+    await flushPersistence();
 
     const cached = await loadCache();
     expect(cached).not.toBeNull();
@@ -77,7 +83,7 @@ describe("idbCache.native", () => {
   it("round-trips a meta blob", async () => {
     const state = { clientState: { current_conversation_id: "conv1", tips: { seen: ["x"] } } };
     writePatchesToIDB([{ op: "replace", path: ["clientState", "tips"], value: {} } as any], state);
-    await Promise.resolve();
+    await flushPersistence();
 
     const cached = await loadCache();
     expect(cached!.clientState).toEqual({ current_conversation_id: "conv1", tips: { seen: ["x"] } });
@@ -104,7 +110,7 @@ describe("idbCache.native", () => {
       [{ op: "replace", path: ["tasks", "mh7real"], value: {} } as any],
       { tasks: { mh7real: { ...real, title: "Renamed" } } },
     );
-    await Promise.resolve();
+    await flushPersistence();
     const onDisk = JSON.parse(kv.get("col:tasks")!) as any[];
     expect(onDisk.map((r) => r._id)).toEqual(["mh7real"]);
   });
@@ -113,7 +119,7 @@ describe("idbCache.native", () => {
     const a = { _id: "a", title: "Alpha" };
     const state = { sessions: { a } };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], state);
-    await Promise.resolve();
+    await flushPersistence();
     expect(kv.has("col:sessions")).toBe(true);
 
     // Same row reference re-pushed (the live-query churn case). Clear storage and
@@ -121,7 +127,7 @@ describe("idbCache.native", () => {
     // assert on the raw blob: if the diff correctly skips, the key is never set.
     kv.clear();
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], state);
-    await Promise.resolve();
+    await flushPersistence();
     expect(kv.has("col:sessions")).toBe(false);
   });
 
@@ -132,13 +138,13 @@ describe("idbCache.native", () => {
     const a = { _id: "k97aaaaaaaaaaaaaaaaaaaaaaaaaaaa1", title: "Alpha", updated_at: Date.now() };
     const b = { _id: "k97bbbbbbbbbbbbbbbbbbbbbbbbbbbb2", title: "Beta", updated_at: Date.now() };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [a._id]: a, [b._id]: b } });
-    await Promise.resolve();
+    await flushPersistence();
     expect((await loadCache())!.sessions).toEqual({ [a._id]: a, [b._id]: b });
 
     // b vanished from the store with NO exclude (an incomplete store / a bug, not
     // a deletion) → it MUST survive on disk so the durable cache is never wiped.
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [a._id]: a } });
-    await Promise.resolve();
+    await flushPersistence();
     expect((await loadCache())!.sessions).toEqual({ [a._id]: a, [b._id]: b });
   });
 
@@ -149,9 +155,9 @@ describe("idbCache.native", () => {
     const server = { _id: "k97cccccccccccccccccccccccccccc3", client_id: "chatmsgstub-x1", content: "hi", updated_at: Date.now() };
     const stub = { _id: "chatmsgstub-x1", client_id: "chatmsgstub-x1", content: "hi" };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [stub._id]: stub, [server._id]: server } });
-    await Promise.resolve();
+    await flushPersistence();
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [server._id]: server } });
-    await Promise.resolve();
+    await flushPersistence();
     expect((await loadCache())!.sessions).toEqual({ [server._id]: server });
   });
 
@@ -159,7 +165,7 @@ describe("idbCache.native", () => {
     const a = { _id: "a", title: "Alpha" };
     const b = { _id: "b", title: "Beta" };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a, b } });
-    await Promise.resolve();
+    await flushPersistence();
 
     // b is intentionally removed: gone from the store AND carrying a pending
     // exclude → drop it from disk too.
@@ -167,7 +173,7 @@ describe("idbCache.native", () => {
       sessions: { a },
       pending: { "sessions:b": { type: "exclude" } },
     });
-    await Promise.resolve();
+    await flushPersistence();
     expect((await loadCache())!.sessions).toEqual({ a });
   });
 
@@ -176,7 +182,7 @@ describe("idbCache.native", () => {
     writePatchesToIDB([{ op: "replace", path: ["sessions", "a"], value: {} } as any], {
       sessions: { a: { _id: "a" } },
     });
-    await Promise.resolve();
+    await flushPersistence();
     expect(await loadCache()).toBeNull();
   });
 
@@ -198,6 +204,7 @@ describe("idbCache.native", () => {
     const cached = await loadCache();
     expect(Object.keys(cached!.sessions).sort()).toEqual([cid(1), cid(3), cid(4), cid(5)].sort());
     // The pruned blob was persisted back — the stale row is gone from disk too.
+    await flushPersistence();
     const onDisk = JSON.parse(kv.get("col:sessions")!) as any[];
     expect(onDisk.map((r) => r._id).sort()).toEqual([cid(1), cid(3), cid(4), cid(5)].sort());
   });

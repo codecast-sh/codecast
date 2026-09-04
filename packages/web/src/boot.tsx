@@ -58,6 +58,11 @@ ReactDOM.createRoot(document.getElementById("root")!, {
   isDesktop() ? app : <React.StrictMode>{app}</React.StrictMode>
 );
 
+const entryPath = window.location.pathname;
+if (hasStoredAuthToken() && (entryPath === "/inbox" || entryPath.startsWith("/conversation/"))) {
+  setTimeout(() => { void import("@/app/inbox/page"); }, 0);
+}
+
 // Defer non-critical work until after first paint. The timeout is load-bearing:
 // Chrome starves idle callbacks entirely in hidden/occluded windows, and the
 // desktop app often boots minimized — without it, everything deferred here
@@ -68,7 +73,7 @@ const idle: (cb: () => void) => void =
     ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 15_000 })
     : (cb) => setTimeout(cb, 1);
 
-idle(() => initAnalytics());
+idle(() => void initAnalytics().catch(() => {}));
 
 // Install the offline app shell (service worker precache) once the app is
 // interactive. First visit installs it in the background; every later boot —
@@ -130,14 +135,12 @@ idle(() => {
   // instantly, so it warms with the hot set even in dev.
   void import("@/app/questions/page");
   // Then every other shell route (prod only — in dev this would make Vite
-  // transform the whole app at boot). A route left unimported reloads the
-  // whole window on first visit after a deploy: the SW swap purges old-hash
-  // chunks, the fetch fails, and ErrorBoundary heals with location.reload(),
-  // losing the destination. Importing everything while the manifest is fresh
-  // removes that class for this window.
+  // transform the whole app at boot). Wait until the window is hidden or has
+  // been open for a minute so startup and the first interaction stay clear.
+  // Warming still precedes the service worker's first 15-minute update.
   if (import.meta.env.PROD) {
-    setTimeout(() => {
-      import("../lib/tabLazyPages").then((m) => m.warmTabRoutes()).catch(() => {});
-    }, 5_000);
+    void import("../lib/tabLazyPages")
+      .then((module) => module.scheduleTabRouteWarmup())
+      .catch(() => {});
   }
 });

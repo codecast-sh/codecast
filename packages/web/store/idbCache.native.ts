@@ -77,6 +77,60 @@ export function _resetPersistedShadow() {
 // null-guarded as defense in depth.
 export const PERSISTENCE_AVAILABLE = Storage != null;
 
+// ── Write-behind ─────────────────────────────────────────────────────────────
+// The KV store holds ONE blob per collection, so every write is a JSON.stringify
+// of the whole table: for a busy account sessions is ~4.5 MB and tasks ~6.8 MB.
+// The store patches those tables many times a second during boot catch-up
+// (every sync page and every delta batch is its own patch), and each setItem
+// pins its multi-MB string until SQLite commits it. Written eagerly, the strings
+// outran the disk and piled up until Hermes ran out of heap ~20 s after launch
+// (Sentry REACT-NATIVE-J "LLVM ERROR" abort inside JSON.stringify, and the
+// watchdog RAM kill REACT-NATIVE-H). So a key is scheduled, not written: the
+// latest producer wins, a short trailing delay folds a burst into one blob, and
+// at most one write per key is in flight — a key dirtied mid-write is rewritten
+// once, after the write lands. Reads of a scheduled key see the scheduled value.
+const WRITE_COALESCE_MS = 250;
+const pendingWrites = new Map<string, () => string>();
+const inflightWrites = new Map<string, Promise<void>>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleWrite(key: string, produce: () => string) {
+  pendingWrites.set(key, produce);
+  if (flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, WRITE_COALESCE_MS);
+}
+
+function flushScheduledWrites() {
+  flushTimer = null;
+  for (const [key, produce] of pendingWrites) {
+    if (inflightWrites.has(key)) continue;
+    pendingWrites.delete(key);
+    let value: string;
+    try { value = produce(); } catch { continue; }
+    const write = Promise.resolve(Storage.setItem(key, value)).catch(() => {}).then(() => {
+      inflightWrites.delete(key);
+      if (pendingWrites.has(key) && flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, 0);
+    });
+    inflightWrites.set(key, write);
+  }
+}
+
+/** A scheduled-but-unflushed value, so a read never sees older bytes than the
+ *  store has already committed to disk-in-spirit. */
+function scheduledValue(key: string): string | undefined {
+  const produce = pendingWrites.get(key);
+  return produce ? produce() : undefined;
+}
+
+/** Drain every scheduled and in-flight write. Tests and a deliberate shutdown
+ *  path want a settled disk; the app itself never needs to wait. */
+export async function flushPersistence(): Promise<void> {
+  while (pendingWrites.size > 0 || inflightWrites.size > 0) {
+    if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
+    flushScheduledWrites();
+    await Promise.all([...inflightWrites.values()]);
+  }
+}
+
 // A top-level store key is durable iff it maps to a dedicated collection or is
 // whitelisted as a meta blob. Keys that satisfy neither are silently dropped on
 // write — the class of bug that lost pending user messages.
@@ -121,11 +175,11 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         // include the rows we refused to drop so they survive on disk.
         if (puts.length || rawDeletes.length) {
           const rows = kept.length ? [...Object.values(data), ...kept] : Object.values(data);
-          Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(rows)).catch(() => {});
+          scheduleWrite(COLLECTION_PREFIX + key, () => JSON.stringify(rows));
         }
       }
     } else if (META_KEYS.has(key)) {
-      Storage.setItem(META_PREFIX + key, JSON.stringify(state[key])).catch(() => {});
+      scheduleWrite(META_PREFIX + key, () => JSON.stringify(state[key]));
     }
   }
 }
@@ -176,14 +230,14 @@ export async function loadCache(): Promise<Record<string, any> | null> {
         // Whole-blob engine: the trim rewrite below (Object.values(map), which
         // the dropped rows never enter) is how the prune reaches disk.
         if (drop.length) anyTrimmed = true;
-        if (drop.length && rows.length === 0) Storage.setItem(COLLECTION_PREFIX + key, "[]").catch(() => {});
+        if (drop.length && rows.length === 0) scheduleWrite(COLLECTION_PREFIX + key, () => "[]");
       }
       // Opened-docs body cache: bound by last-open recency (see idbCache.ts).
       if (key === "docDetails" && rows.length > 0) {
         const { keep, drop } = partitionDocDetailRetention(rows, Date.now());
         rows = keep;
         if (drop.length) anyTrimmed = true;
-        if (drop.length && rows.length === 0) Storage.setItem(COLLECTION_PREFIX + key, "[]").catch(() => {});
+        if (drop.length && rows.length === 0) scheduleWrite(COLLECTION_PREFIX + key, () => "[]");
       }
       if (rows.length > 0) {
         const map: Record<string, any> = {};
@@ -199,7 +253,7 @@ export async function loadCache(): Promise<Record<string, any> | null> {
           if (kept !== row) anyTrimmed = true;
           map[row._id] = kept; shadow.set(row._id, kept);
         }
-        if (anyTrimmed) Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(Object.values(map))).catch(() => {});
+        if (anyTrimmed) scheduleWrite(COLLECTION_PREFIX + key, () => JSON.stringify(Object.values(map)));
         if (Object.keys(map).length > 0) {
           result[key] = map;
           hasData = true;
@@ -255,7 +309,7 @@ export type CachedConversation = {
 
 async function loadUserMessages(convId: string): Promise<any[] | undefined> {
   try {
-    const raw = await Storage.getItem(CONVUSERMSG_PREFIX + convId);
+    const raw = scheduledValue(CONVUSERMSG_PREFIX + convId) ?? await Storage.getItem(CONVUSERMSG_PREFIX + convId);
     return raw == null ? undefined : JSON.parse(raw);
   } catch {
     return undefined;
@@ -266,7 +320,7 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
   if (!Storage) return null;
   try {
     const userMessages = await loadUserMessages(convId);
-    const raw = await Storage.getItem(CONVMSG_PREFIX + convId);
+    const raw = scheduledValue(CONVMSG_PREFIX + convId) ?? await Storage.getItem(CONVMSG_PREFIX + convId);
     if (raw == null) return userMessages ? { messages: [], pagination: undefined, latestTimestamp: 0, userMessages } : null;
     const row = JSON.parse(raw);
     return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp, userMessages };
@@ -277,7 +331,7 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
 
 export function writeConversationUserMessages(convId: string, userMessages: any[]) {
   if (!Storage || _hydrating) return;
-  Storage.setItem(CONVUSERMSG_PREFIX + convId, JSON.stringify(userMessages)).catch(() => {});
+  scheduleWrite(CONVUSERMSG_PREFIX + convId, () => JSON.stringify(userMessages));
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
@@ -285,7 +339,7 @@ export function writeConversationMessages(convId: string, messages: any[], pagin
   const latestTimestamp = messages.length > 0
     ? Math.max(...messages.map((m: any) => m.timestamp || 0))
     : 0;
-  Storage.setItem(CONVMSG_PREFIX + convId, JSON.stringify({ messages, pagination, latestTimestamp })).catch(() => {});
+  scheduleWrite(CONVMSG_PREFIX + convId, () => JSON.stringify({ messages, pagination, latestTimestamp }));
 }
 
 // -- Dispatch outbox: persist server-bound mutations until acknowledged --
