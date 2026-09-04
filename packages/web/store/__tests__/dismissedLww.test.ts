@@ -60,10 +60,12 @@ describe("updateClientUI stamped view keys", () => {
   });
 
   it("leaves per-device keys unstamped (legacy local_wins semantics)", () => {
-    useInboxStore.getState().updateClientUI({ sidebar_collapsed: true });
+    useInboxStore.getState().updateClientUI({ sidebar_collapsed: true, visual_style: "minimal" });
     const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
     expect(ui.sidebar_collapsed).toBe(true);
+    expect(ui.visual_style).toBe("minimal");
     expect(ui["sidebar_collapsed:ts"]).toBeUndefined();
+    expect(ui["visual_style:ts"]).toBeUndefined();
   });
 
   it("adopts a NEWER view-mode change from another device on sync", () => {

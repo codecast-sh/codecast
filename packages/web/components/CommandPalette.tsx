@@ -1396,7 +1396,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   // Global command rows fire the same handlers their keyboard chords use.
   const { dispatchAction } = useShortcuts();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
   const recentVisits = useInboxStore((s) => (open ? s.recentVisits : EMPTY_RECENT_VISITS));
   const recentVisitRows = useMemo(
     () => (open ? resolveRecentVisits(useInboxStore.getState(), RECENT_VISITS_RENDER_CAP, { skipViews: standalone }) : []),
@@ -2862,6 +2862,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <Moon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
               )}
               <span className="truncate flex-1">Switch to {theme === "dark" ? "light" : "dark"} theme</span>
+            </CommandPrimitive.Item>
+            <CommandPrimitive.Item
+              key="cmd-visual-style"
+              value="Switch interface style minimal classic appearance"
+              onSelect={() => { closePalette(); setVisualStyle(visualStyle === "minimal" ? "classic" : "minimal"); }}
+              className={itemClass}
+            >
+              <LayoutDashboard className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">Switch to {visualStyle === "minimal" ? "Classic" : "Minimal"} style</span>
             </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}

@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
  */
 
 export function SettingsPanel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn("mx-auto max-w-3xl space-y-8 pb-6", className)}>{children}</div>;
+  return <div data-cc-settings className={cn("mx-auto max-w-3xl space-y-8 pb-6", className)}>{children}</div>;
 }
 
 interface SectionProps {
