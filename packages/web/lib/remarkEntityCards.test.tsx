@@ -1,8 +1,5 @@
 import { test, expect, describe, mock } from "bun:test";
 
-// End-to-end check of shared-object cards: a chat line that is NOTHING BUT
-// object references renders each as a rich preview card (remarkEntityCards →
-// EntityObjectCard), while a reference inside prose stays an inline pill.
 // The whole path runs for real — markdown → remark plugins → components —
 // with only the Convex transport faked, exactly like the references suite.
 
@@ -10,7 +7,7 @@ const TASK_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
 const FAKE_TASK = {
   _id: TASK_CONVEX_ID,
   short_id: "ct-46943",
-  title: "Rich object preview cards in chat",
+  title: "Rich object preview cards in chat: preserve the full title when shared with surrounding text",
   description: "Preview-tier rendering for shared object references, with inline expansion.",
   status: "in_progress",
   priority: "high",
@@ -61,19 +58,46 @@ const FAKE_DOC = {
   updated_at: Date.now() - 500_000,
 };
 
+const PROJECT_CONVEX_ID = "sx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const FAKE_PROJECT = { _id: PROJECT_CONVEX_ID, name: "Product improvements", description: "Larger inline objects throughout chat." };
+const FAKE_TRIGGER = { _id: "tx82qtvpbmmrmwcjqmhzawejsx8bq9gm", short_id: "tr-476", display_title: "Check the release", status: "active", prompt: "Read the release checks and report any failures.", trigger_type: "manual" };
+
+const MSG_CONVEX_ID = "kx91qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const SHARE_TOKEN = "3f0c1b2a-7d4e-4c9a-9b1e-2a6f8c0d1e2f";
+const FAKE_MESSAGE = {
+  _id: MSG_CONVEX_ID,
+  conversation_id: SESSION_CONVEX_ID,
+  role: "assistant",
+  content: "Shipped the **card plugin**.\n\n- detection\n- rendering",
+  timestamp: Date.now() - 900_000,
+};
+const FAKE_SHARED_MESSAGE = {
+  message: FAKE_MESSAGE,
+  contextMessages: [FAKE_MESSAGE],
+  conversation: { _id: SESSION_CONVEX_ID, title: FAKE_SESSION.title, agent_type: "claude_code" },
+  conversationShareToken: null,
+  user: { name: "Ashot", image: null },
+  note: null,
+  sharedAt: Date.now() - 60_000,
+};
+
 const { getFunctionName } = await import("convex/server");
 
 const ROWS: Record<string, any[]> = {
   "tasks:webGet": [FAKE_TASK],
   "plans:webGet": [FAKE_PLAN],
   "conversations:webGet": [FAKE_SESSION],
+  "agentTasks:webGet": [FAKE_TRIGGER],
+  "projects:webGet": [FAKE_PROJECT],
 };
 
 function fakeQuery(fn: unknown, args: any) {
   if (args === "skip") return undefined;
   const name = getFunctionName(fn as any);
-  if (name === "entities:resolveIdType") return args?.id === DOC_CONVEX_ID ? "doc" : null;
+  if (name === "entities:resolveIdType") return args?.id === DOC_CONVEX_ID ? "doc" : args?.id === PROJECT_CONVEX_ID ? "project" : null;
   if (name === "docs:webGet") return args?.id === DOC_CONVEX_ID ? FAKE_DOC : null;
+  if (name === "messages:getSharedMessage") return args?.share_token === SHARE_TOKEN ? FAKE_SHARED_MESSAGE : null;
+  if (name === "messages:webGet") return args?.id === MSG_CONVEX_ID ? FAKE_SHARED_MESSAGE : null;
   const rows = ROWS[name];
   if (!rows) return undefined;
   return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
@@ -133,10 +157,11 @@ describe("shared-object detection", () => {
     expect(html).not.toContain("not-prose inline-flex");
   });
 
-  test("an id inside a sentence stays an inline pill", () => {
+  test("an id inside a sentence becomes a card between intact prose blocks", () => {
     const html = render("Picked up ct-46943 this morning.");
-    expect(html).not.toContain("entity-card-row");
-    expect(html).toContain("not-prose inline-flex");
+    expect(html).toContain("entity-card-row");
+    expect(html).toContain("<p>Picked up </p>");
+    expect(html).toContain("<p> this morning.</p>");
     expect(html).toContain("Rich object preview cards in chat");
   });
 
@@ -146,6 +171,35 @@ describe("shared-object detection", () => {
     expect(html).toContain("Thoughts?");
     expect(html).toContain("entity-card-row");
     expect(html).toContain('data-card-count="1"');
+  });
+
+  test("the screenshot shape promotes adjacent mentions followed by prose", () => {
+    const html = render("I'm confused on this one — why is it asking me?\n@[First task ct-46943]\n@[Related plan pl-476] and what about this one?");
+    expect(html).toContain('data-card-count="2"');
+    expect(html).toContain("why is it asking me?");
+    expect(html).toContain("and what about this one?");
+    expect(html).not.toMatch(/<p>\s*<div/);
+  });
+
+  test("emphasized references are lifted out without losing surrounding formatting", () => {
+    const html = render("Review **the task ct-46943 today** please.");
+    expect(html).toContain("<strong>the task </strong>");
+    expect(html).toContain("<strong> today</strong>");
+    expect(html).toContain("entity-card-row");
+    expect(html).not.toMatch(/<strong>\s*<div/);
+  });
+
+  test("object URLs get the same cards as short references", () => {
+    const html = render("Review https://codecast.sh/tasks/ct-46943 and [the plan](/plans/pl-476).");
+    expect(html.match(/entity-card-row/g)?.length).toBe(2);
+    expect(html).toContain("Rich object preview cards in chat");
+    expect(html).toContain("Rich inline object embeds");
+  });
+
+  test("code and date references remain inline", () => {
+    const html = render("Run `cast task show ct-46943` @[tomorrow date:2026-08-30].");
+    expect(html).not.toContain("entity-card-row");
+    expect(html).toContain("cast task show ct-46943");
   });
 
   test("several ids on adjacent lines share one card row", () => {
@@ -164,9 +218,9 @@ describe("shared-object detection", () => {
     expect(html).toContain("Build the card system");
   });
 
-  test("a list with prose items stays a list of pills", () => {
+  test("a list with prose items keeps its list structure and expands references", () => {
     const html = render("- ct-46943 needs review\n- pl-476");
-    expect(html).not.toContain("entity-card-row");
+    expect(html).toContain("entity-card-row");
     expect(html).toContain("<li");
     expect(html).toContain("needs review");
   });
@@ -209,6 +263,16 @@ describe("shared-object detection", () => {
 });
 
 describe("card previews per type", () => {
+  test("collapsed cards keep the complete title", () => {
+    expect(render("ct-46943")).toContain(FAKE_TASK.title);
+  });
+
+  test("all six object types become cards when mentioned together in prose", () => {
+    const html = render(`Review ct-46943 pl-476 jx84qtv doc:${DOC_CONVEX_ID} tr-476 ${PROJECT_CONVEX_ID} today.`);
+    expect(html).toContain('data-card-count="6"');
+    expect(html).toContain("Check the release");
+    expect(html).toContain("Product improvements");
+  });
   test("a session card is the inbox card: title, summary, user line, project footer", () => {
     const html = render("jx84qtv");
     expect(html).toContain("Build the card system");
@@ -237,5 +301,55 @@ describe("card previews per type", () => {
     const html = render("ct-46943");
     expect(html).toContain("Looks great so far");
     expect(html).not.toContain("An earlier note");
+  });
+});
+
+describe("shared conversation messages", () => {
+  const shareUrl = `https://codecast.sh/share/message/${SHARE_TOKEN}`;
+  const inPlaceUrl = `https://codecast.sh/conversation/${SESSION_CONVEX_ID}#msg-${MSG_CONVEX_ID}`;
+
+  test("a share link alone on its line is a card that renders the message rich", () => {
+    const html = render(shareUrl);
+    expect(html).toContain("entity-card-row");
+    expect(html).toContain('data-card-count="1"');
+    // The session it came from, who wrote it, and the message body as markdown.
+    expect(html).toContain("Build the card system");
+    expect(html).toContain("Claude");
+    expect(html).toContain("card plugin</strong>");
+    expect(html).toContain("<li");
+    // Not the raw link.
+    expect(html).not.toContain(`>${shareUrl}<`);
+  });
+
+  test("a message deep link into the conversation is the same card", () => {
+    const html = render(inPlaceUrl);
+    expect(html).toContain("entity-card-row");
+    expect(html).toContain("card plugin</strong>");
+    expect(html).toContain(`href="/conversation/${SESSION_CONVEX_ID}#msg-${MSG_CONVEX_ID}"`);
+  });
+
+  test("a note above the link (its own paragraph, as forwardToChat sends it) keeps the note as prose and the card below it", () => {
+    const html = render(`Look at this one\n\n${shareUrl}`);
+    expect(html).toContain("Look at this one");
+    expect(html).toContain("entity-card-row");
+  });
+
+  test("a share link inside a sentence becomes a card with the surrounding prose", () => {
+    const html = render(`As I said in ${shareUrl} yesterday.`);
+    expect(html).toContain("entity-card-row");
+    expect(html).toContain("<p>As I said in </p>");
+    expect(html).toContain("<p> yesterday.</p>");
+    expect(html).toContain("card plugin</strong>");
+  });
+
+  test("a link the author gave their own words keeps them", () => {
+    const html = render(`[the fix](${shareUrl})`);
+    expect(html).not.toContain("entity-card-row");
+    expect(html).toContain("the fix");
+  });
+
+  test("an unknown token is not available, not a broken card", () => {
+    const html = render("https://codecast.sh/share/message/no-such-token-here");
+    expect(html).toContain("Not available to you.");
   });
 });

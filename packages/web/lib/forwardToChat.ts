@@ -32,7 +32,11 @@ export function openForwardToChat(payload: ForwardToChatPayload) {
           : target.kind === "channel" ? target.id
           : null;
         if (!channelId) return;
-        const content = [result.note, payload.url].filter(Boolean).join("\n");
+        // A blank line between them: the note is its own paragraph and the
+        // link stands alone on its line, which is what promotes it to a
+        // preview card in chat (remarkEntityCards) instead of a pill after
+        // a line break.
+        const content = [result.note, payload.url].filter(Boolean).join("\n\n");
         store.sendChatMessage(channelId, content);
         toast.success(`Sent to ${target.label}`);
       },

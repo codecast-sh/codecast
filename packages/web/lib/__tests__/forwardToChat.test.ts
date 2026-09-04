@@ -49,7 +49,7 @@ describe("openForwardToChat", () => {
     const rows = Object.values(useInboxStore.getState().chatMessages) as any[];
     expect(rows.length).toBe(1);
     expect(rows[0].channel_id).toBe(CHANNEL);
-    expect(rows[0].content).toBe(`worth a look\n${URL}`);
+    expect(rows[0].content).toBe(`worth a look\n\n${URL}`);
   });
 
   it("sends just the url when no note was typed", () => {
