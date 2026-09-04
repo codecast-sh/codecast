@@ -33,6 +33,7 @@ import { deviceInfo, deviceId } from "./device.js";
 import { decryptToken } from "../tokenEncryption.js";
 import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
+import { learnHostDeviceId } from "../cloud/prepare.js";
 
 /**
  * Find the machine a session should move to, whichever registry it lives in.
@@ -55,25 +56,15 @@ async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost;
     // online remote" broke the moment a second remote existed: the registry
     // still listed a retired Mac whose daemon kept heartbeating, and the
     // ownership flip would have sent the session there while the worktree
-    // landed here.
-    let deviceId: string | undefined;
-    try {
-      const { execFileSync } = await import("node:child_process");
-      const line = execFileSync(
-        "ssh",
-        ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-         "-o", "BatchMode=yes", `${host.user}@${host.address}`, "cast remote hosts 2>/dev/null | head -1"],
-        { encoding: "utf-8", timeout: 60_000 },
-      );
-      deviceId = /\(([0-9a-f-]{8,})\)/.exec(line)?.[1];
-    } catch { /* fall back to the online-remote pick */ }
+    // landed here. Remembered in the registry so wake requests can find it.
+    const deviceId = await learnHostDeviceId(up, host);
     return { host, cloudId: up.id, deviceId };
   }
   return { host: loadRemoteHost(hostId) };
 }
 
 /** A Convex client + api_token + generated api, from the local config (move flow). */
-async function convexClient(): Promise<{ client: any; token: string; api: any }> {
+export async function convexClient(): Promise<{ client: any; token: string; api: any }> {
   const cfgPath = path.join(os.homedir(), ".codecast", "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   const token = cfg.auth_token?.startsWith("enc:") ? decryptToken(cfg.auth_token) : cfg.auth_token;
