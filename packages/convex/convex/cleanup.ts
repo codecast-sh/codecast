@@ -113,6 +113,7 @@ export function isGcableEmptyConversation(c: {
   is_workflow_sub?: boolean;
   is_workflow_primary?: boolean;
   inbox_pinned_at?: number;
+  inbox_snoozed_until?: number;
   is_favorite?: boolean;
   share_token?: string;
   title_is_custom?: boolean;
@@ -124,7 +125,7 @@ export function isGcableEmptyConversation(c: {
   if (c.is_subagent || c.parent_conversation_id) return false;
   if (c.forked_from || c.fork_status) return false;
   if (c.workflow_run_id || c.is_workflow_sub || c.is_workflow_primary) return false;
-  if (c.inbox_pinned_at || c.is_favorite) return false;
+  if (c.inbox_pinned_at || c.is_favorite || c.inbox_snoozed_until) return false;
   if (c.share_token) return false;
   if (c.title_is_custom) return false;
   return true;

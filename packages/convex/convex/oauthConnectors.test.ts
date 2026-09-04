@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl } from "./oauthConnectors";
+import { PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl, accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS } from "./oauthConnectors";
 import { signStateWith, verifyStateWith } from "./googleOAuth";
 
 // The generic connector shares Google's security design; these tests pin the
@@ -144,5 +144,48 @@ describe("storeConnection + finishConfirm", () => {
     const member = await (deleteConnection as any)._handler(c, { user_id: "u_member", installation_id: "ai_1" });
     expect(member.ok).toBe(true);
     expect(t.app_installations).toHaveLength(0);
+  });
+});
+
+describe("token refresh policy", () => {
+  const now = 1_800_000_000_000;
+
+  test("expires_in becomes an absolute expiry; a provider without one records none", () => {
+    expect(accessExpiresAt({ expires_in: 86399 }, now)).toBe(now + 86_399_000);
+    expect(accessExpiresAt({}, now)).toBeUndefined();
+    expect(accessExpiresAt({ expires_in: 0 }, now)).toBeUndefined();
+  });
+
+  test("a row refreshes when it can and its token is expiring or of unknown age", () => {
+    const fresh = { refresh_token_enc: "r", access_expires_at: now + 60 * 60 * 1000 };
+    const expiring = { refresh_token_enc: "r", access_expires_at: now + REFRESH_MARGIN_MS - 1 };
+    const expired = { refresh_token_enc: "r", access_expires_at: now - 1 };
+    const unknownAge = { refresh_token_enc: "r" };
+    expect(needsRefresh(fresh, now)).toBe(false);
+    expect(needsRefresh(expiring, now)).toBe(true);
+    expect(needsRefresh(expired, now)).toBe(true);
+    // The rows connected before expiry was recorded: refresh once, then it is known.
+    expect(needsRefresh(unknownAge, now)).toBe(true);
+  });
+
+  test("a row without a refresh token never refreshes (Notion: the access token is all there is)", () => {
+    expect(needsRefresh({ access_expires_at: now - 1 }, now)).toBe(false);
+    expect(needsRefresh({}, now)).toBe(false);
+  });
+
+  test("storeConnection persists the expiry on insert and on re-store", async () => {
+    const t = { users: [{ _id: OWNER }], teams: [{ _id: TEAM }], app_installations: [] as any[] };
+    const c = ctx(t);
+    const base = {
+      provider: "linear", user_id: OWNER, team_id: TEAM, access_token_enc: "a1", refresh_token_enc: "r1",
+      granted_scopes: ["read"], pending_confirm_hash: "h", access_expires_at: now + 1000,
+    };
+    await (storeConnection as any)._handler(c, base);
+    expect(t.app_installations[0].access_expires_at).toBe(now + 1000);
+    t.app_installations[0].last_error = "stale";
+    await (storeConnection as any)._handler(c, { ...base, access_token_enc: "a2", access_expires_at: now + 2000 });
+    expect(t.app_installations.length).toBe(1);
+    expect(t.app_installations[0].access_expires_at).toBe(now + 2000);
+    expect(t.app_installations[0].last_error).toBeUndefined();
   });
 });

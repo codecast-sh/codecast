@@ -178,8 +178,13 @@ Both write `external.synced_at`, `external.field_ts`, and `last_error` on
 failure. Failures are logged, never retried in a loop: the 15 minute reconcile
 (S6) is the retry.
 
-Tokens: Linear via `oauthConnectors.getAccessTokenForTeam`; GitHub via
-`githubApp.getInstallationToken` for the installation covering the repo.
+Tokens: Linear via `oauthConnectors.getFreshAccessTokenForTeam`, which
+refreshes the 24 hour access token ahead of `access_expires_at` and stores
+the rotated refresh token in the same write; a refused refresh lands on the
+connection's `last_error` and parks the source with a "reconnect" message.
+GitHub via `githubApp.getInstallationToken` for the installation covering
+the repo. The reconcile retries parked sources every tick, and a successful
+sync flips a parked source back to active.
 
 ## S6. Inbound
 
