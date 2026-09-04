@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -19,6 +19,7 @@ import { adoptPathIntoActiveTab } from "../../../../src/compat/tabRouting";
 import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../../store/inboxStore";
 
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 const CODE_FORM_ID = "team-join-code";
 const CODE_LENGTH = 8;
 const TEAM_FEED_PATH = "/team/activity";
@@ -72,7 +73,7 @@ export default function JoinTeamPage() {
 
   // The member's default visibility on this team lands with the
   // suggestions; seed the picker once it does.
-  useEffect(() => {
+  useWatchEffect(() => {
     const current = data.suggestions?.current_visibility;
     if (current) setVisibility(current);
   }, [data.suggestions?.team_id, data.suggestions?.current_visibility]);

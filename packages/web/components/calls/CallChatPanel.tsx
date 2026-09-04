@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { SendHorizontal } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AvatarImg } from "../../lib/avatarCache";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The huddle's text lane: one thread per room, live on the call stage and
 // preserved on the call page — links and asides dropped mid-call stay next to
 // the words that prompted them. Optimistic rows keep sending instant; the
@@ -43,7 +44,7 @@ export function CallChatPanel({
     ];
   }, [rows, pending]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length]);

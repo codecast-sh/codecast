@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
@@ -11,6 +11,7 @@ import { channelRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { channelRowRoomKey } from "../lib/chatViews";
 import { soundRoomKnock } from "../lib/sounds";
 
+import { useWatchEffect } from "./useWatchEffect";
 // The huddles data pump, mounted once app-wide (DashboardLayout, beside
 // useChatToasts). Renders nothing; binds the Convex client into callManager
 // and syncs three store fields:
@@ -24,7 +25,7 @@ import { soundRoomKnock } from "../lib/sounds";
 export function useCallSync(): void {
   const convex = useConvex();
   const { isAuthenticated } = useConvexAuth();
-  useEffect(() => {
+  useWatchEffect(() => {
     bindConvex(convex);
   }, [convex]);
 
@@ -124,7 +125,7 @@ export function useCallSync(): void {
   const transcribeOff = !!(roster.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off;
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
   const liveStartedBy = liveTranscript === undefined ? undefined : liveTranscript ? String(liveTranscript.started_by) : null;
-  useEffect(() => {
+  useWatchEffect(() => {
     const verdict = decideAutoScribe({
       roomKey: seatedRoomKey,
       connected: !!seatedRoomKey,

@@ -71,7 +71,7 @@ export default [
       // the two classic hook rules only (the v7 plugin also ships the React
       // Compiler ruleset, which we intentionally do not opt into here).
       "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      "react-hooks/exhaustive-deps": ["warn", { additionalHooks: "^useWatchEffect$" }],
       // The eslint:recommended JS rules don't understand TypeScript syntax
       // (type-only constructs, enums, decorators). The TS parser handles those;
       // disable the core rules that double-flag them so `eslint .` executes

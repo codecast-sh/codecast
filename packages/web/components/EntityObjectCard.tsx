@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -39,6 +39,7 @@ import {
   useEntityResolution,
 } from "./entityDisplay";
 
+import { useMountEffect } from "../hooks/useMountEffect";
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
 // a card row; each card previews its object usably in place (title, state, a
@@ -505,12 +506,11 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
     if (open) setMounted(true);
     else unmountTimer.current = setTimeout(() => setMounted(false), 320);
   }, []);
-  useEffect(
+  useMountEffect(
     () => () => {
       if (unmountTimer.current) clearTimeout(unmountTimer.current);
     },
-    [],
-  );
+    []);
 
   const toggle = useCallback(() => {
     // A click that ends a text selection is copying, not toggling.

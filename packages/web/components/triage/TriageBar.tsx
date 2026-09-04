@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { EyeOff, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -14,6 +14,7 @@ import { PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb } from "./verbs";
 import { useTriageActions } from "./useTriageActions";
 import { isTriageBarCompact, toggleTriageBarCompact } from "./graduation";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
 // The triage bar: one quiet row under the composer, in the composer's own
 // column. At rest it says three words — Defer, Stash, Kill — the verbs that
 // settle nearly every card. Nothing else is printed: the chord and the
@@ -97,12 +98,12 @@ export function TriageBar() {
 
   const [flash, setFlash] = useState<Flash | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+  useMountEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); });
 
   // Finishing the intro tour points here: a one-time glow that says "the
   // verbs you just practiced live on this row."
   const [glow, setGlow] = useState(false);
-  useEffect(() => {
+  useMountEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const handler = () => {
       if (timer) clearTimeout(timer);
@@ -114,7 +115,7 @@ export function TriageBar() {
       window.removeEventListener("cc-triage-bar-glow", handler);
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  });
 
   // Zen strips the chrome by definition; the chords still work there. An
   // account with no sessions yet is on the CLI setup hero — a row of disabled

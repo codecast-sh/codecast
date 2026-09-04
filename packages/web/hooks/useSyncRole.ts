@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { startSyncReplication } from "../store/syncReplication";
 
+import { useWatchEffect } from "./useWatchEffect";
 /**
  * Whether this window feeds itself from the server (sync host or solo) or
  * receives the shared slice from another window (follower). Global feeders
@@ -15,5 +15,5 @@ export function useIsSyncHost(): boolean {
 /** Mount cross-window replication for this window. `eligible` = this window
  *  mounts the full shell and may be elected host. */
 export function useSyncReplication(eligible: boolean): void {
-  useEffect(() => startSyncReplication({ eligible }), [eligible]);
+  useWatchEffect(() => startSyncReplication({ eligible }), [eligible]);
 }

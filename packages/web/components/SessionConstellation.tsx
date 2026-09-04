@@ -5,8 +5,9 @@
 // force simulation (seeded on a circle, no randomness) run in the container's OWN
 // aspect ratio so it fills the pane at any size, and memoized on the graph shape so
 // live-status polling re-colors nodes without ever reshuffling them.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
+import { useMountEffect } from "../hooks/useMountEffect";
 export type GNode = {
   id: string;
   shortId: string;
@@ -204,7 +205,7 @@ export function SessionConstellation({
   const [dims, setDims] = useState({ w: 900, h: 620 });
   const [hover, setHover] = useState<string | null>(null);
 
-  useEffect(() => {
+  useMountEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const measure = () => {
@@ -216,7 +217,7 @@ export function SessionConstellation({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  });
 
   const W = dims.w;
   const H = dims.h;

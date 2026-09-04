@@ -13,7 +13,7 @@
 // torn down on unmount and redialed on mount: a screencast nobody is looking
 // at should not keep Chrome encoding JPEGs.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { X, RotateCw, MousePointerClick } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -30,6 +30,8 @@ import {
   type WatchTabInfo,
 } from "../../lib/browserWatch";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const DEFAULT_HEIGHT = 320;
 const MIN_HEIGHT = 120;
 
@@ -150,7 +152,7 @@ function SplitBody({
   const machineName = machine ? deviceDisplayName(machine as any) : null;
   const foreign = !!machine && !machine.is_mine;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!machineSettled) return;
     let cancelled = false;
     setStatus({ kind: "connecting" });
@@ -373,9 +375,9 @@ function ControlSurface({
 
   // Keys should land in the page the moment control turns on, without an
   // extra "click to focus" step the user has no way to discover.
-  useEffect(() => {
+  useMountEffect(() => {
     surfaceRef.current?.focus();
-  }, []);
+  });
 
   const toNorm = useCallback(
     (clientX: number, clientY: number): { nx: number; ny: number } | null => {

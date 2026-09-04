@@ -13,7 +13,7 @@
 // answers inline — and the room's chat sits in a rail next to the words.
 
 import { useTeamFeature } from "../../lib/teamFeatures";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "convex/react";
@@ -68,6 +68,8 @@ import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
 import { useRecorderStatus } from "../../hooks/useRecorder";
 import "../../components/calls/recorder.css";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 function fmtWhen(ms: number): string {
   const d = new Date(ms);
   const today = new Date();
@@ -271,23 +273,23 @@ function CallDetail({ id }: { id: string }) {
     setEnd(null);
   };
 
-  useEffect(() => {
+  useMountEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") clearSelection();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  });
 
   // Selection resets when the viewer moves to another call.
-  useEffect(() => clearSelection(), [id]);
+  useWatchEffect(() => clearSelection(), [id]);
 
   const live = isLive;
 
   // Live transcripts follow the tail while the reader is near the bottom.
   const scrollRef = useRef<HTMLDivElement>(null);
   const segCount = call?.segments?.length ?? 0;
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scrollRef.current;
     if (!el || !live) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240;

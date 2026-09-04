@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 
+import { useWatchEffect } from "./useWatchEffect";
 // ── Generic live co-presence over the doc_presence backend ───────────────────
 // One ephemeral presence row per (user, doc_id). Anyone watching a doc_id sees
 // who else is there and the words they're forming live (draft_text) — the "type
@@ -42,7 +43,7 @@ export function useDocPresence(opts: {
 
   // Heartbeat while broadcasting (keeps the row inside the 30s stale window),
   // and clear it on exit so the other side sees us leave promptly.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!broadcast) return;
     update({ doc_id: docId, draft_text: draftRef.current }).catch(() => {});
     const iv = setInterval(() => update({ doc_id: docId, draft_text: draftRef.current }).catch(() => {}), 3000);
@@ -50,7 +51,7 @@ export function useDocPresence(opts: {
   }, [broadcast, docId, update, remove]);
 
   // Snappier than the heartbeat: push shortly after the draft changes.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!broadcast) return;
     const t = setTimeout(() => update({ doc_id: docId, draft_text: draftRef.current }).catch(() => {}), 250);
     return () => clearTimeout(t);

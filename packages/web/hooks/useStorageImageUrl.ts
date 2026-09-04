@@ -17,11 +17,12 @@
 // enqueue ids the moment messages arrive, before any ImageBlock mounts.
 
 import { useConvex } from "convex/react";
-import { useEffect, useReducer } from "react";
+import { useReducer } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { imageBytes } from "../lib/imageByteCache";
 
+import { useWatchEffect } from "./useWatchEffect";
 const api = _api as any;
 
 // storageId -> resolved URL (string) or null (storage object missing).
@@ -212,7 +213,7 @@ export function useStorageImageUrl(storageId: string | undefined | null): string
   const convex = useConvex();
   const [, forceRender] = useReducer((c: number) => c + 1, 0);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!storageId || urlCache.has(storageId)) return;
     let cancelled = false;
     const unsubscribe = requestUrl(convex, storageId, () => {
@@ -242,7 +243,7 @@ export function useStorageImageUrls(
   const [, forceRender] = useReducer((c: number) => c + 1, 0);
   const idsKey = storageIds.filter(Boolean).join(",");
 
-  useEffect(() => {
+  useWatchEffect(() => {
     let cancelled = false;
     const unsubscribes: Array<() => void> = [];
     for (const id of idsKey ? idsKey.split(",") : []) {

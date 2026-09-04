@@ -1,5 +1,5 @@
 import { withInboxView } from "../lib/inboxViewHistory";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
@@ -40,6 +40,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
 
+import { useMountEffect } from "../hooks/useMountEffect";
 // A native banner is for something that JUST happened. Rows older than this at
 // the time we first see them (a sleep/offline gap replaying on reconnect) stay
 // in the bell but don't banner — the phone already covered the away window,
@@ -299,7 +300,7 @@ export function DesktopProvider() {
   // published version (same-origin /api/desktop/latest). Poll on mount, on window
   // focus, and hourly — Squirrel's own check is dead on macOS 26, so this is the
   // only reliable signal that an update is waiting.
-  useEffect(() => {
+  useMountEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
     const check = () => {
@@ -317,7 +318,7 @@ export function DesktopProvider() {
       window.removeEventListener("focus", onFocus);
       window.clearInterval(id);
     };
-  }, []);
+  });
 
   const ready = ipc?.status === "ready";
   const downloading = ipc?.status === "downloading";
@@ -333,7 +334,7 @@ export function DesktopProvider() {
   // so for it this stays a plain 90s ceiling — past that, the update likely
   // failed (daemon down, download/verify error); surface that instead of a
   // frozen banner.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!inProgress) {
       setStalled(false);
       return;
@@ -352,7 +353,7 @@ export function DesktopProvider() {
   // seconds ("keep working" shouldn't cover where you work), while ready /
   // stalled re-expand once because they need a click. Manual expand during a
   // download sticks — the timer only arms on the download's state change.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (ready || showStalled) {
       setMinimized(false);
       return;

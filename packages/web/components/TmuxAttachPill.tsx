@@ -33,7 +33,7 @@
  * pane is theirs alone.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -47,6 +47,7 @@ import {
   toggleConversationTerminal,
 } from "../lib/terminal/conversationTerminalState";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 /**
  * The machine a pane lives on, and the copy gesture for it. One hook so every
  * surface that offers "copy the attach command" — the header pill and the
@@ -95,7 +96,7 @@ export function TmuxAttachPill({
 
   const { machine, attach, copyAttach } = useAttachCopy(tmuxSession, conversationKey);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const p = prev.current;
     prev.current = tmuxSession ?? null;
     if (p === undefined) return;

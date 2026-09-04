@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, useMemo, useRef, useState, type ReactNode } from "react";
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction } from "../shortcuts";
@@ -10,6 +10,8 @@ import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation";
 
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
 export function KeyCap({ children, size = "sm" }: { children: React.ReactNode; size?: "sm" | "xs" }) {
@@ -46,7 +48,7 @@ export function KeyboardShortcutsPanel() {
   // constants — the user can rebind or remove them in Settings → Desktop, so
   // refetch each time the panel opens. Empty accelerator = removed, hidden.
   const [systemRows, setSystemRows] = useState<{ description: string; parts: string[] }[]>([]);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!s.shortcutsPanelOpen) return;
     getDesktopShortcutConfig().then((cfg) => {
       if (!cfg) return;
@@ -231,7 +233,7 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", children
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  useMountEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); });
 
   // Stuck-open guard. Arming swaps the tree (bare child → Radix trigger), which
   // remounts the DOM node, so the pointerleave that should cancel/close can land
@@ -239,7 +241,7 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", children
   // a stationary cursor. A controlled tooltip that opens with the pointer already
   // elsewhere has no event left to close it, so while open we close on any
   // evidence the pointer isn't on the trigger.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     const closeIfAway = (e?: Event) => {
       const el = triggerRef.current;

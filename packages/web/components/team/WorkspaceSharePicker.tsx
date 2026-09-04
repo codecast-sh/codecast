@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { GitBranch, Check, Search, Terminal, Users } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Input } from "../ui/input";
@@ -12,6 +12,7 @@ import {
 } from "../../hooks/useTeamWorkspaceSuggestions";
 import "./teamFlow.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The selection state (seedWorkspaceSelection, useWorkspaceSelection) lives in
 // hooks/useWorkspaceSelection so this file stays a clean Fast Refresh boundary.
 // Selection follows --team-flow-accent inside the create flow and falls back
@@ -94,7 +95,7 @@ export function WorkspaceSharePicker({
   // "/" reaches the filter from anywhere on the step. Capture phase, so the
   // app's own "/" (global search) never sees the press while this list is
   // on screen. Text fields keep the key: paths contain slashes.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!filterable) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -332,7 +333,7 @@ function WorkspaceSection({
     wrap.dataset.canScroll = below ? "true" : "false";
   }, []);
   // The grown clip is viewport relative, so a resize can change what fits.
-  useEffect(() => {
+  useWatchEffect(() => {
     updateFade();
     window.addEventListener("resize", updateFade);
     return () => window.removeEventListener("resize", updateFade);

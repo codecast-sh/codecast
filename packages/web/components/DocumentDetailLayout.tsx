@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import type { Components } from "react-markdown";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
@@ -22,6 +22,7 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
 import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // The reading view uses the EDITOR's type scale (editor.css), not chat's
 // compact one, so toggling edit mode doesn't reflow the whole document.
 // MD_COMPONENTS stays the base — entity pills, code blocks, images and the
@@ -126,7 +127,7 @@ export function DocumentDetailLayout({
 
   // Cmd/Ctrl+E toggles edit mode from anywhere on the surface — including
   // while the editor itself has focus (a modifier chord is never typing).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!initialEditable) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") {

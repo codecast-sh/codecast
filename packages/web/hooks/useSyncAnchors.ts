@@ -2,13 +2,14 @@
 // store-fed from anchors.listAnchors. One feeder (mounted once in the shell),
 // many readers: the global chip and drawer, the inbox's anchor marking, the
 // /anchor page's scope switcher, and chat's DM naming for personal bots.
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { registerKnownAgentMembers } from "../lib/chatViews";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useCollectionRows } from "./useCollectionRows";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 
+import { useWatchEffect } from "./useWatchEffect";
 const api = _api as any;
 
 export type AnchorRow = {
@@ -50,7 +51,7 @@ export function useSyncAnchors(): { ready: boolean } {
     }
     return out;
   });
-  useEffect(() => {
+  useWatchEffect(() => {
     const anchors = (useInboxStore.getState() as any).anchors ?? {};
     const list: any[] = [];
     for (const id in anchors) {

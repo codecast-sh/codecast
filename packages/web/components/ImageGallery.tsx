@@ -1,7 +1,8 @@
-import { createContext, useContext, useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 type ImageGalleryContextType = {
   register: (src: string) => void;
   open: (src: string) => void;
@@ -105,7 +106,7 @@ export function ImageGalleryProvider({ children }: { children: React.ReactNode }
 
   // Keep the active thumb visible as arrow keys / clicks move the selection.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isOpen) activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [isOpen, currentIndex]);
 

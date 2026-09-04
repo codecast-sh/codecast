@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Check, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -12,6 +12,8 @@ import { isInboxSessionView } from "../../lib/inboxRouting";
 import { useFirstRunDialog } from "../../lib/firstRunDialogs";
 import { PARK_VERBS, PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb, type TriageVerbId } from "./verbs";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The intro tour: four screens that teach the codecast loop — cards arrive,
 // the inbox sorts them by who acts next, and you clear them with one
 // keystroke each. The last screen is a practice inbox wired to the REAL
@@ -299,11 +301,11 @@ export function TriageNux() {
   const clearedBy = practice.by;
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  useMountEffect(() => {
     track("nux_tour_opened", {});
     containerRef.current?.focus();
-  }, []);
-  useEffect(() => { track("nux_tour_step", { step }); }, [step]);
+  });
+  useWatchEffect(() => { track("nux_tour_step", { step }); }, [step]);
 
   const close = useCallback((outcome: "finished" | "skipped") => {
     const store = useInboxStore.getState();
@@ -348,7 +350,7 @@ export function TriageNux() {
   // One window listener, capture phase: the app's own dispatcher is already
   // suspended by aria-modal, but Escape and the practice chords must not
   // leak into anything else either.
-  useEffect(() => {
+  useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault(); e.stopPropagation();
@@ -511,7 +513,7 @@ export function TriageNuxGate() {
   // for it while the device-setup dialog has it: one introduction at a time.
   const { blocked, claim } = useFirstRunDialog("tour", open);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (open || blocked || !onInboxView || !initialized || done || off || veteran || !hasSessions) return;
     // A beat after landing, so the tour never races the page paint. A modal
     // the user has up at that moment (new session, settings) keeps its turn:

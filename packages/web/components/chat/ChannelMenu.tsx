@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Archive, Bell, Pencil, Text } from "lucide-react";
 import {
@@ -17,6 +17,7 @@ import { channelDisplayName } from "../../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import "./chat.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The one channel-management surface, on the app's one menu system.
 //
 // The menu itself is the shared context-menu primitive (ui/context-menu), so a
@@ -143,7 +144,7 @@ function ChannelFieldEditor({
   );
   const cardRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (cardRef.current?.contains(e.target as Node)) return;
       onClose();

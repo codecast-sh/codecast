@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   isMappedToTeam,
@@ -6,6 +6,7 @@ import {
   type UserWorkspace,
 } from "./useTeamWorkspaceSuggestions";
 
+import { useWatchEffect } from "./useWatchEffect";
 /** Initial selection: workspaces teammates already share, plus those already
  *  mapped to this team. Pure so the create flow can reseed after the team id
  *  swaps from a stub to the real row. */
@@ -44,7 +45,7 @@ export function useWorkspaceSelection(
     : null;
   const seedRef = useRef(seed);
   seedRef.current = seed;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (seedRef.current) setSelectedPaths(seedRef.current);
   }, [seedSig]);
 

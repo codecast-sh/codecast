@@ -14,7 +14,7 @@
 // Cross-component state is in inboxStore's ephemeral review fields; the store
 // choreography is in lib/reviewActions.
 
-import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
@@ -29,6 +29,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { RightCommentRail } from "./comments/RightCommentRail";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // Comment-rail sizing (px). When the empty left margin is at least MIN, float the
 // rail there at whatever width fits (up to MAX) so the text column keeps its full
 // width; below MIN there isn't room for a readable rail, so shrink inline instead.
@@ -141,7 +142,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
   // before onMouseLeave fires, so clear the peek when its block no longer has any
   // comment (or all comments are gone) — otherwise the overlay lingers.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (peekBlock !== null && !myComments.some((c) => c.blockIndex === peekBlock)) setPeekBlock(null);
   }, [myComments, peekBlock]);
 
@@ -205,7 +206,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     if (measureActive) measure();
   }, [content, measureActive, measure]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!measureActive) return;
     const el = contentRef.current;
     if (!el) return;
@@ -255,7 +256,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // local to that card, invisible to this component's render cycle — so watch
   // the cards themselves; otherwise the stack (and the footer hanging under it)
   // freezes while the editor grows over it.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!engaged) return;
     const ro = new ResizeObserver(() => restack());
     cardRefs.current.forEach((el) => ro.observe(el));
@@ -352,7 +353,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   );
 
   // keep active block in view + hold focus so single-letter keys are captured here
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isReviewTarget || editingId) return;
     getQuoteUnits(contentRef.current)[activeBlock]?.scrollIntoView({ block: "nearest" });
     if (containerRef.current && !containerRef.current.contains(document.activeElement)) {

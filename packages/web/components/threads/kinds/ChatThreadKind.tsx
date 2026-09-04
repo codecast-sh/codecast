@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Hash, Lock, Users } from "lucide-react";
 import { buildChatTimeline } from "@codecast/shared/chat";
 import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
@@ -14,6 +14,7 @@ import type { ChatMessageView } from "../../chat/chatTypes";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The chat kind: a channel thread the viewer is in. The collapsed card shows
 // the room, the root message and a one-line rollup of the replies; expanded,
 // the whole thread IN PLACE, composer included — the thread panel's content
@@ -198,7 +199,7 @@ export function ChatExpanded({
   // the newest message never rendered. Re-marks when new replies land while
   // the reader is still looking (last_activity_at moves); a card expanded
   // below the fold stays unread.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen || sync.loading) return;
     if (entry.last_read_at >= entry.last_activity_at && entry.unread === 0) return;
     useInboxStore.getState().markThreadRead("chat", rootId);
@@ -207,7 +208,7 @@ export function ChatExpanded({
   // The thread on the reader's screen is being read: its own arrivals must not
   // toast at them. A hold, not the page's single slot — several cards can be
   // on screen at once, and releasing this one must not erase another's.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen) return;
     return holdChatFocus({ channelId, threadRootId: rootId });
   }, [seen, channelId, rootId]);

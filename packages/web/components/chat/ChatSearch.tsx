@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Hash, Loader2, Lock, Search, User, X } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -16,6 +16,7 @@ import { authorFor, channelDisplayName, memberHandles, memberName, type ChatMemb
 import type { ChatChannelView } from "./chatTypes";
 import "./chat.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const api = _api as any;
 
 // Chat search.
@@ -175,10 +176,10 @@ export function ChatSearch({
   }, [hits]);
   const flat = useMemo(() => groups.flatMap((g) => g.hits), [groups]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     setHighlight((h) => Math.min(h, Math.max(flat.length - 1, 0)));
   }, [flat.length]);
-  useEffect(() => {
+  useWatchEffect(() => {
     listRef.current
       ?.querySelector(`[data-idx="${highlight}"]`)
       ?.scrollIntoView({ block: "nearest" });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { CheckCircle2, FileCode2, MessageSquare, Quote } from "lucide-react";
 import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
@@ -21,6 +21,7 @@ import { FileLineThread } from "../../comments/FileLineThread";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The comment kind: one comment thread on a session — anchored to a message,
 // to a code line, or to the conversation itself. The collapsed card names the
 // session and the anchor and shows the root comment; expanded, the whole
@@ -191,7 +192,7 @@ export function CommentExpanded({ card, seen, focusComposer }: { card: ThreadCar
   // rendered — the mark waits for content (and fires once it syncs in, the
   // length dep). Re-marks when a reply lands while the reader is still
   // looking (last_activity_at moves).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && comments.length === 0) return;
     if (row.last_read_at >= row.last_activity_at && row.unread === 0) return;

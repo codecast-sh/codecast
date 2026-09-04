@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
@@ -9,6 +9,8 @@ import { track } from "../lib/analytics";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./useWorkspaceArgs";
 
+import { useMountEffect } from "./useMountEffect";
+import { useWatchEffect } from "./useWatchEffect";
 const api = _api as any;
 
 function normalizeProjectPath(path: string): string {
@@ -94,7 +96,7 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   const attemptedRef = useRef(new Map<string, number>());
   const prefetchHydrated = useInboxStore((s) => s.clientStateInitialized);
   const wsSkip = wsArgs === "skip";
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!prefetchHydrated || wsSkip || !results?.length) return;
     const { docDetails } = useInboxStore.getState();
     const rowById = new Map<string, any>();
@@ -147,11 +149,11 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   // before the persisted backfilledAt loads. Mirrors useSyncTasks.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const [reconcileNonce, setReconcileNonce] = useState(0);
-  useEffect(() => {
+  useMountEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), RECONCILE_THROTTLE_MS);
     return () => clearInterval(id);
-  }, []);
-  useEffect(() => {
+  });
+  useWatchEffect(() => {
     if (!hydrated) return;
     // Healed-rows metric (sync-log-migration.md D12): only meaningful after the
     // first full backfill — a cold crawl would count every row as "missed".

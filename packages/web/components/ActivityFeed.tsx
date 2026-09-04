@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { useMemo, useState, useRef, useCallback, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AvatarImg } from "../lib/avatarCache";
@@ -23,6 +23,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 // The team-tinted card and accent text used by the share nudge below.
 import "./team/teamFlow.css";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // Activity feed. Two sources, one rendering (FeedBody):
 //   • personal mode → a VIEW over store.sessions (the liberal delta cache that the
 //     inbox already syncs) — no redundant server query, instant from cache.
@@ -182,7 +183,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
   // Broken preview image → drop the slot entirely, otherwise the invisible
   // img reserves width and wraps the text early.
   const [thumbBroken, setThumbBroken] = useState(false);
-  useEffect(() => setThumbBroken(false), [conv.image_preview_url]);
+  useWatchEffect(() => setThumbBroken(false), [conv.image_preview_url]);
   const thumbUrl = showImageThumb && !thumbBroken ? conv.image_preview_url : null;
 
   // Expandable summary: show the full text on demand. We only surface the toggle
@@ -191,7 +192,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
   const summaryRef = useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = summaryRef.current;
     if (!el || expanded) return;
     setClamped(el.scrollHeight > el.clientHeight + 1);
@@ -480,7 +481,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   // server once the window reaches the end of what's cached — so scroll feels
   // immediate even when the backend is slow, and the DOM stays light.
   const [renderLimit, setRenderLimit] = useState(40);
-  useEffect(() => { setRenderLimit(40); }, [actorFilter, projectFilter]);
+  useWatchEffect(() => { setRenderLimit(40); }, [actorFilter, projectFilter]);
   const windowed = useMemo(() => displayConvs.slice(0, renderLimit), [displayConvs, renderLimit]);
   const canReveal = renderLimit < displayConvs.length;
 
@@ -523,7 +524,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   const lastReconfirmAt = useRef(0);
   const scrollState = useRef({ canReveal, hasMore, isLoadingMore, loadMore });
   scrollState.current = { canReveal, hasMore, isLoadingMore, loadMore };
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
     // Capture-phase scroll listener on the document so it fires no matter which
@@ -711,7 +712,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   const sharesNone =
     !!activeTeamId && !stubTeam && Array.isArray(mappings) &&
     !mappings.some((m) => m.team_id?.toString() === activeTeamId.toString() && m.auto_share);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (live) mergeFeed(key, live.conversations);
   }, [live, key, mergeFeed]);
 
@@ -723,7 +724,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   // and, if they don't connect, walk pages from the head until they do. ---
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const catchupState = useRef<Record<string, "pending" | "walking" | "contiguous">>({});
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!hydrated || !live) return;
     const rows = (live.conversations ?? []) as Conversation[];
     // An empty live page is indistinguishable from an auth blip — decide
@@ -799,7 +800,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   // first page (or a non-null cursor) means older pages exist; < a full page
   // means we already have everything.
   const liveHasMore = live != null && (((live.conversations?.length ?? 0) >= FEED_PAGE_SIZE) || live.nextCursor != null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (live && knownHasMore === undefined) setFeedHasMore(key, liveHasMore);
   }, [live, key, knownHasMore, liveHasMore, setFeedHasMore]);
 

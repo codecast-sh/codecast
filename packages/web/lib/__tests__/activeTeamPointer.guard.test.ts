@@ -56,7 +56,7 @@ describe("active-team pointer", () => {
   // canonical pointer. Both halves must stay in that one action.
   test("the store's createTeam is the only draft writer of the mirror, and its dispatch writes the canonical pointer", () => {
     const store = readFileSync(join(ROOT, "store/inboxStore.ts"), "utf8");
-    const writers = [...store.matchAll(/^\s*(\w+):\s*(?:asyncAction|sync|action)\(function[\s\S]*?^  \}\),/gm)]
+    const writers = [...store.matchAll(/^\s*(\w+):\s*(?:asyncAction|sync|action)\(function[\s\S]*?^ {2}\}\),/gm)]
       .filter((m) => /\.active_team_id = /.test(m[0]))
       .map((m) => m[1]);
     expect(writers.sort()).toEqual(["discardTeamStub", "dispatchCreateTeam", "resolveTeamStub"]);
@@ -65,7 +65,7 @@ describe("active-team pointer", () => {
       join(ROOT, "..", "convex", "convex", "dispatch.ts"),
       "utf8",
     );
-    const handler = dispatch.match(/^  dispatchCreateTeam: async \([\s\S]*?^  \},/m)?.[0] ?? "";
+    const handler = dispatch.match(/^ {2}dispatchCreateTeam: async \([\s\S]*?^ {2}\},/m)?.[0] ?? "";
     expect(handler).toContain("api.teams.createTeam");
     expect(handler).toContain("active_team_id: teamId");
 

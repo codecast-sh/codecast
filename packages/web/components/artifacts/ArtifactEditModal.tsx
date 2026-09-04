@@ -6,13 +6,14 @@
 // instead (ArtifactCard opens manage_url?edit=1); this modal is the keyless
 // path.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { X } from "lucide-react";
 import type { ArtifactRow } from "./ArtifactCard";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 export function ArtifactEditModal({ artifact, onClose }: { artifact: ArtifactRow; onClose: () => void }) {
   const loadSource = useAction(api.artifactsHttp.sourceForWeb);
   const saveEdit = useAction(api.artifactsHttp.editForWeb);
@@ -21,7 +22,7 @@ export function ArtifactEditModal({ artifact, onClose }: { artifact: ArtifactRow
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     let cancelled = false;
     loadSource({ slug: artifact.slug }).then(
       (r) => {

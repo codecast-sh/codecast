@@ -12,7 +12,7 @@
  * an informed one.
  */
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import { conversationIdFromPath } from "../lib/desktop";
 import { SessionHoverContent } from "./EntityIdPill";
 import { useInboxStore } from "../store/inboxStore";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // Keyed by path, so a background tab re-firing the same handoff refreshes the
 // one card instead of stacking duplicates.
 export function showBrowserHandoffToast(path: string, onOpen: (path: string) => void) {
@@ -56,7 +57,7 @@ function BrowserHandoffToast({
   // Landing on the session by any route resolves the handoff — drop the card
   // rather than keep offering a page the user is already on.
   const arrived = useInboxStore((s) => convId != null && s.currentSessionId === convId);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (arrived) toast.dismiss(toastId);
   }, [arrived, toastId]);
 
@@ -72,7 +73,7 @@ function BrowserHandoffToast({
   // the same toast id on any size change — sonner treats that as an update and
   // re-measures.
   const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const node = rootRef.current;
     if (!node) return;
     let lastHeight = node.getBoundingClientRect().height;

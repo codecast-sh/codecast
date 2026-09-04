@@ -1,8 +1,8 @@
-import { useEffect } from "react";
 import { useConvexAuth, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { getIdleMs, installDesktopInputTracker, isElectron } from "../lib/desktop";
 
+import { useWatchEffect } from "./useWatchEffect";
 // Tell the server a human is at this desktop surface (pushRouter.reportPresence).
 // The server uses it to keep mobile pushes quiet while you're actually here, so
 // the fidelity bar is low: a coarse heartbeat with input recency. Electron
@@ -19,7 +19,7 @@ export function usePresenceReporter() {
   // send anonymous write traffic at all).
   const { isAuthenticated } = useConvexAuth();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (typeof window === "undefined" || !isAuthenticated) return;
     installDesktopInputTracker();
 

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQueries, type RequestForQueries } from "convex/react";
 import { getFunctionName } from "convex/server";
 import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 import { convexToJson, type Value } from "convex/values";
 
+import { useWatchEffect } from "./useWatchEffect";
 // Returned (as a stable instance — consumers may use it in memo deps) when the
 // circuit breaker drops a subscription that never resolved. Renders through the
 // same error paths as a terminal server error.
@@ -59,7 +60,7 @@ export function useQueryNoThrow<Query extends FunctionReference<"query">>(
 
   // The pause lasts one commit: useQueries (above) has already dropped the
   // subscription by the time this effect runs, so the next render re-adds it.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (paused) setPausedKey(null);
   }, [paused]);
   const retry = useCallback(() => {
@@ -68,7 +69,7 @@ export function useQueryNoThrow<Query extends FunctionReference<"query">>(
   }, [key]);
 
   const breakAfterMs = opts?.breakAfterMs;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!breakAfterMs || !loading) return;
     const timer = setTimeout(() => setBrokenKey(key), breakAfterMs);
     return () => clearTimeout(timer);

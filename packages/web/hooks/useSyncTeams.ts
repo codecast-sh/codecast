@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
@@ -6,6 +6,7 @@ import { useConvexSync } from "./useConvexSync";
 import { useSwitchWorkspace } from "./useSwitchWorkspace";
 import { useIsSyncHost } from "./useSyncRole";
 
+import { useWatchEffect } from "./useWatchEffect";
 /**
  * The viewer's teams, into the store.
  *
@@ -35,7 +36,7 @@ export function useSyncTeams(): any[] | undefined {
   // after create the real id is active while the list subscription still
   // holds the old answer, and that gap must not read as a deleted team.
   const switchWorkspace = useSwitchWorkspace();
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!Array.isArray(teamsQuery)) return;
     const active = useInboxStore.getState().clientState.ui?.active_team_id;
     // Stub ids (optimistic create) resolve on their own; only a real id can dangle.

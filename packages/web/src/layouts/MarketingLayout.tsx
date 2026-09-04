@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { Outlet, useLocation } from "react-router";
 import { ForceLightMode } from "@/components/force-light-mode";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 export function MarketingLayout() {
   // This div (not the window) is the scroll container for every marketing
   // page, so in-app navigation would otherwise carry the previous page's
@@ -10,7 +11,7 @@ export function MarketingLayout() {
   // same-page hash navigation keeps the pathname and is unaffected.
   const scrollRef = useRef<HTMLDivElement>(null);
   const { pathname } = useLocation();
-  useEffect(() => {
+  useWatchEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
   }, [pathname]);
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { PanelRight, Wrench } from "lucide-react";
 import { useInboxStore, type InboxSession } from "../../../store/inboxStore";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
@@ -16,6 +16,7 @@ import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 import "../../chat/chat.css";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The session kind: the viewer's own inbox sessions, shown as cards only when
 // the Sessions toggle is on (off by default — their queue already lives in
 // the Inbox). Membership is the Inbox's own: placeInboxRows over
@@ -161,7 +162,7 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
   // shell's tail sentinel). Re-marks as messages land (newestId moves) and
   // when the meta row's count catches up — the stamp reads message_count,
   // which can bump after the message itself.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen || !newestId) return;
     useInboxStore.getState().markSessionSeen(sessionId);
   }, [seen, sessionId, newestId, session.message_count]);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { toast } from "sonner";
 import {
@@ -16,6 +16,8 @@ import {
   SettingsField, SettingsLinkRow, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
 
+import { useMountEffect } from "../../../hooks/useMountEffect";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 export default function ProfilePage() {
   const user = useQuery(api.users.getCurrentUser);
   if (!user) return null;
@@ -44,7 +46,7 @@ function ProfileSection({ user }: { user: any }) {
 
   // Initialize from the loaded user, and re-initialize only if the identity
   // itself changes — not on every query refresh, which would clobber typing.
-  useEffect(() => {
+  useWatchEffect(() => {
     setForm({
       name: user.name ?? "",
       bio: user.bio ?? "",
@@ -192,11 +194,11 @@ function DesktopSection() {
   const preferBrowser = useInboxStore((s) => s.clientState?.dismissed?.prefer_browser_links === true);
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
 
-  useEffect(() => {
+  useMountEffect(() => {
     if (!isDesktop()) return;
     getAppVersion().then(setCurrent);
     checkDesktopUpdate().then(setUpdate);
-  }, []);
+  });
 
   const inDesktop = isDesktop() && !!current;
   if (!inDesktop && !hasUsedDesktop) return null;

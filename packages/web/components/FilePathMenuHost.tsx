@@ -5,7 +5,6 @@
 // they hand the event to this host (lib/filePathMenu requestFilePathMenu),
 // mounted once in the dashboard shell next to the other docks.
 
-import { useEffect } from "react";
 import { ExternalLink, FileText, Folder, FolderOpen, PanelRightOpen } from "lucide-react";
 import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
 import { filePathHref } from "../lib/filePathLinks";
@@ -19,9 +18,10 @@ import { vaultOp } from "../lib/vault/client";
 import { fileManagerName } from "../lib/vault/reveal";
 import { useVaultStore } from "../store/vaultStore";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 export function FilePathMenuHost() {
   const menu = useContextMenu<FilePathMenuPayload>();
-  useEffect(() => setFilePathMenuListener((e, payload) => menu.open(e, payload, { force: true })), [menu]);
+  useWatchEffect(() => setFilePathMenuListener((e, payload) => menu.open(e, payload, { force: true })), [menu]);
 
   return (
     <ContextMenu state={menu}>

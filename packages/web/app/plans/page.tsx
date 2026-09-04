@@ -1,7 +1,7 @@
 "use client";
 
 import { copyToClipboard } from "../../lib/utils";
-import { useState, useCallback, useMemo, useEffect, useRef, type MouseEvent } from "react";
+import { useState, useCallback, useMemo, useRef, type MouseEvent } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -218,12 +218,12 @@ export default function PlansPage() {
   // The source toggle is otherwise store-only; honor a shared ?source= deep link
   // once on mount so the copied "link to this view" round-trips back through here.
   const seededRef = useRef(false);
-  useEffect(() => {
+  useMountEffect(() => {
     if (seededRef.current) return;
     seededRef.current = true;
     const src = searchParams.get("source");
     if (src && src !== planSource) setPlanSource(src);
-  }, []);
+  });
 
   // A deep-linkable URL for the current view: the source filter plus the
   // open plan (already carried in the URL as ?plan=). Built from state rather

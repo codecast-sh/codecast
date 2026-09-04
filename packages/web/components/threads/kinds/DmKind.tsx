@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Users } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { selectChannelReadMarker, type ChatAttachment, type ChatRailChannel } from "../../../store/chatSlice";
@@ -11,6 +11,7 @@ import { ChatComposer } from "../../chat/ChatComposer";
 import { ChatTimelineRows } from "./ChatThreadKind";
 import { useThreadsPage } from "../threadsContext";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The DM kind: a direct message room from the chat rail (a multi-person DM is
 // a DM too). The collapsed card is the rail row's story — who, and the last
 // line; expanded, the newest messages of the room and its composer, the
@@ -82,7 +83,7 @@ export function DmExpanded({
   // is that statement, witnessed by the shell's tail sentinel. The marker is
   // the newest message in the ROOM, replies included, so a badge a thread
   // reply raised clears too. Re-marks as messages land (newestId moves).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen || feed.loading) return;
     const state = useInboxStore.getState();
     const marker = selectChannelReadMarker(state as any, channelId);
@@ -91,7 +92,7 @@ export function DmExpanded({
 
   // A hold, not the page's single slot: several cards can be on screen at
   // once, and releasing this one must not erase another's.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen) return;
     return holdChatFocus({ channelId });
   }, [seen, channelId]);

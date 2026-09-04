@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Hash, Headphones, Lock, Users, X } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
@@ -23,6 +23,7 @@ import { memberAvatarUrl } from "../../lib/liveEntities";
 import type { ChatChannelView } from "./chatTypes";
 import "./chat.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // New message / new huddle.
 //
 // One field answers "who do I want to talk to" — a person, several people, a
@@ -151,10 +152,10 @@ export function NewMessageModal({
   }, [q, chips, teamMembers, viewer, rail, capReached]);
 
   // The keyboard cursor follows the list, never dangles past it.
-  useEffect(() => {
+  useWatchEffect(() => {
     setHighlight((h) => Math.min(h, Math.max(candidates.length - 1, 0)));
   }, [candidates.length]);
-  useEffect(() => {
+  useWatchEffect(() => {
     listRef.current
       ?.querySelector(`[data-idx="${highlight}"]`)
       ?.scrollIntoView({ block: "nearest" });

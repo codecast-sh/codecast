@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -8,6 +8,7 @@ import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
 import { PingAgentButton } from "./PingAgentButton";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // This message's teammate comments, rendered to the RIGHT of the message — the
 // mirror of the left quote rail. MessageReview owns the placement: it floats the
 // rail in the right page margin on wide screens (text keeps full width) or, when
@@ -28,7 +29,7 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
   const openNonce = useInboxStore((s) => (s.commentRailAnchor === messageId ? s.commentRailNonce : -1));
   const [composing, setComposing] = useState(false);
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
-  useEffect(() => { if (openNonce >= 0) setComposing(true); }, [openNonce]);
+  useWatchEffect(() => { if (openNonce >= 0) setComposing(true); }, [openNonce]);
 
   const composeOpen = composing && isAuthenticated;
   const agentBusy = thread.comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));

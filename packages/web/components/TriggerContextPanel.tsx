@@ -1,7 +1,7 @@
 "use client";
 
 import { copyToClipboard } from "../lib/utils";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -31,6 +31,7 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useTriggers } from "../hooks/useSyncTriggers";
 import { TriggerPromptView } from "./TriggerPromptView";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 const api = _api as any;
 
 // Raw titles are often a 60-char prompt slice that dies mid-parenthetical
@@ -83,7 +84,7 @@ export function TriggerContextPanel({
     const req = useInboxStore.getState().scheduleStripExpand;
     return !!req && req.convId === conversationId;
   });
-  useEffect(() => {
+  useWatchEffect(() => {
     if (stripReq && stripReq.convId === conversationId) {
       setExpanded(true);
       useInboxStore.getState().setScheduleStripExpand(null);
@@ -183,7 +184,7 @@ export function TriggerContextPanel({
   // — however it changes (switcher click OR reactive re-pick). Without this an
   // armed "Confirm cancel" could survive a swap and cancel the wrong schedule.
   const primaryId = primary?._id;
-  useEffect(() => {
+  useWatchEffect(() => {
     setConfirmingCancel(false);
     setShowPrompt(false);
     setBriefOpen(false);

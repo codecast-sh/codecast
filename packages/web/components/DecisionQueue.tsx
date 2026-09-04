@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 // The real conversation pane the inbox uses — same component, same data hooks,
 // so the queue IS the session view: the decision card renders inside it
 // (SessionDecisionCard, mounted by ConversationView), and the queue only adds
@@ -10,6 +10,7 @@ import { useDecisionQueue, DecisionStepperContext, type DecisionStepper } from "
 import { useInboxStore } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // One decision at a time, full width, keyboard driven: answer and it advances;
 // when the queue empties, say so and get out of the way. Ranking (which
 // decision is "current") lives in lib/decisionQueue.
@@ -70,7 +71,7 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
   // `?s=` anchor cannot do this job: answering advances the queue without
   // touching the URL, and the highlight has to follow the advance.
   const currentId = current?.conversationId;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!currentId) return;
     const store = useInboxStore.getState();
     // selectPanelSession toggles the pointer off when handed the id it already
@@ -96,7 +97,7 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
 
 function QueueEmpty({ resolved, onExit }: { resolved: number; onExit?: () => void }) {
   // Nothing to render means nothing to claim keys for, except the way out.
-  useEffect(() => {
+  useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onExit?.();
     };

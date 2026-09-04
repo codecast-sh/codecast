@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import {
   peekOsPermissions,
   refreshOsPermissions,
@@ -8,6 +8,7 @@ import {
   type PermissionMap,
 } from "../lib/osPermissions";
 
+import { useMountEffect } from "./useMountEffect";
 // React view of the shared OS-permissions store (lib/osPermissions.ts).
 const getServerSnapshot = () => UNKNOWN_PERMISSIONS;
 
@@ -16,9 +17,9 @@ export function useOsPermissions(): { permissions: PermissionMap; refresh: () =>
   const refresh = useCallback(() => refreshOsPermissions(), []);
   // A consumer mounting while the poll is parked (nothing was actionable at
   // the time) still wants one fresh read.
-  useEffect(() => {
+  useMountEffect(() => {
     refreshOsPermissions();
-  }, []);
+  });
   return { permissions, refresh };
 }
 

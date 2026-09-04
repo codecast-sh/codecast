@@ -11,7 +11,7 @@ import { useAction, useMutation } from "convex/react";
 import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
 import { deriveAnchorStatus, useAnchors } from "../../hooks/useSyncAnchors";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Repeat, Settings2 } from "lucide-react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -26,6 +26,8 @@ import { AnchorAvatar, AnchorGlyph, AnchorScopePill } from "../../components/anc
 import { AnchorConversation, AnchorOnboarding, CenteredNote } from "../../components/anchor/AnchorConversation";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 type ScopeType = "user" | "team";
 type Scope = { type: ScopeType; teamId: string | null };
 
@@ -52,7 +54,7 @@ function AnchorSpace() {
   // complete the install here — binding it to the logged-in user's own anchor.
   const completeInstall = useAction(api.slack.completeSlackInstall);
   const [slackFlash, setSlackFlash] = useState<null | "connected" | "error">(null);
-  useEffect(() => {
+  useMountEffect(() => {
     const p = new URLSearchParams(window.location.search);
     const cleanUrl = () => {
       const u = new URL(window.location.href);
@@ -85,11 +87,11 @@ function AnchorSpace() {
       return () => clearTimeout(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
   // A team scope with no team named yet resolves to the active team once the
   // pointer lands (a deep link that only said scope=team).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (scope.type === "team" && !scope.teamId && activeTeamId) setScope({ type: "team", teamId: activeTeamId });
   }, [scope, activeTeamId]);
 

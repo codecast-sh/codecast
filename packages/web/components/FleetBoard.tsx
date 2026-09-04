@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useEffect, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -28,6 +28,8 @@ import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { isForeignSession } from "../lib/liveEntities";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
 // grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
@@ -249,7 +251,7 @@ function FleetDrillIn() {
 
   const open = !!id && !!session;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -274,14 +276,14 @@ function FleetDrillIn() {
   // overlay pane in the store: nothing rendered it, yet overlayConversationId
   // kept answering — and the triage chords (stash/defer/kill) target exactly
   // that id, so a destructive key could hit an invisible session.
-  useEffect(() => {
+  useMountEffect(() => {
     return () => {
       const st = useInboxStore.getState();
       if (st.workspace.secondary.presentation === "overlay" && st.workspace.secondary.pane?.kind === "conversation") {
         st.wsHide("secondary", { remember: false });
       }
     };
-  }, []);
+  });
 
   // A drilled-in row that vanished (killed, pruned) closes itself.
   if (!open || !id || !session) return null;

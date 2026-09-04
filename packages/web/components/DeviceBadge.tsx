@@ -7,7 +7,7 @@
  * lands on the most-recently-active local laptop/desktop (see convex/deviceRouting).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -22,6 +22,7 @@ import {
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 export type Device = {
   device_id: string;
   label: string;
@@ -416,7 +417,7 @@ export function useDeviceMoveStatus(conversationId: string | undefined): {
   // The unclaimed warning and the give-up are time-driven, not row-driven — a
   // coarse tick re-evaluates them, gated so it costs nothing outside a move.
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!entry || entry.error) return;
     setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 5_000);
@@ -480,7 +481,7 @@ export function useDeviceMoveStatus(conversationId: string | undefined): {
 
   // Self-cleaning: a confirmed move lingers green then clears; a failed one
   // keeps its retry for a while, then expires rather than sticking forever.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!conversationId || !entry) return;
     if (status.phase === "restored") {
       const t = setTimeout(() => clearMoveEntry(conversationId, entry.started_at), MOVE_RESTORED_LINGER_MS);

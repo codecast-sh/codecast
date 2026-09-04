@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // One first-run dialog at a time.
 //
 // Several surfaces introduce themselves the first time the dashboard opens:
@@ -47,7 +48,7 @@ const getServerSnapshot = () => "";
  */
 export function useFirstRunDialog(id: string, open: boolean): { blocked: boolean; claim: () => boolean } {
   const snap = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (open) {
       if (!holders.has(id)) {
         holders.add(id);
@@ -57,7 +58,7 @@ export function useFirstRunDialog(id: string, open: boolean): { blocked: boolean
       emit();
     }
   }, [id, open]);
-  useEffect(
+  useWatchEffect(
     () => () => {
       if (holders.delete(id)) emit();
     },
