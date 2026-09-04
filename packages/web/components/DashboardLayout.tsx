@@ -337,6 +337,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => selectCommentRailOpen(s),
     s => s.clientState.ui?.comments_enabled ?? false,
     s => s.clientState.ui?.simple_view === true,
+    s => s.clientState.ui?.visual_style,
     // Re-render the header toggle when comments change, so a teammate's comment on
     // the viewed conversation surfaces the toggle even with the tools off. Subscribe
     // to the comments map REF (O(1) Object.is compare), not a full scan: comments is
@@ -366,7 +367,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The nav slot owns the sidebar's width (so a workbench restores it with the
   // rest of the chrome); the legacy layouts.dashboard value seeds it once for
   // users whose width predates the slot taking ownership.
-  const rawLayout = s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT;
+  const rawLayout = s.clientState.layouts?.dashboard ?? (s.clientState.ui?.visual_style === "minimal" ? { sidebar: 18, main: 82 } : DEFAULT_LAYOUT);
   const navSize = s.workspace.nav.size ?? rawLayout.sidebar ?? 25;
   const layout = {
     sidebar: Math.max(10, Math.min(50, navSize)),
@@ -875,7 +876,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // pane holds the edge — a percent for the session list, pixels for the
   // comment rail — so only a plausibly-percent value is read here.
   const ctxSize = s.workspace.context.size;
-  const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : 30;
+  const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : s.clientState.ui?.visual_style === "minimal" ? 22 : 30;
   const railDragEchoRef = useRef<number | null>(railSize);
   const handleRightLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     const size = newLayout["session-list"];
@@ -985,7 +986,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   );
 
   return (
-    <div className={`bg-sol-bg flex flex-col overflow-hidden${s.clientState.ui?.simple_view ? " simple-view" : ""}`} style={{ height: zoomHeight }}>
+    <div data-cc-shell className={`bg-sol-bg flex flex-col overflow-hidden${s.clientState.ui?.simple_view ? " simple-view" : ""}`} style={{ height: zoomHeight }}>
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
@@ -993,11 +994,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           then stands in as the titlebar — drag region + traffic-light inset —
           via useTitlebarHead, so no strip is needed above the page. */}
       {/* Header spans full width */}
-      <header ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
+      <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
-          <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
+          <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
-        <div className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
+        <div data-cc-topbar-row className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Sidebar toggle + nav */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
@@ -1061,7 +1062,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </div>
 
           {/* Center section: Search */}
-          <div className="hidden sm:flex flex-1 justify-center min-w-0">
+          <div data-cc-topbar-search className="hidden sm:flex flex-1 justify-center min-w-0">
             <ErrorBoundary name="GlobalSearch" level="inline">
               <GlobalSearch />
             </ErrorBoundary>
@@ -1070,7 +1071,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           <div className="hidden md:block flex-shrink-0 mx-1" style={{ width: 1, minWidth: 1, height: 20, backgroundColor: "var(--sol-text-dim)", opacity: 0.35 }} />
 
           {/* Right section: Actions */}
-          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+          <div data-cc-topbar-actions className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <ErrorBoundary name="AccountUsageChip" level="inline">
               <AccountUsageChip />
             </ErrorBoundary>
@@ -1362,4 +1363,3 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     </div>
   );
 }
-

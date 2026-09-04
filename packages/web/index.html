@@ -34,6 +34,10 @@
       (function() {
         var theme = localStorage.getItem('codecast-theme') || 'light';
         document.documentElement.classList.add(theme);
+        var visualStyle = localStorage.getItem('codecast-visual-style');
+        if (visualStyle === 'minimal' || visualStyle === 'codex') {
+          document.documentElement.classList.add('minimal-style');
+        }
       })();
     </script>
     <style>
@@ -54,6 +58,8 @@
         z-index: 2147483647;
       }
       html.dark #boot-shell { background: #002b36; }
+      html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
+      html.dark.minimal-style #boot-shell { background: #212121; color: #9b9b9b; }
       #boot-shell[data-hidden="true"] { opacity: 0; pointer-events: none; }
       #boot-shell .mark { opacity: 0.45; }
       #boot-shell .bar {

@@ -1179,6 +1179,7 @@ export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan" | 
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  visual_style?: "classic" | "minimal";
   sidebar_collapsed?: boolean;
   zen_mode?: boolean;
   sticky_headers_disabled?: boolean;

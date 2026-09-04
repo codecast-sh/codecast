@@ -98,8 +98,8 @@ const config: Config = {
   				'monospace'
   			],
   			sans: [
-  				'var(--font-mono)',
-  				'monospace'
+				'var(--font-ui)',
+				'sans-serif'
   			],
   			serif: [
   				'var(--font-serif)',
@@ -110,7 +110,7 @@ const config: Config = {
   		typography: {
   			DEFAULT: {
   				css: {
-  					fontFamily: 'var(--font-mono), monospace',
+					fontFamily: 'var(--font-ui), sans-serif',
   					code: {
   						fontFamily: 'var(--font-mono), monospace'
   					},
@@ -121,7 +121,7 @@ const config: Config = {
   			},
   			invert: {
   				css: {
-  					fontFamily: 'var(--font-mono), monospace'
+					fontFamily: 'var(--font-ui), sans-serif'
   				}
   			}
   		},

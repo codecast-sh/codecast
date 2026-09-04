@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { toast } from "sonner";
 import {
-  Activity, Globe, LayoutList, Monitor, MonitorDot, User, Volume2,
+  Activity, Globe, LayoutList, Monitor, MonitorDot, Palette, User, Volume2,
 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { isDesktop, getAppVersion, checkDesktopUpdate } from "../../../lib/desktop";
@@ -12,8 +12,9 @@ import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { SelectBox } from "../../../components/ui/select-box";
 import { useInboxStore, type ClientUI } from "../../../store/inboxStore";
+import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
 import {
-  SettingsField, SettingsLinkRow, SettingsPanel, SettingsRow, SettingsSection,
+  SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
 
 import { useMountEffect } from "../../../hooks/useMountEffect";
@@ -24,6 +25,7 @@ export default function ProfilePage() {
   return (
     <SettingsPanel>
       <ProfileSection user={user} />
+      <AppearanceSection />
       <InterfaceSection />
       <DesktopSection />
       <DaemonSection user={user} />
@@ -129,6 +131,43 @@ function ProfileSection({ user }: { user: any }) {
 }
 
 // ── interface preferences ──────────────────────────────────────────────────
+
+function AppearanceSection() {
+  const { visualStyle, setVisualStyle } = useTheme();
+  const options = ([
+    { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
+    { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
+  ] satisfies Array<{ value: VisualStyle; label: string; description: ReactNode }>);
+  return (
+    <SettingsSection title="Appearance" icon={Palette} description="Choose the visual language for every Codecast surface.">
+      <SettingsField
+        label="Interface style"
+        hint="Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."
+      >
+        <SettingsOptionGroup
+          value={visualStyle}
+          onChange={(value) => setVisualStyle(value as VisualStyle)}
+          label="Interface style"
+          options={options}
+          className="visual-style-options w-full"
+        />
+      </SettingsField>
+    </SettingsSection>
+  );
+}
+
+function StyleOptionPreview({ variant, caption }: { variant: VisualStyle; caption: string }) {
+  return (
+    <span className="mt-2 block">
+      <span aria-hidden="true" className={`cc-style-preview cc-style-preview--${variant}`}>
+        <span className="cc-style-preview__nav"><i /><i /><i /></span>
+        <span className="cc-style-preview__body"><i /><i /><i /></span>
+        <span className="cc-style-preview__rail"><i /><i /></span>
+      </span>
+      <span className="mt-1.5 block">{caption}</span>
+    </span>
+  );
+}
 
 const INTERFACE_TOGGLES: Array<{
   prefKey: keyof ClientUI;
