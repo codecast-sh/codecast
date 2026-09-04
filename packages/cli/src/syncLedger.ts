@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { CachedJsonStore } from "./cachedJsonStore.js";
+import { walkFiles } from "./fsWalk.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const LEDGER_FILE = path.join(CONFIG_DIR, "sync-ledger.json");
@@ -237,53 +238,31 @@ export function findUnsyncedFiles(
 // Async twin of findUnsyncedFiles for the daemon's hot paths. The sync walk holds
 // the event loop for the whole ~3.5k-file scan of ~/.claude/projects (readdirSync +
 // statSync per file); at that scale it reads as a multi-second freeze that starves
-// heartbeats and message delivery. This version uses promise-based fs and yields to
-// the event loop between stat batches, so a sweep interleaves with live work.
-const ASYNC_SCAN_YIELD_EVERY = 50;
+// heartbeats and message delivery. This version rides fsWalk's promise-based,
+// batched walk, so a sweep interleaves with live work.
 export async function findUnsyncedFilesAsync(
   baseDir: string,
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000,
   includeFile?: (filePath: string) => boolean,
+  // Which directories to enter (fsWalk semantics). The daemon passes the
+  // watcher's rule so a sweep skips every tool-results/memory/checkpoint dir
+  // instead of reading and discarding them (3947 dirs for 7918 files on one
+  // machine, most of them out of scope).
+  dirFilter?: (relativeDirPath: string) => boolean,
 ): Promise<string[]> {
   const ledger = store.getAll();
   const positions = loadPositions();
   const now = Date.now();
   const unsynced: string[] = [];
-  let sinceYield = 0;
-
-  const maybeYield = async () => {
-    if (++sinceYield >= ASYNC_SCAN_YIELD_EVERY) {
-      sinceYield = 0;
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  };
-
-  const scanDir = async (dir: string): Promise<void> => {
-    let entries;
-    try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // Can't read directory, skip
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await scanDir(fullPath);
-      } else if (entry.name.endsWith(".jsonl")) {
-        if (includeFile && !includeFile(fullPath)) continue;
-        await maybeYield();
-        try {
-          const stats = await fs.promises.stat(fullPath);
-          if (isUnsynced(fullPath, stats, now, maxAgeMs, ledger, positions)) {
-            unsynced.push(fullPath);
-          }
-        } catch {
-          // Can't stat file, skip
-        }
-      }
-    }
-  };
-
-  await scanDir(baseDir);
+  await walkFiles(
+    baseDir,
+    {
+      dirFilter,
+      fileFilter: (rel) => rel.endsWith(".jsonl") && (!includeFile || includeFile(path.join(baseDir, rel))),
+    },
+    (f) => {
+      if (isUnsynced(f.path, f.stat, now, maxAgeMs, ledger, positions)) unsynced.push(f.path);
+    },
+  );
   return unsynced;
 }

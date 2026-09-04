@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isInboxRoute, isInboxSessionView, resolveSessionSelectKind } from "../inboxRouting";
+import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, resolveSessionSelectKind } from "../inboxRouting";
 
 describe("inboxRouting", () => {
   it("detects real inbox routes", () => {
@@ -12,6 +12,22 @@ describe("inboxRouting", () => {
     expect(isInboxRoute("/conversation/abc")).toBe(false);
     expect(isInboxSessionView("/conversation/abc", "inbox")).toBe(true);
     expect(isInboxSessionView("/conversation/abc", "sessions")).toBe(false);
+  });
+});
+
+// The decision queue writes the rail pointer itself; the layout's
+// leave-the-inbox carry-over must not overwrite it (it did: the queue's effect
+// commits first, the layout's default landed on top, and the rail highlighted
+// the inbox's conversation instead of the question).
+describe("pageOwnsRailHighlight", () => {
+  it("is the questions page, and nothing else", () => {
+    expect(pageOwnsRailHighlight("/questions")).toBe(true);
+    expect(pageOwnsRailHighlight("/questions/")).toBe(true);
+    expect(pageOwnsRailHighlight("/inbox")).toBe(false);
+    expect(pageOwnsRailHighlight("/tasks")).toBe(false);
+    expect(pageOwnsRailHighlight("/conversation/abc")).toBe(false);
+    expect(pageOwnsRailHighlight(null)).toBe(false);
+    expect(pageOwnsRailHighlight(undefined)).toBe(false);
   });
 });
 

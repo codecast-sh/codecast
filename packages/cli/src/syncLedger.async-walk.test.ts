@@ -58,3 +58,13 @@ test("async walker yields to the event loop mid-scan", async () => {
   // A blocking walk would let zero timer callbacks run before it returned.
   expect(ticks).toBeGreaterThan(0);
 });
+
+test("async walker honors a dirFilter and skips the pruned subtrees entirely", async () => {
+  const root = makeTree(30);
+  const noSubagents = (rel: string) => path.basename(rel) !== "subagents";
+  const all = (await findUnsyncedFilesAsync(root)).length;
+  const pruned = await findUnsyncedFilesAsync(root, undefined, undefined, noSubagents);
+  expect(all).toBe(30);
+  expect(pruned.length).toBe(20);
+  expect(pruned.some((p) => p.includes(`${path.sep}subagents${path.sep}`))).toBe(false);
+});

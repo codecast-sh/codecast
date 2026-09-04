@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { useInboxStore, type InboxSession } from "../inboxStore";
+import { flatViewSessions, useInboxStore, type InboxSession } from "../inboxStore";
 
 // The "recent" view sorts by updated_at, which working sessions bump every
 // heartbeat. Without a freeze the list re-sorts under the cursor and Ctrl+J/K
@@ -70,6 +70,29 @@ describe("recent view freeze", () => {
     });
     // It's appended, not slotted at the top where it would shove the frozen rows.
     expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual(["b", "a", "z"]);
+  });
+
+  it("reconstructs a large frozen order with linear id access", () => {
+    let idReads = 0;
+    const rows = Array.from({ length: 500 }, (_, index) => {
+      const row = session(`s${index}`, { updated_at: index });
+      Object.defineProperty(row, "_id", {
+        get() {
+          idReads++;
+          return `s${index}`;
+        },
+      });
+      return row;
+    });
+    const freezeOrder = rows.map((row) => row._id).reverse();
+    idReads = 0;
+    const result = flatViewSessions(rows, new Map(), {
+      mode: "recent",
+      showSubagents: true,
+      freezeOrder,
+    });
+    expect(result.length).toBe(500);
+    expect(idReads).toBeLessThan(10_000);
   });
 
   it("freeze is a no-op outside recent mode (time is already stable)", () => {

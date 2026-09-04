@@ -1784,6 +1784,7 @@ describe("kill/stash cascade takes the whole nested group", () => {
   const TASK_SUB = "b".repeat(32);
   const TEAMMATE = "c".repeat(32);
   const SPAWN_NO_TEAM = "d".repeat(32);
+  const SPAWN_TEAM_LEAD = "f".repeat(32);
   const FORK = "e".repeat(32);
 
   const mk = (id: string, extra: Partial<InboxSession>): InboxSession => ({
@@ -1802,6 +1803,7 @@ describe("kill/stash cascade takes the whole nested group", () => {
       // cast-spawn lineage: spawned_by WITHOUT a team name stays first-class
       // (nestParentIdOf's agent_team_name gate) — the cascade must not take it.
       [SPAWN_NO_TEAM]: mk(SPAWN_NO_TEAM, { spawned_by_conversation_id: LEAD }),
+      [SPAWN_TEAM_LEAD]: mk(SPAWN_TEAM_LEAD, { spawned_by_conversation_id: LEAD, agent_team_name: "own-team", agent_name: "team-lead" }),
       [FORK]: mk(FORK, { forked_from: LEAD }),
     };
     useInboxStore.setState({
@@ -1814,6 +1816,20 @@ describe("kill/stash cascade takes the whole nested group", () => {
     });
   });
 
+  it("a spawned team lead keeps its own bucket while its teammates ride it", () => {
+    const rows = useInboxStore.getState().sessions;
+    const buckets = placeSections({
+      ...rows,
+      [LEAD]: { ...rows[LEAD], agent_status: "working", is_idle: false, agent_status_updated_at: Date.now() },
+      [SPAWN_TEAM_LEAD]: { ...rows[SPAWN_TEAM_LEAD], status: "completed", agent_status: "done" },
+      [TEAMMATE]: { ...rows[TEAMMATE], spawned_by_conversation_id: SPAWN_TEAM_LEAD },
+    });
+    expect(buckets.working.map((row) => row._id)).toContain(LEAD);
+    expect(buckets.done.map((row) => row._id)).toContain(SPAWN_TEAM_LEAD);
+    expect(buckets.subsByParent.get(SPAWN_TEAM_LEAD)?.map((row) => row._id)).toContain(TEAMMATE);
+    expect(buckets.subsByParent.get(LEAD)?.map((row) => row._id) ?? []).not.toContain(SPAWN_TEAM_LEAD);
+  });
+
   it("killing a lead dismisses its Task subagents AND its teammates", () => {
     useInboxStore.getState().killSession(LEAD);
 
@@ -1823,6 +1839,7 @@ describe("kill/stash cascade takes the whole nested group", () => {
     expect(isSessionDismissed(s.sessions[TEAMMATE])).toBe(true);
     // First-class lineages are untouched: spawn-without-team and forks.
     expect(isSessionDismissed(s.sessions[SPAWN_NO_TEAM])).toBe(false);
+    expect(isSessionDismissed(s.sessions[SPAWN_TEAM_LEAD])).toBe(false);
     expect(isSessionDismissed(s.sessions[FORK])).toBe(false);
 
     // The point of the sweep: nothing from the group floats back into the
@@ -1842,6 +1859,7 @@ describe("kill/stash cascade takes the whole nested group", () => {
     expect(isSessionStashed(s.sessions[TASK_SUB])).toBe(true);
     expect(isSessionStashed(s.sessions[TEAMMATE])).toBe(true);
     expect(isSessionStashed(s.sessions[SPAWN_NO_TEAM])).toBe(false);
+    expect(isSessionStashed(s.sessions[SPAWN_TEAM_LEAD])).toBe(false);
     expect(isSessionStashed(s.sessions[FORK])).toBe(false);
   });
 
@@ -2484,6 +2502,8 @@ describe("inboxStore.beginOptimisticSession", () => {
       pending: {},
       currentConversation: {},
       isolatedWorktreeMode: false,
+      cloudSessionMode: false,
+      machineRoster: [],
     });
   });
 
@@ -2743,6 +2763,39 @@ describe("inboxStore.beginOptimisticSession", () => {
       const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
       await done;
       expect(calls[0].isolated).toBeUndefined();
+    });
+
+    // "Run in the cloud" reaches the create as cloud_device_id — the field that
+    // parks the row on the host and hands a local daemon the preparation. It
+    // REPLACES isolated rather than joining it: the worktree is made on the host,
+    // so asking a local daemon for one too would make a second, unused one.
+    it("createSessionFromStub forwards cloud_device_id when the cloud toggle is on", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        machineRoster: [
+          { device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin" },
+          { device_id: "cloud-linux", is_remote: true, online: false, last_seen: 1, platform: "linux" },
+        ],
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", project_path: "/repo", session_id: "stub1" });
+      expect(calls[0].isolated).toBeUndefined();
+    });
+
+    it("createSessionFromStub omits cloud_device_id when no machine wakes on use", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        machineRoster: [{ device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin" }],
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0].cloud_device_id).toBeUndefined();
+      expect(calls[0].isolated).toBe(true);
     });
 
     // The in-app new session (Ctrl+N) self-heals its stub through

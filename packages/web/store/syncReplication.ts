@@ -27,6 +27,7 @@ import {
 } from "@platform/engine";
 import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey } from "./inboxStore";
 import { writePatchesToIDB } from "./idbCache";
+import { followerPersistencePatches } from "./followerPersistence";
 import {
   isReplicatedCollectionKey,
   REPLICATED_STORE_KEYS,
@@ -301,7 +302,10 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
         if (synced) {
           if (soloTimer) clearTimeout(soloTimer);
           setRole("follower");
-          (useInboxStore.getState() as any)._setIDBWrite(null);
+          (useInboxStore.getState() as any)._setIDBWrite((patches: any[], state: any) => {
+            const local = followerPersistencePatches(patches);
+            if (local.length) return writePatchesToIDB(local, state);
+          });
           (useInboxStore.getState() as any)._setActionTee((_name: string, patches: any[], state: any) => {
             // The engine's own mutTee ships whole rows; a field-level mut is
             // built here so an edited row never overlays the host's copy.

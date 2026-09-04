@@ -89,14 +89,34 @@ export function selectSyncSummary(s: SyncSelectorState): { settled: number; tota
   return { settled, total };
 }
 export function selectSyncing(s: SyncSelectorState): boolean {
-  const { settled, total } = selectSyncSummary(s);
-  return total > 0 && settled < total;
+  const lagByScope = s.syncLogLag;
+  if (lagByScope) {
+    for (const scope in lagByScope) {
+      if (lagByScope[scope] > 0) return true;
+    }
+  }
+  return selectColdLoad(s);
 }
 // The first-load case on its own: a live subscription still owed its first
 // payload into a collection with no cached rows. This is the only routine
 // state the dot shows — the screen is genuinely empty until it lands.
 export function selectColdLoad(s: SyncSelectorState): boolean {
-  return Object.entries(s.liveLoading).some(([scope, loading]) => loading && collectionIsCold(s, scope));
+  for (const scope in s.liveLoading) {
+    if (s.liveLoading[scope] && collectionIsCold(s, scope)) return true;
+  }
+  return false;
+}
+
+export function selectSyncFlags(s: SyncSelectorState): number {
+  const coldLoad = selectColdLoad(s);
+  if (coldLoad) return 3;
+  const lagByScope = s.syncLogLag;
+  if (lagByScope) {
+    for (const scope in lagByScope) {
+      if (lagByScope[scope] > 0) return 1;
+    }
+  }
+  return 0;
 }
 
 export function SyncStatusChip() {
@@ -111,8 +131,9 @@ export function SyncStatusChip() {
   // busy team and is the sync working, not news. It only arms the stall timer.
   // The dot itself lights for a cold first load, or once a catch-up has dragged
   // past STALL_MS.
-  const syncing = useInboxStore((s) => selectSyncing(s));
-  const coldLoad = useInboxStore((s) => selectColdLoad(s));
+  const syncFlags = useInboxStore((s) => selectSyncFlags(s));
+  const syncing = (syncFlags & 1) !== 0;
+  const coldLoad = (syncFlags & 2) !== 0;
   const [stalled, setStalled] = useState(false);
   // Mirror DaemonStatusChip: paint the store-driven dot only once mounted so
   // SSR markup and the first client render agree (no hydration mismatch). The

@@ -255,6 +255,24 @@ describe("bucket filter mutual exclusivity", () => {
   // suites' navigation assertions.
   afterEach(resetFilters);
 
+  // React Native defines `window` without `location`. A chip tap evicts focus
+  // through mountedPathname, which read window.location.pathname and threw
+  // "Cannot read property 'pathname' of undefined" (Sentry REACT-NATIVE-G,
+  // fatal on every label/project chip tap in the 1.0.4 mobile build).
+  it("a chip tap survives a window with no location (React Native)", () => {
+    const hadWindow = typeof window !== "undefined";
+    const saved = hadWindow ? (globalThis as any).window : undefined;
+    (globalThis as any).window = {};
+    try {
+      expect(() => useInboxStore.getState().setActiveBucketFilter("b1")).not.toThrow();
+      expect(useInboxStore.getState().activeBucketFilter).toBe("b1");
+      expect(() => useInboxStore.getState().setActiveProjectFilter("codecast", "/x/codecast")).not.toThrow();
+    } finally {
+      if (hadWindow) (globalThis as any).window = saved;
+      else delete (globalThis as any).window;
+    }
+  });
+
   it("setting a bucket filter clears the project filter and vice versa", () => {
     const store = useInboxStore.getState();
     store.setActiveProjectFilter("codecast", "/x/codecast");
