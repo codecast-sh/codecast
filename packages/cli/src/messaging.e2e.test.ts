@@ -24,6 +24,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import { injectViaTmux } from "./daemon.js";
+import { tmuxRun } from "./tmux.js";
 import {
   spawnHarness,
   waitFor,
@@ -321,12 +322,17 @@ describe("messaging e2e — failure modes", () => {
   test("Scenario 9: shim exits immediately (FATAL) — JSONL never appears", async () => {
     const fatalMessage = "fake-claude: simulated startup failure";
     const h = track(spawnHarness({ fatal: fatalMessage }));
-    await waitFor(() => h.paneExitCode() === 1, {
-      timeoutMs: 2_000,
+    await waitFor(() => h.paneExitCode() !== null, {
+      timeoutMs: 5_000,
       label: "fatal shim exit",
+    }).catch((error) => {
+      const state = tmuxRun(["list-panes", "-t", h.tmuxSession, "-F", "#{pane_id}:#{pane_index}:#{pane_dead}:#{pane_dead_status}"]);
+      throw new Error(`${error.message}; pane: ${JSON.stringify(h.capturePane())}; state: ${JSON.stringify(state)}`);
     });
     // The retained dead pane proves the intended shim ran. An unrelated
     // tmux/bash startup failure cannot satisfy these negative assertions.
+    expect(h.paneExitCode()).toBe(1);
+    expect(tmuxRun(["move-window", "-s", h.tmuxSession, "-t", `${h.tmuxSession}:7`]).status).toBe(0);
     expect(h.paneExitCode()).toBe(1);
     expect(h.capturePane()).toContain(fatalMessage);
     expect(h.paneHasPrompt()).toBe(false);

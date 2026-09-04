@@ -37,7 +37,6 @@ import { parseTranscriptFor } from "./parser.js";
 import { SessionWatcher } from "./sessionWatcher.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, expandTranscriptRoot, encodeGrokCwdSlug } from "./transcriptDirWatcher.js";
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // A synthetic, minimal transcript per client — the smallest input the client's own
 // parser accepts and returns a user+assistant pair for. Held inline (not read from a
@@ -197,6 +196,7 @@ export async function watcherFires(id: AgentClientId, fixture: ClientFixture, ti
       : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi" | "grok", root));
 
   try {
+    await watcher.start();
     return await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), timeoutMs);
       watcher.on("session", (e: { filePath: string }) => {
@@ -205,9 +205,7 @@ export async function watcherFires(id: AgentClientId, fixture: ClientFixture, ti
           resolve(true);
         }
       });
-      watcher.start();
-      // Let the recursive watcher settle before the write (mirrors the watcher tests).
-      sleep(250).then(() => fs.writeFileSync(filePath, fixture.transcript));
+      fs.writeFileSync(filePath, fixture.transcript);
     });
   } finally {
     try { (watcher as { stop?: () => void }).stop?.(); } catch {}

@@ -92,7 +92,7 @@ export class RecursiveWatcher extends EventEmitter {
      * Receives every filter-matching file the priming walk found, with stats.
      * Callers that used to walk the tree themselves on start (to emit recent
      * files, sorted) can take them from this one walk instead of running a
-     * second one over the same tens of thousands of files. Native path only.
+     * second one over the same tens of thousands of files.
      */
     onExisting?: (files: WalkFile[]) => void;
     maxDepth?: number;
@@ -124,8 +124,7 @@ export class RecursiveWatcher extends EventEmitter {
     }
   }
 
-  /** Resolves once the priming walk has recorded every existing file (native
-   *  path); immediately on the chokidar path. */
+  /** Resolves once the backend and the priming walk are ready. */
   whenPrimed(): Promise<void> {
     return this.primed;
   }
@@ -282,8 +281,8 @@ export class RecursiveWatcher extends EventEmitter {
   }
 
   private startChokidar(): void {
-    this.isPrimed = true;
-    this.primed = Promise.resolve();
+    const gen = ++this.generation;
+    this.isPrimed = false;
     this.chokidarWatcher = chokidarWatch(this.watchPath, {
       persistent: true,
       ignoreInitial: true,
@@ -311,7 +310,16 @@ export class RecursiveWatcher extends EventEmitter {
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     });
 
-    this.chokidarWatcher.on("ready", () => {
+    const ready = new Promise<void>((resolve) => this.chokidarWatcher!.once("ready", resolve));
+    const existing: WalkFile[] = [];
+    this.primed = Promise.all([
+      ready,
+      this.walkTree(gen, false, this.onExisting ? (f) => existing.push(f) : undefined),
+    ]).then(() => {
+      if (gen !== this.generation) return;
+      this.isPrimed = true;
+      this.lastRescanEndedAt = Date.now();
+      this.onExisting?.(existing);
       this.emit("ready");
     });
   }

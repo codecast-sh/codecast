@@ -60,6 +60,7 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   const cwd = opts.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "codecast-test-cwd-"));
   const sessionId = opts.sessionId ?? randomUUID();
   const shimPath = opts.command ? null : writeShimScript({ ...opts, sessionId });
+  const exitStatusPath = opts.fatal && shimPath ? `${shimPath}.exit` : null;
 
   // The shim must be discoverable as `claude` on PATH so an invocation of
   // `claude` lands on it. We do this by symlinking (or copying) it to a
@@ -80,7 +81,7 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   // unrelated bash/tmux startup failures still make the session disappear.
   let shimCommand: string;
   if (opts.command) shimCommand = opts.command;
-  else if (opts.fatal) shimCommand = `tmux set-option -p remain-on-exit on && exec ${shellQuote(shimPath!)}`;
+  else if (exitStatusPath) shimCommand = `tmux set-option -p remain-on-exit on && { ${shellQuote(shimPath!)}; status=$?; printf '%s' "$status" > ${shellQuote(exitStatusPath)}; exit "$status"; }`;
   else shimCommand = `exec ${shellQuote(shimPath!)}`;
   const spawnOnce = (): { status: number | null; stderr: string; stdout: string } => tmuxRun([
     "new-session", "-d", "-s", tmuxSession,
@@ -136,17 +137,21 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
     },
     paneExitCode(): number | null {
       const state = tmuxRun([
-        "display-message", "-p", "-t", `${tmuxSession}:0.0`,
+        "display-message", "-p", "-t", tmuxSession,
         "#{pane_dead}:#{pane_dead_status}",
       ]);
       if (state.status !== 0) return null;
       const [dead, rawCode] = state.stdout.trim().split(":");
-      const code = Number.parseInt(rawCode ?? "", 10);
+      const recordedCode = exitStatusPath && fs.existsSync(exitStatusPath)
+        ? fs.readFileSync(exitStatusPath, "utf-8")
+        : rawCode;
+      const code = Number.parseInt(recordedCode ?? "", 10);
       return dead === "1" && Number.isInteger(code) ? code : null;
     },
     tearDown(): void {
       tmuxRun(["kill-session", "-t", tmuxSession]);
       ACTIVE_SESSIONS.delete(tmuxSession);
+      if (exitStatusPath) fs.rmSync(exitStatusPath, { force: true });
       if (shimPath) cleanupShimScript(shimPath);
       try {
         fs.unlinkSync(jsonlPath);
