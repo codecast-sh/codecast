@@ -1,4 +1,4 @@
-import { test, expect, describe, mock } from "bun:test";
+import { afterAll, test, expect, describe, mock } from "bun:test";
 
 /**
  * The reported crash, end to end: on 2026-08-11 the web bundle shipped ahead of
@@ -29,7 +29,8 @@ let lookup: () => { data?: unknown; error?: Error } = () => ({
   data: undefined,
   error: missingFunction,
 });
-const noThrow = await import("../hooks/useQueryNoThrow");
+const noThrow = { ...await import("../hooks/useQueryNoThrow") };
+afterAll(() => mock.module("../hooks/useQueryNoThrow", () => noThrow));
 mock.module("../hooks/useQueryNoThrow", () => ({
   ...noThrow,
   useQueryNoThrow: () => lookup(),
@@ -38,7 +39,8 @@ mock.module("../hooks/useQueryNoThrow", () => ({
 // The pill only needs to know whether the split is open. Keep every other
 // export real: mock.module replaces the module process-wide, and a partial stub
 // breaks any later test file that imports a name this one left out.
-const terminal = await import("./terminal/ConversationTerminal");
+const terminal = { ...await import("./terminal/ConversationTerminal") };
+afterAll(() => mock.module("./terminal/ConversationTerminal", () => terminal));
 mock.module("./terminal/ConversationTerminal", () => ({
   ...terminal,
   isConversationTerminalOpen: () => false,
