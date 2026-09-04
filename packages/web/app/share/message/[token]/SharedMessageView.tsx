@@ -3,7 +3,8 @@ import { useMountEffect } from "../../../../hooks/useMountEffect";
 import { AvatarImg } from "../../../../lib/avatarCache";
 import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
-import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "@/components/tools/MarkdownRenderer";
+import { MarkdownRenderer } from "@/components/tools/MarkdownRenderer";
+import { isMarkdownFile, isPlanFile } from "@/lib/markdownFiles";
 import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
 import {
   extractNestedActions,
@@ -26,7 +27,7 @@ import {
 export type SharedMessageData = {
   message: any;
   contextMessages: any[];
-  conversation: { _id: string; title?: string | null };
+  conversation: { _id: string; title?: string | null; agent_type?: string | null };
   conversationShareToken: string | null;
   user: { name?: string | null; image?: string | null } | null;
   note?: string | null;
@@ -217,7 +218,7 @@ function ToolCallBlock({ tool }: { tool: any }) {
   );
 }
 
-function MessageBlock({ message, isTarget, now }: { message: any; isTarget?: boolean; now: number }) {
+export function MessageBlock({ message, isTarget, now }: { message: any; isTarget?: boolean; now: number }) {
   const mounted = useMounted();
   const isUser = message.role === "user";
   const hasToolResults = message.tool_results && message.tool_results.length > 0;

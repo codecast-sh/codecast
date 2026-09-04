@@ -17,10 +17,12 @@ import {
   parsePublishedPageUrl,
   isEntityId,
   entityMentionRegex,
+  MESSAGE_REF_PREFIX,
   type EntityType,
 } from "../lib/entityLinks";
-import { AuthorAvatar, SessionSummaryBlock } from "./entityDisplay";
-import { PRIORITY_CONFIG, STATUS_COLOR, STATUS_LABEL, TYPE_LABEL, abbrevModel, relativeTime, taskPeople, useEntityResolution } from "../lib/entityDisplay";
+import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
+import { AuthorAvatar } from "./entityDisplay";
+import { PRIORITY_CONFIG, STATUS_COLOR, STATUS_LABEL, TYPE_LABEL, relativeTime, taskPeople, useEntityResolution } from "../lib/entityDisplay";
 import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
@@ -29,8 +31,9 @@ import { filePathMention, parseFilePathHref } from "../lib/filePathLinks";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
+import { SessionHoverContent } from "./SessionHoverContent";
 
-export { isEntityId };
+export { SessionHoverContent };
 
 // `date:<iso>` optionally trailed by `|<label>` — the payload remarkEntityIds
 // writes for a serialized date pill (`@[<label> date:<iso>]`).
@@ -184,87 +187,6 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
-// Exported for reuse beyond the hover popover — the browser-handoff notice
-// (BrowserHandoffToast) embeds the same card so a handed-off session previews
-// identically to a session reference.
-export function SessionHoverContent({ session }: { session: any }) {
-  const isActive = session.status === "active";
-  const model = abbrevModel(session.model);
-  const projectName = session.project_path?.split("/").pop() ?? null;
-  const timeAgo = relativeTime(session.updated_at);
-  // webGet returns author_* only when the session belongs to a teammate.
-  const isForeign = !!(session.author_name || session.author_avatar);
-
-  const metaParts = [
-    session.message_count != null ? `${session.message_count} msgs` : null,
-    model,
-    timeAgo,
-  ].filter(Boolean);
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-start gap-2">
-        <div className="relative flex-shrink-0 mt-0.5">
-          {isForeign ? (
-            <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={16} />
-          ) : (
-            <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
-          )}
-          {isActive && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text leading-snug">
-            {session.title || session.short_id}
-          </div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className={`text-[10px] font-medium ${isActive ? "text-sol-green" : "text-gray-400"}`}>
-              {isActive ? "Active" : session.status || "Stopped"}
-            </span>
-            {session.agent_type && (
-              <>
-                <span className="text-gray-600">·</span>
-                <span className="text-[10px] text-gray-400">{session.agent_type}</span>
-              </>
-            )}
-            {isForeign && session.author_name && (
-              <>
-                <span className="text-gray-600">·</span>
-                <span className="text-[10px] text-sol-text-muted truncate">{session.author_name}</span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <SessionSummaryBlock session={session} className="pl-[22px]" />
-
-      {metaParts.length > 0 && (
-        <div className="flex items-center gap-2 pl-[22px] text-[10px] text-gray-500 font-mono">
-          {metaParts.map((p, i) => (
-            <span key={i}>{p}</span>
-          ))}
-        </div>
-      )}
-
-      {projectName && (
-        <div className="flex items-center gap-1.5 pl-[22px]">
-          <FolderOpen className="w-2.5 h-2.5 text-gray-500 flex-shrink-0" />
-          <span className="text-[10px] text-gray-400 font-mono truncate">{projectName}</span>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono">{session.short_id}</span>
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
-        </span>
-      </div>
-    </div>
-  );
-}
-
 // What a trigger reference has to answer at a glance: what it does, when it
 // fires next, and whether its last run went badly. Cadence and state wording
 // come from triggerCadence — the same helpers the /triggers rows and the
@@ -349,7 +271,7 @@ function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   return namePill;
 }
 
-export function renderWithMentions(text: string): React.ReactNode[] {
+export function TextWithMentions({ text }: { text: string }) {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -366,7 +288,7 @@ export function renderWithMentions(text: string): React.ReactNode[] {
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex));
   }
-  return parts.length > 0 ? parts : [text];
+  return <>{parts.length > 0 ? parts : [text]}</>;
 }
 
 export function EntityAwareCode({ children, className, ...props }: any) {
@@ -405,7 +327,11 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     const fromCardPlugin = typeof (props as any).className === "string" && (props as any).className.includes("entity-card-ref");
     const cardMatch = fromCardPlugin ? /^card:(\d+):(.+)$/.exec(embedText) : null;
     if (cardMatch) {
-      return <EntityObjectCard refId={cardMatch[2]} count={Math.max(1, Number(cardMatch[1]) || 1)} />;
+      const count = Math.max(1, Number(cardMatch[1]) || 1);
+      // A conversation message is its own reference kind (see entityLinks:
+      // MESSAGE_REF_PREFIX) — no entity table, so it has its own card.
+      if (cardMatch[2].startsWith(MESSAGE_REF_PREFIX)) return <SharedMessageCard refId={cardMatch[2]} count={count} />;
+      return <EntityObjectCard refId={cardMatch[2]} count={count} />;
     }
     // A publish URL alone on its own line, hoisted by remarkEntityIds into
     // "embed:artifact:<slug>|<caption>" — the page renders inline.
@@ -420,6 +346,7 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
     const ref = href.slice(9);
     if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
+    if (ref.startsWith(MESSAGE_REF_PREFIX)) return <SharedMessagePill refId={ref} />;
     const date = parseDateRef(ref);
     if (date) return <DatePill iso={date.iso} label={date.label} />;
     return <EntityIdPill shortId={ref} />;
@@ -442,6 +369,10 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   // sanitizer). This is the markdown twin of the entity:// branch above.
   if (text.startsWith("doc:") && text.length > 4) {
     return <EntityIdPill type="doc" id={text.slice(4)} />;
+  }
+  // A message reference's text payload (`msg:<token or id>`), same convention.
+  if (text.startsWith(MESSAGE_REF_PREFIX) && text.length > MESSAGE_REF_PREFIX.length) {
+    return <SharedMessagePill refId={text} />;
   }
   // A date pill's text payload (`date:<iso>|<label>`), same stripped-href
   // convention as doc refs above.

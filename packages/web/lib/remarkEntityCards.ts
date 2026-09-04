@@ -1,24 +1,4 @@
-// Sharing an object is a different act from mentioning one. "Fixed the race
-// in ct-4102" is prose — the reference stays an inline pill. But a message
-// whose line is NOTHING BUT references ("jx7c6zk", or a list of three task
-// ids) is someone handing objects to the room, and it earns a richer default:
-// a preview card per object, browsable in place.
-//
-// This plugin runs AFTER remarkEntityIds, which has already turned every id
-// into an entity:// link whose TEXT node carries the payload (react-markdown's
-// url sanitizer strips custom protocols, so the text is the real carrier —
-// see remarkEntityIds). It finds paragraphs made only of such links, and lists
-// whose every item is one, and:
-//
-//   • rewrites each link's text payload to `card:<count>:<payload>` so
-//     EntityAwareLink renders an EntityObjectCard instead of a pill, and
-//   • re-tags the containing paragraph (or the whole list) as a block-level
-//     <div class="entity-card-row">, the grid the cards lay out in.
-//
-// The count rides in each payload so a card knows whether it stands alone
-// (full-width, richer preview) or shares the row with siblings (compact).
-// Opt-in per surface: only chat registers it today — a conversation transcript
-// keeps its tighter pill rendering.
+import { parseEntityUrl } from "./entityLinks";
 
 const CARD_PREFIX = "card:";
 
@@ -41,6 +21,21 @@ function isEntityLink(node: any): boolean {
     node.url.startsWith("entity://") &&
     cardEligible(mdastText(node))
   );
+}
+
+function normalizeEntityLinks(node: any) {
+  if (!Array.isArray(node?.children)) return;
+  for (const child of node.children) {
+    if (child.type === "link") {
+      const ref = parseEntityUrl(child.url);
+      if (!ref) continue;
+      const payload = ref.type === "doc" ? `doc:${ref.id}` : ref.id;
+      child.url = `entity://${payload}`;
+      child.children = [{ type: "text", value: payload }];
+    } else {
+      normalizeEntityLinks(child);
+    }
+  }
 }
 
 /** Whitespace and hard breaks — the glue between shared ids, not content. */
@@ -96,24 +91,72 @@ function toCardRow(links: any[]): any {
   };
 }
 
-function walk(node: any, inListItem = false) {
-  if (!Array.isArray(node?.children)) return;
-  node.children = node.children.map((child: any) => {
-    // Inside a list item, never promote: a MIXED list (some items prose, some
-    // bare ids) reads as one list, and turning half its items into cards while
-    // the rest stay bullets would shred it. A list that is references
-    // throughout is caught whole by listLinks below, before recursion.
-    if (!inListItem) {
-      const para = paragraphLinks(child);
-      if (para) return toCardRow(para);
-      const list = listLinks(child);
-      if (list) return toCardRow(list);
+function splitInline(node: any): any[] {
+  if (isEntityLink(node) || !["strong", "emphasis", "delete"].includes(node.type)) return [node];
+  const parts: any[] = [];
+  let children: any[] = [];
+  const flush = () => {
+    if (children.length) parts.push({ ...node, children });
+    children = [];
+  };
+  for (const child of node.children.flatMap(splitInline)) {
+    if (isEntityLink(child)) {
+      flush();
+      parts.push(child);
+    } else children.push(child);
+  }
+  flush();
+  return parts;
+}
+
+function paragraphBlocks(node: any): any[] | null {
+  if (node.type !== "paragraph" || !Array.isArray(node.children)) return null;
+  const children = node.children.flatMap(splitInline);
+  if (!children.some(isEntityLink)) return null;
+  const blocks: any[] = [];
+  let prose: any[] = [];
+  let links: any[] = [];
+  const flushProse = () => {
+    while (prose.length && isIgnorable(prose[0])) prose.shift();
+    while (prose.length && isIgnorable(prose.at(-1))) prose.pop();
+    if (prose.length) blocks.push({ ...node, children: prose });
+    prose = [];
+  };
+  const flushLinks = () => {
+    if (links.length) blocks.push(toCardRow(links));
+    links = [];
+  };
+  for (const child of children) {
+    if (isEntityLink(child)) {
+      flushProse();
+      links.push(child);
+    } else if (links.length && isIgnorable(child)) {
+      continue;
+    } else {
+      flushLinks();
+      prose.push(child);
     }
-    walk(child, inListItem || child.type === "listItem");
-    return child;
+  }
+  flushLinks();
+  flushProse();
+  return blocks;
+}
+
+function walk(node: any) {
+  if (!Array.isArray(node?.children)) return;
+  node.children = node.children.flatMap((child: any) => {
+    const list = listLinks(child);
+    if (list) return [toCardRow(list)];
+    const blocks = paragraphBlocks(child);
+    if (blocks) return blocks;
+    walk(child);
+    return [child];
   });
 }
 
 export function remarkEntityCards() {
-  return (tree: any) => walk(tree);
+  return (tree: any) => {
+    normalizeEntityLinks(tree);
+    walk(tree);
+  };
 }

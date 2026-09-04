@@ -12,7 +12,49 @@ import {
   bareEntityIdRegex,
   truncateEntityLabel,
   entityReferenceLabel,
+  parseMessageRefUrl,
+  messageRefPayload,
+  parseMessageRefPayload,
 } from "./entityLinks";
+
+const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const CONV_CONVEX_ID = "jx84qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const SHARE_TOKEN = "3f0c1b2a-7d4e-4c9a-9b1e-2a6f8c0d1e2f";
+
+describe("parseMessageRefUrl", () => {
+  test("a /share/message link is a share reference", () => {
+    expect(parseMessageRefUrl(`https://codecast.sh/share/message/${SHARE_TOKEN}`)).toEqual({ kind: "share", token: SHARE_TOKEN });
+    expect(parseMessageRefUrl(`/share/message/${SHARE_TOKEN}`)).toEqual({ kind: "share", token: SHARE_TOKEN });
+    expect(parseMessageRefUrl(`https://local.codecast.sh/share/message/${SHARE_TOKEN}?x=1`)).toEqual({ kind: "share", token: SHARE_TOKEN });
+  });
+
+  test("a conversation link with a #msg- fragment is an in-place reference", () => {
+    expect(parseMessageRefUrl(`https://codecast.sh/conversation/${CONV_CONVEX_ID}#msg-${MSG_CONVEX_ID}`)).toEqual({ kind: "message", id: MSG_CONVEX_ID });
+    expect(parseMessageRefUrl(`/conversation/${CONV_CONVEX_ID}#msg-${MSG_CONVEX_ID}`)).toEqual({ kind: "message", id: MSG_CONVEX_ID });
+  });
+
+  test("other share kinds, plain conversation links, and foreign hosts are not messages", () => {
+    expect(parseMessageRefUrl(`https://codecast.sh/share/${SHARE_TOKEN}`)).toBeNull();
+    expect(parseMessageRefUrl(`https://codecast.sh/share/doc/${SHARE_TOKEN}`)).toBeNull();
+    expect(parseMessageRefUrl(`https://codecast.sh/conversation/${CONV_CONVEX_ID}`)).toBeNull();
+    expect(parseMessageRefUrl(`https://codecast.sh/conversation/${CONV_CONVEX_ID}#msg-short`)).toBeNull();
+    expect(parseMessageRefUrl(`https://example.com/share/message/${SHARE_TOKEN}`)).toBeNull();
+    expect(parseMessageRefUrl("entity://msg:abc")).toBeNull();
+    expect(parseMessageRefUrl(null)).toBeNull();
+  });
+
+  test("payloads round-trip and tell a token from a message id by shape", () => {
+    const share = { kind: "share", token: SHARE_TOKEN } as const;
+    const inPlace = { kind: "message", id: MSG_CONVEX_ID } as const;
+    expect(messageRefPayload(share)).toBe(`msg:${SHARE_TOKEN}`);
+    expect(messageRefPayload(inPlace)).toBe(`msg:${MSG_CONVEX_ID}`);
+    expect(parseMessageRefPayload(messageRefPayload(share))).toEqual(share);
+    expect(parseMessageRefPayload(messageRefPayload(inPlace))).toEqual(inPlace);
+    expect(parseMessageRefPayload("msg:")).toBeNull();
+    expect(parseMessageRefPayload("msg:has spaces")).toBeNull();
+    expect(parseMessageRefPayload("ct-4102")).toBeNull();
+  });
+});
 
 describe("isConvexId", () => {
   test("accepts a full 32-char Convex id", () => {

@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parsePublishedPageUrl } from "./entityLinks";
+import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parsePublishedPageUrl, parseMessageRefUrl, messageRefPayload } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
 
@@ -83,8 +83,34 @@ function hoistEmbeds(node: any) {
   });
 }
 
+/**
+ * A pasted message link — `/share/message/<token>` or
+ * `/conversation/<id>#msg-<id>` — becomes a message reference: an entity://
+ * link whose text carries `msg:<token or id>`, the same shape every other
+ * object reference takes, so it renders as a pill in prose and remarkEntityCards
+ * promotes it to a card when it stands alone. Only a BARE link (text is the
+ * URL, the way a forwarded message arrives) converts: a link the author gave
+ * their own words keeps them.
+ */
+function promoteMessageLinks(node: any) {
+  if (!Array.isArray(node.children)) return;
+  node.children = node.children.map((child: any) => {
+    if (child.type === "link") {
+      const ref = parseMessageRefUrl(child.url);
+      if (ref && mdastText(child).trim() === String(child.url).trim()) {
+        const payload = messageRefPayload(ref);
+        return { type: "link", url: `entity://${payload}`, children: [{ type: "text", value: payload }] };
+      }
+      return child;
+    }
+    promoteMessageLinks(child);
+    return child;
+  });
+}
+
 export function remarkEntityIds() {
   return (tree: any) => {
+    promoteMessageLinks(tree);
     findAndReplace(tree, [
       [
         EMBED_RE,
