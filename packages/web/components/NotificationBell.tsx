@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { agentNames, notificationRoute, sessionLabel, sessionTypes, typeColors, typeLabels } from "../lib/notificationTypes";
+import { agentNames, notificationRoute, sessionLabel, showsAgentIcon, typeColors, typeLabels } from "../lib/notificationTypes";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
@@ -177,7 +177,7 @@ export function NotificationBell() {
                 const actorName = notification.actor?.name || notification.actor?.github_username || (notification as any).actor_name;
                 const actorAvatar = notification.actor?.github_avatar_url || (notification as any).actor_avatar;
                 const agentType = notification.conversation?.agent_type || "claude_code";
-                const isSessionNotif = sessionTypes.has(notification.type);
+                const agentIcon = showsAgentIcon(notification);
                 const typeLabel = typeLabels[notification.type] || notification.type;
                 const typeColor = typeColors[notification.type] || "text-sol-text-muted";
 
@@ -202,7 +202,7 @@ export function NotificationBell() {
                             </div>
                           }
                         />
-                      ) : isSessionNotif ? (
+                      ) : agentIcon ? (
                         <div className="flex-shrink-0 mt-0.5">
                           <AgentIcon agentType={agentType} />
                         </div>
@@ -217,7 +217,7 @@ export function NotificationBell() {
                         <div className="flex items-center gap-2 mb-1">
                           {actorName ? (
                             <span className="text-sm font-medium text-sol-text">{actorName}</span>
-                          ) : isSessionNotif ? (
+                          ) : agentIcon ? (
                             <span className="text-sm font-medium text-sol-text">{agentNames[agentType] || agentType}</span>
                           ) : null}
                           <span className={`text-xs ${typeColor}`}>{typeLabel}</span>

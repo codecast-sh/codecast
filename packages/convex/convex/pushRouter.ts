@@ -23,14 +23,22 @@ import { mutation, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import {
+  INPUT_ACTIVE_MS,
+  PRESENCE_FRESH_MS,
+  isDesktopActivePresence,
+  isMachineActivePresence,
+  type MachineDevice,
+  type PresenceRow,
+} from "./presencePolicy";
 
 // Client heartbeats every ~30s while visible; background browser tabs get
 // throttled to ~1/min, so "fresh" tolerates two missed beats. Sleeping the
 // machine stops the heartbeat entirely — presence goes stale on its own.
-export const PRESENCE_FRESH_MS = 150_000;
+export { PRESENCE_FRESH_MS } from "./presencePolicy";
 // "Active" additionally requires input (keys/pointer, or low system idle on
 // Electron) this recently. A focused-but-abandoned window is NOT active.
-export const INPUT_ACTIVE_MS = 3 * 60_000;
+export { INPUT_ACTIVE_MS } from "./presencePolicy";
 // How long a push is held while the desktop is active before escalating to
 // the phone anyway ("I never opened the notifs").
 export const HOLD_WHILE_ACTIVE_MS = 3 * 60_000;
@@ -48,51 +56,8 @@ export const BATCH_SLACK_MS = 25_000;
 // — the hold is a wait, never a black hole.
 export const MAX_MACHINE_HOLD_MS = 60 * 60_000;
 
-export type PresenceRow = {
-  last_seen: number;
-  last_input_at: number;
-};
-
-// Pure policy: is a human actively using a desktop surface right now?
-export function isDesktopActivePresence(
-  presence: PresenceRow | null | undefined,
-  now: number,
-): boolean {
-  if (!presence) return false;
-  return (
-    now - presence.last_seen < PRESENCE_FRESH_MS &&
-    now - presence.last_input_at < INPUT_ACTIVE_MS
-  );
-}
-
-export type MachineDevice = {
-  last_seen: number;
-  last_input_at?: number;
-  is_remote?: boolean;
-};
-
-// Pure policy: is a human touching one of this user's own Macs right now —
-// anywhere, not just in Codecast? On-by-default widening of the presence
-// signal (users.machine_wide_presence, opt-out).
-//
-// A device only counts when it is (a) not a remote box — nose and the hosted
-// agent Macs are servers, never where the user is sitting — (b) still
-// heartbeating, and (c) reporting input recently. Devices that report no input
-// at all (Linux/headless, or a daemon too old to send it) contribute nothing
-// rather than counting as present, so every uncertain case degrades to "away",
-// which keeps notifications flowing rather than silently swallowing them.
-export function isMachineActivePresence(
-  devices: MachineDevice[],
-  now: number,
-): boolean {
-  return devices.some(
-    (d) =>
-      !d.is_remote &&
-      d.last_input_at !== undefined &&
-      now - d.last_seen < PRESENCE_FRESH_MS &&
-      now - d.last_input_at < INPUT_ACTIVE_MS,
-  );
-}
+export { isDesktopActivePresence, isMachineActivePresence } from "./presencePolicy";
+export type { MachineDevice, PresenceRow } from "./presencePolicy";
 
 // The two presence signals, kept separate because they hold pushes DIFFERENTLY.
 // Client presence gets one hold window and then escalates ("you never opened the
@@ -147,6 +112,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_dm: ["direct message", "direct messages"],
   chat_added: ["channel invite", "channel invites"],
   chat_post: ["channel message", "channel messages"],
+  daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
 };
 
 export function summarizePushBatch(
