@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useId, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -14,6 +14,7 @@ import {
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
 import { type EntityType } from "../lib/entityLinks";
+import { ACCENT, type Accent } from "../lib/entityCardAccent";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { cleanUserMessage } from "./sessionMessage";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -25,6 +26,7 @@ import { FormattedSummary } from "./FormattedSummary";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { clipFade } from "./CollapsibleBody";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import {
   AuthorAvatar,
@@ -50,33 +52,6 @@ import {
 // store seed on the first frame, live webGet keeping it fresh. The expanded
 // detail needs no extra queries — webGet already carries the deep fields
 // (doc content, plan tasks, task comments).
-
-// Every class literal in full — Tailwind's scanner never sees a composed
-// string like `hover:${accent.text}`, so composition would silently produce
-// no CSS at all. The strip tint is stronger in light mode (a 6% wash reads
-// as nothing on white); `borderOpen`/`stripOpen` are the open-state raise, so
-// an expanded card reads as open at a glance, not just by its chevron.
-type Accent = {
-  text: string;
-  hoverText: string;
-  border: string;
-  borderOpen: string;
-  borderHover: string;
-  strip: string;
-  stripOpen: string;
-  stripBorder: string;
-  ring: string;
-  chevronHover: string;
-  bar: string;
-};
-const ACCENT: Record<EntityType, Accent> = {
-  session: { text: "text-sol-blue", hoverText: "hover:text-sol-blue", border: "border-sol-blue/25", borderOpen: "border-sol-blue/45", borderHover: "hover:border-sol-blue/45", strip: "bg-sol-blue/10 dark:bg-sol-blue/[0.06]", stripOpen: "bg-sol-blue/[0.15] dark:bg-sol-blue/10", stripBorder: "border-sol-blue/15", ring: "focus-visible:ring-sol-blue/35", chevronHover: "group-hover/card:text-sol-blue", bar: "bg-sol-blue" },
-  task: { text: "text-sol-violet", hoverText: "hover:text-sol-violet", border: "border-sol-violet/25", borderOpen: "border-sol-violet/45", borderHover: "hover:border-sol-violet/45", strip: "bg-sol-violet/10 dark:bg-sol-violet/[0.06]", stripOpen: "bg-sol-violet/[0.15] dark:bg-sol-violet/10", stripBorder: "border-sol-violet/15", ring: "focus-visible:ring-sol-violet/35", chevronHover: "group-hover/card:text-sol-violet", bar: "bg-sol-violet" },
-  plan: { text: "text-sol-cyan", hoverText: "hover:text-sol-cyan", border: "border-sol-cyan/25", borderOpen: "border-sol-cyan/45", borderHover: "hover:border-sol-cyan/45", strip: "bg-sol-cyan/10 dark:bg-sol-cyan/[0.06]", stripOpen: "bg-sol-cyan/[0.15] dark:bg-sol-cyan/10", stripBorder: "border-sol-cyan/15", ring: "focus-visible:ring-sol-cyan/35", chevronHover: "group-hover/card:text-sol-cyan", bar: "bg-sol-cyan" },
-  doc: { text: "text-sol-green", hoverText: "hover:text-sol-green", border: "border-sol-green/25", borderOpen: "border-sol-green/45", borderHover: "hover:border-sol-green/45", strip: "bg-sol-green/10 dark:bg-sol-green/[0.06]", stripOpen: "bg-sol-green/[0.15] dark:bg-sol-green/10", stripBorder: "border-sol-green/15", ring: "focus-visible:ring-sol-green/35", chevronHover: "group-hover/card:text-sol-green", bar: "bg-sol-green" },
-  trigger: { text: "text-sol-orange", hoverText: "hover:text-sol-orange", border: "border-sol-orange/25", borderOpen: "border-sol-orange/45", borderHover: "hover:border-sol-orange/45", strip: "bg-sol-orange/10 dark:bg-sol-orange/[0.06]", stripOpen: "bg-sol-orange/[0.15] dark:bg-sol-orange/10", stripBorder: "border-sol-orange/15", ring: "focus-visible:ring-sol-orange/35", chevronHover: "group-hover/card:text-sol-orange", bar: "bg-sol-orange" },
-  project: { text: "text-sol-text-muted", hoverText: "hover:text-sol-text-muted", border: "border-sol-border", borderOpen: "border-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)]", borderHover: "hover:border-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)]", strip: "bg-sol-bg-alt", stripOpen: "bg-sol-bg-alt", stripBorder: "border-sol-border", ring: "focus-visible:ring-[color-mix(in_srgb,var(--sol-text-dim)_35%,transparent)]", chevronHover: "group-hover/card:text-sol-text-muted", bar: "bg-sol-text-dim" },
-};
 
 const TYPE_ICON: Record<EntityType, any> = {
   session: MessageSquare,
@@ -198,7 +173,7 @@ function ProgressBar({ done, total, pct, bar }: { done: number; total: number; p
 function SessionCardBody({ session, expanded }: { session: any; expanded: boolean }) {
   const thumbSrc = imageBytes.useSrc(session.image_preview_url || undefined);
   const title = cleanTitle(session.title || "New Session");
-  const summary = sessionCardSummary(session);
+  const summary = expanded ? session.subtitle || sessionCardSummary(session) : sessionCardSummary(session);
   const userLine = cleanUserMessage(session.last_message_preview);
   const project = getProjectName(undefined, session.project_path);
   const projectColor = project ? getLabelColor(project) : null;
@@ -207,11 +182,11 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
   return (
     <div className="flex items-start gap-2.5">
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-[13px] leading-tight text-sol-text">
+        <div className="flex items-start gap-1.5 text-sm leading-snug text-sol-text">
           <span className="flex-shrink-0" title={session.agent_type || "claude_code"}>
             <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
           </span>
-          <span className={`min-w-0 font-medium ${expanded ? "" : "truncate"}`}>{title}</span>
+          <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{title}</span>
           {isLive && (
             <span className="relative flex h-1.5 w-1.5 flex-shrink-0" title="Live">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-75" />
@@ -220,7 +195,7 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
           )}
         </div>
         {summary && (
-          <div className={`mt-0.5 text-[11px] leading-snug text-sol-text-muted ${expanded ? "whitespace-pre-line" : "line-clamp-2"}`}>
+          <div className={`mt-0.5 text-[12px] leading-snug text-sol-text-muted ${expanded ? "whitespace-pre-line" : "line-clamp-2"}`}>
             <FormattedSummary text={summary} />
           </div>
         )}
@@ -272,7 +247,7 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
     return (
       <div className="space-y-1">
         {entity.description && (
-          <p className={`text-[11px] leading-relaxed text-sol-text-muted ${clamp}`}>
+          <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>
             {stripMarkdown(entity.description).slice(0, 400)}
           </p>
         )}
@@ -291,7 +266,7 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
     return (
       <div className="space-y-1.5">
         {entity.goal && (
-          <p className={`text-[11px] leading-relaxed text-sol-text-muted ${clamp}`}>
+          <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>
             {stripMarkdown(entity.goal).slice(0, 400)}
           </p>
         )}
@@ -307,7 +282,7 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
     if (!preview) return null;
     return (
       <div className="overflow-hidden" style={{ maxHeight: compact ? 54 : 108, ...clipFade(28) }}>
-        <p className="whitespace-pre-line text-[11px] leading-relaxed text-sol-text-muted">{preview}</p>
+        <p className="whitespace-pre-line text-[12px] leading-relaxed text-sol-text-muted">{preview}</p>
       </div>
     );
   }
@@ -315,21 +290,21 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
     const text = entity.display_summary || entity.prompt;
     if (!text) return null;
     return (
-      <p className={`text-[11px] leading-relaxed text-sol-text-muted ${clamp}`}>
+      <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>
         {stripMarkdown(text).slice(0, 400)}
       </p>
     );
   }
   const summary = entity.description || entity.goal || entity.summary;
   if (!summary) return null;
-  return <p className={`text-[11px] leading-relaxed text-sol-text-muted ${clamp}`}>{stripMarkdown(summary).slice(0, 400)}</p>;
+  return <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>{stripMarkdown(summary).slice(0, 400)}</p>;
 }
 
 // Markdown rendered inside a card: the same shared blocks as doc transclusion,
 // with the same list-outside override (see DocEmbed for why).
-function CardMarkdown({ content }: { content: string }) {
+export function CardMarkdown({ content }: { content: string }) {
   return (
-    <div className="text-[12px] [&_ol]:!list-outside [&_ol]:!pl-5 [&_ul]:!list-outside [&_ul]:!pl-5">
+    <div className="min-w-0 text-[13px] [overflow-wrap:anywhere] [&_ol]:!list-outside [&_ol]:!pl-5 [&_ul]:!list-outside [&_ul]:!pl-5">
       <MarkdownBlocks content={content} />
     </div>
   );
@@ -346,20 +321,17 @@ function PersonChip({ label, person }: { label: string; person: { name?: string;
 }
 
 function CommentRows({ comments }: { comments: any[] }) {
-  const recent = [...comments]
-    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))
-    .slice(-3);
-  if (recent.length === 0) return null;
+  const ordered = [...comments].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+  if (ordered.length === 0) return null;
   return (
     <div className="space-y-1.5 border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-2">
-      {comments.length > recent.length && (
-        <div className="text-[10px] text-sol-text-dim">{comments.length - recent.length} earlier comments</div>
-      )}
-      {recent.map((c: any, i: number) => (
-        <div key={c._id ?? i} className="flex items-start gap-1.5 text-[11px] leading-relaxed">
-          <span className="max-w-[180px] flex-shrink-0 truncate font-medium text-sol-text-muted">{c.session_info?.title || c.author}:</span>
-          <span className="line-clamp-3 min-w-0 whitespace-pre-line text-sol-text-muted [overflow-wrap:anywhere]">{c.text}</span>
-          {c.created_at && <span className="ml-auto flex-shrink-0 text-[10px] text-sol-text-dim">{relativeTime(c.created_at)}</span>}
+      {ordered.map((c: any, i: number) => (
+        <div key={c._id ?? i} className="space-y-1 text-[12px] leading-relaxed">
+          <div className="flex flex-wrap items-baseline gap-x-2 text-sol-text-muted">
+            <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{c.session_info?.title || c.author}</span>
+            {c.created_at && <span className="text-[11px] text-sol-text-dim">{relativeTime(c.created_at)}</span>}
+          </div>
+          <CardMarkdown content={c.text || ""} />
         </div>
       ))}
     </div>
@@ -369,13 +341,13 @@ function CommentRows({ comments }: { comments: any[] }) {
 function PlanTaskRows({ tasks }: { tasks: any[] }) {
   if (!tasks || tasks.length === 0) return null;
   return (
-    <div className="max-h-64 space-y-0.5 overflow-y-auto">
+    <div className="space-y-1">
       {tasks.map((t: any) => {
         const v = taskVisual(t.status);
         return (
-          <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-[11px]">
+          <div key={t._id} className="flex items-start gap-2 py-1 text-[13px]">
             <v.icon className={`h-3 w-3 flex-shrink-0 ${v.color}`} />
-            <span className={`min-w-0 truncate ${t.status === "done" ? "text-sol-text-dim line-through" : "text-sol-text-muted"}`}>
+            <span className={`min-w-0 [overflow-wrap:anywhere] ${t.status === "done" ? "text-sol-text-dim line-through" : "text-sol-text-muted"}`}>
               {t.title}
             </span>
             {t.assignee_info?.name && (
@@ -419,8 +391,10 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
     return (
       <div className="space-y-2.5">
         {entity.goal && <CardMarkdown content={entity.goal} />}
+        {(entity.doc_content || entity.body) && <CardMarkdown content={docBodyMarkdown(entity.doc_content || entity.body)} />}
         {progress && <ProgressBar {...progress} bar={ACCENT.plan.bar} />}
         {Array.isArray(entity.tasks) && <PlanTaskRows tasks={entity.tasks} />}
+        {entity.comments?.length > 0 && <CommentRows comments={entity.comments} />}
       </div>
     );
   }
@@ -449,9 +423,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
   }
   if (type === "doc") {
     return (
-      <div className="max-h-[70vh] overflow-y-auto pr-1">
-        <CardMarkdown content={docBodyMarkdown(entity.content)} />
-      </div>
+      <CardMarkdown content={docBodyMarkdown(entity.content)} />
     );
   }
   if (type === "trigger") {
@@ -459,9 +431,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
     return (
       <div className="space-y-2.5">
         {entity.prompt && (
-          <div className="max-h-72 overflow-y-auto">
-            <CardMarkdown content={entity.prompt} />
-          </div>
+          <CardMarkdown content={entity.prompt} />
         )}
         {(entity.last_run_at || entity.run_count > 0) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-sol-text-dim">
@@ -481,12 +451,59 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
 }
 
 /**
- * One shared object, rendered as a browsable card. `count` is how many cards
- * share the row (from the remark plugin): alone it renders rich; in a group it
- * starts compact and expanding makes it span the whole row.
+ * The chrome every shared-object card shares — expand/collapse (animated open
+ * AND close, keyboard, selection-guarded click), the accent border, the
+ * header strip, the preview body, the not-available and loading states, and
+ * the footer with the id and the open link. The caller supplies the object:
+ * EntityObjectCard for entity references, SharedMessageCard for a message.
+ * `count` is how many cards share the row (from the remark plugin): alone it
+ * renders rich; in a group it starts compact and expanding spans the row.
  */
-export function EntityObjectCard({ refId, count }: { refId: string; count: number }) {
-  const { rawId, type, entity, served, label, href } = useEntityResolution(refId);
+export function ObjectCardFrame({
+  accent,
+  count,
+  ariaLabel,
+  href,
+  onOpen,
+  openLabel,
+  footerId,
+  resolved,
+  served,
+  header,
+  flatBody,
+  snippet,
+  detail,
+}: {
+  accent: Accent;
+  count: number;
+  ariaLabel: string;
+  href: string;
+  onOpen?: (e: React.MouseEvent) => void;
+  /** "Open task" — the footer link and the header arrow's tooltip. */
+  openLabel: string;
+  footerId: string;
+  /** True once the object is in hand. */
+  resolved: boolean;
+  /** True once the server has answered (so `!resolved` means no access). */
+  served: boolean;
+  /** Identity + state, always visible. Omitted when `flatBody` renders instead. */
+  header?: {
+    icon: React.ReactNode;
+    /** A function gets `expanded`: the strip clips a collapsed title, so an open card can show the full one. */
+    title: React.ReactNode | ((expanded: boolean) => React.ReactNode);
+    /** The type-specific state line; hidden in the strip and shown in the body when compact. */
+    meta?: React.ReactNode;
+    timeAgo?: string | null;
+    live?: boolean;
+  };
+  /** A card that reads as its own surface (a session reads as its inbox card): no strip, controls float. */
+  flatBody?: (expanded: boolean) => React.ReactNode;
+  /** The usable preview a collapsed card shows — the reason to expand, visible before it. */
+  snippet?: React.ReactNode;
+  /** The full inline browse — what expanding reveals. */
+  detail: React.ReactNode;
+}) {
+  const detailId = useId();
   const [expanded, setExpanded] = useState(false);
   // The detail stays mounted through the CLOSE animation — unmounting with the
   // toggle would snap the card shut with nothing inside to shrink. Cleared on
@@ -494,7 +511,6 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
   // no transitionend ever fires).
   const [mounted, setMounted] = useState(false);
   const unmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openLinkedSession = useOpenLinkedSession();
 
   const setOpen = useCallback((open: boolean) => {
     if (unmountTimer.current) {
@@ -505,11 +521,10 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
     if (open) setMounted(true);
     else unmountTimer.current = setTimeout(() => setMounted(false), 320);
   }, []);
-  useEffect(
+  useMountEffect(
     () => () => {
       if (unmountTimer.current) clearTimeout(unmountTimer.current);
     },
-    [],
   );
 
   const toggle = useCallback(() => {
@@ -533,6 +548,136 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
   const openObject = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
+      onOpen?.(e);
+    },
+    [onOpen],
+  );
+
+  const compact = count > 1 && !expanded;
+  const flat = resolved && !!flatBody;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      aria-controls={detailId}
+      // Explicit name: without it a screen reader would concatenate the whole
+      // card's text, including the nested "Open …" links, into the button name.
+      aria-label={ariaLabel}
+      onClick={toggle}
+      onKeyDown={onKeyDown}
+      style={expanded && count > 1 ? { gridColumn: "1 / -1" } : undefined}
+      className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden border ${expanded ? `rounded-lg ${accent.borderOpen} bg-sol-bg shadow-xl` : `rounded-md ${accent.border} bg-sol-card`} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
+    >
+      {/* A flat card renders as its own surface — no header strip; the
+          open/expand controls float over the top-right corner on hover. */}
+      {flat && (
+        <>
+          <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
+            <Link
+              href={href}
+              onClick={openObject}
+              title={openLabel}
+              className={`rounded p-0.5 text-sol-text-dim ${accent.hoverText}`}
+            >
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
+            <ChevronDown
+              className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
+            />
+          </div>
+          <div className={expanded ? "px-4 pb-1 pt-3" : "px-4 py-3"}>{flatBody!(expanded)}</div>
+        </>
+      )}
+
+      {/* Header strip: identity + state, always visible. */}
+      {!flat && header && (
+        <div className={`flex items-start gap-2.5 border-b ${accent.stripBorder} ${expanded ? accent.stripOpen : accent.strip} px-4 py-3 transition-colors`}>
+          <span className="relative mt-[2px] flex-shrink-0">
+            {header.icon}
+            {header.live && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-sol-bg bg-sol-green" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium leading-snug text-sol-text [overflow-wrap:anywhere]">
+              {typeof header.title === "function" ? header.title(expanded) : header.title}
+            </div>
+            {resolved && !compact && header.meta}
+          </div>
+          <div className="mt-[1px] flex flex-shrink-0 items-center gap-1.5">
+            {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
+            <Link
+              href={href}
+              onClick={openObject}
+              title={openLabel}
+              className={`rounded p-0.5 text-sol-text-dim opacity-0 transition-opacity ${accent.hoverText} focus-visible:opacity-100 group-hover/card:opacity-100`}
+            >
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
+            <ChevronDown
+              className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Preview body — the usable snippet, before any click. */}
+      {resolved && !expanded && !flat && (
+        <div className="px-4 py-3">
+          {compact && header?.meta}
+          <div className={compact ? "mt-1" : ""}>{snippet}</div>
+        </div>
+      )}
+      {!resolved &&
+        (served ? (
+          <div className="px-2.5 py-2 text-[11px] text-sol-text-dim">Not available to you.</div>
+        ) : (
+          <div className="space-y-1.5 px-2.5 py-2.5" aria-hidden>
+            <div className="h-2 w-3/4 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
+            <div className="h-2 w-1/2 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
+          </div>
+        ))}
+
+      {/* The inline browse: animated open AND close, scrollable inside. */}
+      <div
+        id={detailId}
+        className="entity-card-expand"
+        data-open={expanded || undefined}
+        inert={!expanded}
+        onTransitionEnd={(e) => {
+          if (e.target === e.currentTarget && !expanded) setMounted(false);
+        }}
+      >
+        <div>
+          {resolved && mounted && (
+            <div className={`cursor-auto ${expanded || mounted ? "px-3.5 pb-3 pt-2" : "px-2.5 pb-2.5 pt-2"}`} onClick={(e) => e.stopPropagation()}>
+              {detail}
+              <div className="mt-2.5 flex items-center justify-between border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-1.5">
+                <span className="font-mono text-[10px] text-sol-text-dim">{footerId}</span>
+                <Link
+                  href={href}
+                  onClick={openObject}
+                  className={`inline-flex items-center gap-0.5 text-[10px] ${accent.text} no-underline hover:underline`}
+                >
+                  {openLabel}
+                  <ArrowUpRight className="h-2.5 w-2.5" />
+                </Link>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** One shared entity (task, plan, session, doc, trigger, project), rendered as a browsable card. */
+export function EntityObjectCard({ refId, count }: { refId: string; count: number }) {
+  const { rawId, type, entity, served, label, href } = useEntityResolution(refId);
+  const openLinkedSession = useOpenLinkedSession();
+
+  const openObject = useCallback(
+    (e: React.MouseEvent) => {
       if (type !== "session" || !entity?._id) return;
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
@@ -545,140 +690,42 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
   // is still resolving) renders back as the text that was typed.
   if (!type) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
 
-  const accent = ACCENT[type];
-  const compact = count > 1 && !expanded;
   const isSession = type === "session";
-  const isActive = isSession && entity?.status === "active";
   const Icon = TYPE_ICON[type];
   const taskV = type === "task" ? taskVisual(entity?.status) : null;
-  const timeAgo = relativeTime(entity?.updated_at);
+  const openLabel = `Open ${TYPE_LABEL[type].toLowerCase()}`;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-expanded={expanded}
-      // Explicit name: without it a screen reader would concatenate the whole
-      // card's text, including the nested "Open …" links, into the button name.
-      aria-label={`${TYPE_LABEL[type]}: ${entity ? label : rawId}`}
-      onClick={toggle}
-      onKeyDown={onKeyDown}
-      style={expanded && count > 1 ? { gridColumn: "1 / -1" } : undefined}
-      className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden border ${expanded ? `rounded-lg ${accent.borderOpen} bg-sol-bg shadow-xl` : `rounded-md ${accent.border} bg-sol-card`} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
-    >
-      {/* A session renders as its inbox card — flat, no header strip; the
-          open/expand controls float over the top-right corner on hover. */}
-      {isSession && entity && (
-        <>
-          <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
-            <Link
-              href={href}
-              onClick={openObject}
-              title="Open session"
-              className={`rounded p-0.5 text-sol-text-dim ${accent.hoverText}`}
-            >
-              <ArrowUpRight className="h-3 w-3" />
-            </Link>
-            <ChevronDown
-              className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
-            />
-          </div>
-          <div className={expanded ? "px-3.5 pb-1 pt-2.5" : "px-3 py-2"}>
-            <SessionCardBody session={entity} expanded={expanded} />
-          </div>
-        </>
-      )}
-
-      {/* Header strip: identity + state, always visible. */}
-      {!(isSession && entity) && (
-      <div className={`flex items-start gap-2 border-b ${accent.stripBorder} ${expanded ? accent.stripOpen : accent.strip} px-2.5 py-1.5 transition-colors`}>
-        <span className="relative mt-[2px] flex-shrink-0">
-          {isSession && (entity?.author_name || entity?.author_avatar) ? (
+    <ObjectCardFrame
+      accent={ACCENT[type]}
+      count={count}
+      ariaLabel={`${TYPE_LABEL[type]}: ${entity ? (type === "trigger" ? entity.display_title : undefined) || entity.title || entity.display_title || entity.name || label : rawId}`}
+      href={href}
+      onOpen={openObject}
+      openLabel={openLabel}
+      footerId={entity?.short_id ?? rawId}
+      resolved={!!entity}
+      served={served}
+      // A session reads as its inbox card — flat, no header strip.
+      flatBody={isSession ? (expanded) => <SessionCardBody session={entity} expanded={expanded} /> : undefined}
+      header={{
+        icon:
+          isSession && (entity?.author_name || entity?.author_avatar) ? (
             <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={16} />
           ) : taskV ? (
             <taskV.icon className={`h-3.5 w-3.5 ${taskV.color}`} />
           ) : (
-            <Icon className={`h-3.5 w-3.5 ${accent.text}`} />
-          )}
-          {(isActive || (type === "trigger" && entity?.status === "running")) && (
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-sol-bg bg-sol-green" />
-          )}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className={`text-[13px] font-medium leading-snug text-sol-text ${expanded ? "" : "truncate"}`}>
-            {/* `label` is clipped to pill length (~40 chars) — right for a
-                collapsed row, wrong at full width, where the real title fits. */}
-            {entity ? (
-              expanded ? (type === "trigger" ? entity.display_title : undefined) || entity.title || entity.display_title || entity.name || label : label
-            ) : (
-              <span className="font-mono text-sol-text-dim">{rawId}</span>
-            )}
-          </div>
-          {entity && !compact && <CardMetaLine type={type} entity={entity} />}
-        </div>
-        <div className="mt-[1px] flex flex-shrink-0 items-center gap-1.5">
-          {timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{timeAgo}</span>}
-          <Link
-            href={href}
-            onClick={openObject}
-            title={`Open ${TYPE_LABEL[type].toLowerCase()}`}
-            className={`rounded p-0.5 text-sol-text-dim opacity-0 transition-opacity ${accent.hoverText} focus-visible:opacity-100 group-hover/card:opacity-100`}
-          >
-            <ArrowUpRight className="h-3 w-3" />
-          </Link>
-          <ChevronDown
-            className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
-          />
-        </div>
-      </div>
-      )}
-
-      {/* Preview body — the usable snippet, before any click. */}
-      {entity && !expanded && !isSession && (
-        <div className={compact ? "px-2.5 py-1.5" : "px-2.5 py-2"}>
-          {compact && <CardMetaLine type={type} entity={entity} />}
-          <div className={compact ? "mt-1" : ""}>
-            <CardSnippet type={type} entity={entity} compact={compact} />
-          </div>
-        </div>
-      )}
-      {!entity &&
-        (served ? (
-          <div className="px-2.5 py-2 text-[11px] text-sol-text-dim">Not available to you.</div>
-        ) : (
-          <div className="space-y-1.5 px-2.5 py-2.5" aria-hidden>
-            <div className="h-2 w-3/4 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
-            <div className="h-2 w-1/2 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
-          </div>
-        ))}
-
-      {/* The inline browse: animated open AND close, scrollable inside. */}
-      <div
-        className="entity-card-expand"
-        data-open={expanded || undefined}
-        onTransitionEnd={(e) => {
-          if (e.target === e.currentTarget && !expanded) setMounted(false);
-        }}
-      >
-        <div>
-          {entity && mounted && (
-            <div className={`cursor-auto ${expanded || mounted ? "px-3.5 pb-3 pt-2" : "px-2.5 pb-2.5 pt-2"}`} onClick={(e) => e.stopPropagation()}>
-              <CardDetail type={type} entity={entity} />
-              <div className="mt-2.5 flex items-center justify-between border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-1.5">
-                <span className="font-mono text-[10px] text-sol-text-dim">{entity.short_id ?? rawId}</span>
-                <Link
-                  href={href}
-                  onClick={openObject}
-                  className={`inline-flex items-center gap-0.5 text-[10px] ${accent.text} no-underline hover:underline`}
-                >
-                  Open {TYPE_LABEL[type].toLowerCase()}
-                  <ArrowUpRight className="h-2.5 w-2.5" />
-                </Link>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+            <Icon className={`h-3.5 w-3.5 ${ACCENT[type].text}`} />
+          ),
+        title: entity
+          ? (type === "trigger" ? entity.display_title : undefined) || entity.title || entity.display_title || entity.name || label
+          : <span className="font-mono text-sol-text-dim">{rawId}</span>,
+        meta: entity ? <CardMetaLine type={type} entity={entity} /> : undefined,
+        timeAgo: relativeTime(entity?.updated_at),
+        live: (isSession && entity?.status === "active") || (type === "trigger" && entity?.status === "running"),
+      }}
+      snippet={entity ? <CardSnippet type={type} entity={entity} compact={count > 1} /> : undefined}
+      detail={entity ? <CardDetail type={type} entity={entity} /> : null}
+    />
   );
 }
