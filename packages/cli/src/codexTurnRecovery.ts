@@ -1,16 +1,39 @@
-import type { ApprovalPolicy, ThreadResumeResponse, Turn } from "./codexAppServer.js";
+import type { ApprovalPolicy, SandboxMode, ThreadResumeParams, ThreadResumeResponse, Turn } from "./codexAppServer.js";
 
 export type PersistedCodexThread = {
   threadId: string;
   updatedAt: number;
   cwd?: string;
   approvalPolicy?: ApprovalPolicy;
+  sandbox?: SandboxMode;
   activeTurnId?: string;
   recoveryAttempts?: number;
 };
 
 export const CODEX_RECOVERY_PROMPT = "Codecast restarted while your previous turn was still running. Continue the user's existing task from the saved conversation and current workspace. First check the results of any commands that may already have run; do not repeat completed actions. Respect any pending permission or user decision. Continue until the requested work is complete or you need the user's input.";
 export const MAX_CODEX_RECOVERY_ATTEMPTS = 3;
+
+/**
+ * Params to bring a saved thread back. `fallbackSandbox` is the sandbox the
+ * current config asks for, used only when the record predates sandbox
+ * persistence. Resuming with no sandbox at all lets Codex 0.153+ substitute a
+ * restrictive managed profile, which silently strips a running session of file
+ * and network access, so callers that know the configured value must pass it.
+ * It is never inferred from the record's own approval policy.
+ */
+export function codexResumeParams(
+  record: PersistedCodexThread,
+  approvalPolicy: ApprovalPolicy,
+  fallbackSandbox?: SandboxMode,
+): ThreadResumeParams {
+  const sandbox = record.sandbox ?? fallbackSandbox;
+  return {
+    threadId: record.threadId,
+    ...(record.cwd ? { cwd: record.cwd } : {}),
+    approvalPolicy,
+    ...(sandbox ? { sandbox } : {}),
+  };
+}
 
 export function codexRecoveryAction(record: PersistedCodexThread, thread: ThreadResumeResponse["thread"]): "none" | "settled" | "active" | "continue" | "exhausted" {
   if (!record.activeTurnId) return "none";

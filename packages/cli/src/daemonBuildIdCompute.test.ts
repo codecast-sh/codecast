@@ -185,3 +185,23 @@ describe("the scanner reads the real closure without losing specifiers", () => {
     expect(missed).toEqual([]);
   }, 60_000);
 });
+
+test("worker-only runtime changes affect the daemon fingerprint without importing CLI boot", () => {
+  write("packages/cli/src/workers/runtime.ts", 'import "./probeOnly.js";\n');
+  write("packages/cli/src/workers/probeOnly.ts", 'export const n = 1;\n');
+  const before = computeDaemonBuildId(root);
+  expect(before.files).toContain("packages/cli/src/workers/runtime.ts");
+  expect(before.files).toContain("packages/cli/src/workers/probeOnly.ts");
+  write("packages/cli/src/workers/probeOnly.ts", 'export const n = 2;\n');
+  expect(computeDaemonBuildId(root).id).not.toBe(before.id);
+});
+
+test("worker fast entry is fingerprinted without pulling the CLI-only import closure into the hash", () => {
+  write("packages/cli/src/main.ts", 'import("./index.js");\n');
+  write("packages/cli/src/index.ts", 'export const cliOnly = 1;\n');
+  const before = computeDaemonBuildId(root);
+  expect(before.files).toContain("packages/cli/src/main.ts");
+  expect(before.files).not.toContain("packages/cli/src/index.ts");
+  write("packages/cli/src/main.ts", 'if (true) import("./index.js");\n');
+  expect(computeDaemonBuildId(root).id).not.toBe(before.id);
+});

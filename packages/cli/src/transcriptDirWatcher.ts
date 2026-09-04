@@ -22,6 +22,7 @@ export interface TranscriptDirEvent {
 }
 
 export interface TranscriptDirWatcherConfig {
+  scanPolicy?: import("./workers/scanTypes.js").ScanPolicy;
   /** Absolute base directory the client writes transcripts under. */
   basePath: string;
   /** Filter for the live watch, matched against the path RELATIVE to basePath
@@ -88,6 +89,7 @@ export class TranscriptDirWatcher extends EventEmitter {
 
     this.watcher = new RecursiveWatcher({
       path: this.cfg.basePath,
+      scanPolicy: this.cfg.scanPolicy,
       filter: this.cfg.watchFilter,
       dirFilter: this.cfg.dirFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
@@ -108,10 +110,14 @@ export class TranscriptDirWatcher extends EventEmitter {
 
   // Files the watcher's priming walk found (one walk serves both), narrowed by
   // scanMatch and emitted newest first.
-  private emitExistingFilesSorted(files: WalkFile[]): void {
+  private async emitExistingFilesSorted(files: WalkFile[]): Promise<void> {
+    const watcher = this.watcher;
     const matched = files.filter((f) => this.cfg.scanMatch(path.dirname(f.path), path.basename(f.path)));
     matched.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-    for (const file of matched) {
+    for (let i = 0; i < matched.length; i++) {
+      if (i % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.watcher !== watcher) return;
+      const file = matched[i];
       this.handleFileEvent(file.path, "add");
     }
   }
@@ -235,6 +241,7 @@ export function transcriptDirWatcherConfig(
     // never watch. The session id is the CONTAINING DIRECTORY's uuid name.
     return {
       basePath,
+      scanPolicy: { dirs: "grokWatch", files: "grokWatch" },
       watchFilter: (rel) => /[\\/]updates\.jsonl$/.test(rel),
       scanMatch: (_dir, name) => name === "updates.jsonl",
       extractSessionId: (filePath) => {
@@ -260,6 +267,7 @@ export function transcriptDirWatcherConfig(
     // (lossily) back to the cwd, but processPiSession prefers the header cwd.
     return {
       basePath,
+      scanPolicy: { files: "jsonl" },
       watchFilter: (rel) => rel.endsWith(".jsonl"),
       scanMatch: (_dir, name) => name.endsWith(".jsonl"),
       extractSessionId: (filePath) => {
@@ -280,6 +288,7 @@ export function transcriptDirWatcherConfig(
   if (clientId === "codex") {
     return {
       basePath,
+      scanPolicy: { dirs: "codexWatch", files: "jsonl" },
       watchFilter: (rel) => rel.endsWith(".jsonl"),
       scanMatch: (_dir, name) => name.endsWith(".jsonl"),
       extractSessionId: (filePath) => {
@@ -299,6 +308,7 @@ export function transcriptDirWatcherConfig(
   // full filename and the parent-of-`chats` segment is the project hash.
   return {
     basePath,
+    scanPolicy: { dirs: "gemini", files: "geminiWatch" },
     watchFilter: (rel) => rel.endsWith(".json") && rel.split(/[\\/]/).includes("chats"),
     scanMatch: (dir, name) => name.endsWith(".json") && path.basename(dir) === "chats",
     extractSessionId: (filePath) => path.basename(filePath, ".json"),

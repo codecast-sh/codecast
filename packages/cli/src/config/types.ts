@@ -30,6 +30,7 @@ export type AgentPermissionModes = Partial<Record<AgentClientId, AgentPermission
 export type AgentDefaultParams = Partial<Record<AgentClientId, Record<string, string>>>;
 
 export interface Config {
+  daemon_workers?: boolean;
   // --- Identity / auth (all three writers) ---
   auth_token?: string;
   user_id?: string;

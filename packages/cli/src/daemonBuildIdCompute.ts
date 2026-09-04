@@ -190,7 +190,8 @@ export function computeDaemonBuildId(repoRoot = findRepoRoot()): BuildIdResult {
 
   const visited = new Set<string>();
   const external = new Set<string>();
-  const queue: string[] = [entry];
+  const worker = path.join(repoRoot, "packages/cli/src/workers/runtime.ts");
+  const queue: string[] = [entry, ...(isFile(worker) ? [worker] : [])];
 
   while (queue.length) {
     const file = queue.pop()!;
@@ -229,6 +230,8 @@ export function computeDaemonBuildId(repoRoot = findRepoRoot()): BuildIdResult {
     }
   }
 
+  const workerEntry = path.join(repoRoot, "packages/cli/src/main.ts");
+  if (isFile(workerEntry)) visited.add(workerEntry);
   visited.delete(excluded);
   const files = [...visited].map((f) => path.relative(repoRoot, f)).sort();
 

@@ -13,6 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
+import { isAgentContextMessage } from "@codecast/shared/contracts";
 import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt } from "../components/sessionMessage";
 
 const COMMAND_PATTERNS = [
@@ -56,7 +57,7 @@ export function isSystemMessage(content: string): boolean {
 const REMOTE_CONTROL_NOTICE_RE = /^Remote Control (?:disconnected|not started here)\b/;
 
 export function isHiddenSystemNotice(content: string | null | undefined, subtype?: string | null): boolean {
-  return subtype === "informational" && !!content && REMOTE_CONTROL_NOTICE_RE.test(content.trim());
+  return isAgentContextMessage(content) || (subtype === "informational" && !!content && REMOTE_CONTROL_NOTICE_RE.test(content.trim()));
 }
 
 // The usage-limit notices among those status lines ("Usage limit reached ·
@@ -77,6 +78,10 @@ export const IMPORT_NOTICE_PREFIX = "[Codecast import]";
 
 export function isImportNotice(content: string | null | undefined): boolean {
   return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
+}
+
+export function isContextOnlyUserMessage(content: string | null | undefined): boolean {
+  return isImportNotice(content) || isAgentContextMessage(content);
 }
 
 // Claude Code's `!` bash mode records the typed command as
@@ -186,7 +191,7 @@ export function getConversationPreview(
   return processed
     .filter(m => {
       if (isSystemMessage(m.cleanContent)) return false;
-      if (isImportNotice(m.cleanContent)) return false;
+      if (isContextOnlyUserMessage(m.content)) return false;
       if (m.role === "user") {
         const msgNorm = m.cleanContent.toLowerCase().trim().slice(0, 80);
         if (msgNorm === titleNorm) return false;
@@ -283,7 +288,7 @@ export function isNoiseUserMessage(content: string | null | undefined): boolean 
   if (!content) return true;
   const raw = content.trim();
   if (!raw) return true;
-  if (isImportNotice(raw)) return true;
+  if (isContextOnlyUserMessage(raw)) return true;
   if (isTaskNotification(raw)) return true;
   if (/^<scheduled-task[\s>]/.test(raw)) return true;
   if (isSkillExpansion(raw)) return true;

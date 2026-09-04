@@ -258,6 +258,7 @@ export default defineSchema({
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
+    request_id: v.optional(v.string()),
     command: daemonCommandValidator,
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -284,7 +285,8 @@ export default defineSchema({
     claimed_by: v.optional(v.string()),
     claimed_at: v.optional(v.number()),
     claimed_device: v.optional(v.string()),
-  }).index("by_user_pending", ["user_id", "executed_at"]),
+  }).index("by_user_pending", ["user_id", "executed_at"])
+    .index("by_user_request", ["user_id", "request_id"]),
 
   teams: defineTable({
     name: v.string(),
@@ -1788,6 +1790,7 @@ export default defineSchema({
     last_heartbeat: v.number(),
     agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
+    agent_status_write_at: v.optional(v.number()),
     // When the daemon parked this session's pane to stay under the fleet cap.
     // Cleared when the session resumes. Separate from agent_status_updated_at
     // so a later status write does not lose when the park started.
@@ -1823,6 +1826,7 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
     .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
+    .index("by_user_status", ["user_id", "agent_status"])
     .index("by_heartbeat", ["last_heartbeat"]),
 
   session_metrics: defineTable({

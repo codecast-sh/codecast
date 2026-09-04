@@ -18,14 +18,14 @@ export function useSyncManagedSessions(enabled = true) {
 }
 
 const sig = (m: any) =>
-  `${m.agent_status ?? ""}|${m.last_heartbeat ?? 0}|${m.current_cpu ?? 0}|${m.current_memory ?? 0}|${m.conversation_title ?? ""}|${m.message_count ?? 0}|${m.is_killed ? 1 : 0}|${m.headline ?? ""}|${m.last_message_preview ?? ""}`;
+  `${m.agent_status ?? ""}|${m.hibernated_at ?? ""}|${m.owner_device_id ?? ""}|${m.user_id ?? ""}|${m.session_id}|${m.conversation_id ?? ""}|${m.awake_idle_ms ?? 0}|${m.conversation_updated_at ?? 0}|${m.started_at ?? 0}|${m.last_heartbeat ?? 0}|${m.current_cpu ?? 0}|${m.current_memory ?? 0}|${m.current_pid_count ?? 0}|${m.conversation_title ?? ""}|${m.message_count ?? 0}|${m.is_killed ? 1 : 0}|${m.headline ?? ""}|${m.last_message_preview ?? ""}`;
 const byHeartbeatDesc = (a: any, b: any) => (b.last_heartbeat ?? 0) - (a.last_heartbeat ?? 0);
 
 /** Reader: live managed sessions, most recently seen first. */
 export function useManagedSessions(): { sessions: any[]; ready: boolean } {
   const { ready } = useSyncManagedSessions();
   const now = useCoarseNow(60_000);
-  const where = useMemo(() => (m: any) => (m.last_heartbeat ?? 0) > now - HEARTBEAT_WINDOW_MS, [now]);
+  const where = useMemo(() => (m: any) => m.agent_status === "hibernated" || (m.last_heartbeat ?? 0) > now - HEARTBEAT_WINDOW_MS, [now]);
   const sessions = useCollectionRows<any>("managedSessions", { where, sig, sort: byHeartbeatDesc });
   return { sessions, ready };
 }

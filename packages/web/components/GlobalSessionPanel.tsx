@@ -1,3 +1,5 @@
+import { HibernatedMarker } from "./HibernatedMarker";
+import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -1769,7 +1771,11 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
   let family: string;
   let title: string;
   let detail: string;
-  if (session.agent_status === "waiting") {
+  if (session.agent_status === "hibernated") {
+    family = "Hibernated";
+    title = HIBERNATED_COPY;
+    detail = "";
+  } else if (session.agent_status === "waiting") {
     family = "Background";
     title = "waiting on background work";
     detail = "the turn ended on an open task — the agent resumes when it finishes";
@@ -2466,6 +2472,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
+            <HibernatedMarker status={session.agent_status} compact />
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -2886,6 +2893,7 @@ export const SessionCard = memo(function SessionCard({
               );
             })()}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
+            <HibernatedMarker status={session.agent_status} compact />
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}

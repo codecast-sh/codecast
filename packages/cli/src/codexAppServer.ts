@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
 import { STABLE_ENV_MODE } from "@codecast/shared/contracts";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { withWorktreeConfig } from "./worktreeEnv.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -26,6 +27,11 @@ export interface TurnStartParams {
   model?: string;
   cwd?: string;
   approvalPolicy?: ApprovalPolicy;
+  /** Codex 0.153+ recomputes a restrictive managed permission profile for any
+   *  turn that arrives without one, instead of inheriting what the thread was
+   *  created with. Every turn must therefore restate the sandbox. Callers may
+   *  leave this unset: turnStart fills it from the thread's own registration. */
+  sandbox?: SandboxMode;
 }
 
 export type UserInput =
@@ -39,6 +45,7 @@ export interface ThreadResumeParams {
   approvalPolicy?: ApprovalPolicy;
   model?: string;
   baseInstructions?: string;
+  config?: Record<string, unknown>;
 }
 
 export interface ThreadForkParams extends ThreadStartParams {
@@ -208,6 +215,12 @@ export class CodexAppServer extends EventEmitter {
   private pendingRequests = new Map<number | string, PendingRequest>();
   private turnAccumulators = new Map<string, TurnAccumulator>();
   private threadModels = new Map<string, string>();
+  /** The sandbox each live thread was created or resumed with, so every turn on
+   *  it can restate the same one. See TurnStartParams.sandbox. */
+  private threadSandboxes = new Map<string, SandboxMode>();
+  /** Sandbox for threads whose caller named none. Set once from config, so no
+   *  call site can leave Codex to pick a profile of its own. */
+  defaultSandbox?: SandboxMode;
   private restartDelay = 1000;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -259,14 +272,37 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadStart(params: ThreadStartParams): Promise<ThreadStartResponse> {
-    const response = await this.sendRequest("thread/start", params, THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
+    const sandbox = this.effectiveSandbox(undefined, params.sandbox);
+    const response = await this.sendRequest("thread/start", withWorktreeConfig(sandbox ? { ...params, sandbox } : params), THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
     this.threadModels.set(response.thread.id, response.model);
+    this.rememberSandbox(response.thread.id, sandbox);
     return response;
   }
 
   async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
     if (params.model) this.threadModels.set(params.threadId, params.model);
-    return this.sendRequest("turn/start", params, DEFAULT_TIMEOUT_MS) as Promise<TurnStartResponse>;
+    this.rememberSandbox(params.threadId, params.sandbox);
+    const sandbox = this.effectiveSandbox(params.threadId, params.sandbox);
+    return this.sendRequest("turn/start", sandbox ? { ...params, sandbox } : params, DEFAULT_TIMEOUT_MS) as Promise<TurnStartResponse>;
+  }
+
+  /** Records the sandbox a thread is running under. Callers that omit it are
+   *  asking to keep whatever the thread already had, so an absent value never
+   *  erases a known one. */
+  private rememberSandbox(threadId: string, sandbox?: SandboxMode): void {
+    if (sandbox) this.threadSandboxes.set(threadId, sandbox);
+  }
+
+  /** The sandbox to send: the caller's, else the thread's own, else the
+   *  configured default. Only undefined when nothing is configured. */
+  private effectiveSandbox(threadId: string | undefined, requested?: SandboxMode): SandboxMode | undefined {
+    return requested ?? (threadId ? this.threadSandboxes.get(threadId) : undefined) ?? this.defaultSandbox;
+  }
+
+  /** The sandbox a live thread is running under, for callers that need to
+   *  persist or report it. */
+  sandboxForThread(threadId: string): SandboxMode | undefined {
+    return this.threadSandboxes.get(threadId);
   }
 
   async turnInterrupt(threadId: string, turnId: string): Promise<void> {
@@ -274,14 +310,18 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
-    const response = await this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
+    const sandbox = this.effectiveSandbox(params.threadId, params.sandbox);
+    const response = await this.sendRequest("thread/resume", withWorktreeConfig(sandbox ? { ...params, sandbox } : params), THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
     this.threadModels.set(response.thread.id, response.model);
+    this.rememberSandbox(response.thread.id, sandbox);
     return response;
   }
 
   async threadFork(params: ThreadForkParams, timeoutMs = THREAD_START_TIMEOUT_MS): Promise<ThreadForkResponse> {
-    const response = await this.sendRequest("thread/fork", params, timeoutMs) as ThreadForkResponse;
+    const sandbox = this.effectiveSandbox(undefined, params.sandbox);
+    const response = await this.sendRequest("thread/fork", withWorktreeConfig(sandbox ? { ...params, sandbox } : params), timeoutMs) as ThreadForkResponse;
     this.threadModels.set(response.thread.id, response.model);
+    this.rememberSandbox(response.thread.id, sandbox);
     return response;
   }
 

@@ -72,12 +72,22 @@ export function probeWorktree(worktreePath: string): { dirty: boolean; aheadOfOr
 export async function releaseSessionWorktree(
   cwd: string | undefined,
   log: (m: string) => void = () => {},
+  isShared?: (worktreePath: string) => Promise<boolean>,
 ): Promise<GcVerdict> {
   if (!cwd) return { action: "skipped", reason: "no cwd" };
   const wt = locateWorktree(cwd);
   if (!wt) return { action: "skipped", reason: "not a codecast worktree" };
   const worktreePath = path.join(wt.repoRoot, ".codecast", "worktrees", wt.name);
   if (!fs.existsSync(worktreePath)) return { action: "skipped", reason: "already gone" };
+  if (isShared) {
+    try {
+      if (await isShared(worktreePath)) {
+        return { action: "kept", name: wt.name, path: worktreePath, reason: "another session uses this worktree" };
+      }
+    } catch {
+      return { action: "kept", name: wt.name, path: worktreePath, reason: "cannot verify exclusive session ownership" };
+    }
+  }
   let probe: { dirty: boolean; aheadOfOrigin: number | null };
   try {
     probe = probeWorktree(worktreePath);

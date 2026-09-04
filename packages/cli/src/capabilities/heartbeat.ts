@@ -31,6 +31,8 @@ let lastCollectedAt = 0;
 let lastSentHash: string | undefined;
 let lastSentAt = 0;
 let inFlight = false;
+let collectionHome: string | undefined;
+let collectionGeneration = 0;
 
 /** Scan now, synchronously. Exported for tests and `cast doctor`. */
 export function collectCapabilityInventory(home = os.homedir(), projectPath?: string): CapabilityHeartbeatPayload {
@@ -41,7 +43,9 @@ export function collectCapabilityInventory(home = os.homedir(), projectPath?: st
  *  background collection never holds the loop for the whole tree. */
 export async function collectCapabilityInventoryAsync(home = os.homedir(), projectPath?: string): Promise<CapabilityHeartbeatPayload> {
   const started = Date.now();
-  return payloadFrom(await readInventoryAsync(home, projectPath), started);
+  const inventory = await readInventoryAsync(home, projectPath);
+  if (inventory.unreadable.length) throw new Error("capability inventory unavailable");
+  return payloadFrom(inventory, started);
 }
 
 function payloadFrom(inv: Inventory, started: number): CapabilityHeartbeatPayload {
@@ -61,11 +65,17 @@ function payloadFrom(inv: Inventory, started: number): CapabilityHeartbeatPayloa
 
 /** Kick a background rescan when stale. Called per beat; the result rides the
  *  NEXT beat. Never awaited — presence must not wait on a disk scan. */
-export function ensureCapabilityInventoryFresh(home?: string): void {
+export function ensureCapabilityInventoryFresh(home = os.homedir()): void {
+  if (collectionHome !== home) {
+    resetCapabilityHeartbeatState();
+    collectionHome = home;
+  }
+  const generation = collectionGeneration;
   if (inFlight || Date.now() - lastCollectedAt < REFRESH_MS) return;
   inFlight = true;
   void collectCapabilityInventoryAsync(home)
     .then((payload) => {
+      if (generation !== collectionGeneration) return;
       cached = payload;
       lastCollectedAt = Date.now();
     })
@@ -73,7 +83,7 @@ export function ensureCapabilityInventoryFresh(home?: string): void {
       // A failed scan leaves the previous cache in place; the next window retries.
     })
     .finally(() => {
-      inFlight = false;
+      if (generation === collectionGeneration) inFlight = false;
     });
 }
 
@@ -95,6 +105,8 @@ export function markCapabilityPayloadSent(hash: string): void {
 
 /** Test seam: reset module state between cases. */
 export function resetCapabilityHeartbeatState(): void {
+  collectionGeneration++;
+  collectionHome = undefined;
   cached = undefined;
   lastCollectedAt = 0;
   lastSentHash = undefined;

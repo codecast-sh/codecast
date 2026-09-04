@@ -402,6 +402,32 @@
       "is_idle": false,
       "is_unresponsive": true,
       "has_pending_messages": true
+    },
+    {
+      "_id": "hibernated",
+      "status": "active",
+      "updated_at": "E-2h",
+      "message_count": 5,
+      "agent_status": "hibernated",
+      "is_idle": true
+    },
+    {
+      "_id": "hibernated_ask",
+      "status": "active",
+      "updated_at": "E-2h",
+      "message_count": 5,
+      "agent_status": "hibernated",
+      "is_idle": true,
+      "awaiting_input": true
+    },
+    {
+      "_id": "hibernated_stashed",
+      "status": "active",
+      "updated_at": "E-2h",
+      "message_count": 5,
+      "agent_status": "hibernated",
+      "is_idle": true,
+      "inbox_stashed_at": "E-1h"
     }
   ],
   "expected": {
@@ -411,12 +437,12 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 18,
+        "needs_input": 19,
         "done": 3,
-        "dormant": 6,
+        "dormant": 7,
         "working": 4,
         "idle": 0,
-        "stashed": 1,
+        "stashed": 2,
         "dismissed": 1,
         "hidden": 0
       },
@@ -434,7 +460,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "ab847b4985bf1a3d",
+    "set_digest": "69ef22e1694213ef",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -504,6 +530,21 @@
       "forkchildz9000000000000000000000": [
         "needs_input",
         "needs_input",
+        false
+      ],
+      "hibernatedaskz130000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "hibernatedstashedz17000000000000": [
+        "stashed",
+        "dormant",
+        false
+      ],
+      "hibernatedz100000000000000000000": [
+        "dormant",
+        "dormant",
         false
       ],
       "killedpinnedz1200000000000000000": [

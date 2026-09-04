@@ -18,7 +18,7 @@
  * not through runEngine, so it is never undone.
  */
 
-import { execFile, spawnSync } from "../proc.js";
+import { execFileAsync, spawnSync } from "../proc.js";
 import { readState } from "./instance.js";
 import { raiseAppByPidSync } from "./raiseApp.js";
 
@@ -60,13 +60,14 @@ function pidForAsn(key: string): number | null {
 // where blocking is the point. A long-lived poller (the daemon's focus
 // sentinel) must not block: `lsappinfo front` takes 1-2s when the machine is
 // busy, and inside the daemon that is 1-2s of no delivery, once a second.
-function lsappinfo(args: string[]): Promise<{ status: number | null; stdout: string }> {
-  return new Promise((resolve) => {
-    execFile("lsappinfo", args, { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS }, (err, stdout) => {
-      const status = err ? ((err as { code?: unknown }).code as number | null ?? 1) : 0;
-      resolve({ status: typeof status === "number" ? status : 1, stdout: String(stdout ?? "") });
-    });
-  });
+async function lsappinfo(args: string[]): Promise<{ status: number | null; stdout: string }> {
+  try {
+    const { stdout } = await execFileAsync("lsappinfo", args, { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS });
+    return { status: 0, stdout };
+  } catch (error) {
+    const e = error as { code?: unknown; stdout?: unknown };
+    return { status: typeof e.code === "number" ? e.code : 1, stdout: String(e.stdout ?? "") };
+  }
 }
 
 export async function frontAsnAsync(): Promise<string | null> {

@@ -54,6 +54,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { timeSyncFs } from "../slowSync.js";
+import { scanWorkerHost } from "../workers/bridge.js";
+import { visitScan, scanCanFallback } from "../workers/scanClient.js";
 import { AGENT_CLIENTS, observedScopeRank, SNIPPET_CATALOG} from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
@@ -893,6 +895,24 @@ export function readInventory(home: string, projectPath?: string): Inventory {
  * whole tree. Same steps, same order, same output as readInventory.
  */
 export async function readInventoryAsync(home: string, projectPath?: string): Promise<Inventory> {
+  if (scanWorkerHost()) {
+    try {
+      const inventory: Inventory = { items: [], marketplaces: [], unreadable: [] };
+      await visitScan({ name: "inventory", home, ...(projectPath ? { projectPath } : {}) }, rows => {
+       for (const row of rows) {
+        if (row.type === "item") inventory.items.push(row.value as InventoryItem);
+        else if (row.type === "marketplace") inventory.marketplaces.push(row.value as MarketplaceRef);
+        else if (row.type === "unreadable") inventory.unreadable.push(row.value as UnreadablePath);
+        else throw new Error("invalid inventory observation");
+       }
+      });
+      return inventory;
+    } catch (error) { if (!scanCanFallback(error)) throw error; }
+  }
+  return readInventoryAsyncLocal(home, projectPath);
+}
+
+export async function readInventoryAsyncLocal(home: string, projectPath?: string): Promise<Inventory> {
   const scan = inventorySteps(home, projectPath);
   for (const step of scan.steps) {
     timeSyncFs("readInventory step", step.label, step.run);
