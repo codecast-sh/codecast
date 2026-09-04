@@ -192,12 +192,17 @@ describe("the webhook lookup is scoped too", () => {
   });
 
   test("no CREDENTIAL lookup there falls back to an unscoped owner scan", async () => {
-    // `by_account_login` still appears once, in matchPRToConversation, and that
-    // one is legitimate: an inbound webhook carries no team, so the owner scan
-    // is how it works out which team the repository belongs to in the first
-    // place. It reads an installation for attribution and never mints a token
-    // from it. The rule this pins is narrower than "never scan by owner": a
-    // lookup that RESOLVES A CREDENTIAL must be scoped.
+    // `by_account_login` still appears once, and that one is legitimate: an
+    // inbound webhook carries no team, so the owner scan is how it works out
+    // which team the repository belongs to in the first place. It reads an
+    // installation for attribution and never mints a token from it. The rule
+    // this pins is narrower than "never scan by owner": a lookup that RESOLVES
+    // A CREDENTIAL must be scoped.
+    //
+    // The scan used to sit inline in matchPRToConversation. It now lives in
+    // resolveTeamForRepository, because push ingest and trigger scoping ask the
+    // same question. That is one named place instead of three inline copies, so
+    // what this test pins is where it lives AND what it is allowed to return.
     const src = await Bun.file(
       new URL("./githubWebhooks.ts", import.meta.url).pathname,
     ).text();
@@ -205,10 +210,16 @@ describe("the webhook lookup is scoped too", () => {
     // left where the deleted lookup used to be, which explains the fallback.
     const scans = src.match(/\.withIndex\("by_account_login"/g) ?? [];
     expect(scans.length).toBe(1);
-    // The surviving scan must live in the attribution mutation, not near a mint.
+    // The surviving scan must live in the attribution resolver, not near a mint.
     const idx = src.indexOf('.withIndex("by_account_login"');
-    const enclosing = src.lastIndexOf("export const", idx);
-    expect(src.slice(enclosing, idx)).toContain("matchPRToConversation");
+    const enclosing = src.lastIndexOf("export async function", idx);
+    expect(src.slice(enclosing, idx)).toContain("resolveTeamForRepository");
+
+    // And it may hand back a team to attribute to, nothing else. A token read
+    // here would be exactly the unscoped credential resolution this forbids.
+    const body = src.slice(enclosing, src.indexOf("\n}", idx));
+    expect(body).toContain("installation?.team_id");
+    expect(body).not.toContain("token");
   });
 
   test("its callers go through the team-scoped resolver", async () => {

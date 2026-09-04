@@ -1,9 +1,9 @@
-import { mutation, query, action, internalAction, internalQuery } from "./functions";
+import { mutation, query, action, internalAction, internalQuery, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { canAccessConversation } from "./lib/access";
+import { canAccessConversation, canAccessCommit } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
 
 export const addCommit = mutation({
@@ -142,20 +142,21 @@ export const linkCommitToSession = mutation({
 // be attributed and are withheld (fail closed). Giving `commits` an owner
 // column is the real fix; until then these read as "signed in, and either the
 // row is yours by conversation or it is not served".
-async function accessibleCommits<T extends { conversation_id?: Id<"conversations"> }>(
-  ctx: Parameters<typeof canAccessConversation>[0] & { db: any },
+async function accessibleCommits<
+  T extends { conversation_id?: Id<"conversations">; team_id?: Id<"teams"> },
+>(
+  ctx: Parameters<typeof canAccessCommit>[0],
   userId: Id<"users">,
   commits: T[],
 ): Promise<T[]> {
+  // A repository's commits arrive in long runs that share one session or one
+  // team, so the verdict is cached per provenance pair instead of being derived
+  // again for every row.
   const verdict = new Map<string, boolean>();
   const out: T[] = [];
   for (const c of commits) {
-    if (!c.conversation_id) continue;
-    const key = c.conversation_id.toString();
-    if (!verdict.has(key)) {
-      const conversation = await ctx.db.get(c.conversation_id);
-      verdict.set(key, conversation ? await canAccessConversation(ctx, userId, conversation) : false);
-    }
+    const key = `${c.conversation_id ?? ""}|${c.team_id ?? ""}`;
+    if (!verdict.has(key)) verdict.set(key, await canAccessCommit(ctx, userId, c));
     if (verdict.get(key)) out.push(c);
   }
   return out;
@@ -450,5 +451,77 @@ export const getUserById = internalQuery({
   },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.user_id);
+  },
+});
+
+// ── Filling in a commit that arrived without its diff ──
+//
+// A push webhook carries the message and the file names but no patch, so a
+// commit ingested that way has no diff to show. repos.ensureCommitFiles is the
+// read-through that fetches it; these two are its halves.
+
+export const commitFilesState = internalQuery({
+  args: { repository: v.string(), sha: v.string() },
+  handler: async (ctx, args) => {
+    const commit = await ctx.db
+      .query("commits")
+      .withIndex("by_sha", (q) => q.eq("sha", args.sha))
+      .first();
+    if (!commit) return null;
+
+    // A commit recorded from a session transcript carries no repository: the
+    // session knew the checkout, not the remote. That is missing information,
+    // not a mismatch, so it does not disqualify the row. Only a row that names
+    // a DIFFERENT repository is somebody else's commit.
+    if (commit.repository && commit.repository !== args.repository) return null;
+
+    return {
+      commit_id: commit._id,
+      has_files: (commit.files?.length ?? 0) > 0,
+      needs_repository: !commit.repository,
+    };
+  },
+});
+
+export const applyCommitFiles = internalMutation({
+  args: {
+    commit_id: v.id("commits"),
+    files: v.array(v.object({
+      filename: v.string(),
+      status: v.string(),
+      additions: v.number(),
+      deletions: v.number(),
+      changes: v.number(),
+      patch: v.optional(v.string()),
+    })),
+    additions: v.number(),
+    deletions: v.number(),
+    author_login: v.optional(v.string()),
+    author_avatar_url: v.optional(v.string()),
+    // Set when the row reached us from a transcript and never learned which
+    // remote it came from. Filling it in here means the next reader finds the
+    // commit by {repository, sha} like every other one.
+    repository: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const commit = await ctx.db.get(args.commit_id);
+    if (!commit) return { ok: false };
+
+    // The counts from a push payload are often zero, so the real ones from the
+    // commit endpoint replace them. Author identity is only filled in when the
+    // row is missing it, since the ingest path may know better.
+    const patch: Record<string, any> = {
+      files: args.files,
+      files_changed: args.files.length,
+      insertions: args.additions,
+      deletions: args.deletions,
+    };
+    if (!commit.repository && args.repository) patch.repository = args.repository;
+    if (!commit.author_login && args.author_login) patch.author_login = args.author_login;
+    if (!commit.author_avatar_url && args.author_avatar_url) {
+      patch.author_avatar_url = args.author_avatar_url;
+    }
+    await ctx.db.patch(args.commit_id, patch);
+    return { ok: true };
   },
 });
