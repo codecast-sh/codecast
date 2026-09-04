@@ -52,7 +52,7 @@ describe("change-feed write interceptor coverage", () => {
     "buckets.ts": "inbox_buckets / bucket_assignments through the revision-bound writer — untracked",
     "callChat.ts": "call room chat rows — untracked",
     "calls.ts": "call rooms and participants — untracked",
-    "debugTmp.ts": "temporary debug harness; deleted when its census is done — must never write a tracked table",
+    "debugTmpDiet.ts": "temporary conversation doc diet sweep; sheds legacy blobs nothing renders, so no delta is worth logging — deleted with debugTmp.ts",
     "oauthConnectors.ts": "oauth connector state — untracked",
     "searchMirror.ts": "search mirror rows — untracked",
     "storyMode.ts": "story mode state — untracked",
@@ -69,11 +69,11 @@ describe("change-feed write interceptor coverage", () => {
       if (!(f in RAW_BUILDER_ALLOWLIST)) offenders.push(f);
       // A raw-builder file that queries a tracked table AND patches/deletes has
       // the bypass in reach; the reason column above says it never does. The
-      // debug harness is exempt by name: it exists to poke rows and is slated
-      // for deletion, and its writes never reach a client through the sync log.
+      // diet sweep is exempt by name: it strips fields nothing renders and is
+      // slated for deletion, so its patches never need to reach the sync log.
       const readsTracked = TRACKED.some((t) => src.includes(`.query("${t}")`));
       const writes = /\.(patch|delete)\(/.test(src);
-      if (readsTracked && writes && f !== "debugTmp.ts") trackedWriters.push(f);
+      if (readsTracked && writes && f !== "debugTmpDiet.ts") trackedWriters.push(f);
     }
     expect(offenders).toEqual([]);
     expect(trackedWriters).toEqual([]);
