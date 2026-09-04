@@ -20,7 +20,10 @@ import {
   actedBlockedConversations,
   ccAccountsValidator,
   decideAutoSwitch,
+  splitAuthParks,
   AUTO_SWITCH_CONTINUE_KEY,
+  AUTO_SWITCH_PROBE_RETRY_MS,
+  authRestartAttemptKey,
   AUTO_CONTINUE_WINDOW_MS,
   isAutoContinueEnabled,
   isBlockedConversation,
@@ -34,12 +37,18 @@ import {
   LOGIN_FLOW_STALE_MS,
   MINT_FLOW_STALE_MS,
   STALE_FLAG_AFTER_MS,
+  THROTTLE_CONTINUE_DELAY_MS,
+  THROTTLE_CONTINUE_SPACING_MS,
+  pickThrottleContinueBatch,
   tokenBackedProfile,
   activeTokenProfile,
   continueTargetPin,
   continueNeedsRestart,
+  parkedOnActiveAccount,
+  resumePinFor,
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
+import { canOwnerOrTeamAccess } from "./privacy";
 
 // The freshest online NON-remote device: it holds the keychain profiles and is
 // the canonical credential source remotes are pushed from.
@@ -276,7 +285,7 @@ export const requestAccountSwitch = mutation({
 // (primary as fallback — it can reclaim sessions whose owner died, same rule
 // the command executor applies) and insert one switch_account daemon command
 // per involved device.
-async function insertSwitchCommands(
+export async function insertSwitchCommands(
   ctx: { db: any },
   userId: Id<"users">,
   opts: {
@@ -409,29 +418,26 @@ async function insertSwitchCommands(
       }
     }
     routed += convs.length;
-    // A switch restarts every session (the keychain swap invalidates the
-    // token each process holds). A plain continue on the current account
-    // restarts only the sessions a message cannot reach: signed-out ones,
-    // and ones pinned to another account's setup-token — the rest get the
-    // message a hand-typed continue would send.
+    // A switch restarts every targeted blocked session because its process is
+    // bound to the old credential. A plain continue on the current account
+    // restarts only the sessions a message cannot reach: signed-out ones, and
+    // ones pinned to another account's setup-token — the rest get the message
+    // a hand-typed continue would send.
     const restart = switchRequested
       ? convs
       : convs.filter((c) => continueNeedsRestart(c, device, opts.now));
     if (!switchRequested && opts.continueBlocked) {
       for (const c of convs) if (!restart.includes(c)) await sendContinue(c);
     }
-    // The pin the restarted sessions resume under. Per-session tokens on
-    // this device: the target account's token (the switch target, or the
-    // machine's current login for a plain continue) — or no pin when that
-    // account has no token, because a session left pinned to the exhausted
-    // account would re-source it on resume and undo the revive. The daemon
-    // reads the pin from the row at resume, so it is corrected here, before
-    // the kill command exists.
+    // The pin the restarted sessions resume under: the target account's token
+    // (the switch target, or the machine's current login for a plain continue)
+    // — or no pin when that account has no token, because a session left pinned
+    // to the exhausted account would re-source it on resume and undo the revive.
+    // The daemon reads the pin from the row at resume, so it is corrected here,
+    // before the kill command exists.
     if (!isRemote) {
       const pin = switchRequested
-        ? device?.cc_session_tokens === true
-          ? tokenBackedProfile(device.cc_accounts, { profile: localProfile }, opts.now)
-          : undefined
+        ? tokenBackedProfile(device?.cc_accounts, { profile: localProfile }, opts.now)
         : continueTargetPin(device, opts.now);
       for (const c of restart) {
         if ((c.cc_account ?? undefined) !== pin) await ctx.db.patch(c._id, { cc_account: pin });
@@ -522,11 +528,12 @@ const BLOCKED_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
  * notification (all blocked kinds). Both are idempotent and self-gating, so
  * over-scheduling is harmless. */
 export async function onFreshApiErrorPark(
-  ctx: { scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
+  ctx: { db?: any; scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
   userId: Id<"users">,
   kind: string,
 ): Promise<void> {
   if (kind === "limit" || kind === "auth") await scheduleAutoSwitchCheck(ctx, userId);
+  if (kind === "throttle") await scheduleThrottleContinue(ctx, userId);
   await ctx.scheduler.runAfter(BLOCKED_NOTIFY_DEBOUNCE_MS, internal.accountSwitch.blockedNotifyCheck, {
     user_id: userId,
   });
@@ -876,7 +883,7 @@ const AUTO_SWITCH_COOLDOWN_MS = 3 * 60 * 1000;
 // Debounce between a limit banner landing and the check: lets a fleet-wide
 // park burst coalesce into one decision instead of one per session.
 const AUTO_SWITCH_DEBOUNCE_MS = 45 * 1000;
-const MAX_ATTEMPT_HISTORY = 12;
+const MAX_ATTEMPT_HISTORY = 64;
 
 /** Schedule an auto-switch check for this user. Called from the message paths
  * that stamp a limit-kind banner — the event that makes a check worth running.
@@ -890,6 +897,73 @@ export async function scheduleAutoSwitchCheck(
     user_id: userId,
   });
 }
+
+// Burst-throttle recovery. A throttle park (kind "throttle": the provider's
+// per-minute cap rejected a request, usually because many sessions resumed at
+// once) is healed by a plain continue after a short wait, never by an account
+// switch — every account trips the same cap under the same burst. The check
+// runs THROTTLE_CONTINUE_DELAY_MS after the newest park, continues a few of
+// the due sessions, and books itself again while more are due or waiting, so
+// the retry itself is paced instead of being the burst all over again. One
+// booking per user at a time (throttle_check_at on the primary's switch state);
+// with no primary online the booking is unconditional — nothing to stamp, and
+// a duplicate tick costs one extra query.
+async function scheduleThrottleContinue(
+  ctx: { db?: any; scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
+  userId: Id<"users">,
+): Promise<void> {
+  const now = Date.now();
+  const primary = ctx.db ? (await listOnlineDevices(ctx as { db: any }, userId, now)).primary : undefined;
+  const state = primary?.cc_auto_switch_state ?? {};
+  if (primary && state.throttle_check_at && state.throttle_check_at > now) return;
+  const at = now + THROTTLE_CONTINUE_DELAY_MS;
+  await ctx.scheduler.runAfter(THROTTLE_CONTINUE_DELAY_MS, internal.accountSwitch.throttleContinueCheck, {
+    user_id: userId,
+  });
+  if (primary) await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: at } });
+}
+
+export const throttleContinueCheck = internalMutation({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
+    const state = primary?.cc_auto_switch_state ?? {};
+    const book = async (at: number) => {
+      await ctx.scheduler.runAt(at, internal.accountSwitch.throttleContinueCheck, { user_id: args.user_id });
+      if (primary) await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: at } });
+    };
+    const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
+    const { batch, remaining, waiting, nextDueAt } = pickThrottleContinueBatch(blocked, now);
+    if (batch.length === 0) {
+      if (nextDueAt !== null) {
+        await book(Math.max(nextDueAt, now + 1000));
+        return { acted: "wait", waiting, next_check_at: nextDueAt };
+      }
+      if (primary && state.throttle_check_at) {
+        await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: undefined } });
+      }
+      return { acted: "nothing_throttled" };
+    }
+    const res = await insertSwitchCommands(ctx, args.user_id, {
+      profile: undefined,
+      blocked: batch,
+      online,
+      primary,
+      continueBlocked: true,
+      now,
+    });
+    if (remaining > 0 || waiting > 0) {
+      const at = remaining > 0 ? now + THROTTLE_CONTINUE_SPACING_MS : Math.max(nextDueAt ?? now, now + THROTTLE_CONTINUE_SPACING_MS);
+      await book(at);
+      return { acted: "continued", continued: res.messaged + res.restarted, remaining, waiting, next_check_at: at };
+    }
+    if (primary && state.throttle_check_at) {
+      await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: undefined } });
+    }
+    return { acted: "continued", continued: res.messaged + res.restarted, remaining: 0, waiting: 0 };
+  },
+});
 
 // The recovery toggles live on the device row because both behaviors are
 // machine-global — it's this machine's login that rotates through profiles
@@ -925,7 +999,7 @@ export const recoveryStatus = query({
       device_id: primary.device_id,
       auto_switch: primary.cc_auto_switch === true,
       auto_continue: isAutoContinueEnabled(primary),
-      session_tokens: primary.cc_session_tokens === true,
+      session_tokens: true,
     };
   },
 });
@@ -994,9 +1068,9 @@ async function enqueueMintFlow(
   return { command_id: commandId, device_id: target.device_id, profile, email };
 }
 
-// The web toggle. Turning it on mints for the current login right away when
-// it has no token yet (the daemon's own auto-mint would catch it on the next
-// beat; acting now is what the click promised).
+// Rollout compatibility for older web clients that still render the removed
+// toggle. Session tokens are always enabled; a write can only prompt a missing
+// active token to mint.
 export const setSessionTokens = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -1007,17 +1081,20 @@ export const setSessionTokens = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
-    await ctx.db.patch(device._id, { cc_session_tokens: args.enabled });
     let mint: Awaited<ReturnType<typeof enqueueMintFlow>> | null = null;
     const now = Date.now();
-    if (args.enabled && isDeviceOnline(device, now) && !activeTokenProfile(device.cc_accounts, now)) {
-      try {
-        mint = await enqueueMintFlow(ctx, userId, device, { now });
-      } catch {
-        // No saved profile for the login yet — the daemon auto-mints once it is.
-      }
+    const activeEmail = device.cc_accounts?.active_email;
+    const activeProfile = activeEmail
+      ? resolveDeviceProfile(device.cc_accounts, { email: activeEmail })
+      : undefined;
+    if (
+      isDeviceOnline(device, now) &&
+      activeProfile &&
+      !activeTokenProfile(device.cc_accounts, now)
+    ) {
+      mint = await enqueueMintFlow(ctx, userId, device, { now });
     }
-    return { enabled: args.enabled, mint };
+    return { enabled: true, mint };
   },
 });
 
@@ -1041,6 +1118,39 @@ export const requestMintToken = mutation({
       throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
     }
     return await enqueueMintFlow(ctx, userId, target, { force: args.force === true, now });
+  },
+});
+
+// The popover's / Settings' refresh button: ask a machine's daemon to re-probe
+// every account's usage now — the active login, and every saved profile
+// (rotating a lapsed dormant token first) — instead of at its next 5-minute
+// tick. No state channel: the daemon heartbeats straight after, and the
+// caller watches the profiles' `usage.fetched_at` advance.
+export const requestUsageRefresh = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const now = Date.now();
+    const { online, primary: freshestPrimary } = await listOnlineDevices(ctx, userId, now);
+    const target = args.device_id ? online.find((d) => d.device_id === args.device_id) : freshestPrimary;
+    if (!target) {
+      throw new Error(args.device_id ? "That device's daemon is offline" : "No online daemon on a primary (non-remote) machine");
+    }
+    if (target.is_remote) {
+      throw new Error("Remote devices mirror the primary's account — refresh on the primary machine");
+    }
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "switch_account" as const,
+      args: JSON.stringify({ refresh_usage: true }),
+      created_at: now,
+      target_device_id: target.device_id,
+    });
+    return { command_id: commandId, device_id: target.device_id };
   },
 });
 
@@ -1125,25 +1235,34 @@ export const autoSwitchCheck = internalMutation({
     if (!allowSwitch && !isAutoContinueEnabled(primary)) return { acted: "off" };
 
     const state = primary.cc_auto_switch_state ?? {};
+    const attempts = state.attempts ?? [];
     const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
     // Continue-only mode acts on the current incident alone: a park older than
     // a full session window has already sat through a reset the user could
     // have used — resuming it now spends the fresh window on abandoned work.
     // (With auto-switch on the user opted into the wider 48h revive.)
-    const limitBlocked = blocked.filter(
-      (c) =>
-        c.pending_api_error_kind === "limit" &&
-        (allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS),
+    const recentEnough = (c: Doc<"conversations">): boolean =>
+      allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS;
+    const limitBlocked = blocked.filter((c) => c.pending_api_error_kind === "limit" && recentEnough(c));
+    const authParks = blocked.filter((c) => c.pending_api_error_kind === "auth" && recentEnough(c) &&
+      (!c.owner_device_id || c.owner_device_id === primary.device_id));
+    const { restart: authRestart, dead: authDead } = splitAuthParks(
+      authParks,
+      primary,
+      attempts,
     );
-    // Auth parks ("Login expired") mean the active login is dead — waiting
-    // can't heal them, so they ride ONLY the opt-in switch path: rotating the
-    // machine's login is exactly what the cc_auto_switch flag consents to.
-    // Without the flag they keep the manual path (incident notification).
-    const authBlocked = allowSwitch
-      ? blocked.filter((c) => c.pending_api_error_kind === "auth")
-      : [];
-    const targets = [...limitBlocked, ...authBlocked];
-    if (targets.length === 0) {
+    const activeDead = authDead.length > 0;
+    const authSwitch = allowSwitch && activeDead ? authParks : [];
+    const targets = [...limitBlocked, ...authSwitch];
+    if (targets.length === 0 && authRestart.length === 0) {
+      if (authParks.length > 0 && !activeDead) {
+        const retryAt = now + AUTO_SWITCH_PROBE_RETRY_MS;
+        if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
+          await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+          await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, next_check_at: retryAt } });
+        }
+        return { acted: "wait", next_check_at: retryAt };
+      }
       if (state.exhausted_at) {
         await ctx.db.patch(primary._id, {
           cc_auto_switch_state: { ...state, exhausted_at: undefined },
@@ -1168,31 +1287,58 @@ export const autoSwitchCheck = internalMutation({
       return { acted: "cooldown" };
     }
 
-    const attempts = state.attempts ?? [];
-    const recordAction = async (action: string, profileKey: string) => {
+    const recordAction = async (action: string, profileKeys: string[], nextCheckAt?: number) => {
       await ctx.db.patch(primary._id, {
         cc_auto_switch_state: {
           ...state,
           last_action_at: now,
           last_action: action,
-          attempts: [...attempts, { profile: profileKey, at: now }].slice(-MAX_ATTEMPT_HISTORY),
+          attempts: [...attempts, ...profileKeys.map((profile) => ({ profile, at: now }))].slice(
+            -MAX_ATTEMPT_HISTORY,
+          ),
           exhausted_at: undefined,
-          next_check_at: undefined,
+          next_check_at: nextCheckAt,
         },
       });
     };
 
+    if (authRestart.length > 0) {
+      await insertSwitchCommands(ctx, args.user_id, {
+        profile: undefined,
+        blocked: authRestart,
+        online,
+        primary,
+        continueBlocked: true,
+        now,
+      });
+      const retryAt = now + AUTO_SWITCH_COOLDOWN_MS + 5_000;
+      await recordAction("auth_restart", authRestart.map((c) => authRestartAttemptKey(c._id)), retryAt);
+      await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+      console.log(
+        `autoSwitchCheck: restarting ${authRestart.length} auth-parked conversation(s) on the current login`,
+      );
+      return { acted: "auth_restart", conversations: authRestart.length };
+    }
+
+    // A park is read as a fact about the account the session ran on: the
+    // owning device's active login unless the row pins another account's
+    // token. Only the former can wait on the active account's windows.
+    const onlineById = new Map(online.map((d) => [d.device_id, d]));
+    const parksOnActive = targets.filter((c) =>
+      parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary),
+    );
     const decision = decideAutoSwitch({
       now,
       parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
+      activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.updated_at ?? 0)) : null,
       activeEmail: primary.cc_accounts?.active_email,
       activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
       allowSwitch,
-      // An auth park is proof the active login is dead — "continue" can't help
-      // even the limit-parked sessions until the machine has a live account.
-      activeDead: authBlocked.length > 0,
+      // A dead login (splitAuthParks) means "continue" can't help even the
+      // limit-parked sessions until the machine has a live account.
+      activeDead,
     });
 
     if (decision.action === "wait") {
@@ -1225,24 +1371,29 @@ export const autoSwitchCheck = internalMutation({
           limitBlocked.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
         ),
       });
-      await recordAction("continue", AUTO_SWITCH_CONTINUE_KEY);
-      return { acted: "continue", conversations: limitBlocked.length, restarted: res.restarted };
+      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY]);
+      return {
+        acted: "continue",
+        conversations: limitBlocked.length,
+        restarted: res.restarted,
+      };
     }
 
     if (decision.action === "switch") {
+      const switched = targets;
       await insertSwitchCommands(ctx, args.user_id, {
         profile: decision.profile,
-        blocked: targets,
+        blocked: switched,
         online,
         primary,
         continueBlocked: true,
         now,
       });
-      await recordAction(`switch:${decision.profile}`, decision.profile);
+      await recordAction(`switch:${decision.profile}`, [decision.profile]);
       console.log(
-        `autoSwitchCheck: switching to "${decision.profile}" for ${limitBlocked.length} limit-parked + ${authBlocked.length} auth-parked conversation(s)`,
+        `autoSwitchCheck: switching to "${decision.profile}" for ${limitBlocked.length} limit-parked + ${authSwitch.length} auth-parked conversation(s)`,
       );
-      return { acted: "switch", profile: decision.profile, conversations: targets.length };
+      return { acted: "switch", profile: decision.profile, conversations: switched.length };
     }
 
     // Every account is spent. Mark it for the UI and wake up at the earliest
@@ -1268,6 +1419,41 @@ export const autoSwitchCheck = internalMutation({
     }
     await ctx.db.patch(primary._id, { cc_auto_switch_state: nextState });
     return { acted: "exhausted", next_check_at: nextState.next_check_at };
+  },
+});
+
+// The pin a daemon sources when it resumes a conversation. The daemon used
+// to read the row's `cc_account` raw, so a session parked on a limit while
+// pinned to a spent account re-sourced that account's token on every resume
+// — a hand-typed "continue" restarted it straight back into the same banner,
+// and only the banner's revive button knew to rewrite the pin. Every resume
+// of a parked session is that same continue, so the rule (resumePinFor)
+// runs here, at the one read the daemon makes before it launches, and the
+// row is corrected in the same step so later resumes agree.
+export const pinForResume = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    device_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ cc_account: string | null } | null> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) return null;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    const pin = resumePinFor(conv, device ?? undefined, Date.now());
+    if ((conv.cc_account ?? undefined) !== pin) {
+      await ctx.db.patch(conv._id, { cc_account: pin });
+      console.log(
+        `pinForResume: ${conv._id} parked (${conv.pending_api_error_kind}) on pin "${conv.cc_account}" — resuming under ${pin ? `"${pin}"` : "the keychain login"}`,
+      );
+    }
+    return { cc_account: pin ?? null };
   },
 });
 
@@ -1423,7 +1609,7 @@ export const listAccountProfiles = query({
           online: isDeviceOnline(d, now),
           active_email: d.cc_accounts?.active_email,
           login_flow: d.cc_login_flow,
-          session_tokens: d.cc_session_tokens === true,
+          session_tokens: true,
           mint_flow: d.cc_mint_flow,
           profiles: d.cc_accounts?.profiles ?? [],
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),

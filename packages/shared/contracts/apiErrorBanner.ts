@@ -12,7 +12,7 @@
 // (e.g. "You've hit your usage limit on the free plan, so video generation is
 // paused…") from being mistaken for a banner.
 
-export type ApiErrorBannerKind = "auth" | "limit" | "error" | "connection" | "fatal";
+export type ApiErrorBannerKind = "auth" | "limit" | "throttle" | "error" | "connection" | "fatal";
 
 // The kinds that park a session — it won't heal itself, so the row earns the
 // amber badge, the fleet banner, and the revive actions. kind "error" is the
@@ -20,6 +20,7 @@ export type ApiErrorBannerKind = "auth" | "limit" | "error" | "connection" | "fa
 export const BLOCKED_BANNER_KINDS: ReadonlySet<string> = new Set([
   "auth",
   "limit",
+  "throttle",
   "connection",
   "fatal",
 ]);
@@ -27,7 +28,46 @@ export const BLOCKED_BANNER_KINDS: ReadonlySet<string> = new Set([
 // The blocked subset a plain "continue" un-parks (auth needs /login or an
 // account switch — continuing a signed-out session just re-fails). Default
 // selection for continueAllBlocked and the web's continue-all button.
-export const CONTINUE_BANNER_KINDS: readonly string[] = ["limit", "connection", "fatal"];
+export const CONTINUE_BANNER_KINDS: readonly string[] = ["limit", "throttle", "connection", "fatal"];
+
+// Burst throttle. Claude Code renders a transient 429 — the provider's "This
+// request would exceed your account's rate limit. Please try again later."
+// (a per-minute cap, hit when many sessions resume at once) — with the SAME
+// words as a real weekly exhaustion: "You've reached your Fable limit. Run
+// /usage-credits …" or "You've hit your monthly spend limit …". Read as kind
+// "limit", that park sent the auto-switch loop rotating accounts and reviving
+// every parked session in one burst, which reproduced the 429 on the fresh
+// account (2026-09-04: 44 banners across two rotations while every account
+// sat at 0%). The JSONL entry still carries the raw error (`apiErrorStatus`,
+// `errorDetails`); only the daemon's parser sees it, so the parser rewrites
+// the banner into this marked form and everything downstream — the server
+// stamp, the switch loop, the web card — reads kind "throttle": blocked (the
+// turn died at the prompt), healed by a plain continue after a short wait,
+// never by an account switch.
+export const THROTTLE_BANNER_PREFIX = "Rate limited ·";
+const THROTTLE_BANNER_RE = /^rate limited ·/i;
+// The provider's transient rate-limit wording. A quota exhaustion carries the
+// exceeded_limit payload instead (see EXCEEDED_LIMIT_BODY_RE) and stays "limit".
+const TRANSIENT_RATE_LIMIT_RE = /would exceed your account['’]s rate limit/i;
+
+/** Is this API-error banner entry a burst throttle rather than a quota park?
+ * Judged from the JSONL entry's own fields, never the rendered words. */
+export function isTransientRateLimit429(
+  status: number | null | undefined,
+  errorDetails: string | null | undefined,
+): boolean {
+  if (status !== 429 || !errorDetails) return false;
+  if (EXCEEDED_LIMIT_BODY_RE.test(errorDetails)) return false;
+  return TRANSIENT_RATE_LIMIT_RE.test(errorDetails);
+}
+
+/** The marked banner the parser stores for a burst throttle. One line, under
+ * the prose cap, keeps the CLI's own words as the tail so the card can still
+ * say what the pane showed. */
+export function throttleBannerContent(shownAs: string | null | undefined): string {
+  const shown = (shownAs ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return `${THROTTLE_BANNER_PREFIX} the request burst exceeded the account's per-minute rate limit · retried automatically${shown ? ` · Claude Code showed: ${shown}` : ""}`;
+}
 
 // Auth subset — the user can act by re-running /login. "Login expired" covers
 // the CLI's expired-grant banner forms ("Login expired · Please run /login",
@@ -39,6 +79,10 @@ const AUTH_BANNER_RE =
 //   "You've hit your session limit · resets 11:30pm (America/New_York)"
 //   "You've hit your session limit"
 //   "You've hit your monthly spend limit · raise it at claude.ai/settings/usage"
+//   "You've hit your org's monthly spend limit · ask your admin to raise it at
+//    claude.ai/settings/usage?from=cc_cli_limit_message · your session limit
+//    resets 7:40pm (America/New_York)" (the org-billed form carries an
+//    apostrophe between "your" and "limit")
 //   "You've hit your monthly spend limit. Run /usage-credits to manage your
 //    limit and keep using Fable 5 or switch models to continue this chat."
 //   "You've reached your Fable 5 limit. Run /usage-credits to continue or
@@ -49,7 +93,7 @@ const AUTH_BANNER_RE =
 // admitted only by their "Run /usage-credits" tail — a CLI slash-command
 // reference prose doesn't produce in that position.
 const LIMIT_BANNER_RE =
-  /^(?:you['’]ve (?:hit|reached) your [\w -]{1,40}limit(?:\s*[·∙][^\n]*|\.\s*run \/usage-credits\b[^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
+  /^(?:you['’]ve (?:hit|reached) your [\w '’-]{1,40}limit(?:\s*[·∙][^\n]*|\.\s*run \/usage-credits\b[^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
 
 // Generic provider failure. No status code ("API Error: Connection closed
 // mid-response. The response above may be incomplete.", "API Error:
@@ -117,6 +161,7 @@ export function classifyApiErrorBanner(
     const body = trimmed.slice(CLIENT_ERROR_BANNER_PREFIX.length);
     return CLIENT_AUTH_ERROR_RE.test(body) ? "auth" : "error";
   }
+  if (THROTTLE_BANNER_RE.test(trimmed) && !trimmed.includes("\n")) return "throttle";
   if (isExceededLimit429(trimmed)) return "limit";
   if (trimmed.length === 0 || trimmed.length > 400) return null;
   if (AUTH_BANNER_RE.test(trimmed)) return "auth";

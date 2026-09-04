@@ -15,7 +15,7 @@ import {
 // The usage snapshot type and its predicates live in @codecast/shared/contracts
 // (the CLI reads them too); re-exported here so existing web/convex imports keep
 // one path.
-export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted };
+export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted, fallbackProfiles };
 export type { CcUsage };
 
 // Per-account usage snapshot the daemon probes from the OAuth usage API
@@ -81,6 +81,10 @@ export const ccAccountsValidator = v.object({
       // A `claude setup-token` on file for this profile (per-session launch
       // credential, see cli/ccAccounts.ts). Metadata only — never the token.
       token: v.optional(v.object({ stored_at: v.number(), expires_at: v.number() })),
+      // The daemon's token refresh was refused for this saved login
+      // (invalid_grant): dead until the account signs in again. Never a
+      // switch target (fallbackProfiles); the UI says "login expired".
+      login_expired_at: v.optional(v.number()),
     }),
   ),
 });
@@ -123,8 +127,8 @@ export function tokenBackedProfile(
   return profileHasToken(accounts?.profiles.find((p) => p.name === name), now) ? name : undefined;
 }
 
-/** The pin for a NEW session on a device with per-session tokens on: the
- * profile covering the machine's current login, if it has a live token. */
+/** The pin for a NEW session: the profile covering the machine's current
+ * login, if it has a live token. */
 export function activeTokenProfile(
   accounts:
     | { active_email?: string; profiles: Array<{ name: string; email?: string; token?: { expires_at: number } }> }
@@ -137,17 +141,15 @@ export function activeTokenProfile(
 
 type ContinueDevice = {
   is_remote?: boolean;
-  cc_session_tokens?: boolean;
   cc_accounts?: Parameters<typeof activeTokenProfile>[0];
 };
 
 /** The pin a session continued "on this account" (no switch) must carry on
- * this device: the profile covering the machine's current login when
- * per-session tokens are on and it has a live token, otherwise none (the
- * session follows the keychain). Remotes run a pushed credential and never
- * pin. */
+ * this device: the profile covering the machine's current login when it has a
+ * live token, otherwise none (the session follows the keychain). Remotes run a
+ * pushed credential and never pin. */
 export function continueTargetPin(device: ContinueDevice | undefined, now: number): string | undefined {
-  if (!device || device.is_remote === true || device.cc_session_tokens !== true) return undefined;
+  if (!device || device.is_remote === true) return undefined;
   return activeTokenProfile(device.cc_accounts, now);
 }
 
@@ -169,6 +171,50 @@ export function continueNeedsRestart(
   return conv.cc_account !== continueTargetPin(device, now);
 }
 
+/** Whether a parked session's banner says anything about the device's ACTIVE
+ * login. A session pinned to a profile with another identity ran on THAT
+ * account's setup-token: its limit is that account's limit. The active
+ * login may have all the headroom in the world and the recovery loop must
+ * not wait on its windows for a park it never caused — the restart that
+ * corrects the pin (continueNeedsRestart) un-parks the session at once. A
+ * pin the device's inventory cannot resolve, or one with no recorded
+ * identity, is treated the same way: it is not the active account, and the
+ * restart replaces it with a pin that is. Unpinned sessions and remotes (a
+ * pushed credential, never a pin) run on the active login. */
+export function parkedOnActiveAccount(
+  conv: { cc_account?: string | null },
+  device:
+    | { is_remote?: boolean; cc_accounts?: { active_email?: string; profiles: Array<{ name: string; email?: string }> } }
+    | undefined,
+): boolean {
+  if (!conv.cc_account || device?.is_remote === true) return true;
+  const pinned = device?.cc_accounts?.profiles.find((p) => p.name === conv.cc_account);
+  const activeEmail = device?.cc_accounts?.active_email;
+  return !!pinned?.email && !!activeEmail && pinned.email === activeEmail;
+}
+
+/** The pin a RESUME of this conversation must source. The daemon reads the
+ * row's `cc_account` at every resume, so a pin that cannot serve the session
+ * would be re-sourced forever unless it is corrected on the row. A resume of
+ * a session parked on a limit or auth banner IS a continue — whoever caused
+ * it (a hand-typed message, the delivery rail's repair ladder, the recovery
+ * loop) — so it carries the same rule the banner's continue applies:
+ * restart-worthy pins are rewritten to the device's continue target. Legacy
+ * unpinned sessions adopt the current token on their next local resume; other
+ * resumes keep the pin as recorded. */
+export function resumePinFor(
+  conv: { pending_api_error?: boolean | null; pending_api_error_kind?: string | null; cc_account?: string | null },
+  device: ContinueDevice | undefined,
+  now: number,
+): string | undefined {
+  const parked =
+    conv.pending_api_error === true &&
+    (conv.pending_api_error_kind === "limit" || conv.pending_api_error_kind === "auth");
+  if (parked && continueNeedsRestart(conv, device, now)) return continueTargetPin(device, now);
+  if (!conv.cc_account && device?.is_remote !== true) return continueTargetPin(device, now);
+  return conv.cc_account ?? undefined;
+}
+
 // Auto-switch bookkeeping, stored on the primary device row. `attempts` is the
 // per-incident memory that stops the loop from re-trying an account that
 // already parked sessions this window; `exhausted_at` is the UI's "every
@@ -179,7 +225,38 @@ export const ccAutoSwitchStateValidator = v.object({
   attempts: v.optional(v.array(v.object({ profile: v.string(), at: v.number() }))),
   exhausted_at: v.optional(v.number()),
   next_check_at: v.optional(v.number()),
+  // A booked throttleContinueCheck (see accountSwitch.ts): a fresh throttle
+  // park books one only when none is already booked for the future.
+  throttle_check_at: v.optional(v.number()),
 });
+
+// Burst-throttle recovery (kind "throttle", see apiErrorBanner.ts). The park
+// is a per-minute cap the fleet tripped by resuming many sessions at once, so
+// the cure is the opposite of a switch: wait a little, then continue a few
+// sessions at a time. Both the wait and the pacing are what keep the retry
+// from being the same burst again.
+export const THROTTLE_CONTINUE_DELAY_MS = 60 * 1000;
+export const THROTTLE_CONTINUE_BATCH = 3;
+export const THROTTLE_CONTINUE_SPACING_MS = 20 * 1000;
+
+/** The throttle-parked sessions to continue on this tick: those parked at
+ * least THROTTLE_CONTINUE_DELAY_MS ago, oldest park first, capped at the
+ * batch. `waiting` counts the ones still inside the delay — a caller with
+ * nothing to send now but some waiting books the next tick for the moment
+ * the oldest of them becomes due. */
+export function pickThrottleContinueBatch<
+  T extends { pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
+>(blocked: T[], now: number): { batch: T[]; remaining: number; waiting: number; nextDueAt: number | null } {
+  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const throttled = blocked
+    .filter((c) => c.pending_api_error_kind === "throttle")
+    .sort((a, b) => parkedAt(a) - parkedAt(b));
+  const due = throttled.filter((c) => now - parkedAt(c) >= THROTTLE_CONTINUE_DELAY_MS);
+  const waitingRows = throttled.filter((c) => now - parkedAt(c) < THROTTLE_CONTINUE_DELAY_MS);
+  const batch = due.slice(0, THROTTLE_CONTINUE_BATCH);
+  const nextDueAt = waitingRows.length > 0 ? parkedAt(waitingRows[0]) + THROTTLE_CONTINUE_DELAY_MS : null;
+  return { batch, remaining: due.length - batch.length, waiting: waitingRows.length, nextDueAt };
+}
 
 // The browser sign-in round trip, stored on the device row that runs it. The
 // web writes "pending" (requestLoginFlow) when the user clicks the sign-in
@@ -227,6 +304,40 @@ export const AUTO_SWITCH_PROBE_GRACE_MS = 6 * 60 * 1000;
 export const AUTO_SWITCH_PROBE_RETRY_MS = 60 * 1000;
 // The attempt-history key for a same-account "continue" (no profile involved).
 export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
+export const AUTO_SWITCH_AUTH_RESTART_KEY = "__auth_restart__";
+
+export function authRestartAttemptKey(conversationId: string): string {
+  return `${AUTO_SWITCH_AUTH_RESTART_KEY}:${conversationId}`;
+}
+
+export function splitAuthParks<T extends { _id: string; updated_at?: number; pending_api_error_at?: number | null }>(
+  parks: T[],
+  device:
+    | {
+        cc_accounts?: {
+          active_email?: string;
+          active_since?: number;
+          profiles: Array<{ email?: string; login_expired_at?: number; usage?: { fetched_at: number } }>;
+        };
+      }
+    | undefined,
+  attempts: Array<{ profile: string; at: number }>,
+): { restart: T[]; dead: T[] } {
+  const accounts = device?.cc_accounts;
+  const activeSince = accounts?.active_since ?? 0;
+  const active = accounts?.profiles.find((p) => !!p.email && p.email === accounts.active_email);
+  if (active?.login_expired_at && active.login_expired_at >= activeSince) return { restart: [], dead: parks };
+  if (!active?.usage || active.usage.fetched_at < activeSince) return { restart: [], dead: [] };
+  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const lastRestart = (c: T): number => attempts.reduce(
+    (latest, a) => a.profile === authRestartAttemptKey(c._id) && a.at >= activeSince ? Math.max(latest, a.at) : latest,
+    0,
+  );
+  if (parks.some((c) => lastRestart(c) > 0 && c.pending_api_error_at != null && c.pending_api_error_at > lastRestart(c))) {
+    return { restart: [], dead: parks };
+  }
+  return { restart: parks.filter((c) => lastRestart(c) === 0 && parkedAt(c) > 0), dead: [] };
+}
 // Continue-only mode (auto-switch off) acts on limit parks no older than this:
 // a full session window plus slack for the reset-plus-settle wake-up. Older
 // parks sat through a reset already — abandoned, not waiting.
@@ -281,6 +392,7 @@ export interface AutoSwitchProfile {
   name: string;
   email?: string;
   usage?: CcUsage;
+  login_expired_at?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,8 +475,19 @@ export type AutoSwitchDecision =
  *     With switching off only the active account's windows are consulted —
  *     another account's reset can't help a session that will never move.
  *
- * All of that reads parks and snapshots as facts about the ACTIVE account,
- * which holds only while the account hasn't changed hands. `activeSince`
+ * All of that reads parks and snapshots as facts about the ACTIVE account.
+ * Parks on sessions pinned to ANOTHER account's setup-token are not
+ * (parkedOnActiveAccount): the caller passes the newest park that does
+ * implicate the active login as `activeParkedAt`, null when none does. With
+ * no such park there is nothing to wait out — those sessions un-park the
+ * moment they are restarted on the active login (the continue rewrites their
+ * pin), so the free continue needs only an active account that is not
+ * itself known to be spent. (2026-09-03: a workflow session pinned to an
+ * account whose weekly window was pegged sat "waiting" on the active
+ * account's session reset, hours away, while that account had 40% headroom —
+ * and every hand-typed continue re-sourced the same pegged token.)
+ *
+ * The active-account reading holds only while the account hasn't changed hands. `activeSince`
  * (the device's activation stamp) corrects for a change: a snapshot fetched
  * before it says nothing about the current login, so the loop WAITS for the
  * post-switch probe rather than switching away on stale meters; and parks
@@ -376,6 +499,10 @@ export type AutoSwitchDecision =
 export function decideAutoSwitch(input: {
   now: number;
   parkedAt: number; // newest limit-park among the blocked conversations
+  // Newest park among the sessions that ran on the ACTIVE account (unpinned,
+  // or pinned to its own token). null = every park belongs to another
+  // account's pin; omitted = every park is the active account's (parkedAt).
+  activeParkedAt?: number | null;
   activeEmail?: string;
   activeSince?: number; // when the active account last changed on the device
   profiles: AutoSwitchProfile[];
@@ -406,13 +533,19 @@ export function decideAutoSwitch(input: {
   }
   const sessionResetAt = active?.usage?.session?.resets_at;
   const lastContinue = lastAttemptAt(AUTO_SWITCH_CONTINUE_KEY);
-  const windowRolledSincePark = !!sessionResetAt && sessionResetAt > parkedAt && sessionResetAt <= now;
-  const parksPredateActivation = activeSince !== undefined && activeSince > parkedAt;
+  const activeParkedAt = input.activeParkedAt === undefined ? parkedAt : input.activeParkedAt;
+  // No park implicates the active account: its meters are the only evidence
+  // needed, and a pegged one is caught by isUsageExhausted below.
+  const noParkOnActive = activeParkedAt === null;
+  const windowRolledSincePark =
+    !noParkOnActive && !!sessionResetAt && sessionResetAt > activeParkedAt && sessionResetAt <= now;
+  const parksPredateActivation = !noParkOnActive && activeSince !== undefined && activeSince > activeParkedAt;
   const settledProbeShowsHeadroom =
-    activeFetchedAt >= (parksPredateActivation ? activeSince : parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS);
+    !noParkOnActive &&
+    activeFetchedAt >= (parksPredateActivation ? activeSince : activeParkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS);
   if (
     !input.activeDead &&
-    (windowRolledSincePark || settledProbeShowsHeadroom) &&
+    (noParkOnActive || windowRolledSincePark || settledProbeShowsHeadroom) &&
     !isUsageExhausted(active?.usage, now) &&
     (!lastContinue || lastContinue < parkedAt)
   ) {
@@ -565,9 +698,10 @@ export function nestParentIdOf(conv: {
   parent_conversation_id?: { toString(): string } | string | null;
   spawned_by_conversation_id?: { toString(): string } | string | null;
   agent_team_name?: string | null;
+  agent_name?: string | null;
 }): string | null {
   if (conv.parent_conversation_id) return conv.parent_conversation_id.toString();
-  if (conv.agent_team_name && conv.spawned_by_conversation_id) {
+  if (conv.agent_team_name && conv.agent_name !== "team-lead" && conv.spawned_by_conversation_id) {
     return conv.spawned_by_conversation_id.toString();
   }
   return null;

@@ -1,6 +1,6 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { extractInlineImages } from "./inlineImage.js";
-import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -35,6 +35,12 @@ export interface ClaudeSessionEntry {
   isMeta?: boolean;
   isCompactSummary?: boolean;
   isVisibleInTranscriptOnly?: boolean;
+  // Claude Code's API-error banner turns (the one-liners it writes when a
+  // request fails) carry the raw failure alongside the rendered words: the
+  // HTTP status and the provider's error body. See claudeBannerText.
+  isApiErrorMessage?: boolean;
+  apiErrorStatus?: number;
+  errorDetails?: string;
   // A message the user queues with Ctrl+Enter (or that codecast's daemon injects
   // while the agent is mid-turn) is written as type:"attachment" with this shape —
   // the prompt lives in `attachment.prompt`, NOT in `message.content`. A text-only
@@ -113,6 +119,22 @@ export const CODECAST_IMPORT_NOTICE_PREFIX = "[Codecast import]";
 function stripControlPrefix(text: unknown): string {
   if (typeof text !== "string") return "";
   return text.replace(/^[\x00-\x08\x0b-\x1f]+/, "");
+}
+
+// The banner text to sync for a Claude Code API-error entry. The CLI renders a
+// transient burst 429 with the same words as a weekly quota exhaustion ("You've
+// reached your Fable limit …"); the entry's own errorDetails tells them apart,
+// and this is the only place that sees it — so the throttle is rewritten into
+// the shared classifier's marked form here, once, for every reader (sync,
+// tail probes, the web card).
+export function claudeBannerText(
+  entry: Pick<ClaudeSessionEntry, "isApiErrorMessage" | "apiErrorStatus" | "errorDetails">,
+  text: string,
+): string {
+  if (entry.isApiErrorMessage && isTransientRateLimit429(entry.apiErrorStatus, entry.errorDetails)) {
+    return throttleBannerContent(text);
+  }
+  return text;
 }
 
 export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
@@ -284,6 +306,8 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         }
       }
     }
+
+    if (role === "assistant" && entry.isApiErrorMessage) textContent = claudeBannerText(entry, textContent);
 
     const isImportNotice = role === "user" && textContent.trimStart().startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
 
@@ -461,6 +485,7 @@ interface CodexSessionEntry {
   timestamp: string;
   type: "session_meta" | "response_item" | "event_msg" | "turn_context";
   payload: {
+    model?: string;
     id?: string;
     cwd?: string;
     type?: string;
@@ -594,12 +619,13 @@ function codexItemUuid(entry: CodexSessionEntry, kind: string): string {
   })}`;
 }
 
-export function parseCodexSessionFile(content: string): ParsedMessage[] {
+export function parseCodexSessionFile(content: string, state: { model?: string } = {}): ParsedMessage[] {
   const lines = content.split("\n");
   const messages: ParsedMessage[] = [];
   let pendingAssistantThinking = "";
   let pendingAssistantThinkingUuid: string | undefined;
   let lastTimestamp = Date.now();
+  let currentModel = state.model;
 
   const takePendingThinking = () => {
     const thinking = pendingAssistantThinking.trim();
@@ -625,6 +651,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       uuid: message.uuid || thinkingUuid,
       role: "assistant",
       content: contentText,
+      model: currentModel,
       timestamp: message.timestamp,
       thinking,
       toolCalls: message.toolCalls && message.toolCalls.length > 0 ? message.toolCalls : undefined,
@@ -645,6 +672,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       role: "assistant",
       content: "",
       timestamp: message.timestamp,
+      model: currentModel,
       toolResults: [{
         toolUseId: message.toolUseId,
         content: message.content,
@@ -663,6 +691,12 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       continue;
     }
 
+    if (entry.type === "turn_context") {
+      if (pendingAssistantThinking) pushAssistantMessage({ timestamp: lastTimestamp });
+      currentModel = entry.payload.model;
+      state.model = currentModel;
+      continue;
+    }
     if (entry.type !== "response_item") continue;
 
     const payload = entry.payload;
@@ -790,6 +824,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       content: "",
       timestamp: lastTimestamp,
       thinking: trailingThinking,
+      model: currentModel,
     });
   }
   return messages;
@@ -1084,6 +1119,13 @@ interface GeminiSessionMessage {
   thoughts?: Array<{ subject: string; description: string; timestamp: string }>;
   tokens?: { input: number; output: number; cached: number; thoughts: number; tool: number; total: number };
   model?: string;
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    status: string;
+    result?: unknown;
+  }>;
 }
 
 interface GeminiSessionFile {
@@ -1140,13 +1182,27 @@ export function parseGeminiSessionFile(content: string): ParsedMessage[] {
         .join("\n\n");
     }
 
-    if (textContent || thinking) {
+    const toolCalls = msg.type === "gemini" && Array.isArray(msg.toolCalls)
+      ? msg.toolCalls.map((call) => ({ id: call.id, name: call.name, input: call.args ?? {} }))
+      : [];
+    const toolResults = (msg.toolCalls ?? [])
+      .filter((call) => ["success", "error", "cancelled"].includes(call.status))
+      .map((call) => ({
+        toolUseId: call.id,
+        content: typeof call.result === "string" ? call.result : JSON.stringify(call.result ?? ""),
+        isError: call.status !== "success",
+      }));
+
+    if (textContent || thinking || toolCalls.length > 0) {
       messages.push({
         uuid: msg.id,
         role,
         content: textContent,
         timestamp,
         thinking: thinking || undefined,
+        model: role === "assistant" ? msg.model : undefined,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        toolResults: toolResults.length > 0 ? toolResults : undefined,
       });
     }
   }

@@ -1,3 +1,4 @@
+import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AvatarImg } from "../lib/avatarCache";
@@ -6,14 +7,13 @@ import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
-import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { copyToClipboard, formatRelative, formatDateFull, formatShortDate } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
-import { ConversationData } from "./ConversationView";
+import type { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../lib/threadState";
@@ -38,12 +38,14 @@ import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLab
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
+import { DeviceIcon, useRosterDevice, deviceWakesOnUse } from "./DeviceBadge";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
 import { useAnchorIdentity } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
+import { PrStatusChip } from "./PrStatusChip";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
@@ -64,6 +66,10 @@ import { sessionPanePath, startPaneDrag } from "../lib/stage";
 import { PaneControls } from "./stage/PaneControls";
 
 import { useMountEffect } from "../hooks/useMountEffect";
+const ConversationDiffLayout = React.lazy(() =>
+  import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
+);
+
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
@@ -218,38 +224,40 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         />
       )}
       <div className="flex-1 min-h-0">
-        <ConversationDiffLayout
-          conversation={conversation as ConversationData}
-          embedded
-          headerExtra={shareControls}
-          headerEnd={onClose || onExpandToMain ? (
-            // The standard pane cluster (expand, close) — same icons and
-            // order as every other pane's strip (components/stage/PaneControls).
-            <PaneControls onExpand={onExpandToMain} onClose={onClose} />
-          ) : undefined}
-          hasMoreAbove={hasMoreAbove}
-          hasMoreBelow={hasMoreBelow}
-          isLoadingOlder={isLoadingOlder}
-          isLoadingNewer={isLoadingNewer}
-          onLoadOlder={loadOlder}
-          onLoadNewer={loadNewer}
-          onJumpToStart={jumpToStart}
-          onJumpToEnd={jumpToEnd}
-          onJumpToTimestamp={jumpToTimestamp}
-          isOwner={true}
-          onSendAndAdvance={onSendAndAdvance}
-          onSendAndDismiss={onSendAndDismiss}
-          autoFocusInput
-          backHref={backHref}
-          onBack={onBack}
-          fallbackStickyContent={lastUserMessage}
-          targetMessageId={targetMessageId}
-          isJumpingToTarget={isJumpingToTarget}
-          subHeaderContent={<>
-            {activePlanId && <PlanContextPanel planId={activePlanId} />}
-            {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
-          </>}
-        />
+        <React.Suspense fallback={<AppLoader className="min-h-0 h-full" />}>
+          <ConversationDiffLayout
+            conversation={conversation as ConversationData}
+            embedded
+            headerExtra={shareControls}
+            headerEnd={onClose || onExpandToMain ? (
+              // The standard pane cluster (expand, close) — same icons and
+              // order as every other pane's strip (components/stage/PaneControls).
+              <PaneControls onExpand={onExpandToMain} onClose={onClose} />
+            ) : undefined}
+            hasMoreAbove={hasMoreAbove}
+            hasMoreBelow={hasMoreBelow}
+            isLoadingOlder={isLoadingOlder}
+            isLoadingNewer={isLoadingNewer}
+            onLoadOlder={loadOlder}
+            onLoadNewer={loadNewer}
+            onJumpToStart={jumpToStart}
+            onJumpToEnd={jumpToEnd}
+            onJumpToTimestamp={jumpToTimestamp}
+            isOwner={true}
+            onSendAndAdvance={onSendAndAdvance}
+            onSendAndDismiss={onSendAndDismiss}
+            autoFocusInput
+            backHref={backHref}
+            onBack={onBack}
+            fallbackStickyContent={lastUserMessage}
+            targetMessageId={targetMessageId}
+            isJumpingToTarget={isJumpingToTarget}
+            subHeaderContent={<>
+              {activePlanId && <PlanContextPanel planId={activePlanId} />}
+              {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
+            </>}
+          />
+        </React.Suspense>
       </div>
     </div>
   );
@@ -305,7 +313,21 @@ function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?:
   // Only the parked-and-won't-heal kinds get a badge. kind "error" (statusful
   // 429/5xx provider failures) self-retries — badging it paints a healthy
   // session as blocked.
-  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal") return null;
+  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle") return null;
+  if (kind === "throttle") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
+        title="The provider's per-minute rate limit rejected a request burst — codecast retries a few sessions at a time; send continue to retry now"
+      >
+        <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        throttled
+      </span>
+    );
+  }
   if (kind === "fatal") {
     return (
       <span
@@ -579,7 +601,8 @@ function BlockedSessionsBanner({
   const authCount = acted.filter((sess) => sess.pending_api_error_kind === "auth").length;
   const connCount = acted.filter((sess) => sess.pending_api_error_kind === "connection").length;
   const fatalCount = acted.filter((sess) => sess.pending_api_error_kind === "fatal").length;
-  const limitCount = acted.length - authCount - connCount - fatalCount;
+  const throttleCount = acted.filter((sess) => sess.pending_api_error_kind === "throttle").length;
+  const limitCount = acted.length - authCount - connCount - fatalCount - throttleCount;
   // When a session's block landed: the banner message's own timestamp, with
   // updated_at standing in for rows flagged before the field existed. The
   // headline shows the newest one — the moment the incident (last) grew.
@@ -782,6 +805,7 @@ function BlockedSessionsBanner({
             {([
               [limitCount, "usage limits"],
               [authCount, "login"],
+              [throttleCount, "rate-limit bursts"],
               [connCount, "dropped connections"],
               [fatalCount, "api errors"],
             ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1]}
@@ -793,6 +817,7 @@ function BlockedSessionsBanner({
           <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
             {[
               limitCount > 0 ? `${limitCount} hit a usage limit` : null,
+              throttleCount > 0 ? `${throttleCount} rate limited by a burst (retried a few at a time)` : null,
               connCount > 0 ? `${connCount} dropped mid-response` : null,
               fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
@@ -2130,6 +2155,11 @@ export const SessionCard = memo(function SessionCard({
     30_000,
   );
   const project = getProjectName(session.git_root, session.project_path);
+  // The machine behind a worktree, read straight off the persisted roster —
+  // useDevices() here would mount the roster feeder once per card. Only a cloud
+  // host earns an icon: a worktree on your own laptop needs no explaining.
+  const ownerDevice = useRosterDevice(session.owner_device_id);
+  const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
   const isWorking = variant === "working";
   const isStashed = variant === "stashed";
   // Stashed cards share the dismissed bucket's muted look — but NOT its
@@ -2761,9 +2791,20 @@ export const SessionCard = memo(function SessionCard({
               <span className="truncate">{sessionLabel ?? project}</span>
             </span>
           )}
-          {session.worktree_name && (
-            <span data-simple-hide className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
-              {session.worktree_name}
+          {(session.worktree_name || session.cloud_placement === "pending") && (
+            <span
+              data-simple-hide
+              className={`inline-flex items-center gap-1 text-[9px] font-mono truncate max-w-[130px] ${session.cloud_placement === "pending" ? "text-sol-violet animate-pulse" : "text-sol-cyan"}`}
+              title={session.cloud_placement === "pending"
+                ? "Preparing the cloud host — its worktree is being made now."
+                : (session.worktree_branch || session.worktree_name || "")}
+            >
+              {/* The machine only appears when it is a host you would not
+                  otherwise expect — a worktree on your own laptop needs no icon. */}
+              {runHost && <DeviceIcon d={runHost} className="w-2.5 h-2.5 shrink-0" />}
+              <span className="truncate">
+                {session.cloud_placement === "pending" ? "preparing" : session.worktree_name}
+              </span>
             </span>
           )}
           {showModelBadge && session.model && (
@@ -2777,6 +2818,8 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+            <BranchCodeLink session={session} className="max-w-[110px]" />
+            <PrStatusChip status={session.pr_status} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

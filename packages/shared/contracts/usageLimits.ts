@@ -53,10 +53,16 @@ export function worstUsagePercent(usage: CcUsage | undefined | null, now: number
 
 /** An account with no headroom RIGHT NOW: some window is pegged and its reset
  * is still in the future. A pegged window whose reset has passed doesn't count
- * — the snapshot is just stale, the window has rolled. */
+ * — the snapshot is just stale, the window has rolled. Neither does a pegged
+ * window on an account with usage credits switched on: Claude Code keeps
+ * working on credits past the plan limit ("Now using usage credits"), so the
+ * account is usable until the credit budget itself is spent. Such an account
+ * still ranks after every account with plan headroom (rankByHeadroom scores
+ * it at 100), so credits are the fallback, never the first pick. */
 export function isUsageExhausted(usage: CcUsage | undefined | null, now: number): boolean {
   if (!usage) return false;
-  return limitWindows(usage).some((w) => livePercent(w, now) >= 100);
+  if (!limitWindows(usage).some((w) => livePercent(w, now) >= 100)) return false;
+  return !(usage.extra?.enabled && usage.extra.percent < 100);
 }
 
 /** "resets in …" for a limit window: minute precision under an hour, hours and
@@ -88,18 +94,20 @@ export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: P
 }
 
 /** The other accounts a limit-parked session could fall back to: every saved
- * profile that is not the active login and shows no pegged window, best
- * headroom first. Shared by the auto-switch decision (which further excludes
- * profiles already tried this window) and `cast usage`, so what the CLI
- * reports as "N accounts with headroom" is the set auto-switch would choose
- * from. */
-export function fallbackProfiles<P extends { email?: string; usage?: CcUsage | null }>(
-  profiles: P[],
-  activeEmail: string | undefined,
-  now: number,
-): P[] {
+ * profile that is not the active login, shows no pegged window, and whose
+ * saved login still works (`login_expired_at`: the daemon's token refresh was
+ * refused, so a switch there lands on a dead credential and parks on an auth
+ * banner instead of un-parking anything). Best headroom first. Shared by the
+ * auto-switch decision (which further excludes profiles already tried this
+ * window) and `cast usage`, so what the CLI reports as "N accounts with
+ * headroom" is the set auto-switch would choose from. */
+export function fallbackProfiles<
+  P extends { email?: string; usage?: CcUsage | null; login_expired_at?: number | null },
+>(profiles: P[], activeEmail: string | undefined, now: number): P[] {
   return rankByHeadroom(
-    profiles.filter((p) => p.email && p.email !== activeEmail && !isUsageExhausted(p.usage, now)),
+    profiles.filter(
+      (p) => p.email && p.email !== activeEmail && !p.login_expired_at && !isUsageExhausted(p.usage, now),
+    ),
     now,
   );
 }
