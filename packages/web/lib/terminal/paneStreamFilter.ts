@@ -9,10 +9,8 @@
 //    tmux on the pane's behalf. xterm's reply would then be typed INTO the
 //    pane a moment later as a second, unexpected answer — the classic
 //    `^[[?1;2c` / `^[[12;1R` garbage on a command line, or stray keys to a
-//    TUI. Those queries are removed before xterm can see them. (DECRQM and
-//    OSC colour queries stay: tmux 3.6 does not answer them, so xterm's reply
-//    is the only one the program gets — and it is how Claude Code learns
-//    that synchronized output works.)
+//    TUI. Those queries are removed before xterm can see them. DECRQM stays:
+//    xterm's reply is how Claude Code learns that synchronized output works.
 //
 // 2. Frames are bracketed. Full-screen TUIs (Claude Code, Ink apps, vim) hide
 //    the cursor while they paint a frame and show it when done. tmux through
@@ -38,7 +36,10 @@ const CURSOR_HIDE = enc("\x1b[?25l");
 const CURSOR_SHOW = enc("\x1b[?25h");
 
 /** Queries tmux answers itself; xterm must not answer them a second time. */
-const DROP: Uint8Array[] = ["\x1b[c", "\x1b[0c", "\x1b[>c", "\x1b[>0c", "\x1b[>q", "\x1b[>0q", "\x1b[5n", "\x1b[6n"].map(enc);
+const DROP: Uint8Array[] = [
+  "\x1b[c", "\x1b[0c", "\x1b[>c", "\x1b[>0c", "\x1b[>q", "\x1b[>0q", "\x1b[5n", "\x1b[6n",
+  ...[10, 11].flatMap((code) => ["\x07", "\x1b\\"].map((end) => `\x1b]${code};?${end}`)),
+].map(enc);
 
 const PATTERNS = [...DROP, CURSOR_HIDE, CURSOR_SHOW];
 const MAX_PATTERN = Math.max(...PATTERNS.map((p) => p.length));

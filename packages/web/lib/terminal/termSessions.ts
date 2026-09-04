@@ -134,6 +134,9 @@ export function applyTerminalTheme(theme: ITheme, fontFamily?: string): void {
   currentTheme = theme;
   for (const inst of instances.values()) {
     inst.term.options.theme = theme;
+    if (inst.ws?.readyState === WebSocket.OPEN) {
+      inst.ws.send(JSON.stringify({ type: "colors", colors: { foreground: theme.foreground, background: theme.background } }));
+    }
     if (fontFamily) inst.term.options.fontFamily = fontFamily;
   }
 }
@@ -216,6 +219,7 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     allowProposedApi: true,
     scrollback: 20000,
     macOptionIsMeta: true,
+    minimumContrastRatio: 7,
     theme: currentTheme,
   });
   // The panel toggle is the ONE chord the app keeps while the terminal is
@@ -304,6 +308,7 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
       interactive: opts.interactive,
       cols: inst.term.cols,
       rows: inst.term.rows,
+      colors: { foreground: currentTheme.foreground, background: currentTheme.background },
     };
     logHello({ tabId: inst.state.id, ...hello });
     ws.send(JSON.stringify(hello));
