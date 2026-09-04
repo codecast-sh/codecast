@@ -1,0 +1,9 @@
+{
+  "published_version": 2,
+  "published_bytes": 210960,
+  "local_bytes": 210447,
+  "only_difference": "Remove 9 unnecessary aria-label attributes from focusable pre elements",
+  "visible_content_changed": false,
+  "published_sha256": "1e23ff38d17a7e84c2a2547bfe5998b2e3ef0c71ccabe47d7a691897f492588c",
+  "local_sha256": "2dcd802b929be332c8b867ed7d47397514934c6592fadcd111eb36b1679a9429"
+}

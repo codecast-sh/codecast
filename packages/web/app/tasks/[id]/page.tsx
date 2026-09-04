@@ -1,14 +1,21 @@
 "use client";
+import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
+import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
-import { copyToClipboard, canonicalUrl, formatDateFull } from "../../../lib/utils";
+import { copyToClipboard, canonicalUrl, formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds } from "../../../lib/liveEntities";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useSyncTaskExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../../../hooks/useSyncExternalEvents";
+import { ExternalEventRow } from "../../../components/feed/ExternalEventRow";
+import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../../../lib/externalEvents";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { IssueLink } from "../../../components/tasks/IssueLink";
+import { useIssueSyncSources } from "../../../hooks/useSyncIssueSyncSources";
 import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentionQuery";
@@ -572,6 +579,33 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     const s = useInboxStore.getState();
     return resolveTaskLinkedConversations(data, s.sessions, s.taskOriginBadges);
   }, [data?.linked_conversations, linkedIds, linkedSig]);
+  // External events for this task are their own synced collection: mount the task
+  // feeder and read the store, never the query. The route id may be the short
+  // id, so match on both it and the convex id.
+  const taskConvexId = (data as any)?._id as string | undefined;
+  useSyncTaskExternalEvents(taskConvexId);
+  const externalWhere = useMemo(
+    () => (row: ExternalEventRecord) =>
+      (!!taskConvexId && (row.task_id === taskConvexId || !!row.task_ids?.includes(taskConvexId))) ||
+      row.task_id === id ||
+      !!row.task_ids?.includes(id),
+    [taskConvexId, id],
+  );
+  const externalEvents = useExternalEvents(externalWhere, externalEventsOldestFirst);
+  // Which imported container this issue came from (issue-sync S1.3). Named
+  // because a workspace can import several repos or Linear projects, and
+  // "synced 2m ago" does not say which one owns this task.
+  const issueSources = useIssueSyncSources(data?.external?.provider);
+  // Named only when it adds something. A GitHub identifier already carries its
+  // repo ("owner/repo#482"), so "from owner/repo" would print it twice; a
+  // Linear identifier ("ENG-412") never names the project it came from.
+  const issueSourceName = useMemo(() => {
+    const external = data?.external;
+    if (!external?.source_id) return undefined;
+    const name = issueSources.find((s: any) => s._id === external.source_id)?.name;
+    if (!name || external.identifier.startsWith(name)) return undefined;
+    return name;
+  }, [issueSources, data?.external?.source_id, data?.external?.identifier]);
   const wsDocs = useWorkspaceCollection("docs", docOriginSig);
   const relatedDocs = useMemo(() => {
     const docs: Record<string, any> = {};
@@ -748,6 +782,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               >
                 {data.short_id}
               </button>
+              {data.external && <IssueLink external={data.external} size="sm" />}
               {teamInfo && (
                 <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] truncate min-w-0">{teamInfo.name}</span>
               )}
@@ -805,6 +840,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </button>
             </div>
           </div>
+
+          <RepositoryLinks taskId={data._id} conversationIds={linkedIds} sessions={linkedConversations} repository={taskRepository(data) ?? undefined} />
 
           {/* Parent breadcrumb — a subtask never renders context-free */}
           {(data as any).parent_id && (
@@ -869,6 +906,37 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">
+            {/* Provider twin (issue-sync S1.1): where the task came from and how
+                fresh the mirror is. The row reads plainly on its own: state,
+                unmapped assignee, last sync, and the error when the last sync
+                failed. */}
+            {data.external && (
+              <div className="grid grid-cols-[7rem_1fr] items-start px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim pt-0.5">Issue</span>
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-sol-text-muted min-w-0">
+                  <IssueLink external={data.external} />
+                  {data.external.state_name && <span>{data.external.state_name}</span>}
+                  {data.external.assignee_label && !data.assignee && (
+                    <span className="text-sol-text-dim">assigned to {data.external.assignee_label}</span>
+                  )}
+                  <span className="text-sol-text-dim" title={formatDateFull(data.external.synced_at)}>
+                    synced {formatRelative(data.external.synced_at)}
+                  </span>
+                  {issueSourceName && (
+                    <Link
+                      href="/settings/integrations"
+                      className="text-sol-text-dim hover:text-sol-cyan transition-colors truncate min-w-0"
+                      title={`Imported from ${issueSourceName}. Open integrations.`}
+                    >
+                      from {issueSourceName}
+                    </Link>
+                  )}
+                  {data.external.last_error && (
+                    <span className="text-sol-red truncate min-w-0" title={data.external.last_error}>{data.external.last_error}</span>
+                  )}
+                </span>
+              </div>
+            )}
             {/* Created */}
             <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Created</span>
@@ -1083,11 +1151,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 {[
                   ...(data.history || []).map((h: any) => ({ type: "history" as const, ts: h.created_at, data: h })),
                   ...(data.comments || []).map((c: any) => ({ type: "comment" as const, ts: c.created_at, data: c })),
+                  ...externalEvents.map((e) => ({ type: "git" as const, ts: e.created_at ?? 0, data: e })),
                 ]
                   .sort((a, b) => a.ts - b.ts)
                   .map((item) =>
                     item.type === "history" ? (
                       <HistoryItem key={item.data._id} entry={item.data} />
+                    ) : item.type === "git" ? (
+                      <ExternalEventRow
+                        key={item.data._id}
+                        event={externalEventRowToExternalEvent(item.data)}
+                        density="compact"
+                        omitRefs={["task_id", "task_short_id"]}
+                        className="-ml-[4px]"
+                      />
                     ) : (
                       <TaskCommentItem key={item.data._id} comment={item.data} openLinkedSession={openLinkedSession} />
                     )

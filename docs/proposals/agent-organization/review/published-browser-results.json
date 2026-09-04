@@ -1,0 +1,60 @@
+[
+  {},
+  {
+    "url": "https://a.codecast.sh/d0vFfz4flyqj",
+    "title": "Agent Organization · Codecast product proposal",
+    "chapters": 10,
+    "fonts": "loaded",
+    "version2": true
+  },
+  true,
+  {
+    "axeVersion": "4.12.1",
+    "violations": [],
+    "incomplete": [
+      {
+        "id": "aria-prohibited-attr",
+        "count": 9
+      },
+      {
+        "id": "color-contrast",
+        "count": 292
+      }
+    ],
+    "passes": 33
+  },
+  {},
+  {
+    "opened": true,
+    "hash": "#s7",
+    "headingTop": 93.875,
+    "tocPosition": "relative",
+    "width": 312,
+    "scroll": 312
+  },
+  {
+    "before": true,
+    "focused": "SUMMARY"
+  },
+  {},
+  {},
+  {
+    "closed": true,
+    "focusOutline": "solid"
+  },
+  {
+    "opened": true
+  },
+  {
+    "screenshot": "/tmp/agent-org/review/published-mobile-decision.png"
+  },
+  {},
+  {
+    "url": "https://a.codecast.sh/d0vFfz4flyqj#s7",
+    "width": 1152,
+    "scroll": 1152
+  },
+  {
+    "screenshot": "/tmp/agent-org/review/published-desktop.png"
+  }
+]

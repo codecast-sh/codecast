@@ -69,7 +69,9 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
   // that pointer opens nothing on its own — it is purely the highlight — so
   // publishing the queue's current item is exactly "light up this card". The
   // `?s=` anchor cannot do this job: answering advances the queue without
-  // touching the URL, and the highlight has to follow the advance.
+  // touching the URL, and the highlight has to follow the advance. The layout's
+  // leave-the-inbox carry-over stands down for this page (pageOwnsRailHighlight)
+  // so its default cannot land on top of this write in the same commit.
   const currentId = current?.conversationId;
   useWatchEffect(() => {
     if (!currentId) return;

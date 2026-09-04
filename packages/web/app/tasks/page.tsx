@@ -1,6 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInfo } from "../../store/inboxStore";
@@ -27,12 +28,14 @@ import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates
 import { boardOrderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
+import { IssueLink } from "../../components/tasks/IssueLink";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex, taskOrigin } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
+import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import { AgentTypeIcon, formatAgentType } from "../../components/AgentTypeIcon";
 import {
   Plus,
@@ -48,6 +51,7 @@ import {
   Link2,
   X,
   Clock,
+  CalendarDays,
   FileCode,
   ListChecks,
   ShieldCheck,
@@ -105,9 +109,10 @@ const STATUS_ORDER = TASK_STATUS_ORDER;
 /** What the default "Not done" tab shows: every status but the terminal two. */
 const NOT_DONE: TaskStatus[] = STATUS_ORDER.filter((st) => st !== "done" && st !== "dropped");
 
-export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenDescendantCount = 0, progress, collapsed = false, onToggleCollapse, parentChip }: {
+export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, indent = 0, hiddenDescendantCount = 0, progress, collapsed = false, onToggleCollapse, parentChip }: {
   task: TaskItem;
   state: ItemRowState;
+  onFilterLabel: (label: string) => void;
   triageMode?: boolean;
   onTriage?: (task: TaskItem, action: "active" | "dismissed") => void;
   /** Nesting depth, already clamped to the emphasised top levels by buildTaskTree. */
@@ -171,6 +176,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
         )}
       </button>
       <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
+      {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       {state.isEditing ? (
         <input
           autoFocus
@@ -304,7 +310,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0 cq-hide-compact" />
       )}
       {task.labels && task.labels.length > 0 && (
-        <LabelChips labels={task.labels} className="cq-hide-compact" />
+        <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}
       {task.assignee_info && (() => {
         const avatar = (
@@ -320,11 +326,15 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
           />
         );
         return (
-          <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact" title={`Assigned: ${task.assignee_info.name}`}>
-            {(task.assignee_info as any).github_username ? (
-              <Link href={`/team/${(task.assignee_info as any).github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{avatar}</Link>
-            ) : avatar}
-          </div>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); state.onOpenPalette("assign"); }}
+            className="flex items-center gap-1 flex-shrink-0 rounded-full hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan cq-hide-compact"
+            title={`Change assignee: ${task.assignee_info.name}`}
+            aria-label={`Change assignee: ${task.assignee_info.name}`}
+          >
+            {avatar}
+          </button>
         );
       })()}
       {triageMode && onTriage ? (
@@ -379,6 +389,7 @@ function TaskMiniCard({ task }: { task: TaskItem }) {
     <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
       <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
       <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+      {task.external && <IssueLink external={task.external} />}
       <span className="text-xs text-sol-text truncate">{task.title}</span>
     </div>
   );
@@ -473,6 +484,7 @@ function TaskCombineDialog({ source, target, onClose }: {
 
 function KanbanCard({
   task,
+  onFilterLabel,
   isDragging,
   onClick,
   onContextMenu,
@@ -481,6 +493,7 @@ function KanbanCard({
   parentChip,
 }: {
   task: TaskItem;
+  onFilterLabel: (label: string) => void;
   isDragging?: boolean;
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -493,6 +506,7 @@ function KanbanCard({
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.none;
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
+  const firstLabel = task.labels?.[0];
 
   return (
     <div
@@ -507,7 +521,10 @@ function KanbanCard({
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="flex items-center gap-1.5 min-w-0 text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">
-          {task.short_id}
+          {/* The id never breaks: a long provider identifier next to it would
+              otherwise wrap "ct-45202" onto two lines on a narrow card. */}
+          <span className="flex-shrink-0">{task.short_id}</span>
+          {task.external && <IssueLink external={task.external} className="max-w-[9rem]" />}
           {parentChip && (
             <span className="flex items-center gap-0.5 min-w-0 opacity-80" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>
               <CornerDownRight className="w-2.5 h-2.5 flex-shrink-0" />
@@ -545,9 +562,17 @@ function KanbanCard({
                 }
               />
             );
-            return (assignee as any).github_username
-              ? <Link href={`/team/${(assignee as any).github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{av}</Link>
-              : av;
+            return (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); useInboxStore.getState().openPalette({ targets: [task], targetType: "task", mode: "assign" }); }}
+                className="rounded-full hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan"
+                title={`Change assignee: ${assignee.name}`}
+                aria-label={`Change assignee: ${assignee.name}`}
+              >
+                {av}
+              </button>
+            );
           })() : null}
         </div>
       </div>
@@ -555,13 +580,19 @@ function KanbanCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
-          {task.labels && task.labels.length > 0 && (() => {
-            const lc = getLabelColor(task.labels[0]);
+          {firstLabel && (() => {
+            const lc = getLabelColor(firstLabel);
             return (
-              <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onFilterLabel(firstLabel); }}
+                title={`Filter by label: ${firstLabel}`}
+                aria-label={`Filter by label: ${firstLabel}`}
+                className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan ${lc.bg} ${lc.border} ${lc.text}`}
+              >
                 <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
-                {task.labels[0]}
-              </span>
+                {firstLabel}
+              </button>
             );
           })()}
         </div>
@@ -575,6 +606,7 @@ const COLUMN_DRAG_TYPE = "application/x-codecast-kanban-column";
 
 function KanbanView({
   statuses,
+  onFilterLabel,
   grouped,
   keyFor,
   hiddenStatuses,
@@ -588,6 +620,7 @@ function KanbanView({
 }: {
   /** The workspace's status vocabulary — one column per status, board-ordered. */
   statuses: TeamTaskStatus[];
+  onFilterLabel: (label: string) => void;
   grouped: Record<string, TaskItem[]>;
   /** A task's current column key (resolved status id). */
   keyFor: (t: TaskItem) => string;
@@ -726,6 +759,7 @@ function KanbanView({
                   <KanbanCard
                     key={task._id}
                     task={task}
+                    onFilterLabel={onFilterLabel}
                     isDragging={dragging === task.short_id}
                     onClick={() => onCardClick(task)}
                     onContextMenu={(e) => onContextMenu(e, task)}
@@ -838,19 +872,29 @@ function useTaskUrlState() {
   const session = hasUrlParams
     ? (searchParams.get("session") || "")
     : (taskView?.session ?? "");
+  const completed = completionWindow(hasUrlParams ? searchParams.get("completed") : taskView?.completed);
+  const effectivePrefs = useMemo(() => ({
+    ...taskView,
+    status, view, priority, label, assignee, statuses,
+    group: rawGroup,
+    sort: rawSort,
+    dir: rawDir,
+    source: sourceFilter,
+    session, completed,
+  }), [taskView, status, view, rawGroup, rawSort, rawDir, priority, label, assignee, statuses, sourceFilter, session, completed]);
 
   const setParam = useCallback((updates: Record<string, string>) => {
     const prefs: Record<string, any> = {};
     for (const [k, v] of Object.entries(updates)) {
       prefs[k] = v || undefined;
     }
-    updateClientUI({ task_view: { ...taskView, ...prefs } });
+    updateClientUI({ task_view: { ...effectivePrefs, ...prefs } });
     if (!isDetailPage) {
       const params = new URLSearchParams(searchParams.toString());
       // Sync store-only values into URL so they aren't lost when
       // hasUrlParams flips from false→true on first URL param addition
-      if (taskView) {
-        for (const [k, v] of Object.entries(taskView)) {
+      if (!hasUrlParams) {
+        for (const [k, v] of Object.entries(effectivePrefs)) {
           if (v && typeof v === "string" && !params.has(k)) {
             params.set(k, v);
           }
@@ -863,7 +907,7 @@ function useTaskUrlState() {
       const qs = params.toString();
       router.replace(qs ? `/tasks?${qs}` : "/tasks");
     }
-  }, [searchParams, router, taskView, updateClientUI, isDetailPage]);
+  }, [searchParams, router, effectivePrefs, hasUrlParams, updateClientUI, isDetailPage]);
 
   // Serialize the *effective* view (whichever of URL params / store prefs is
   // live) into an absolute, deep-linkable URL. We can't just copy
@@ -888,12 +932,13 @@ function useTaskUrlState() {
       ["statuses", statuses],
       ["source", sourceFilter],
       ["session", session],
+      ["completed", completed],
     ];
     for (const [k, v] of entries) if (v) params.set(k, v);
     const qs = params.toString();
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     return `${origin}/tasks${qs ? `?${qs}` : ""}`;
-  }, [status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session]);
+  }, [status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, completed]);
 
   // Replace the whole pref set rather than merging into it. Restoring a saved
   // view has to REMOVE filters the view doesn't carry, which a merge can't do —
@@ -927,7 +972,7 @@ function useTaskUrlState() {
   const setSort = useCallback((s: string) => setParam({ sort: s, dir: taskDefaultDir(s) }), [setParam]);
   const toggleSortDir = useCallback(() => setParam({ dir: dir === "asc" ? "desc" : "asc" }), [setParam, dir]);
 
-  return { status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl };
+  return { status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, completed, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl };
 }
 
 /**
@@ -938,7 +983,9 @@ function useTaskUrlState() {
 export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
+  const completionClock = useCoarseNow(60_000);
+  const pendingCompletions = useInboxStore((s) => completedFilter ? pendingTaskCompletionsSig(s.pending) : "");
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   // The one sanctioned reader for a scoped collection — re-asserts the active
   // workspace over the cross-workspace store cache.
@@ -978,16 +1025,16 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   // done), "all" is everything, otherwise a comma list of status categories.
   // Older links and saved views carried a separate multi `statuses` filter;
   // it is read as the same thing and cleared the moment the tabs write.
-  const statusFilter = urlStatus || statusesFilter;
+  const statusFilter = urlStatus || statusesFilter || (completedFilter ? "done" : "");
   const setStatusFilter = useCallback((s: string) => {
     setTaskFilter({ status: s });
-    setParam({ status: s, statuses: "" });
+    setParam({ status: s, statuses: "", ...(s !== "all" && !s.split(",").includes("done") ? { completed: "" } : {}) });
   }, [setTaskFilter, setParam]);
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   // The prefs a view should store: what is on screen now, minus bookkeeping.
   const livePrefs = useMemo(
-    () => ({ ...taskView, status: statusFilter }) as TaskViewPrefs,
-    [taskView, statusFilter]
+    () => ({ ...effectivePrefs, status: statusFilter, statuses: "" }) as TaskViewPrefs,
+    [effectivePrefs, statusFilter]
   );
   const handleSaveView = useCallback((name: string) => {
     // A new view starts unstamped, then adopts the id the server hands back —
@@ -1145,8 +1192,14 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   }, [tasksList, sourceFilter]);
 
 
+  const completionTick = completedFilter ? completionClock : 0;
+  const completionFilteredTasks = useMemo(
+    () => filterTasksByCompletion(sourceFilteredTasks, completedFilter, Date.now(), useInboxStore.getState().pending),
+    [sourceFilteredTasks, completedFilter, completionTick, pendingCompletions],
+  );
+
   const baseFilteredTasks = useMemo(() => {
-    let list = sourceFilteredTasks;
+    let list = completionFilteredTasks;
 
     // Status filtering. An explicit selection (one status or several) is a
     // plain membership test; "all" imposes nothing; the default hides the
@@ -1175,7 +1228,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [sourceFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, sourceFilter, viewMode]);
+  }, [completionFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, sourceFilter, viewMode]);
 
   // Session-linkage filter, layered last. "Has session" must match exactly what
   // the row shows a session pill for, so it mirrors the badge's union: a live
@@ -1278,13 +1331,13 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0, all: 0 };
-    for (const t of sourceFilteredTasks) {
+    for (const t of completionFilteredTasks) {
       counts[t.status] = (counts[t.status] || 0) + 1;
       counts.all++;
       if (t.status !== "done" && t.status !== "dropped") counts.active++;
     }
     return counts;
-  }, [sourceFilteredTasks]);
+  }, [completionFilteredTasks]);
   // The status tabs that exist for this list: the four everyone has, plus the
   // categories only some teams use (in_review, dropped) once rows carry them.
   const statusTabKeys = useMemo(
@@ -1458,6 +1511,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
       <TaskRow
         task={task}
         state={state}
+        onFilterLabel={groupCtx.onFilterLabel}
         triageMode={isBotView}
         onTriage={isBotView ? handleTriage : undefined}
         indent={nest?.indent ?? 0}
@@ -1468,7 +1522,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
         parentChip={parentRow ? { id: parentRow._id, short_id: parentRow.short_id, title: parentRow.title } : null}
       />
     );
-  }, [isBotView, handleTriage, viewNesting, familyIndex, tasksById, collapsedIds, toggleCollapsed]);
+  }, [isBotView, handleTriage, viewNesting, familyIndex, tasksById, collapsedIds, toggleCollapsed, groupCtx.onFilterLabel]);
 
   return (
     <>
@@ -1521,8 +1575,13 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           sortDir={dir}
           onSortDirChange={toggleSortDir}
           filters={{
-            hasActive: !!(priorityFilter || labelFilter || assigneeFilter || sourceFilter || sessionFilter),
+            hasActive: !!(priorityFilter || labelFilter || assigneeFilter || sourceFilter || sessionFilter || completedFilter),
             defs: [
+              {
+                key: "completed", label: "Completed", icon: <CalendarDays className="w-3 h-3" />, value: completedFilter,
+                options: [{ key: "", label: "Any time" }, ...COMPLETION_WINDOWS],
+                onChange: (v: string) => setParam(v ? { completed: v, status: "done", statuses: "" } : { completed: "" }),
+              },
               {
                 key: "priority", label: "Priority", icon: <ArrowUp className="w-3 h-3" />, value: priorityFilter,
                 options: [
@@ -1572,7 +1631,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
                 onChange: (v: string) => setParam({ source: v }),
               },
             ],
-            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "" }),
+            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "", completed: "" }),
             onSaveView: handleSaveView,
             dirtyView,
           }}
@@ -1630,6 +1689,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           customContent={viewMode === "kanban" ? ({ openContextMenuForItems }) => (
             <KanbanView
               statuses={boardStatuses}
+              onFilterLabel={groupCtx.onFilterLabel}
               grouped={kanbanGrouped}
               keyFor={kanbanKeyFor}
               onReorder={handleColumnReorder}

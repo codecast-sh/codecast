@@ -62,7 +62,7 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // selection and fold; `as_of` removed from the envelope.
 // v3: an agent-team teammate rides its present lead's bucket and fold
 // (rideLeadPlacements), so the team files as one group everywhere.
-export const INBOX_PROJECTION_VERSION = 3 as const;
+export const INBOX_PROJECTION_VERSION = 4 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -406,13 +406,14 @@ export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
 export interface RollupRow extends InboxRowIdentity {
   spawned_by_conversation_id?: unknown;
   agent_team_name?: string | null;
+  agent_name?: string | null;
 }
 
 export function rollupParentIdOf(row: RollupRow): string | null {
   if (row.parent_conversation_id) {
     return isOrphanOrSubagent(row) ? String(row.parent_conversation_id) : null;
   }
-  if (row.agent_team_name && row.spawned_by_conversation_id) return String(row.spawned_by_conversation_id);
+  if (row.agent_team_name && row.agent_name !== "team-lead" && row.spawned_by_conversation_id) return String(row.spawned_by_conversation_id);
   return null;
 }
 
@@ -731,6 +732,16 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   inbox_dormant_at?: number | null;
   anchor_id?: unknown;
   armed_trigger_kind?: string | null;
+  // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
+  // Presentation only: no bucket or work-state rule reads it.
+  pr_status?: {
+    pr_id: string;
+    repository: string;
+    number: number;
+    title?: string;
+    state: string;
+    at: number;
+  } | null;
   loop_state?: Pick<LoopState, "status" | "wakeup_at" | "fired_at" | "event_at"> | null;
   settle_verdict?: string | null;
   settle_verdict_at?: number | null;

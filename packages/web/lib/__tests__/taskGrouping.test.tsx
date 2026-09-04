@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { describe, expect, it } from "bun:test";
 import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, TASK_AXES } from "../taskGrouping";
+import { DEFAULT_TASK_STATUSES } from "@codecast/shared/tasks";
+import { orderedStatuses, statusFill } from "../taskStatuses";
 
 const ctx = { projects: {}, onFilterLabel: () => {} };
 // Grouping must never reorder within a bucket, so the identity sort is the
@@ -78,13 +80,33 @@ describe("buildTaskGroups", () => {
     expect(groups("status", [task(), task({ status: "in_progress" })], "open,in_progress")).not.toBeNull();
   });
 
-  it("orders status buckets by the work-first status order, not by name", () => {
+  it("orders status buckets by completion, with dropped tasks last", () => {
     const result = groups("status", [
       task({ status: "done" }),
       task({ status: "backlog" }),
       task({ status: "in_progress" }),
+      task({ status: "dropped" }),
+      task({ status: "open" }),
+      task({ status: "in_review" }),
     ]);
-    expect(result.map((g) => g.label)).toEqual(["In Progress", "Backlog", "Done"]);
+    expect(result.map((g) => g.label)).toEqual(["Done", "In Review", "In Progress", "Open", "Backlog", "Dropped"]);
+  });
+
+  it("puts further-progressed custom statuses first without reversing their progress indicators", () => {
+    const taskStatuses = orderedStatuses([
+      ...DEFAULT_TASK_STATUSES,
+      { id: "today", name: "Today", category: "in_progress" },
+      { id: "approved", name: "Approved", category: "in_review" },
+    ]);
+    const result = groups("status", [
+      task({ status: "in_progress" }),
+      task({ status: "in_progress", status_id: "today" }),
+      task({ status: "in_review" }),
+      task({ status: "in_review", status_id: "approved" }),
+    ], "", { ...ctx, taskStatuses });
+    expect(result.map((g) => g.label)).toEqual(["Approved", "In Review", "Today", "In Progress"]);
+    expect(result.map((g) => statusFill(taskStatuses.find((s) => s.name === g.label), taskStatuses)))
+      .toEqual([0.8, 0.6, 0.4, 0.2]);
   });
 
   it("sorts named buckets alphabetically and trails the empty one", () => {

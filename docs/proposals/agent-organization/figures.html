@@ -1,0 +1,57 @@
+<template id="figure-organization">
+<figure class="org-figure">
+<figcaption><strong>Responsibility stays put. Sessions can change.</strong> Illustrative structure. Expand the leads to inspect their work.</figcaption>
+<div class="org-human"><span class="avatar human">AP</span><div><b>Ashot</b><small>Human owner · protected decisions · can take over</small></div></div>
+<div class="org-trunk">
+<details open class="org-node"><summary><span class="avatar">W</span><span><b>Workspace lead</b><small>Coordinates priorities across projects</small></span><span class="state">Optional</span></summary>
+<div class="org-children">
+<details open class="org-node"><summary><span class="avatar">N</span><span><b>Notification reliability</b><small>Project lead · outcome, blockers, next action</small></span><span class="state">Observing</span></summary>
+<div class="org-children">
+<details class="org-node"><summary><span class="avatar">P</span><span><b>Prevent duplicate delivery</b><small>Plan lead · coordination when justified</small></span><span class="state">Later</span></summary>
+<div class="org-children"><div class="org-worker"><b>Reproduce the failure</b><span>Worker · bounded task attempt</span></div><div class="org-worker"><b>Verify the fix</b><span>Reviewer · checks submitted revision</span></div></div>
+</details>
+<div class="org-worker"><b>Investigate missing receipts</b><span>Worker reports directly to the project lead</span></div>
+</div></details>
+<div class="org-node secondary"><b>Other projects</b><small>Keep their current workflow until explicitly adopted</small></div>
+</div></details></div>
+<div class="figure-note">Levels may be skipped. Workers shown here illustrate later managed capability; observation starts none. One accountable lead per attempt. Reporting links never grant access.</div>
+</figure>
+</template>
+
+<template id="figure-delegation">
+<figure class="flow-figure"><figcaption><strong>From approved intent to verified outcome</strong> Each step has a durable record and a visible failure state.</figcaption>
+<ol class="flow-steps"><li><b>1 · Scope</b><span>Confirm task, owner, criteria and allowed effects.</span></li><li><b>2 · Admit</b><span>Claim attempt and reserve resources in one transaction.</span></li><li><b>3 · Run</b><span>Dispatch the operation; confirm the process receipt.</span></li><li><b>4 · Review</b><span>Submit revision and evidence; independent check where required.</span></li><li><b>5 · Accept</b><span>Record the verified outcome. Separate release approval remains explicit.</span></li></ol>
+<div class="flow-return">At every step: show the next actor, preserve useful work, reconcile uncertainty before retrying.</div>
+</figure>
+</template>
+
+<template id="figure-lifecycle">
+<figure class="flow-figure"><figcaption><strong>A lead survives its current session</strong> Process state and responsibility are separate.</figcaption>
+<div class="lifecycle-grid"><div><span class="state">Active</span><b>Session 12</b><p>Current generation can coordinate authorized work.</p></div><div class="lifecycle-arrow" aria-hidden="true">→</div><div><span class="state warning">Vacant</span><b>No active coordinator</b><p>Work and evidence remain. Eligible decisions escalate.</p></div><div class="lifecycle-arrow" aria-hidden="true">→</div><div><span class="state">Active</span><b>Session 13</b><p>New generation reconciles durable state before dispatch.</p></div></div>
+<p class="figure-note">The role ID and original launch provenance stay unchanged. Old sessions cannot regain authority by resuming.</p>
+</figure>
+</template>
+
+<template id="figure-workday">
+<figure class="flow-figure"><figcaption><strong>A day with one useful project lead</strong> An illustrative workflow, not measured performance.</figcaption>
+<ol class="dayline"><li><time>08:30</time><div><b>Read one project brief</b><p>Latest verified result, missing evidence and one recommended next step.</p></div></li><li><time>09:00</time><div><b>Approve bounded work</b><p>One task, one worker, named owner, agreed criteria.</p></div></li><li><time>15:30</time><div><b>Make the decision only you can make</b><p>Lead adds evidence and a recommendation. The exact production change still needs approval.</p></div></li><li><time>17:00</time><div><b>Inspect the result</b><p>The tested revision, reviewer, remaining uncertainty and next action are one click away.</p></div></li></ol></figure>
+</template>
+
+<template id="mockup-project">
+<figure class="product-mock"><figcaption>Proposed project view · illustrative data</figcaption><div class="product-chrome"><span>Projects / Notification reliability</span><span class="state">Observe mode</span></div>
+<div class="product-body"><div class="product-title"><h4>Notification reliability</h4><span class="avatar">N</span></div><p class="product-meta">Owner: Ashot · Coordinated by: Notification lead</p>
+<div class="outcome"><span class="eyebrow">Latest verified result</span><b>Duplicate-event replay passes on revision abc123.</b><p>Reviewer checked the regression. Production delivery has not been verified.</p><a href="#s8">See verification requirements ↗</a></div>
+<div class="product-columns"><div><h5>Needs a decision</h5><p>Should the fix enter the next production release?</p><span class="state warning">Human approval</span></div><div><h5>Recommended next step</h5><p>Check delivery receipts before approving rollout.</p><span class="state">Proposal only</span></div></div>
+<table class="mini-table"><thead><tr><th>Work</th><th>Owner</th><th>Execution / review</th></tr></thead><tbody><tr><td>Duplicate delivery</td><td>Ashot</td><td>Verified · revision abc123</td></tr><tr><td>Missing receipts</td><td>Ashot</td><td>Ready for approval</td></tr></tbody></table>
+<p class="coverage">Sources checked 2 minutes ago · 1 inaccessible source excluded · no workers started</p></div></figure>
+</template>
+
+<template id="mockup-decision">
+<figure class="product-mock"><figcaption>Proposed decision card · expand the reasoning</figcaption><div class="product-chrome"><b>Needs you</b><span class="state warning">Production change</span></div><div class="product-body"><h4>Release the duplicate-delivery fix?</h4><p class="product-meta">Asked by the worker · coordinated by Notification lead · owner: Ashot</p><div class="recommendation"><b>Recommendation: verify receipts first</b><p>The regression passes on abc123. We have not confirmed production delivery receipts. Approval would apply only to the named release and revision.</p></div>
+<dl class="effect-scope"><dt>Effect</dt><dd>Deploy release notif-2026.09.04</dd><dt>Target</dt><dd>notification-worker · production</dd><dt>Revision</dt><dd>abc123 · request version 3</dd><dt>Expires</dt><dd>4 September 2026, 23:00 UTC</dd><dt>Excluded</dt><dd>Data deletion, permission changes and announcements</dd></dl><details class="reasoning"><summary>Evidence and limits of this recommendation</summary><ul><li>Concurrent duplicate-event fixture: passed.</li><li>Independent review: checked revision abc123.</li><li>Production receipts: not checked.</li><li>Any revision change invalidates this approval request.</li></ul></details>
+<div class="choice-preview"><div><b>Verify receipts first</b><span>Keep the release pending; propose bounded verification work.</span></div><div><b>Approve the named release</b><span>Requires an authorized human and the current request revision.</span></div><div><b>Reject or revise</b><span>Preserve the task and evidence; request a different plan.</span></div></div><p class="coverage">Preview only. These rows do not approve or execute anything.</p></div></figure>
+</template>
+
+<template id="mockup-chat">
+<figure class="product-mock"><figcaption>Proposed chat intake · one thread, one work proposal</figcaption><div class="product-chrome"><b>#notification-reliability</b><span>Thread</span></div><div class="product-body chat-preview"><div class="chat-line"><span class="avatar human">AP</span><div><b>Ashot</b><p>@lead Can we investigate duplicate notifications?</p></div></div><div class="chat-line"><span class="avatar">N</span><div><b>Notification lead <span class="state">Agent</span></b><p>I found an existing reproduction task. Here is a bounded next step.</p><div class="chat-proposal"><b>Investigate the missing receipt</b><dl><dt>Scope</dt><dd>Notification reliability</dd><dt>Owner</dt><dd>Ashot</dd><dt>Output</dt><dd>Reproduction, cause and supporting evidence</dd><dt>Execution</dt><dd>One worker; explicit allowance required</dd><dt>Excluded</dt><dd>Deployment and external communication</dd></dl><span class="preview-button">Approve and start</span><span class="preview-button secondary-button">Edit proposal</span><p class="coverage">Only the current proposal revision can be approved. Repeated approval creates one operation.</p></div></div></div></div></figure>
+</template>

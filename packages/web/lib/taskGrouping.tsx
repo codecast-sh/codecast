@@ -30,8 +30,6 @@ export type TaskGroupContext = {
   taskStatuses?: TeamTaskStatus[];
 };
 
-// Board-ordered regardless of how the caller's list arrived, so the status
-// axis's bucket order (work-first) never depends on config array order.
 const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
   orderedStatuses(ctx?.taskStatuses ?? DEFAULT_TASK_STATUSES);
 
@@ -76,7 +74,13 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     compare: (a, b, ctx) => {
       const statuses = ctxStatuses(ctx);
       const idx = (key: string) => statuses.findIndex((s) => s.id === key);
-      return idx(a.key) - idx(b.key);
+      const ai = idx(a.key);
+      const bi = idx(b.key);
+      const category = statuses[ai]?.category;
+      if (category === statuses[bi]?.category && (category === "in_progress" || category === "in_review")) {
+        return bi - ai;
+      }
+      return ai - bi;
     },
     header: (b, ctx) => {
       const status = statusByKey(ctxStatuses(ctx), b.key);

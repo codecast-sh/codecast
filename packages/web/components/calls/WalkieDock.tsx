@@ -48,6 +48,7 @@ import {
 } from "../../lib/calls/callManager";
 import { CircleFace } from "./FaceCircle";
 import { useCircleFace } from "../../hooks/useCircleFace";
+import { useMicLevelVar } from "../../hooks/useMicLevelVar";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { canPopOutCall } from "../../lib/desktop";
 import { endBurst, endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
@@ -65,9 +66,9 @@ import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
 import { useRoomDescription } from "../../hooks/useCallRoom";
 import { useNowWhen } from "../../hooks/useCoarseNow";
-import { Avatar } from "./CallStage";
 import { WalkiePttButton } from "./WalkiePtt";
 import "./walkie.css";
+import "./faces.css";
 
 const api = _api as any;
 
@@ -172,12 +173,14 @@ export function WalkieBanner() {
   );
   const myName = useInboxStore((st: any) => String(st.currentUser?.name ?? "You"));
   const myFaceRef = useWalkieLevelVar<HTMLSpanElement>(!!sending);
+  const myLiveFaceRef = useMicLevelVar<HTMLSpanElement>(s.call.muted === false && !s.call.micDenied);
   // MY OWN CAMERA, while I hold the key. The hold turns it on (walkie's
   // startBurst) and this is where it lands: the circle that already shows my
   // face becomes the live picture of me, so talking into the walkie is
   // something I can see myself doing rather than a level ring on a photo.
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, emptyTiles);
   const myTile = tiles.find((t) => t.isLocal && t.kind === "camera");
+  const theirTile = tiles.find((t) => t.identity === (incoming?.fromUserId ?? otherId) && t.kind === "camera");
   if (!target) return null;
 
   // The teammate's own name when they are the one talking, and the room's label
@@ -205,8 +208,9 @@ export function WalkieBanner() {
       face={face}
       faceRef={faceRef}
       myFace={{ image: myImage, name: myName }}
-      myFaceRef={myFaceRef}
+      myFaceRef={sending ? myFaceRef : myLiveFaceRef}
       myTile={myTile}
+      theirTile={theirTile}
       stage={strip.stage}
       badge={strip.badge}
       hint={strip.hint}
@@ -308,6 +312,7 @@ export function WalkieStripView(props: {
    *  ordinary case for a machine without one or a refused permission, and the
    *  photo stands in exactly as it does on a call. */
   myTile?: ParticipantTile;
+  theirTile?: ParticipantTile;
   /** This client is talking. */
   tx: boolean;
   /** A teammate's burst is playing here. */
@@ -341,7 +346,7 @@ export function WalkieStripView(props: {
   // press, and the latch after it. Theirs whenever theirs is coming in, or
   // they are deliberately in the room. Both is the founder's picture: two
   // faces, one room, each side seeing the other.
-  const showMe = (tx || locked) && !!props.myFace;
+  const showMe = (tx || locked || props.hotMic) && !!props.myFace;
   const showThem = (rx || together || (!tx && !locked)) && !!props.face;
   // NEVER THE SAME NAME TWICE. Every sentence the engine writes names the
   // person in it ("Riley is talking", "You and Riley are both talking"), so a
@@ -400,7 +405,7 @@ export function WalkieStripView(props: {
             )}
             {showThem && props.face && (
               <span ref={props.faceRef} key="them" className="walkie-strip-face walkie-face-pop">
-                <Avatar m={{ user_image: props.face.image, user_name: props.face.name }} size={FACE} />
+                <MyFace tile={props.theirTile} image={props.face.image} name={props.face.name} />
               </span>
             )}
           </span>

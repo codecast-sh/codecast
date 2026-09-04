@@ -1,0 +1,44 @@
+[
+  {
+    "use": "Body",
+    "foreground": "#1b2430",
+    "background": "#f7f3ec",
+    "ratio": 14.15
+  },
+  {
+    "use": "Muted",
+    "foreground": "#5c6470",
+    "background": "#f7f3ec",
+    "ratio": 5.41
+  },
+  {
+    "use": "Link",
+    "foreground": "#1f6f4a",
+    "background": "#f7f3ec",
+    "ratio": 5.53
+  },
+  {
+    "use": "Hero",
+    "foreground": "#fffdf8",
+    "background": "#1f6f4a",
+    "ratio": 6.02
+  },
+  {
+    "use": "Hero note",
+    "foreground": "#d7ecdf",
+    "background": "#1f6f4a",
+    "ratio": 4.94
+  },
+  {
+    "use": "Green status",
+    "foreground": "#1f6f4a",
+    "background": "#e4efe8",
+    "ratio": 5.19
+  },
+  {
+    "use": "Warning",
+    "foreground": "#a83220",
+    "background": "#f9e4df",
+    "ratio": 5.47
+  }
+]
