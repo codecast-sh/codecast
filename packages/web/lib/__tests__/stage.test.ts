@@ -1,3 +1,4 @@
+import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { leavesOf } from "../../store/stageSplit";
@@ -19,12 +20,12 @@ const state = () => useInboxStore.getState();
 const activeTab = () => state().tabs.find((t) => t.id === state().activeTabId)!;
 
 // syncUrl and the width gate read window; bun has no DOM.
-const hadWindow = typeof (globalThis as any).window !== "undefined";
+let restoreWindow: () => void;
 beforeAll(() => {
-  if (!hadWindow) (globalThis as any).window = { innerWidth: 1400 };
+  restoreWindow = replaceGlobals({ window: { innerWidth: 1400 } });
 });
 afterAll(() => {
-  if (!hadWindow) delete (globalThis as any).window;
+  restoreWindow();
 });
 
 beforeEach(() => {

@@ -12,8 +12,10 @@ import { JSDOM } from "jsdom";
 import * as React from "react";
 import type { PushToTalk } from "../../hooks/useWalkie";
 
-const realWalkieHooks = await import("../../hooks/useWalkie");
-const realCallManager = await import("../../lib/calls/callManager");
+const realWalkieHooks = { ...await import("../../hooks/useWalkie") };
+afterAll(() => { mock.module("../../hooks/useWalkie", () => realWalkieHooks); });
+const realCallManager = { ...await import("../../lib/calls/callManager") };
+afterAll(() => { mock.module("../../lib/calls/callManager", () => realCallManager); });
 
 const ptt: PushToTalk & { presses: number; releases: number } = {
   holding: false,
@@ -44,7 +46,8 @@ mock.module("../../hooks/useWalkie", () => ({
 // here: the same children, the same select, no portal. What this file proves
 // is the key's own wiring — when the menu opens, what it offers, what
 // choosing it does, and that the gesture never leaks into a talk.
-const realContextMenu = await import("../ui/context-menu");
+const realContextMenu = { ...await import("../ui/context-menu") };
+afterAll(() => { mock.module("../ui/context-menu", () => realContextMenu); });
 mock.module("../ui/context-menu", () => ({
   ...realContextMenu,
   ContextMenu: ({ state, children }: any) =>

@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 
 // Two first-run dialogs on the same first visit used to stack: the device
 // setup card opened when the permission read landed, and the inbox tour's
@@ -10,10 +11,20 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/inbox" });
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).navigator = dom.window.navigator;
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+afterAll(() => {
+  dom.window.close();
+  restoreGlobals();
+});
+
+
+
+
 
 import React, { useState } from "react";
 import { act } from "react";

@@ -37,7 +37,6 @@ const ALLOWED = new Set<string>([
   "components/CodeBlock.tsx",
   "components/CollapsibleBody.tsx",
   "components/CreateChannelModal.tsx",
-  "components/DetailSplitLayout.tsx",
   "components/DeviceBadge.tsx",
   "components/DiffView.tsx",
   "components/DynamicRunView.tsx",

@@ -119,6 +119,8 @@ describe("runReconcileCrawl — completeness flag (dismiss CLEAR guard)", () => 
     let pages = 0;
     let seen: boolean | undefined;
     let completeRows = -1;
+    let resolveComplete!: () => void;
+    const completed = new Promise<void>((resolve) => { resolveComplete = resolve; });
     runReconcileCrawl({
       namespace: "cTrunc",
       wsKey: "wsB",
@@ -130,9 +132,9 @@ describe("runReconcileCrawl — completeness flag (dismiss CLEAR guard)", () => 
         return { rows: [{ _id: `d${pages}` }], isDone: false, continueCursor: `cursor-${pages}` };
       },
       onPage: () => {},
-      onComplete: (all, complete) => { seen = complete; completeRows = all.length; },
+      onComplete: (all, complete) => { seen = complete; completeRows = all.length; resolveComplete(); },
     });
-    await delay(60);
+    await completed;
     expect(pages).toBe(3);            // stopped exactly at maxPages
     expect(seen).toBe(false);         // crawl is NOT complete → CLEAR must be skipped
     expect(completeRows).toBe(3);     // onComplete still fires (SET-only path is safe)

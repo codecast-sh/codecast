@@ -12,7 +12,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { morphKeyframes } from "../calls/useSurfaceMorph";
-import { surfaceShape } from "../calls/CallSurfaceRoot";
+import { surfaceShape } from "../../lib/calls/surfaceHandles";
 
 // ── a browser that can animate ──────────────────────────────────────────────
 

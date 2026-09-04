@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 
 // The rail's QUESTIONS card stayed unlit while its question filled the stage.
 // Off the inbox the rail highlights `sidePanelSessionId` (sessionFocusKind →
@@ -13,13 +14,24 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "https://app.test/questions",
   pretendToBeVisual: true,
 });
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).navigator = dom.window.navigator;
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  location: dom.window.location,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+afterAll(() => {
+  dom.window.close();
+  restoreGlobals();
+});
+
+
+
 // posthog-js reads bare `location` at module load; the analytics import rides
 // in with the store.
-(globalThis as any).location = dom.window.location;
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+
 
 const CONV_A = "convaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CONV_B = "convbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -66,6 +78,11 @@ const railFocus = () => useInboxStore.getState().sidePanelSessionId;
 describe("the queue lights the rail card it is showing", () => {
   let container: HTMLElement;
   let root: ReturnType<typeof createRoot>;
+
+  afterAll(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+  });
 
   beforeAll(() => {
     container = document.createElement("div");

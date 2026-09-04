@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LiveRoomRow } from "../../hooks/useLiveRooms";
 
@@ -9,11 +9,21 @@ import type { LiveRoomRow } from "../../hooks/useLiveRooms";
 // does not exist. The room you are in is now a plain span.
 
 let ROOMS: LiveRoomRow[] = [];
+const realRooms = { ...await import("../../hooks/useLiveRooms") };
+const realCallManager = { ...await import("../../lib/calls/callManager") };
+const realOccupancyChip = { ...await import("../calls/OccupancyChip") };
+afterAll(() => {
+  mock.module("../../hooks/useLiveRooms", () => realRooms);
+  mock.module("../../lib/calls/callManager", () => realCallManager);
+  mock.module("../calls/OccupancyChip", () => realOccupancyChip);
+});
 
 mock.module("../../hooks/useLiveRooms", () => ({
+  ...realRooms,
   useLiveRooms: () => ROOMS,
 }));
 mock.module("../../lib/calls/callManager", () => ({
+  ...realCallManager,
   joinCall: () => {},
   knockRoom: () => {},
 }));
@@ -24,6 +34,7 @@ mock.module("../../lib/calls/callManager", () => ({
 // asked for. Spreading the real module instead is not an option — it pulls in
 // lib/calls/callManager, the live WebRTC stack this test exists to stay out of.
 mock.module("../calls/OccupancyChip", () => ({
+  ...realOccupancyChip,
   Facepile: () => null,
   OccupancyChip: () => null,
   HuddleButton: () => null,

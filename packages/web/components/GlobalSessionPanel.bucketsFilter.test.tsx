@@ -1,4 +1,5 @@
-import { test, expect } from "bun:test";
+import { replaceGlobals } from "../test-helpers/globals";
+import { afterAll, test, expect } from "bun:test";
 import { JSDOM } from "jsdom";
 import React, { act, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -12,10 +13,20 @@ import { createRoot } from "react-dom/client";
 // the identity CHANGES, so this test re-renders with a new dep, not once.
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).navigator = dom.window.navigator;
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+afterAll(() => {
+  dom.window.close();
+  restoreGlobals();
+});
+
+
+
+
 
 function Panel({ project }: { project: string }) {
   const filterByChip = useCallback(

@@ -28,6 +28,7 @@ describe("openForwardToChat", () => {
       chatReads: {},
       pending: {},
       currentUser: { _id: ME },
+      clientState: { ui: {} },
       palette: { open: false, targets: [], targetType: null, initialMode: "root" },
     } as any);
     useInboxStore.getState()._setDispatch(async () => null, { owner });

@@ -20,7 +20,7 @@
 // `getInitialState` — React's server snapshot — so a `setState` before the
 // render is simply not visible and every case would silently test the default.
 
-import { mock } from "bun:test";
+import { afterAll, beforeAll, mock } from "bun:test";
 
 type State = Record<string, any>;
 
@@ -45,7 +45,7 @@ export function mockInboxStore(overrides: (real: State) => State, extra: State =
     const base = realHook.getState();
     return { ...base, ...overrides(base) };
   };
-  mock.module("../../store/inboxStore", () => ({
+  const install = () => mock.module("../../store/inboxStore", () => ({
     ...real,
     useInboxStore: Object.assign(
       (selector: (s: State) => unknown) => selector(getState()),
@@ -54,5 +54,8 @@ export function mockInboxStore(overrides: (real: State) => State, extra: State =
     ),
     ...extra,
   }));
+  install();
+  beforeAll(install);
+  afterAll(() => mock.module("../../store/inboxStore", () => real));
   return getState;
 }

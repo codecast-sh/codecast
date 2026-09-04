@@ -29,7 +29,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { useTriggers } from "../../../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns } from "../../../components/TriggerRunHistory";
 import { TriggerPromptView } from "../../../components/TriggerPromptView";
-import { entityQueryArgs } from "../../../components/entityDisplay";
+import { entityQueryArgs } from "../../../lib/entityDisplay";
 import {
   describeTaskCadence,
   fmtClock,

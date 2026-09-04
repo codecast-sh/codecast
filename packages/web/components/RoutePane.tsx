@@ -115,7 +115,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];
 
-export function matchRoute(path: string): { component: React.LazyExoticComponent<any>; params: Record<string, string> } | null {
+function matchRoute(path: string): { component: React.LazyExoticComponent<any>; params: Record<string, string> } | null {
   const pathOnly = path.split("?")[0].split("#")[0];
   for (const route of ROUTES) {
     const match = pathOnly.match(route.pattern);

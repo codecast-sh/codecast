@@ -26,18 +26,8 @@ import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { clipFade } from "./CollapsibleBody";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
-import {
-  AuthorAvatar,
-  PRIORITY_CONFIG,
-  STATUS_COLOR,
-  STATUS_LABEL,
-  SessionSummaryBlock,
-  TYPE_LABEL,
-  abbrevModel,
-  relativeTime,
-  taskPeople,
-  useEntityResolution,
-} from "./entityDisplay";
+import { AuthorAvatar, SessionSummaryBlock } from "./entityDisplay";
+import { PRIORITY_CONFIG, STATUS_COLOR, STATUS_LABEL, TYPE_LABEL, abbrevModel, relativeTime, taskPeople, useEntityResolution } from "../lib/entityDisplay";
 
 import { useMountEffect } from "../hooks/useMountEffect";
 // The preview card a SHARED object renders as — the rich sibling of the inline

@@ -1,3 +1,4 @@
+import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { openConversationBeside, resolveLinkedSessionOpen } from "../useOpenLinkedSession";
 import { resolveSessionSelectKind } from "../../lib/inboxRouting";
@@ -48,12 +49,12 @@ describe("openConversationBeside", () => {
 
   // The gate reads the window's width; bun has no window, so stub the two
   // fields the gesture touches (openBeside's width, syncUrl's location).
-  const hadWindow = typeof (globalThis as any).window !== "undefined";
+  let restoreWindow: () => void;
   beforeAll(() => {
-    if (!hadWindow) (globalThis as any).window = { innerWidth: 1400 };
+    restoreWindow = replaceGlobals({ window: { innerWidth: 1400 } });
   });
   afterAll(() => {
-    if (!hadWindow) delete (globalThis as any).window;
+    restoreWindow();
   });
 
   beforeEach(() => {
