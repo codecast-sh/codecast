@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 
 // ct-46126. TabContent's kept-mounted pane set and its one-shot adoption of
 // the entry URL both lived in component scope, but the component itself
@@ -17,10 +18,20 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "https://app.test/inbox",
   pretendToBeVisual: true,
 });
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).navigator = dom.window.navigator;
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+afterAll(() => {
+  dom.window.close();
+  restoreGlobals();
+});
+
+
+
+
 
 // -- Minimal store: just what TabContent reads --
 
@@ -95,6 +106,11 @@ function panes(): Array<{ id: string; display: string }> {
 describe("TabContent survives its own remount", () => {
   let container: HTMLElement;
   let root: ReturnType<typeof createRoot>;
+
+  afterAll(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+  });
 
   beforeAll(async () => {
     container = document.createElement("div");

@@ -317,6 +317,7 @@ function resetChipStore() {
 describe("applying a workbench's chip filter", () => {
   beforeEach(() => {
     useInboxStore.setState({
+      ...useInboxStore.getInitialState(),
       sessions: { [S1]: session(S1), [S2]: session(S2) },
       buckets: { mine: bucket("mine", "triage"), empty: bucket("empty", "shipping") },
       bucketAssignments: { r1: { _id: "r1", conversation_id: S2, bucket_id: "mine", updated_at: 1 } },
@@ -378,6 +379,7 @@ describe("applying a workbench's chip filter", () => {
 describe("focus eviction after the chip changes", () => {
   beforeEach(() => {
     useInboxStore.setState({
+      ...useInboxStore.getInitialState(),
       sessions: { [S1]: session(S1), [S2]: session(S2) },
       buckets: { mine: bucket("mine", "triage"), empty: bucket("empty", "shipping") },
       bucketAssignments: { r1: { _id: "r1", conversation_id: S2, bucket_id: "mine", updated_at: 1 } },

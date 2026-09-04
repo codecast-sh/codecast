@@ -3,7 +3,7 @@ import { Info, Keyboard, RotateCcw, ShieldCheck, X } from "lucide-react";
 import { useOsPermissions } from "../../../hooks/useOsPermissions";
 import { OS_PERMISSION_KINDS } from "../../../lib/osPermissions";
 import { PermissionRow } from "../../../components/permissions/PermissionRow";
-import { openDeviceSetup } from "../../../components/permissions/DeviceSetupDialog";
+import { openDeviceSetup } from "../../../lib/deviceSetup";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import {

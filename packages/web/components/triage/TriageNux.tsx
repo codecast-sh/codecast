@@ -22,7 +22,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // Runs once (clientState.tips, synced cross device); replayable from the
 // triage bar and the shortcuts panel.
 
-export const NUX_TIP_ID = "nux-tour";
+const NUX_TIP_ID = "nux-tour";
 
 type CardState = "needs-input" | "working" | "dormant" | "done";
 

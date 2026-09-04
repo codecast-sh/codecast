@@ -6,7 +6,7 @@
 // same key the people wall has, and these are the two halves of that promise:
 // the gesture (hold talks, a tap opens the conversation, and a tap can never
 // leave a burst behind) and the flow the bar shows while it happens.
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import { teamBarSig } from "../presence/memberPresence";
@@ -104,6 +104,11 @@ const ROOM = dmRoomKey(VIEWER, String(MEMBER._id));
 type Faces = { talkingId: string; sendingRoomKey: string; joinedRoom: string };
 const idle: Faces = { talkingId: "", sendingRoomKey: "", joinedRoom: "" };
 
+const cleanups = new Set<() => Promise<void>>();
+afterEach(async () => {
+  for (const cleanup of cleanups) await cleanup();
+});
+
 async function mountFace(faces: Faces = idle, member: any = MEMBER) {
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
@@ -112,6 +117,12 @@ async function mountFace(faces: Faces = idle, member: any = MEMBER) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
+  const unmount = async () => {
+    if (!cleanups.delete(unmount)) return;
+    await act(async () => root.unmount());
+    host.remove();
+  };
+  cleanups.add(unmount);
   const draw = async (f: Faces, m: any = member) => {
     await act(async () => {
       root.render(
@@ -135,10 +146,7 @@ async function mountFace(faces: Faces = idle, member: any = MEMBER) {
     key: () => host.querySelector("button.people-face") as HTMLElement,
     html: () => host.innerHTML,
     act,
-    async unmount() {
-      await act(async () => root.unmount());
-      host.remove();
-    },
+    unmount,
   };
 }
 

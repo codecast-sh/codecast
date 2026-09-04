@@ -1,3 +1,4 @@
+import { replaceGlobals } from "../../test-helpers/globals";
 // THE CONNECTION HELD OPEN AHEAD OF THE FIRST WORD.
 //
 // A walkie burst is only audible once the speaker's media connection is up, and
@@ -28,7 +29,8 @@ import { useInboxStore } from "../../store/inboxStore";
 // the real livekit-client and overrides only the one class it drives. Nothing
 // else in the suite constructs a Room (the enums and events stay real).
 
-const realLivekit = await import("livekit-client");
+const realLivekit = { ...await import("livekit-client") };
+afterAll(() => { mock.module("livekit-client", () => realLivekit); });
 
 class FakeRoom {
   static made: FakeRoom[] = [];
@@ -131,19 +133,11 @@ const callManager = await import("../calls/callManager");
 // modules that inject stylesheets at load (sonner, through callManager) branch
 // on `document` existing, and a stub present during import sends them down
 // their DOM path with a document that cannot answer.
-if (typeof (globalThis as any).document === "undefined") {
-  (globalThis as any).document = {
-    createElement: () => ({ style: {}, dataset: {} as any, appendChild() {}, remove() {} }),
-    body: { appendChild() {} },
-  };
-  // The whole test run shares one process, so a lingering partial `document`
-  // sends every LATER file's `typeof document !== "undefined"` branch down a
-  // DOM path this stub cannot answer (document.hasFocus is not a function, in
-  // unrelated store suites). Uninstall what this file installed.
-  afterAll(() => {
-    delete (globalThis as any).document;
-  });
-}
+const restoreDocument = replaceGlobals({ document: {
+  createElement: () => ({ style: {}, dataset: {} as any, appendChild() {}, remove() {} }),
+  body: { appendChild() {} },
+} });
+afterAll(restoreDocument);
 
 let mutations: Array<{ name: string; args: any }> = [];
 let actions: Array<{ name: string; args: any }> = [];

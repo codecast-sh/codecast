@@ -1,14 +1,26 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { replaceGlobals } from "../test-helpers/globals";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
 // The walker is DOM-driven: replies are `.cc-msg-review` regions under
 // `#msg-<id>` rows, chunks are the top-level blocks of their `.cc-content`.
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).navigator = dom.window.navigator;
-(globalThis as any).location = dom.window.location;
-(globalThis as any).HTMLElement = dom.window.HTMLElement;
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  location: dom.window.location,
+  HTMLElement: dom.window.HTMLElement,
+});
+afterAll(() => {
+  dom.window.close();
+  restoreGlobals();
+});
+
+
+
+
+
 // jsdom has no layout; focusComposer scrolls the input into view.
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 

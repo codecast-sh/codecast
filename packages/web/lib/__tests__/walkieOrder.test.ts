@@ -11,7 +11,7 @@
 // first, what keeps the words comes second, and the room comes last and off to
 // one side — a release that beats it still lands a complete message.
 
-import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { useInboxStore } from "../../store/inboxStore";
 
@@ -34,8 +34,10 @@ function defer<T>(): Deferred<T> {
 // files' tests, wherever they sit in the alphabet. Each one below therefore
 // spreads the real module and overrides only what this file drives.
 
-const realCallManager = await import("../calls/callManager");
-const realAsrPipe = await import("../calls/asrPipe");
+const realCallManager = { ...await import("../calls/callManager") };
+afterAll(() => { mock.module("../calls/callManager", () => realCallManager); });
+const realAsrPipe = { ...await import("../calls/asrPipe") };
+afterAll(() => { mock.module("../calls/asrPipe", () => realAsrPipe); });
 
 /** The room join, held open so a test can ask what happened while it was still
  *  in flight — which is the whole question. */
@@ -134,7 +136,8 @@ mock.module("../calls/asrPipe", () => ({
  *  moment in the burst — the chirp to the microphone opening, the roger to the
  *  key coming up, the squelch to a teammate's burst ending — so a change of
  *  ordering in the engine cannot quietly move them somewhere less true. */
-const realSounds = await import("../sounds");
+const realSounds = { ...await import("../sounds") };
+afterAll(() => { mock.module("../sounds", () => realSounds); });
 const soundLog: string[] = [];
 
 mock.module("../sounds", () => ({

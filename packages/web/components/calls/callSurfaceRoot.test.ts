@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { isSurfaceChromeTarget } from "./CallSurfaceRoot";
+import { isSurfaceChromeTarget } from "../../lib/calls/surfaceHandles";
 
 // The floating dock puts pop-out / expand / unpin on the same row you drag
 // the card by. A click on those must not start a drag.

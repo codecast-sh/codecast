@@ -58,7 +58,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { fmtClock } from "../../components/calls/speakers";
 import { soundMeetingDetected } from "../../lib/sounds";
-import { RECORD_OFFER_COPY } from "../../components/calls/MeetingOfferToast";
+import { RECORD_OFFER_COPY } from "../../lib/calls/recordOfferCopy";
 import "../../components/calls/recorder.css";
 
 export default function MeetingOfferPage() {

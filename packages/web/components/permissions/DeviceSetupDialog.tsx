@@ -1,3 +1,4 @@
+import { OPEN_EVENT } from "../../lib/deviceSetup";
 import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -27,11 +28,6 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // machine's answer silence a fresh one.
 
 const SEEN_KEY = "codecast.deviceSetup.v1";
-const OPEN_EVENT = "codecast-device-setup-open";
-
-export function openDeviceSetup(): void {
-  window.dispatchEvent(new CustomEvent(OPEN_EVENT));
-}
 
 function seen(): boolean {
   try {

@@ -1,3 +1,4 @@
+import { RECORD_OFFER_COPY } from "../../lib/calls/recordOfferCopy";
 "use client";
 
 // The cards the desktop's meeting detector puts on screen. What SHOWS them —
@@ -19,11 +20,6 @@ import { Mic, Ban } from "lucide-react";
 import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
 import { getMeetingDetect, setMeetingDetect, type MeetingOffer } from "../../lib/desktop";
 import "./recorder.css";
-
-/** The offer's one paragraph, shared with the /meeting-offer window so the
- *  question reads identically wherever it is asked. */
-export const RECORD_OFFER_COPY =
-  "Record it? Codecast listens through your microphone, writes the transcript live, and summarizes it when you stop. The recording is yours alone.";
 
 export function MeetingOfferCard({
   toastId,

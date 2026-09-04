@@ -1,3 +1,5 @@
+import { replaceGlobals } from "../../test-helpers/globals";
+import { useInboxStore } from "../../store/inboxStore";
 // The walkie cues, measured rather than heard.
 //
 // The founder's report was "no sound that i started recording", and it was a
@@ -11,7 +13,7 @@
 // AudioContext and counts the nodes they start, the same way arrivalSound.test
 // checks the chat knock: by what a cue builds, not by a claim that it played.
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cueDuration, cueHighBandShare, cuePeak, renderCue } from "../cueRender";
 import type { CueSpec } from "../cueSpec";
 import {
@@ -282,9 +284,11 @@ class FakeAudioContext {
   }
 }
 
-(globalThis as any).AudioContext = FakeAudioContext;
+const restoreGlobals = replaceGlobals({ AudioContext: FakeAudioContext });
+afterAll(restoreGlobals);
 
-const realDesktop = await import("../desktop");
+const realDesktop = { ...await import("../desktop") };
+afterAll(() => { mock.module("../desktop", () => realDesktop); });
 let isLeader = true;
 mock.module("../desktop", () => ({ ...realDesktop, isNotificationLeader: () => isLeader }));
 
@@ -298,6 +302,7 @@ describe("who is allowed to sound which cue", () => {
     // Another sound test's stand-in context would otherwise still be cached
     // in sounds.ts and nothing below would count. See `resetAudioContext`.
     sounds.resetAudioContext();
+    useInboxStore.setState({ clientState: { ui: {} } } as any);
     // sounds_enabled defaults on: the store reads `!== false`.
   });
 

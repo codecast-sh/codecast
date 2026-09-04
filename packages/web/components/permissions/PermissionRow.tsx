@@ -12,7 +12,7 @@ import {
 } from "../../lib/osPermissions";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-export const PERMISSION_ICONS: Record<OsPermissionKind, LucideIcon> = {
+const PERMISSION_ICONS: Record<OsPermissionKind, LucideIcon> = {
   notifications: Bell,
   microphone: Mic,
   camera: Camera,

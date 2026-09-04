@@ -19,18 +19,8 @@ import {
   entityMentionRegex,
   type EntityType,
 } from "../lib/entityLinks";
-import {
-  AuthorAvatar,
-  PRIORITY_CONFIG,
-  STATUS_COLOR,
-  STATUS_LABEL,
-  SessionSummaryBlock,
-  TYPE_LABEL,
-  abbrevModel,
-  relativeTime,
-  taskPeople,
-  useEntityResolution,
-} from "./entityDisplay";
+import { AuthorAvatar, SessionSummaryBlock } from "./entityDisplay";
+import { PRIORITY_CONFIG, STATUS_COLOR, STATUS_LABEL, TYPE_LABEL, abbrevModel, relativeTime, taskPeople, useEntityResolution } from "../lib/entityDisplay";
 import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";

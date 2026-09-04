@@ -25,6 +25,7 @@ const tab = (id: string, path: string): AppTab => ({ id, title: "", path, create
 describe("active inbox tab path tracks the current session", () => {
   beforeEach(() => {
     useInboxStore.setState({
+      ...useInboxStore.getInitialState(),
       sessions: {},
       conversations: {},
       currentSessionId: null,

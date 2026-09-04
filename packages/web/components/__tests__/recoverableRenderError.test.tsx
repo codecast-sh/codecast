@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 
 // React does not report the error a render threw. When a concurrent render
 // throws and the synchronous retry succeeds, React builds a NEW Error whose
@@ -17,13 +18,25 @@ const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></
   url: "https://app.test/inbox",
   pretendToBeVisual: true,
 });
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).navigator = dom.window.navigator;
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  location: dom.window.location,
+  self: dom.window,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+afterAll(() => {
+  dom.window.close();
+  restoreGlobals();
+});
+
+
+
 // posthog-js (imported by lib/analytics) touches these at module scope.
-(globalThis as any).location = dom.window.location;
-(globalThis as any).self = dom.window;
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+
+
 
 const toasts: Array<{ title: string; trace: string }> = [];
 mock.module("../../lib/errorToast", () => ({
@@ -35,6 +48,11 @@ const THROWN = "Cannot read properties of undefined (reading 'title')";
 describe("recoverable render errors report the throw, not the React code", () => {
   let React: typeof import("react");
   let createRoot: typeof import("react-dom/client").createRoot;
+  let root: import("react-dom/client").Root | undefined;
+  afterEach(async () => {
+    if (root) await act(async () => root!.unmount());
+    root = undefined;
+  });
   let act: typeof import("react").act;
   let reportRecoverableRenderError: (e: unknown, i?: { componentStack?: string | null }) => void;
 
@@ -62,14 +80,14 @@ describe("recoverable render errors report the throw, not the React code", () =>
     }
 
     const container = dom.window.document.getElementById("root")!;
-    const root = createRoot(container, {
+    root = createRoot(container, {
       onRecoverableError: (error: unknown, info: { componentStack?: string | null }) => {
         recovered.push(error);
         reportRecoverableRenderError(error, info);
       },
     });
 
-    await act(async () => { root.render(React.createElement(Flaky)); });
+    await act(async () => { root!.render(React.createElement(Flaky)); });
     // A transition renders in slices, which is the path that produces the
     // wrapper — a default-lane update renders synchronously and would not.
     await act(async () => { React.startTransition(() => bump(1)); });
