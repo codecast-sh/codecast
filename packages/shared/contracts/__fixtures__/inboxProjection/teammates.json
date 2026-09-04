@@ -4,6 +4,16 @@
   "asking": [],
   "rows": [
     {
+      "_id": "spawned_team_lead",
+      "status": "completed",
+      "updated_at": "E-2m",
+      "message_count": 30,
+      "is_idle": true,
+      "spawned_by_conversation_id": "lead",
+      "agent_team_name": "own-team",
+      "agent_name": "team-lead"
+    },
+    {
       "_id": "lead",
       "status": "active",
       "updated_at": "E-1m",
@@ -140,7 +150,7 @@
         "questions": 0,
         "pinned": 1,
         "new": 0,
-        "needs_input": 3,
+        "needs_input": 4,
         "done": 0,
         "dormant": 0,
         "working": 5,
@@ -163,7 +173,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "fcafd606c222059a",
+    "set_digest": "6e40b05ab4660b7e",
     "placements": {
       "dismissedleadz130000000000000000": [
         "dismissed",
@@ -234,6 +244,11 @@
         "needs_input",
         "needs_input",
         true
+      ],
+      "spawnedteamleadz1500000000000000": [
+        "needs_input",
+        "needs_input",
+        false
       ]
     }
   }

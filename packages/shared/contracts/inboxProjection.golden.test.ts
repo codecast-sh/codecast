@@ -42,6 +42,7 @@ const FIXTURE_EPOCH = 1_800_000_000_000;
 const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   2: "e72f762fac4e3f41",
   3: "658e57e266be626a",
+  4: "7af701cea3a64c02",
 };
 
 type Expected = {

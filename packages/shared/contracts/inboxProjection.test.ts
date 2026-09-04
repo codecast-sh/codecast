@@ -471,9 +471,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 3", () => {
+  test("the caps are the single source and the version is 4", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(3);
+    expect(INBOX_PROJECTION_VERSION).toBe(4);
   });
 });
 
@@ -496,6 +496,7 @@ describe("rollupParentIdOf — the one child → parent rule", () => {
   });
   test("an agent-team teammate rolls up to its lead; a plain spawned session does not", () => {
     expect(rollupParentIdOf({ spawned_by_conversation_id: "lead", agent_team_name: "team" })).toBe("lead");
+    expect(rollupParentIdOf({ spawned_by_conversation_id: "lead", agent_team_name: "team", agent_name: "team-lead" })).toBeNull();
     expect(rollupParentIdOf({ spawned_by_conversation_id: "lead" })).toBeNull();
     expect(rollupParentIdOf({})).toBeNull();
   });

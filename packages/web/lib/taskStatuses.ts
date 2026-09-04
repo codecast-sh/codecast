@@ -54,7 +54,7 @@ const STARTED: readonly TaskStatusCategory[] = ["in_progress", "in_review"];
 export function statusFill(s: TeamTaskStatus, statuses?: TeamTaskStatus[]): number {
   if (!STARTED.includes(s.category)) return 0;
   const run = statuses
-    ? orderedStatuses(statuses).filter((x) => STARTED.includes(x.category))
+    ? boardOrderedStatuses(statuses).filter((x) => STARTED.includes(x.category))
     : [];
   const i = run.findIndex((x) => x.id === s.id);
   if (i < 0) return s.category === "in_progress" ? 0.5 : 0.75;
@@ -90,18 +90,12 @@ export function statusVisual(s: TeamTaskStatus, statuses?: TeamTaskStatus[]): St
   };
 }
 
-/** Work-first category order (the board's order), keeping the team's own
- *  order within each category (Array.prototype.sort is stable). */
 export function orderedStatuses(statuses: TeamTaskStatus[]): TeamTaskStatus[] {
   return [...statuses].sort(
     (a, b) => TASK_STATUS_ORDER.indexOf(a.category) - TASK_STATUS_ORDER.indexOf(b.category),
   );
 }
 
-// Pipeline order for kanban columns: not started on the left, started in the
-// middle, finished on the right. The list view keeps TASK_STATUS_ORDER (active
-// work first); the board reads left to right as a pipeline instead. The shared
-// TASK_STATUS_CATEGORIES tuple is already in pipeline order.
 const BOARD_CATEGORY_ORDER: readonly TaskStatusCategory[] = TASK_STATUS_CATEGORIES;
 
 /**

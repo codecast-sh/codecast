@@ -1,0 +1,8 @@
+{
+  "implementation_tasks": 16,
+  "unique_task_ids": 16,
+  "dependency_dag": "acyclic, each dependency filed earlier",
+  "budget_example": "verified per ancestor, settlement and capacity",
+  "balanced_code_fences": true,
+  "scope": "document examples only; not feature implementation tests"
+}
