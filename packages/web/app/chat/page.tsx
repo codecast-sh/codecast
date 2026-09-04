@@ -34,7 +34,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
-import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
+import { Headphones, Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
 import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
@@ -501,7 +501,7 @@ export default function ChatPage() {
                     roomKey={walkieRoomKey}
                     resolveChannelId={resolveWalkieChannel}
                     size="sm"
-                    label="Talk"
+                    icon={Headphones}
                     className="shrink-0"
                     title="Talk to them — they see your face and hear you; click again to stop"
                     ring={{ toUserIds: activeChannel.dmMemberIds ?? [] }}

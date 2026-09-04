@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall } from "lucide-react";
 import { parseHuddleDigestContent } from "@codecast/shared/contracts";
 import { openForwardToChat } from "../../lib/forwardToChat";
-import { remarkSanitizeInvisibleUnicode } from "../tools/MarkdownRenderer";
+import { remarkSanitizeInvisibleUnicode } from "../../lib/markdownPlugins";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
