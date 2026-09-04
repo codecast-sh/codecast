@@ -11,14 +11,19 @@
  * with the engine installed.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { Command } from "commander";
 import { fmt, icons } from "../../colors.js";
 import { spawn } from "../../proc.js";
+import { findChromeBinary } from "../../workspace/chrome.js";
+import { browserHome } from "../profile.js";
 import {
   bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
   rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
-import { bridgePairingUrl } from "./protocol.js";
+import { bridgePairingPage, bridgePairingUrl } from "./protocol.js";
 import { connectRealBridge, explicitTarget, extensionReady, setStickyTarget, stickyTarget } from "./real.js";
 
 const OK = `${fmt.success(icons.check)}`;
@@ -31,26 +36,53 @@ function die(msg: string, hint?: string): never {
   process.exit(1);
 }
 
+/** The forwarding page `setup` leaves for Chrome to open; removed once pairing settles. */
+export function pairingPagePath(): string {
+  return path.join(browserHome(), "pair.html");
+}
+
 /**
- * Hand a URL to the human's Chrome without waiting for it. Only macOS has a
- * launcher that targets an app by name; elsewhere the caller prints the URL.
- * The URL carries the pairing token, so it goes to osascript on stdin, never
- * in an argument: on macOS every user can read every other user's process
- * arguments. osascript exits as soon as Chrome has the request, so a missing
- * Chrome (or a denied automation prompt) surfaces nowhere but the printed
- * fallback, which is why the fallback is always printed.
+ * Hand the pairing URL to the human's own Chrome, the instance on the default
+ * profile, without waiting for it and without the token touching any
+ * process's arguments.
+ *
+ * Apple events cannot pick that instance. `tell application "Google Chrome"`
+ * addresses a bundle id, and the agent browser is the same bundle on another
+ * profile, so with both running the URL lands in whichever one Launch Services
+ * answers for: in practice the clone, which has no extension and shows
+ * ERR_BLOCKED_BY_CLIENT. JXA's `Application(pid)` resolves the same way and
+ * ignores the pid. Chrome's own process singleton is exact: a Chrome started
+ * without `--user-data-dir` hands its command line to the instance holding the
+ * default profile and exits, or becomes that instance when none is running.
+ *
+ * The command line is readable by every user on the machine, so it carries
+ * the path of a 0600 file whose script forwards to the options page, never
+ * the URL itself. Nothing here can see whether Chrome showed the options page
+ * or an error, which is why the caller always prints the fallback.
  */
-export function openInChrome(url: string, app = "Google Chrome"): boolean {
-  if (process.platform !== "darwin") return false;
+export function openInRealChrome(url: string): boolean {
+  const bin = findChromeBinary();
+  if (!bin) return false;
+  const page = pairingPagePath();
   try {
-    const child = spawn("osascript", ["-"], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+    fs.mkdirSync(path.dirname(page), { recursive: true, mode: 0o700 });
+    fs.rmSync(page, { force: true });
+    fs.writeFileSync(page, bridgePairingPage(url), { mode: 0o600 });
+    const child = spawn(bin, [pathToFileURL(page).href], { stdio: "ignore", detached: true });
     child.on("error", () => {});
-    const quote = (s: string) => `"${s.replace(/[\\"]/g, "\\$&")}"`;
-    child.stdin?.end(`tell application ${quote(app)} to open location ${quote(url)}\n`);
     child.unref();
     return !!child.pid;
   } catch {
     return false;
+  }
+}
+
+/** Drop the forwarding page; Chrome has read it by the time pairing settled either way. */
+export function discardPairingPage(): void {
+  try {
+    fs.rmSync(pairingPagePath(), { force: true });
+  } catch {
+    /* already gone */
   }
 }
 
@@ -71,14 +103,18 @@ function connectedLine(s: BridgeHostStatus): string {
   return `${OK} extension connected${s.extensionVersion ? ` (v${s.extensionVersion}, protocol ${s.extensionProtocol})` : ""}`;
 }
 
-/** How long `setup` waits for the extension after handing Chrome the pairing URL. */
-const PAIRING_WAIT_MS = 10_000;
+/**
+ * How long `setup` waits for the extension after handing Chrome the pairing
+ * URL. A new token asks the human for one click on the options page, so this
+ * is a person's reaction time, not a socket's.
+ */
+const PAIRING_WAIT_MS = 30_000;
 
 export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): void {
   const { me } = deps;
 
   br.command("target [mode]")
-    .description("Which browser the verbs act on: clone (the agent browser, default) or real (the human's own Chrome through the extension; a session acts only on tabs it opened)")
+    .description("Which browser the verbs act on: real (your Chrome, default once the extension is paired) or clone (the agent browser)")
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
@@ -86,7 +122,9 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
           ? " (chosen for this session)"
           : extensionReady()
             ? " (default: the codecast extension is connected, so sessions use your Chrome)"
-            : " (default: the codecast extension is not connected, so sessions use the agent browser)";
+            : cur === "real"
+              ? " (default: the codecast extension is paired; commands wait for it to reconnect to your Chrome)"
+              : " (default: no paired codecast extension, so sessions use the agent browser)";
         console.log(`target: ${fmt.highlight(cur)}${fmt.muted(why)}`);
         console.log(fmt.muted("  change with `cast browser target real|clone`; any command takes --real/--clone to override"));
         return;
@@ -132,10 +170,15 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       // extension connecting is the one proof the pairing worked, and only
       // when it does not arrive do the install steps belong on screen.
       console.log(`${OK} bridge host listening on 127.0.0.1:${state.port}`);
-      const opened = openInChrome(url);
+      const opened = openInRealChrome(url);
       if (opened) {
-        console.log(fmt.muted("  handed the pairing to Chrome, waiting for the extension to connect…"));
-        const status = await waitForExtension(state, PAIRING_WAIT_MS);
+        console.log(fmt.muted("  opened the pairing in your Chrome; a new token asks for one click there. Waiting for the extension to connect…"));
+        let status: BridgeHostStatus;
+        try {
+          status = await waitForExtension(state, PAIRING_WAIT_MS);
+        } finally {
+          discardPairingPage();
+        }
         if (status.extensionConnected) {
           console.log(connectedLine(status));
           console.log(fmt.muted("  sessions on this machine now use your Chrome by default; `cast browser target clone` opts one out"));
@@ -145,7 +188,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       }
       console.log("");
       console.log(opened
-        ? "  If Chrome showed an error page instead of the extension's options, install it (one time):"
+        ? "  If Chrome showed an error page instead of the extension's options, install it (one time), or reload it at chrome://extensions if it predates this pairing flow:"
         : "  Install the extension (one time):");
       console.log(`    1. Open ${fmt.highlight("chrome://extensions")} in your real Chrome, turn on Developer mode`);
       console.log(`    2. ${fmt.highlight("Load unpacked")} → select the repo's ${fmt.highlight("packages/browser-extension")} directory`);

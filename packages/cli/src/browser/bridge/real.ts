@@ -2,11 +2,6 @@
  * Real-Chrome mode: routing `cast browser` verbs at the user's own Chrome
  * through the extension bridge instead of the managed clone.
  *
- * The clone stays the default — it is the safe place for unattended work.
- * Real mode exists for the cases the clone cannot serve: logins that drifted
- * since the clone was made, sites that fight fresh profiles, and work the
- * human wants to watch happen in their own browser.
- *
  * Because the bridge host IS a CDP endpoint, this file holds no transport:
  * `CdpConnection.fromPort(bridgeEndpoint)`, `listTargets`, `attachToTarget`
  * and every verb work exactly as they do against the clone. What is left is
@@ -91,8 +86,8 @@ export function extensionReady(): boolean {
 
 /**
  * Which browser a session's verbs act on. An explicit `cast browser target`
- * wins. Otherwise the human's Chrome is the default whenever the extension is
- * connected, and the clone when it is not. With `settle` a real default is
+ * wins. Otherwise the human's Chrome is the default once the extension is
+ * paired, including while disconnected. With `settle` a real default is
  * written down as the session's choice, so a session that started in the
  * human's Chrome stays there if the extension drops; a clone default is not
  * written, so a session waiting on the clone moves over the moment the
@@ -101,7 +96,7 @@ export function extensionReady(): boolean {
 export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
   const chosen = explicitTarget(sessionKey);
   if (chosen) return chosen;
-  const mode = extensionReady() ? "real" : "clone";
+  const mode = extensionPaired() || extensionReady() ? "real" : "clone";
   if (opts.settle && mode === "real") setStickyTarget(sessionKey, mode);
   return mode;
 }
@@ -225,15 +220,14 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 // Reaching the real browser
 // ---------------------------------------------------------------------------
 
-/** How long a host this process just started may wait for the extension to
- *  reconnect before it is declared absent. */
+/** How long to wait for the extension to reconnect before it is declared absent. */
 export const EXTENSION_RECONNECT_GRACE_MS = 8_000;
 
 /**
  * The bridge with its host up, and whether the extension is on it. A host
  * that is not running is started here, never reported: the extension can
  * only prove itself to a running host, and it reconnects to a new one on its
- * own within seconds (host.ts waitForExtension), so a host that just came up
+ * own within seconds (host.ts waitForExtension), so a disconnected extension
  * is given EXTENSION_RECONNECT_GRACE_MS to hear from it before the answer is
  * "not connected". Every question about the real Chrome's reachability goes
  * through here, whether it wants the answer (status) or a bridge to act on
@@ -244,7 +238,7 @@ export async function connectRealBridge(
 ): Promise<{ bridge: ProvenBridge & { started: boolean }; status: BridgeHostStatus }> {
   requireBridgeConfigured();
   const bridge = await ensureBridgeHost(start);
-  const status = await waitForExtension(bridge, bridge.started ? EXTENSION_RECONNECT_GRACE_MS : 0);
+  const status = await waitForExtension(bridge, EXTENSION_RECONNECT_GRACE_MS);
   return { bridge, status };
 }
 
@@ -258,8 +252,9 @@ export async function requireRealBridge(start?: BridgeHostStarter): Promise<Prov
   if (!status.extensionConnected) {
     throw new Error(
       "the cast bridge extension is not connected to this machine's bridge host.\n" +
-        "  In Chrome: check the extension is loaded (chrome://extensions), then run\n" +
-        "  `cast browser extension setup`; it hands the extension the current token and port.",
+        "  Open Chrome and check the extension is enabled (chrome://extensions).\n" +
+        "  If it still does not connect, run `cast browser extension setup` to pair it again.\n" +
+        "  To use the agent browser explicitly, add --clone or run `cast browser target clone`.",
     );
   }
   return bridge;

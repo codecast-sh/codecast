@@ -1,6 +1,8 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { extractInlineImages } from "./inlineImage.js";
-import { CLIENT_ERROR_BANNER_PREFIX, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
+import { codexTurnErrorMessage } from "./codexTurnError.js";
+import type { CodexTurnError } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -483,8 +485,11 @@ export function parseCodexLines(content: string): CodexMessage[] {
 
 interface CodexSessionEntry {
   timestamp: string;
+  isMeta?: boolean;
   type: "session_meta" | "response_item" | "event_msg" | "turn_context";
   payload: {
+    turn_id?: string;
+    error?: CodexTurnError | null;
     model?: string;
     id?: string;
     cwd?: string;
@@ -697,7 +702,11 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       state.model = currentModel;
       continue;
     }
-    if (entry.type !== "response_item") continue;
+    if (entry.type === "event_msg" && entry.payload.type === "task_complete" && entry.payload.error) {
+      if (pendingAssistantThinking) pushAssistantMessage({ timestamp: lastTimestamp });
+      messages.push(codexTurnErrorMessage(entry.payload.turn_id ?? entry.timestamp, entry.payload.error, new Date(entry.timestamp).getTime(), currentModel));
+    }
+    if (entry.type !== "response_item" || entry.isMeta) continue;
 
     const payload = entry.payload;
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
@@ -712,14 +721,7 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       const trimmedText = text.trim();
 
       if (role === "user") {
-        const isSystemContext =
-          trimmedText.startsWith("<environment_context>") ||
-          trimmedText.startsWith("<INSTRUCTIONS>") ||
-          trimmedText.startsWith("# AGENTS.md instructions") ||
-          trimmedText.startsWith("<permissions") ||
-          trimmedText.startsWith("<collaboration_mode>") ||
-          trimmedText.startsWith("<app-context>");
-        if ((trimmedText || images.length > 0) && !isSystemContext) {
+        if ((trimmedText || images.length > 0) && !isAgentContextMessage(trimmedText)) {
           messages.push({
             uuid,
             role: "user",

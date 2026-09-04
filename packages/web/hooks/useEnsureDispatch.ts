@@ -5,6 +5,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
+import { recordHibernationDispatchError } from "../lib/hibernation";
 
 // Sync-log ack opt-in latch: flips false (for the session) the first time the
 // server rejects the ack_positions arg — see the fallback in bindDispatch.
@@ -65,6 +66,9 @@ export function useEnsureDispatch() {
       // land it), so it's the user's only chance to hear their action didn't
       // take — record it for the platform's feedback surface to render.
       if (isPermanentDispatchError(error)) {
+        if (action === "hibernateSession" && Array.isArray(args) && typeof args[0] === "string") {
+          recordHibernationDispatchError(args[0], error);
+        }
         useInboxStore.setState({
           lastDispatchFailure: { action, args, message: String((error as Error)?.message ?? error), at: Date.now() },
         });

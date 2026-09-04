@@ -1,15 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { daemonWorkersEnabled } from "./workers/bridge.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
-
-// One poll over a real workspaceStorage: the directory listing and the stats
-// run through fs.promises (no report under a zero threshold), the sqlite
-// open is the one sync block left and reports under its own name, and a
-// workspace whose DB did not move is not opened again.
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -42,6 +38,8 @@ describe("CursorWatcher.pollWorkspaces", () => {
     const events: CursorSessionEvent[] = [];
     watcher.on("session", (e) => events.push(e));
     watcher.on("error", (e) => { throw e; });
+    const queries = spyOn(Database.prototype, "query");
+    cleanups.push(() => queries.mockRestore());
     const seen: string[] = [];
     setSlowSyncSink((m) => seen.push(m));
     setSlowSyncFsThresholdForTests(0);
@@ -49,13 +47,14 @@ describe("CursorWatcher.pollWorkspaces", () => {
     await watcher.pollWorkspaces(storage);
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ sessionId: "abc123", workspacePath: "/Users/me/proj one", dbPath, eventType: "add" });
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatch(/^\[SLOW-SYNC-FS\] cursorWatcher\.sqlite blocked the event loop \d+ms: /);
-    expect(seen[0]).toContain(dbPath);
+    expect(seen).toHaveLength(0);
+    const firstQueries = queries.mock.calls.length;
+    expect(firstQueries).toBe(daemonWorkersEnabled() ? 0 : 2);
 
     await watcher.pollWorkspaces(storage);
     expect(events).toHaveLength(1);
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(0);
+    expect(queries.mock.calls.length).toBe(firstQueries);
 
     // A new chat row moves the WAL or the main file; the next poll opens it.
     const db = new Database(dbPath);
@@ -66,7 +65,8 @@ describe("CursorWatcher.pollWorkspaces", () => {
     await watcher.pollWorkspaces(storage);
     expect(events).toHaveLength(2);
     expect(events[1].eventType).toBe("change");
-    expect(seen).toHaveLength(2);
+    expect(seen).toHaveLength(0);
+    expect(queries.mock.calls.length).toBe(firstQueries * 2);
   }, 15_000);
 
   test("a poll still running makes the next tick do nothing instead of a second pass", async () => {

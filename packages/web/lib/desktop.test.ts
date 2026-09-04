@@ -273,7 +273,9 @@ describe("desktop window role", () => {
       anyInCall: false,
       peopleWindow: false,
       callPanel: false,
+      voiceWindow: false,
       facesOverlay: false,
+      peopleWall: false,
     });
   });
 

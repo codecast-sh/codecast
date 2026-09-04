@@ -1082,3 +1082,15 @@ export function readInstalledPluginObservations(home: string): InstalledPluginOb
   }
   return out;
 }
+
+export async function readInstalledPluginObservationsAsync(home: string): Promise<InstalledPluginObservation[]> {
+  const { scanWorkerHost } = await import('../workers/bridge.js');
+  if (scanWorkerHost()) {
+    const { collectScan, scanCanFallback } = await import('../workers/scanClient.js');
+    try {
+      const rows = await collectScan({ name: 'manifests', home });
+      return rows.map(row => { if (row.type !== 'manifest') throw new Error('invalid manifest observation'); return row.value as InstalledPluginObservation; });
+    } catch (error) { if (!scanCanFallback(error)) throw error; }
+  }
+  return readInstalledPluginObservations(home);
+}

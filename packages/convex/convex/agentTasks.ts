@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { normalizeRepository } from "./lib/gitRefs";
 import { mutation, query, internalMutation, internalAction, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
@@ -12,6 +13,8 @@ import { isTeamMember } from "./privacy";
 import { nextShortId } from "./counters";
 import { canAccessConversation } from "./lib/access";
 import { armedTriggerKindFor } from "./dormancy";
+import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
+import { enqueuePendingMessage } from "./pendingMessages";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -535,6 +538,55 @@ export const resolveTask = query({
   },
 });
 
+async function cloudTriggerConversation(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (!task.originating_conversation_id || configuredCloudWakeHosts().length === 0) return null;
+  const conversation = await ctx.db.get(task.originating_conversation_id);
+  if (!conversation || task.user_id !== conversation.user_id) return null;
+  return await getCloudWakeHostForConversation(ctx, conversation) ? conversation : null;
+}
+
+export const dispatchCloudTriggers = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ scanned: number; dispatched: number; done: boolean }> => {
+    if (configuredCloudWakeHosts().length === 0) return { scanned: 0, dispatched: 0, done: true };
+    const now = Date.now();
+    const page = await ctx.db
+      .query("agent_tasks")
+      .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled").gt("run_at", 0).lte("run_at", now))
+      .order("asc")
+      .paginate({ cursor: args.cursor ?? null, numItems: 50 });
+    let dispatched = 0;
+    for (const task of page.page) {
+      const conversation = await cloudTriggerConversation(ctx, task);
+      if (!conversation) continue;
+      const safeTitle = (task.title || "").replace(/"/g, "&quot;");
+      const filingNote = !conversation.inbox_killed_at && conversation.inbox_stashed_at
+        ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
+        : "";
+      const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
+      const updates = completedTaskRunFields(task, now, { conversation_id: conversation._id });
+      const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
+        content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`,
+        origin: "scheduler",
+        client_id: clientId,
+      });
+      await patchTask(ctx, task, updates);
+      dispatched++;
+      console.info("cloud_trigger_dispatched", {
+        task_id: task._id,
+        conversation_id: conversation._id,
+        pending_message_id: pendingMessageId,
+        client_id: clientId,
+        run_count: updates.run_count,
+      });
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.agentTasks.dispatchCloudTriggers, { cursor: page.continueCursor });
+    }
+    return { scanned: page.page.length, dispatched, done: page.isDone };
+  },
+});
+
 export const getDueTasks = query({
   args: {
     api_token: v.string(),
@@ -550,9 +602,13 @@ export const getDueTasks = query({
       .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled"))
       .collect();
 
-    return tasks
-      .filter((t) => t.user_id === auth.userId && t.run_at !== undefined && t.run_at <= now)
-      .slice(0, args.limit || 5);
+    const dueTasks = [];
+    for (const task of tasks) {
+      if (task.user_id !== auth.userId || task.run_at === undefined || !(task.run_at <= now)) continue;
+      if (await cloudTriggerConversation(ctx, task)) continue;
+      dueTasks.push(task);
+    }
+    return dueTasks.slice(0, args.limit || 5);
   },
 });
 
@@ -569,6 +625,7 @@ export const claimTask = mutation({
     const task = await ctx.db.get(args.task_id);
     if (!task || task.user_id !== auth.userId) return null;
     if (task.status !== "scheduled") return null;
+    if (await cloudTriggerConversation(ctx, task)) return null;
 
     const now = Date.now();
     // Through patchTask (scheduled → running are both armed statuses, so the
@@ -604,6 +661,45 @@ export const renewLease = mutation({
     return true;
   },
 });
+
+function completedTaskRunFields(
+  task: Doc<"agent_tasks">,
+  now: number,
+  args: {
+    summary?: string;
+    conversation_id?: string;
+    run_session_uuid?: string;
+    needs_attention?: boolean;
+  },
+  isLateSummary = false,
+): Record<string, any> {
+  const updates: Record<string, any> = {
+    last_run_at: now,
+    last_run_summary: args.summary,
+    last_run_failed: false,
+    retry_count: 0,
+    last_run_conversation_id: args.conversation_id
+      ? args.conversation_id as Id<"conversations">
+      : undefined,
+    last_run_session_uuid: args.run_session_uuid || undefined,
+    last_run_needs_attention: !!args.needs_attention,
+    lease_holder: undefined,
+    lease_expires_at: undefined,
+  };
+  if (!isLateSummary) {
+    updates.run_count = task.run_count + 1;
+    if (task.schedule_type === "recurring" && task.interval_ms) {
+      updates.status = "scheduled";
+      updates.run_at = now + task.interval_ms;
+    } else if (task.schedule_type === "event") {
+      updates.status = "scheduled";
+      updates.run_at = undefined;
+    } else {
+      updates.status = "completed";
+    }
+  }
+  return updates;
+}
 
 export const completeTaskRun = mutation({
   args: {
@@ -647,23 +743,7 @@ export const completeTaskRun = mutation({
     }
 
     const now = Date.now();
-    const updates: Record<string, any> = {
-      last_run_at: now,
-      last_run_summary: args.summary,
-      last_run_failed: false,
-      // A good run ends the retry streak. retry_count is the CURRENT streak, not
-      // a lifetime tally: failRun counts up to max_retries, so leaving it set
-      // after a recovery both shortens the next streak's budget and leaves the
-      // trigger reading as "retrying" forever.
-      retry_count: 0,
-      last_run_conversation_id: args.conversation_id
-        ? args.conversation_id as Id<"conversations">
-        : undefined,
-      last_run_session_uuid: args.run_session_uuid || undefined,
-      last_run_needs_attention: !!args.needs_attention,
-      lease_holder: undefined,
-      lease_expires_at: undefined,
-    };
+    const updates = completedTaskRunFields(task, now, args, isLateSummary);
 
     // Keep the run conversation attributable to its schedule even after a
     // later run overwrites last_run_*. This is the backfill for the daemon's
@@ -735,21 +815,6 @@ export const completeTaskRun = mutation({
           inbox_stashed_at: undefined,
           inbox_dismissed_at: undefined,
         });
-      }
-    }
-
-    if (isLateSummary) {
-      // Already counted on initial completion; don't double-count or re-arm.
-    } else {
-      updates.run_count = task.run_count + 1;
-      if (task.schedule_type === "recurring" && task.interval_ms) {
-        updates.status = "scheduled";
-        updates.run_at = now + task.interval_ms;
-      } else if (task.schedule_type === "event") {
-        updates.status = "scheduled";
-        updates.run_at = undefined;
-      } else {
-        updates.status = "completed";
       }
     }
 
@@ -1651,7 +1716,8 @@ export const matchTaskTriggers = internalMutation({
       if (!task.event_filter) continue;
       if (task.event_filter.event_type !== args.event_type) continue;
       if (task.event_filter.action && task.event_filter.action !== args.action) continue;
-      if (task.event_filter.repository && task.event_filter.repository !== args.repository) continue;
+      // Both sides canonical: the filter is what a person typed, the event is what GitHub sent.
+      if (task.event_filter.repository && normalizeRepository(task.event_filter.repository) !== normalizeRepository(args.repository)) continue;
       if (task.event_filter.pr_number != null && task.event_filter.pr_number !== args.pr_number) continue;
       // Last, because it is the only check that reads the database.
       if (!(await ownerIsInTeam(task.user_id))) continue;

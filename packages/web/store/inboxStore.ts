@@ -513,6 +513,7 @@ export type InboxSession = {
   // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
   // decay flip locally without a server re-execution.
   agent_status_updated_at?: number | null;
+  hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
   auq_open?: boolean | null;
@@ -2343,6 +2344,7 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 export function sessionStructuralSig(s: InboxSession): string {
   return [
     s._id,
+    s.agent_status === "hibernated" ? 1 : 0,
     sessionSortRank(s).join(","),
     isSessionHidden(s) ? 1 : 0,
     isSessionDismissed(s) ? 1 : 0,
@@ -2544,6 +2546,7 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     settle_verdict_at: s.settle_verdict ? (s.updated_at || 1) : null,
     thread_state_status: s.thread_state_status ?? null,
     pending_api_error: s.pending_api_error === true,
+    session_error: s.session_error ?? null,
     last_user_message: s.last_user_message ?? null,
     agent_status: live.agent_status,
     is_idle: live.is_idle,
@@ -4411,6 +4414,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
+  hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
@@ -8039,6 +8043,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // optional `optimistic` patch updates sessions[convId] synchronously for an
   // instant UI; asyncAction returns the server result (e.g. fork's new id), so
   // callers that await the old mutation are a drop-in swap.
+  hibernateSession: asyncAction(function (this: Draft, requestId: string, convId: string, _sessionId: string, _ownerDeviceId: string) {
+    for (const [id, row] of Object.entries(this.sessionCommands)) {
+      if (row.conversation_id === convId || (row.executed_at && Date.now() - row.executed_at > 86400_000)) delete this.sessionCommands[id];
+    }
+    this.sessionCommands[requestId] = {
+      _id: requestId, conversation_id: convId, command: "hibernate_session",
+      requested_at: Date.now(), executed_at: null, result: null, error: null,
+    };
+  }),
+
   convCommand: asyncAction(function (this: Draft, convId: string, _command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),

@@ -6,6 +6,7 @@ import {
   formatTimeAgo,
   sampleTicks,
   activeTickIndex,
+  isStickyEligible,
   pickStickyFallback,
   pickStickyFallbackFromLoaded,
   resolveStickyPrompt,
@@ -281,6 +282,17 @@ describe("pickStickyFallbackFromLoaded", () => {
   test("empty loaded window falls back to the latest prompt overall", () => {
     expect(pickStickyFallbackFromLoaded(all, [])?.id).toBe("p3");
     expect(pickStickyFallbackFromLoaded(undefined, [])).toBeNull();
+  });
+
+  test("interruption notices never replace the last human prompt", () => {
+    const notices = [
+      "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background.",
+      "<turn_aborted>user aborted</turn_aborted>",
+      "<turn_aborted>user aborted",
+    ].map((content, index) => user(`notice-${index}`, content, 400 + index));
+    for (const notice of notices) expect(isStickyEligible(notice.content)).toBe(false);
+    expect(pickStickyFallbackFromLoaded([...all, ...notices], [{ _id: "reply", timestamp: 500 }])?.id).toBe("p3");
+    expect(pickStickyFallbackFromLoaded(notices, [])).toBeNull();
   });
 });
 
