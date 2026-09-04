@@ -110,7 +110,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "agent_status", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
       "awaiting_input", "cloud_placement", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
-      "has_pending", "icon", "icon_color", "idle_summary", "image_preview_url",
+      "has_pending", "hibernated_at", "icon", "icon_color", "idle_summary", "image_preview_url",
       "implementation_session", "inbox_dismissed_at", "inbox_dormant_at", "inbox_killed_at",
       "inbox_pinned_at", "inbox_stash_hidden", "inbox_stashed_at", "is_anchor", "is_connected",
       "is_deferred", "is_dormant", "is_favorite", "is_idle", "is_pinned", "is_private",

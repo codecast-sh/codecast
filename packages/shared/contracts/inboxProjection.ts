@@ -62,7 +62,7 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // selection and fold; `as_of` removed from the envelope.
 // v3: an agent-team teammate rides its present lead's bucket and fold
 // (rideLeadPlacements), so the team files as one group everywhere.
-export const INBOX_PROJECTION_VERSION = 4 as const;
+export const INBOX_PROJECTION_VERSION = 5 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -116,6 +116,7 @@ export interface WorkStateInput {
   declaredStatus?: string | null;
   /** conversations.pending_api_error — the latest turn is an unresolved auth / API-error banner; the CLI is parked on the user (or a limit reset). */
   pendingApiError?: boolean;
+  sessionError?: boolean;
 }
 
 // A single, coarse "who acts next on this session" label for CLI discovery,
@@ -201,7 +202,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // An unresolved API-error banner ("Please run /login", a usage limit) parks
   // the CLI on the user or on a reset: the agent cannot proceed, whatever its
   // daemon status claims. Rule the web inbox had and the server lacked.
-  if (input.pendingApiError && hasMsgs) return "needs_input";
+  if ((input.pendingApiError || (agentStatus === "hibernated" && input.sessionError)) && hasMsgs) return "needs_input";
 
   // Blocked on the user right now (open AskUserQuestion poll, or a tool-use
   // awaiting approve/deny) → needs input. A poll/permission on an empty session
@@ -212,6 +213,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Actively producing, or carrying deliverable queued work on a live daemon.
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
+  if (agentStatus === "hibernated" && !hasPending) return "dormant";
 
   // Dead or unresponsive with output → a human needs to read/restart it. A
   // dead daemon cannot deliver a wake, so no rest verdict survives this arm —
@@ -747,6 +749,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   settle_verdict_at?: number | null;
   thread_state_status?: string | null;
   pending_api_error?: boolean | null;
+  session_error?: string | null;
   /** The last USER message (conversations.last_message_preview / last_user_message). */
   last_message_preview?: string | null;
   last_user_message?: string | null;
@@ -757,6 +760,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   awaiting_input?: boolean | null;
   last_turn_allows_park?: boolean | null;
   agent_status_updated_at?: number | null;
+  hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
   auq_open?: boolean | null;
@@ -820,6 +824,7 @@ export function isSessionIdle(input: SessionIdleInput): boolean {
   if (agentStatus) {
     if (ACTIVE_AGENT_STATUSES.has(agentStatus)) return false;
     if (hasPending) return false; // queued work — agent isn't waiting on the user
+    if (agentStatus === "hibernated") return true;
     const settled =
       agentStatusUpdatedAt !== undefined &&
       now - agentStatusUpdatedAt >= AGENT_IDLE_GRACE_MS;
@@ -874,7 +879,7 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
   const daemonAlive = agentStatus !== "stopped" && row.daemon_alive_until != null && t < row.daemon_alive_until;
   const recentlyUpdated = t - row.updated_at < AGENT_IDLE_GRACE_MS;
   const lastRoleIsUser = !!row.last_role_is_user;
-  const isUnresponsive = (row.status ?? "active") === "active" && !daemonAlive && (
+  const isUnresponsive = (agentStatus !== "hibernated" || hasPending) && (row.status ?? "active") === "active" && !daemonAlive && (
     (lastRoleIsUser && !recentlyUpdated) || (hasPending && !recentlyUpdated)
   );
   let isIdle = isSessionIdle({
@@ -891,7 +896,7 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
   // older channel carries only the epoch's awaiting_input, which is the same
   // answer already gated on not-idle.
   let awaitingInput = false;
-  if (!isIdle && msgs > 0 && (row.auq_open ?? row.awaiting_input ?? false)) {
+  if ((!isIdle || agentStatus === "hibernated") && msgs > 0 && (row.auq_open ?? row.awaiting_input ?? false)) {
     awaitingInput = true;
     isIdle = true;
   }
@@ -962,6 +967,7 @@ export function placeProjectableRow(
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,
     pendingApiError: row.pending_api_error === true,
+    sessionError: !!row.session_error,
     dismissed: !!row.inbox_dismissed_at,
     stashed: !!row.inbox_stashed_at,
     pinned: !!row.inbox_pinned_at,
@@ -1043,6 +1049,7 @@ export const INBOX_FACT_FIELDS = [
   // the +45s settle, the heartbeat lapse and the trust decay flip on the
   // replica's own clock instead of waiting for a server re-execution.
   "agent_status_updated_at",
+  "hibernated_at",
   "last_heartbeat",
   "last_role_is_user",
   "auq_open",

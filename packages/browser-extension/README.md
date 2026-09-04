@@ -1,9 +1,9 @@
 # Codecast browser bridge
 
 Drive tabs in your **real** Chrome from `cast browser`: your logins, your
-session, no profile clone. The cloned browser stays the default for
-unattended work. The bridge is for work you want to watch in your own
-browser, and for sites that fight a fresh profile.
+session, no profile clone. Once the extension is paired, your Chrome is the
+default. The agent browser is used before pairing or when explicitly chosen
+with `--clone` or `cast browser target clone`.
 
 ```
 cast CLI ──ws──▶ bridge host (127.0.0.1, token proven both ways) ◀──ws── this extension ──chrome.debugger──▶ your tabs
@@ -19,17 +19,18 @@ work the same way against the real Chrome. Only the transport differs.
    right), click **Load unpacked**, and select this directory
    (`packages/browser-extension`).
 2. In a terminal: `cast browser extension setup`. It starts the bridge host
-   on this machine and, on macOS, opens the extension's options page in
-   Chrome with the token and port already filled in. The page saves them,
-   clears them from the address bar, and connects. The command waits up to
-   ten seconds for that connection and prints one line when it arrives:
+   on this machine and opens the extension's options page in your Chrome with
+   the token and port already filled in. The first time, the page shows the
+   port and asks for one click on **Pair**; after that it saves the token,
+   clears it from the address bar, and connects. A token the extension already
+   holds reconnects without the click. The command waits up to thirty seconds
+   for the connection and prints one line when it arrives:
    `extension connected`. Only when it does not arrive does the command print
    the install steps.
 3. Check any time with `cast browser extension status`: two green lines, one
    for the host and one for the extension.
 
-If step 2 did not open the page (another OS, Chrome was not found, or macOS
-asked whether the terminal may control Chrome and you said no), run
+If step 2 did not open the page (no Chrome binary at a known path), run
 `cast browser extension setup --show-token`. It prints the pairing URL to
 open by hand, plus the token and port to enter under **Details, Extension
 options** followed by **Save & connect**. Without `--show-token` the command
@@ -70,7 +71,6 @@ manifest and `BRIDGE_EXTENSION_ID`, and delete the private key again.
 ## Use
 
 ```bash
-cast browser target real                       # verbs act on your real Chrome for this session
 cast browser open https://example.com          # opens the session's own tab in your Chrome
 cast browser snapshot -i                       # every verb works as it does against the clone
 cast browser tabs                              # this session's tabs; the rest are yours
@@ -79,11 +79,13 @@ cast browser snapshot --clone                  # --clone overrides a sticky real
 cast browser target                            # prints the current choice
 ```
 
-Once the extension is paired and connected, your Chrome is the default: a
-session's first verb settles on it and stays there, so a session never
-changes browsers midway. `target clone` opts a session out; `target real`
-opts one in when the extension is off. `cast browser target` says which it
-is and why. Real mode is a second engine session, keyed `<session>-real`, on
+Once the extension is paired, your Chrome stays the default even when the
+bridge host or extension disconnects. A command starts the bridge host if
+needed and waits up to eight seconds for the extension to reconnect. If it
+cannot connect, it reports the problem and how to reconnect. `--clone` uses
+the agent browser for one command; `target clone` opts the session out and
+`target real` switches it back. `cast browser target` says which browser is
+selected and why. Real mode is a second engine session, keyed `<session>-real`, on
 the bridge port, so a session can hold a tab in each browser without the two
 colliding. A session that meets a sign-in wall in the agent browser is told
 that your Chrome already holds the login and how to get there.
@@ -166,8 +168,10 @@ Rules the CLI enforces in real mode:
   skips the check.
 - **The token stays off the process table and out of transcripts.** The
   engine gets the bridge URL through `AGENT_BROWSER_CDP` in its environment,
-  not `--cdp` on its command line; the pairing URL goes to `osascript` on
-  stdin; `setup` and `status` print the token only with `--show-token`; and
+  not `--cdp` on its command line; the pairing URL sits in a 0600 file under
+  `~/.codecast/browser` that a `file:` page forwards from, so Chrome's command
+  line carries a path; `setup` and `status` print the token only with
+  `--show-token`; and
   the transcript redactor masks the two shapes it could be printed in
   (`token  <hex>` and `/devtools/browser/<hex>`).
 - **Who can reach the port.** Only local processes. The host binds loopback
@@ -215,7 +219,8 @@ SMOKE_KEEP=1 bun packages/browser-extension/smoke.mjs                          #
 It launches a **separate** Chrome with a scratch profile (your running
 browser is never touched), loads this extension unpacked, checks that Chrome
 gave it the ID the CLI expects, pairs it the way `setup` does (opens the
-pairing URL over a temporary CDP port and asserts the fragment was read and
+forwarding page over a temporary CDP port, asserts it landed on the options
+page, that a new token waited for the Pair click, and that the fragment was read and
 cleared), and prints PASS or FAIL per check. First the handshake against the
 real extension: a squatter that answers like a host but cannot prove the
 token gets no op executed, and the real host turns away an extension paired
@@ -230,7 +235,7 @@ with a wrong token. Then four parts:
    background create into a named group, the group title animating while a
    command runs, the border around the driven page, and a screenshot that
    does not show it.
-4. The product path: `cast browser target real`, then the plain verbs (open,
+4. The product path: the paired-extension default, then the plain verbs (open,
    snapshot, click, shot, tabs, stop) on the engine driver, with the CLI's
    state isolated from the machine's. It asserts the tab landed in one group
    named for the session, a second tab from `open --new-tab` joins the same
@@ -249,7 +254,16 @@ playwright caches, or install one with
   forbids it).
 - One extension connection per bridge host: install the extension in one
   Chrome profile. A second connection replaces the first.
-- The clone remains the default target. The bridge never activates unless
-  you pass `--real` or set `cast browser target real`.
-- `setup` opens Chrome by itself on macOS only. Elsewhere, open the printed
-  URL by hand.
+- A paired extension that is disconnected remains the default target;
+  choose `--clone` or `cast browser target clone` to use the agent browser.
+- `setup` opens the pairing page by starting the Chrome binary on the page's
+  file path. Chrome's process singleton hands that to the Chrome that owns the
+  default profile, or starts it. This is the only way to pick your Chrome over
+  the agent browser: both are the same app bundle, so `open`, AppleScript and
+  JXA's `Application(pid)` all address whichever instance Launch Services
+  answers for, and with the agent browser running that was the agent browser.
+- The options page is web accessible to `file:` pages for that hop. Any local
+  HTML file could therefore open it with a token of its own, which is why a
+  token the extension does not already hold is offered and waits for a click.
+- After pulling a manifest change, reload the extension at
+  `chrome://extensions`; an unpacked extension does not reload itself.

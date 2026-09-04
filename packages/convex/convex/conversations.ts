@@ -467,8 +467,8 @@ async function firstDivergentPreview(
 ): Promise<string | undefined> {
   const rows = await ctx.db
     .query("messages")
-    .withIndex("by_conversation_timestamp", (q: any) =>
-      q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "user").gt("timestamp", afterTs)
     )
     .order("asc")
     .take(40);
@@ -498,12 +498,16 @@ async function computeOriginDivergentPreviews(
     originLineId: Id<"conversations"> | undefined,
   ) => {
     if (!originLineId) return;
+    const seen = new Set<string>();
     for (const fork of forks) {
       const uuid = fork.parent_message_uuid;
-      if (!uuid || out[uuid]) continue;
+      if (!uuid || seen.has(uuid) || out[uuid]) continue;
+      seen.add(uuid);
       const fp = await ctx.db
         .query("messages")
-        .withIndex("by_message_uuid", (q: any) => q.eq("message_uuid", uuid))
+        .withIndex("by_conversation_uuid", (q: any) =>
+          q.eq("conversation_id", originLineId).eq("message_uuid", uuid)
+        )
         .first();
       if (!fp) continue;
       const preview = await firstDivergentPreview(ctx, originLineId, fp.timestamp);
@@ -717,13 +721,12 @@ async function findChildConversations(
     .take(CHILDREN_LIMIT);
 
   const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
-  // Each preview costs a separate messages query. Convex budgets ~4k system
-  // operations per function; a session with thousands of spawned children blew
-  // straight through it ("too many system operations" timeouts). Cap the N+1 —
-  // allChildren is newest-first, so the newest children keep their previews.
-  const PREVIEW_LIMIT = 300;
+  const PREVIEW_LIMIT = 24;
   const firstMessagePreviews = new Map<string, string>();
-  for (const child of subagentChildren.slice(0, PREVIEW_LIMIT)) {
+  const previewChildren = subagentChildren
+    .filter((child: any) => !child.parent_message_uuid)
+    .slice(0, PREVIEW_LIMIT);
+  await Promise.all(previewChildren.map(async (child: any) => {
     const firstMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
@@ -733,7 +736,7 @@ async function findChildConversations(
       const cleaned = content.replace(/<[^>]+>/g, "").trim();
       firstMessagePreviews.set(child._id as string, cleaned.slice(0, 150));
     }
-  }
+  }));
 
   const children = allChildren
     .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
@@ -749,10 +752,8 @@ async function findChildConversations(
       .filter((c: any) => c.parent_message_uuid)
       .map((c: any) => [c.parent_message_uuid as string, c._id as string])
   );
-  for (const msg of messages) {
-    if (msg.message_uuid && childByParentUuid.has(msg.message_uuid)) {
-      map[msg.message_uuid] = childByParentUuid.get(msg.message_uuid)!;
-    }
+  for (const [uuid, childId] of childByParentUuid) {
+    map[uuid] = childId;
   }
 
   // Build agent name -> child conversation ID map from stored subagent_description
@@ -793,15 +794,14 @@ async function findChildConversations(
     }
 
     const matchedChildIds = new Set([...Object.values(map), ...Object.values(agentNameMap)]);
-    if (matchedChildIds.size < subagentChildren.length) {
-      // Bounded newest-first scan, NOT .collect(): collecting a 7k-message
-      // transcript here was the other half of the operation-budget timeout.
-      // Recent messages hold the spawns most likely to still need matching.
+    if (unmappedChildren.some((child: any) => !matchedChildIds.has(child._id))) {
       const allParentMessages = await ctx.db
         .query("messages")
-        .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId))
+        .withIndex("by_conversation_role_timestamp", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("role", "assistant")
+        )
         .order("desc")
-        .take(2000);
+        .take(200);
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
@@ -6699,7 +6699,7 @@ export const feedForCLI = query({
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
         .first();
       if (managed) managedMap.set(conv._id.toString(), managed);
-      if (managed && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
+      if (managed && managed.agent_status !== "hibernated" && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
         liveStatusMap.set(conv._id.toString(), managed.agent_status);
       }
     }
@@ -6753,7 +6753,7 @@ export const feedForCLI = query({
         now,
       });
       let awaitingInput = false;
-      if (!activity.isIdle && (conv.message_count || 0) > 0 && isLive) {
+      if (((!activity.isIdle && isLive) || agentStatus === "hibernated") && (conv.message_count || 0) > 0) {
         const lastMsg = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
@@ -6777,6 +6777,8 @@ export const feedForCLI = query({
         armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
         declaredStatus: conv.thread_state_status ?? null,
+        pendingApiError: conv.pending_api_error === true,
+        sessionError: !!conv.session_error,
       });
       workStateMap.set(conv._id.toString(), ws);
       return ws;
@@ -6789,6 +6791,8 @@ export const feedForCLI = query({
     const stateFilter = normalizeWorkStateFilter(args.state);
     if (stateFilter === "pinned") {
       filteredConversations = filteredConversations.filter(c => !!c.inbox_pinned_at);
+    } else if (stateFilter === "hibernated") {
+      filteredConversations = filteredConversations.filter(c => managedMap.get(c._id.toString())?.agent_status === "hibernated");
     } else if (stateFilter === "live") {
       filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
     } else if (stateFilter) {
@@ -7765,6 +7769,7 @@ const INBOX_PINNED_CHILDREN_SCAN = 20;
 type InboxSessionMaps = {
   agentStatusMap: Map<string, AgentStatus>;
   agentStatusUpdatedAtMap: Map<string, number>;
+  hibernatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
   agentStartedAtMap: Map<string, number>;
@@ -7833,6 +7838,7 @@ async function buildUserSessionMaps(
 
   const agentStatusMap = new Map<string, any>();
   const agentStatusUpdatedAtMap = new Map<string, number>();
+  const hibernatedAtMap = new Map<string, number>();
   const tmuxSessionMap = new Map<string, string>();
   const permissionModeMap = new Map<string, string>();
   const agentStartedAtMap = new Map<string, number>();
@@ -7849,6 +7855,7 @@ async function buildUserSessionMaps(
     if (s.open_tasks !== undefined && s.open_tasks_at !== undefined) openTasksMap.set(cid, { tasks: s.open_tasks, at: s.open_tasks_at });
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
+    if (s.hibernated_at !== undefined) hibernatedAtMap.set(cid, s.hibernated_at);
     // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
     // (consumers pass liveConvIds membership as heartbeatAlive) so it can weigh
     // the conversation's own activity — a lapsed heartbeat on a session that is
@@ -7858,7 +7865,7 @@ async function buildUserSessionMaps(
 
   const userDaemonAlive = userDaemonAliveAt({ latestHeartbeat }, now);
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
+  return { agentStatusMap, agentStatusUpdatedAtMap, hibernatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -7868,6 +7875,7 @@ async function buildUserSessionMaps(
 const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   agentStatusMap: new Map(),
   agentStatusUpdatedAtMap: new Map(),
+  hibernatedAtMap: new Map(),
   tmuxSessionMap: new Map(),
   permissionModeMap: new Map(),
   agentStartedAtMap: new Map(),
@@ -7903,6 +7911,7 @@ async function mergeForeignConversationLiveness(
     if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
     if (managed.agent_started_at !== undefined) maps.agentStartedAtMap.set(cid, managed.agent_started_at);
     if (managed.open_tasks !== undefined && managed.open_tasks_at !== undefined) maps.openTasksMap.set(cid, { tasks: managed.open_tasks, at: managed.open_tasks_at });
+    if (managed.hibernated_at !== undefined) maps.hibernatedAtMap.set(cid, managed.hibernated_at);
     if (!managed.agent_status) continue;
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
@@ -8055,7 +8064,7 @@ async function enrichInboxSessionRow(
   // would miss exactly the blocked sessions we care about. The order("desc")
   // read below is authoritative.
   let awaitingInput = false;
-  if (!skip?.auq && !isIdle && conv.message_count > 0) {
+  if (!skip?.auq && (!isIdle || agentStatus === "hibernated") && conv.message_count > 0) {
     const lastMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q: any) =>
@@ -8197,6 +8206,7 @@ async function enrichInboxSessionRow(
     // The is_idle inputs, on the enriched row too (the CLI and liveness-on
     // clients), so every channel that carries is_idle carries what derived it.
     agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(conv._id.toString()) ?? null,
+    hibernated_at: maps.hibernatedAtMap.get(conv._id.toString()) ?? null,
     last_heartbeat: maps.lastHeartbeatMap.get(conv._id.toString()) ?? null,
     last_role_is_user: activity.lastRoleIsUser,
     auq_open: awaitingInput,
@@ -8990,6 +9000,7 @@ type LivenessFields = {
   // The is_idle inputs (ct-47609), so a replica re-derives idleness,
   // responsiveness and the status trust at its own clock (shared deriveLiveAt).
   agent_status_updated_at: number | null;
+  hibernated_at?: number | null;
   last_heartbeat: number | null;
   last_role_is_user: boolean;
   auq_open: boolean;
@@ -9381,6 +9392,7 @@ function deriveLivenessAt(
     // un-backfilled rows — exactly the input the park rule needs (C1).
     last_turn_allows_park: rowLastTurnAllowsPark({ last_message_preview: reads.lastUserMessage }),
     agent_status_updated_at: facts.agent_status_updated_at,
+    hibernated_at: maps.hibernatedAtMap.get(cid) ?? null,
     last_heartbeat: facts.last_heartbeat,
     last_role_is_user: facts.last_role_is_user,
     auq_open: facts.auq_open,
@@ -9410,7 +9422,7 @@ async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps
   }
   const reads: LivenessRowReads = { lastMsgRole, lastUserMessage, auqOpen: false };
   const base = deriveLivenessAt(conv, maps, reads, null, now);
-  if (!base.is_idle && conv.message_count > 0) {
+  if ((!base.is_idle || base.agent_status === "hibernated") && conv.message_count > 0) {
     if (lastMsg === undefined) lastMsg = await newestMessage(ctx, conv._id);
     reads.auqOpen = isOpenAskUserQuestion(lastMsg);
   }
@@ -9645,6 +9657,7 @@ export function tallyInboxRows(
     message_count: number;
     agent_type?: string;
     agent_status?: string;
+    hibernated_at?: number | null;
     work_state: WorkState;
     // The projection placement (shared placeInboxRow) and the fold flag, next
     // to the verdict the CLI has always tallied.
@@ -9705,7 +9718,7 @@ export function tallyInboxRows(
     const work_state: WorkState = s.work_state;
     const bucket: InboxBucket = s.bucket;
     if (!work_state || !bucket) throw new Error(`tallyInboxRows: row ${s._id} is not stamped with a projection`);
-    const is_live = !!s.is_connected;
+    const is_live = !!s.is_connected && s.agent_status !== "hibernated";
 
     counts.total++;
     counts[work_state]++;
@@ -9716,7 +9729,8 @@ export function tallyInboxRows(
 
     if (opts.stateFilter === "pinned" && !s.is_pinned) continue;
     if (opts.stateFilter === "live" && !is_live) continue;
-    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && work_state !== opts.stateFilter) continue;
+    if (opts.stateFilter === "hibernated" && s.agent_status !== "hibernated") continue;
+    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && opts.stateFilter !== "hibernated" && work_state !== opts.stateFilter) continue;
 
     rows.push({
       id: s._id,
@@ -9728,6 +9742,7 @@ export function tallyInboxRows(
       message_count: s.message_count || 0,
       agent_type: s.agent_type,
       agent_status: s.agent_status,
+      hibernated_at: s.hibernated_at ?? null,
       work_state,
       bucket,
       below_fold: !!s.below_fold,
@@ -10521,7 +10536,7 @@ export const cliResumeSession = mutation({
     // A pane nobody can see is the same problem here as on restart: the card
     // comes back to the inbox before its agent does.
     const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
-    const { deduplicated } = await enqueueResumeSession(ctx, conv);
+    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conv);
     // Re-queue stranded messages so the resume actually delivers them — the
     // same reason users.resumeSession does it.
     await resetConversationPendingMessages(ctx, conv._id);
@@ -10529,6 +10544,7 @@ export const cliResumeSession = mutation({
     return {
       ...sessionCommandResult(conv),
       deduplicated,
+      command_id,
       was_hidden: wasHidden,
       rearmed_schedules: rearmed,
     };
@@ -10552,11 +10568,12 @@ export const cliHibernateSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await resolveCommandableSession(ctx, userId, args.session, "hibernate");
-    const { deduplicated } = await enqueueHibernateSession(ctx, conv);
+    const { deduplicated, command_id } = await enqueueHibernateSession(ctx, conv);
 
     return {
       ...sessionCommandResult(conv),
       deduplicated,
+      command_id,
     };
   },
 });

@@ -4,6 +4,7 @@
 // the iOS session screen, so it must stay free of DOM and React imports. The
 // session title lookup is injected because each platform has its own store.
 
+import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
 import { isCommandMessage, cleanContent, isSystemMessage } from "./conversationProcessor";
 import {
   parseMachineDeliveredMessage,
@@ -122,6 +123,7 @@ export function buildNavigatorRows(
   const rows: NavigatorRow[] = [];
   for (const m of userMessages) {
     const content = m.content ?? "";
+    if (isTurnInterruptionNotice(content)) continue;
     const commentCount = commentCounts?.get(m._id) || 0;
     const machine = parseMachineDeliveredMessage(content);
     if (machine) {

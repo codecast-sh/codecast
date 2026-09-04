@@ -46,7 +46,7 @@ import { popOutPeople } from "./people/popOutPeople";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
-import { paletteActions, paletteObjectPath, paletteDigitIndex, type PaletteTargetType } from "../lib/paletteActions";
+import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, type PaletteTargetType } from "../lib/paletteActions";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { captureException } from "@sentry/react";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -2142,6 +2142,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const paletteContent = (
     <CommandPrimitive
       ref={paletteRef}
+      onKeyDown={(e) => {
+        if (picking) return;
+        const action = paletteActionForKey(e.nativeEvent, actions);
+        if (action) { e.preventDefault(); e.stopPropagation(); handleRootAction(action.key); }
+      }}
       className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
@@ -2173,12 +2178,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             const rows = Array.from(paletteRef.current?.querySelectorAll<HTMLElement>('[cmdk-item]:not([aria-disabled="true"])') ?? []).filter(row => row.offsetParent !== null);
             const index = paletteDigitIndex(e.nativeEvent, rows.length);
             if (index >= 0) { e.preventDefault(); rows[index].click(); return; }
-            if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && !picking) {
-              const key = e.code.replace("Key", "").toLowerCase();
-              const action = actions.find(action => action.hotkey === key);
-              if (action) { e.preventDefault(); handleRootAction(action.key); return; }
-            }
-            if ((e.key === "Backspace" || e.key === "ArrowLeft") && !query && drilled) { e.preventDefault(); setQuery(drilled.query); setDrilled(null); return; }
+            if ((e.key === "Backspace" || e.key === "ArrowLeft") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !query && drilled) { e.preventDefault(); setQuery(drilled.query); setDrilled(null); return; }
             if ((e.key === "ArrowRight" || e.key === "Tab") && !e.shiftKey && !picking) {
               const selected = rows.find(row => row.getAttribute("aria-selected") === "true");
               const type = selected?.dataset.paletteType as PaletteTargetType | undefined;
@@ -2261,7 +2261,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 >
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate flex-1">{action.label}</span>
-                  {action.hotkey && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap><KeyCap size="xs">{action.hotkey.toUpperCase()}</KeyCap></span>}
+                  {action.shortcutAction ? <MenuKeyCaps action={action.shortcutAction} /> : action.hotkey && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap><KeyCap size="xs">{action.hotkey.toUpperCase()}</KeyCap></span>}
                 </CommandPrimitive.Item>
               );
             })}

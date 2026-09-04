@@ -69,6 +69,22 @@ export function bridgePairingUrl(state: { token: string; port: number }): string
   return `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html#${new URLSearchParams({ token: state.token, port: String(state.port) })}`;
 }
 
+/**
+ * A page that forwards to the pairing URL. `setup` writes it to a 0600 file
+ * and starts Chrome on the file's path, so the token rides in a file only its
+ * owner can read while the process table shows a path. The options page is
+ * web-accessible to `file:` pages for exactly this hop; the redirect keeps
+ * the fragment, and the options page clears it as it always did.
+ */
+export function bridgePairingPage(pairingUrl: string): string {
+  // `<` cannot appear in a URL built by URLSearchParams, but a script body
+  // must never be able to close itself, so the escape is unconditional.
+  const js = JSON.stringify(pairingUrl).replace(/</g, "\\u003c");
+  return `<!doctype html><meta charset="utf-8"><title>Pairing with cast</title>` +
+    `<script>location.replace(${js})</script>` +
+    `<p>Opening the Codecast extension. If this page stays, the extension is not installed or needs a reload at chrome://extensions.</p>\n`;
+}
+
 /** WS close code the host uses for a bad or missing token. */
 export const CLOSE_BAD_TOKEN = 4401;
 

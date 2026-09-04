@@ -258,6 +258,7 @@ export default defineSchema({
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
+    request_id: v.optional(v.string()),
     command: daemonCommandValidator,
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -284,7 +285,8 @@ export default defineSchema({
     claimed_by: v.optional(v.string()),
     claimed_at: v.optional(v.number()),
     claimed_device: v.optional(v.string()),
-  }).index("by_user_pending", ["user_id", "executed_at"]),
+  }).index("by_user_pending", ["user_id", "executed_at"])
+    .index("by_user_request", ["user_id", "request_id"]),
 
   teams: defineTable({
     name: v.string(),
@@ -1699,11 +1701,21 @@ export default defineSchema({
     pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     // Set when work was queued for a REMOTE device that is offline (a cloud
-    // host that put itself to sleep). Local daemons read it off the heartbeat
-    // (users.heartbeat → wake_devices) and boot the host; a heartbeat from the
-    // device itself clears it. Never set for a local device — nothing can wake
+    // host that put itself to sleep). The configured server waker or a local
+    // daemon boots the host; a heartbeat from the device itself clears it.
+    // Never set for a local device — nothing can wake
     // a closed laptop.
     wake_requested_at: v.optional(v.number()),
+    cloud_wake: v.optional(v.object({
+      request_at: v.number(),
+      attempt: v.number(),
+      next_attempt_at: v.number(),
+      status: v.union(v.literal("pending"), v.literal("starting"), v.literal("awake"), v.literal("failed")),
+      lease_token: v.optional(v.string()),
+      lease_until: v.optional(v.number()),
+      last_error: v.optional(v.string()),
+      aws_request_id: v.optional(v.string()),
+    })),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
@@ -1788,6 +1800,7 @@ export default defineSchema({
     last_heartbeat: v.number(),
     agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
+    agent_status_write_at: v.optional(v.number()),
     // When the daemon parked this session's pane to stay under the fleet cap.
     // Cleared when the session resumes. Separate from agent_status_updated_at
     // so a later status write does not lose when the park started.
@@ -1823,6 +1836,7 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
     .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
+    .index("by_user_status", ["user_id", "agent_status"])
     .index("by_heartbeat", ["last_heartbeat"]),
 
   session_metrics: defineTable({
@@ -1994,6 +2008,7 @@ export default defineSchema({
       external_id: v.optional(v.string()),
       suite_id: v.optional(v.string()),
       event: v.optional(v.string()),
+      app: v.optional(v.string()),
     }))),
     checks_state: v.optional(v.string()),
     // Reasons that piled up since the last wake was DELIVERED. Several events
