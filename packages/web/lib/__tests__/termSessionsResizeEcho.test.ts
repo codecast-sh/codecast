@@ -15,6 +15,9 @@ class FakeTerminal {
   cols = 80;
   rows = 24;
   options: Record<string, unknown> = {};
+  constructor(options: Record<string, unknown>) {
+    this.options = options;
+  }
   unicode = { activeVersion: "" };
   private resizeCbs: Array<(s: { cols: number; rows: number }) => void> = [];
   onResize(cb: (s: { cols: number; rows: number }) => void) {
@@ -126,6 +129,23 @@ class FakeWebSocket {
 (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeWebSocket;
 
 const endpoint = { port: 1, token: "t", deviceId: "d", tmux: true };
+
+test("terminal colors reach tmux at startup and on theme changes", async () => {
+  const { applyTerminalTheme, openTerminal, getInstance, closeTab } = await import("../terminal/termSessions");
+  const light = { foreground: "#073642", background: "#fdf6e3" };
+  applyTerminalTheme(light);
+  const id = openTerminal({ endpoint, kind: "shell", detached: true });
+  const ws = FakeWebSocket.last!;
+  ws.open();
+  expect(ws.sent[0]?.colors).toEqual(light);
+  expect(getInstance(id)!.term.options.minimumContrastRatio).toBe(7);
+  ws.serverSays({ type: "ready", sessionName: "cast-term-colors", cols: 80, rows: 24 });
+  const dark = { foreground: "#ececec", background: "#212121" };
+  applyTerminalTheme(dark);
+  expect(ws.sent.at(-1)).toEqual({ type: "colors", colors: dark });
+  expect(getInstance(id)!.term.options.theme).toEqual(dark);
+  closeTab(id);
+});
 
 test("adopted ready/reseed sizes are not echoed back; genuine resizes still are", async () => {
   const { openTerminal, getInstance } = await import("../terminal/termSessions");
