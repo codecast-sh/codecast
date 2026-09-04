@@ -614,20 +614,14 @@ export const backfillRecentFiles = internalMutation({
   },
 });
 
-/**
- * Materialize per-edit file changes for a freshly-inserted message into the
- * file_changes table. Called only on genuine inserts (never the uuid/content
- * dedup branches) so re-synced messages don't duplicate rows. Runs the shared
- * extractor on the already-redacted tool calls, and is pre-filtered so an
- * ordinary message (no edit tool calls) costs nothing.
- */
-async function materializeFileChanges(
+export async function materializeFileChanges(
   ctx: MutationCtx,
   conversationId: Id<"conversations">,
   messageId: Id<"messages">,
   timestamp: number,
   toolCalls: Array<{ id: string; name: string; input: string }> | undefined,
   toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
+  previousChanges: FileChange[] = [],
 ): Promise<void> {
   // Late-arriving commit hashes: a `git commit` Bash RESULT lands on the next
   // (user) message, after the commit row materialized hash-less. The string
@@ -651,8 +645,17 @@ async function materializeFileChanges(
   }
 
   const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
-  if (!hasFileChangeToolCall(msg)) return;
+  if (!hasFileChangeToolCall(msg) && previousChanges.length === 0) return;
   const extracted = extractFileChanges([msg]);
+  const nextIds = new Set(extracted.map((change) => change.id));
+  for (const previous of previousChanges) {
+    if (nextIds.has(previous.id)) continue;
+    const rows = await ctx.db.query("file_changes")
+      .withIndex("by_conversation_change_key", (q) =>
+        q.eq("conversation_id", conversationId).eq("change_key", previous.id))
+      .collect();
+    for (const row of rows) await ctx.db.delete(row._id);
+  }
   // Keep the conversation's "where does it work" list current in the same
   // transaction — feed/search cards render it (see schema.recent_files).
   if (extracted.length > 0) {
@@ -661,7 +664,13 @@ async function materializeFileChanges(
     if (nextRecent) await ctx.db.patch(conversationId, { recent_files: nextRecent });
   }
   for (const fc of extracted) {
-    await ctx.db.insert("file_changes", {
+    const matches = await ctx.db.query("file_changes")
+      .withIndex("by_conversation_change_key", (q) =>
+        q.eq("conversation_id", conversationId).eq("change_key", fc.id))
+      .collect();
+    const [existing, ...duplicates] = matches;
+    for (const duplicate of duplicates) await ctx.db.delete(duplicate._id);
+    const fields = {
       conversation_id: conversationId,
       change_key: fc.id,
       message_id: messageId,
@@ -672,9 +681,13 @@ async function materializeFileChanges(
       old_content: fc.oldContent,
       new_content: fc.newContent,
       commit_message: fc.commitMessage,
-      commit_hash: fc.commitHash,
+      commit_hash: fc.commitHash ?? existing?.commit_hash,
       timestamp: fc.timestamp,
-    });
+    };
+    if (!existing) await ctx.db.insert("file_changes", fields);
+    else if (Object.entries(fields).some(([key, value]) => existing[key as keyof typeof existing] !== value)) {
+      await ctx.db.patch(existing._id, fields);
+    }
   }
 }
 
@@ -1248,6 +1261,11 @@ export const addMessage = mutation({
             });
           }
         }
+        if (safeToolCalls !== undefined || safeToolResults !== undefined) {
+          const current = { ...existing, ...patch };
+          await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
+            current.tool_calls, current.tool_results, extractFileChanges([existing]));
+        }
         return existing._id;
       }
     }
@@ -1744,6 +1762,11 @@ export const addMessages = mutation({
             if (existing.timestamp < conversation.updated_at - OLD_ROW_EDIT_MARGIN_MS) {
               oldRowEdits++;
             }
+          }
+          if (safeToolCalls !== undefined || safeToolResults !== undefined) {
+            const current = { ...existing, ...patch };
+            await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
+              current.tool_calls, current.tool_results, extractFileChanges([existing]));
           }
           ids.push(existing._id);
           continue;
@@ -2443,6 +2466,43 @@ export const getSharedMessage = query({
       user: user ? { name: user.name, image: user.image } : null,
       note: share.note,
       sharedAt: share.created_at,
+    };
+  },
+});
+
+/**
+ * One message by id, for a reference to it (`/conversation/<id>#msg-<id>`
+ * shared into chat). Same shape as getSharedMessage so both forms of a
+ * message reference render through one card; access is the conversation's
+ * own rule, so a teammate who cannot read the session sees no message either.
+ */
+export const webGet = query({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    let message: Doc<"messages"> | null = null;
+    try {
+      message = await ctx.db.get(args.id as Id<"messages">);
+    } catch {}
+    if (!message) return null;
+    const conversation = await ctx.db.get(message.conversation_id);
+    if (!conversation) return null;
+    if ((await checkConversationAccess(ctx, userId, conversation)) === "denied") return null;
+    const user = await ctx.db.get(conversation.user_id);
+    return {
+      message,
+      contextMessages: [message],
+      conversation: {
+        _id: conversation._id,
+        title: conversation.title,
+        project_path: conversation.project_path,
+        agent_type: conversation.agent_type,
+      },
+      conversationShareToken: null,
+      user: user ? { name: user.name, image: user.image } : null,
+      note: null,
+      sharedAt: message.timestamp,
     };
   },
 });

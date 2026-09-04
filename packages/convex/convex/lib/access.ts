@@ -9,7 +9,7 @@
 
 import { Doc, Id } from "../_generated/dataModel";
 import { findConversationBySessionReference } from "../conversationSessionLookup";
-import { canTeamMemberAccess, isTeamMember, teamVisibleConvTeam } from "../privacy";
+import { canOwnerOrTeamAccess, isTeamMember, teamVisibleConvTeam } from "../privacy";
 import { forbidden, notFound } from "./auth";
 
 // Re-exported so callers that want the membership primitive can reach it through
@@ -149,6 +149,27 @@ export async function canAccessPullRequest(
   pullRequest: { team_id: Id<"teams"> },
 ): Promise<boolean> {
   return await isTeamMember(ctx, userId, pullRequest.team_id);
+}
+
+/**
+ * A commit is readable through whichever provenance it has.
+ *
+ * A commit written from a session transcript carries conversation_id, and the
+ * session decides who may read it. A commit that arrived by webhook or backfill
+ * has no session, so it falls back to the team the GitHub App is installed for.
+ * Neither path is a guess: the row records which one applies, and a commit with
+ * neither is readable by nobody.
+ */
+export async function canAccessCommit(
+  ctx: AccessCtx & { db: any },
+  userId: Id<"users">,
+  commit: { conversation_id?: Id<"conversations">; team_id?: Id<"teams"> },
+): Promise<boolean> {
+  if (commit.conversation_id) {
+    const conversation = await ctx.db.get(commit.conversation_id);
+    if (conversation && (await canAccessConversation(ctx, userId, conversation))) return true;
+  }
+  return commit.team_id ? await isTeamMember(ctx, userId, commit.team_id) : false;
 }
 
 /** Resolve the membership row or fail closed for an explicitly requested team. */
@@ -548,15 +569,16 @@ export async function canAccessConversation(
   ctx: AccessCtx,
   userId: Id<"users">,
   conversation: {
+    _id?: Id<"conversations">;
     user_id: Id<"users">;
+    owner_user_id?: Id<"users">;
     team_id?: Id<"teams">;
     is_private: boolean;
     team_visibility?: string;
     share_token?: string;
   },
 ): Promise<boolean> {
-  if (conversation.user_id.toString() === userId.toString()) return true;
-  return await canTeamMemberAccess(ctx, userId, conversation);
+  return await canOwnerOrTeamAccess(ctx, userId, conversation);
 }
 
 // A CLI call names "this session" by its agent session uuid. The row's stored

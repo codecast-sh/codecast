@@ -701,6 +701,25 @@ export const markMessageDelivered = mutation({
   },
 });
 
+/** Whether a reported agent status is proof that the injected messages
+ * reached the agent. A processing state observed by a hook or read off the
+ * pane is: the agent is working, so what was pasted got consumed. The
+ * daemon's own post-injection "thinking" is not — it is the injection
+ * assuming its own success. Taking it as proof made the ack circular: a paste
+ * whose Enter never registered was reported "thinking", the row went terminal
+ * "delivered", and the two-minute healer that re-pends stale "injected" rows
+ * had nothing left to revive — the message sat in the composer for good
+ * (2026-09-03). */
+export function activeStatusAcksInjected(agentStatus: string, presumed: boolean | undefined): boolean {
+  if (presumed === true) return false;
+  return (
+    agentStatus === "working" ||
+    agentStatus === "thinking" ||
+    agentStatus === "compacting" ||
+    agentStatus === "permission_blocked"
+  );
+}
+
 export const updateAgentStatus = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -712,6 +731,15 @@ export const updateAgentStatus = mutation({
     // open_tasks). Sent with settle verdicts; an empty array means "checked,
     // nothing open" and is as informative as a full one.
     open_tasks: v.optional(v.array(openTaskValidator)),
+    // The status is the daemon's own presumption, not an observation: it just
+    // pasted a message and reports "thinking" so the session reads live at
+    // once. Such a status paints the row but proves nothing about delivery —
+    // see activeStatusAcksInjected.
+    presumed: v.optional(v.boolean()),
+    // When the daemon parked the pane. A number stamps the field, null clears
+    // it, and absent leaves it alone — so a resume can undo the park in the
+    // same write that reports the new status.
+    hibernated_at: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -731,6 +759,11 @@ export const updateAgentStatus = mutation({
 
     if (args.permission_mode !== undefined) {
       patch.permission_mode = args.permission_mode;
+    }
+    if (args.hibernated_at !== undefined) {
+      // undefined in a patch deletes the field, which is how a resume clears
+      // the park stamp.
+      patch.hibernated_at = args.hibernated_at === null ? undefined : args.hibernated_at;
     }
     if (args.open_tasks !== undefined) {
       // Re-stamp the time even when the list is unchanged: freshness is the
@@ -769,8 +802,8 @@ export const updateAgentStatus = mutation({
       await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at);
     }
 
-    // Active processing states prove the message reached the session — ack injected messages
-    if (args.agent_status === "working" || args.agent_status === "thinking" || args.agent_status === "compacting" || args.agent_status === "permission_blocked") {
+    // An observed processing state proves the message reached the session — ack injected messages
+    if (activeStatusAcksInjected(args.agent_status, args.presumed)) {
       const injected = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_status", (q: any) =>
