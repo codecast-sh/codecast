@@ -32,7 +32,7 @@
 //
 // In-app toasts (MeetingOfferToast) remain the path for shells that predate
 // this window: those route offers to an app window, never here.
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Ban, Maximize2, Mic, Square, X } from "lucide-react";
 import {
   getMeetingDetect,
@@ -143,7 +143,7 @@ function MeetingOfferRoot() {
   // A recording that ends — from the Stop here, or the engine settling after
   // a failure mid-run — leaves nothing to show: put the window away.
   const wasRecording = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (recording) wasRecording.current = true;
     else if (wasRecording.current) {
       wasRecording.current = false;
@@ -155,7 +155,7 @@ function MeetingOfferRoot() {
   // The window is exactly as big as the content: report every size change to
   // the shell, which reshapes the window (and reveals it on the first report).
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     const report = () => {

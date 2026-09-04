@@ -1,5 +1,5 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
-import { useState, useCallback, useEffect, useRef, memo, useMemo, useDeferredValue } from "react";
+import { useState, useCallback, useRef, memo, useMemo, useDeferredValue } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
@@ -578,7 +578,7 @@ export function QueuePageClient() {
   // cached were re-probed forever). Warm only the top of the actionable inbox,
   // once per structural change, off the render path.
   const currentSessionIdForWarm = currentSession?._id ?? null;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (currentSessionIdForWarm) ensureHydrated(currentSessionIdForWarm);
     for (const s of sortedSessions.slice(0, 50)) {
       if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);

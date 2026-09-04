@@ -29,7 +29,7 @@
 
 import { useCallsAvailable, useTeamFeature } from "../../lib/teamFeatures";
 import { TeamFeatureOff } from "../../components/TeamFeatureOff";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
@@ -73,6 +73,7 @@ import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 /** The clock the whole surface shares. Relative times ("3m ago") must stay
  *  honest without a re-render per row per second — see hooks/useCoarseNow. */
 const CLOCK_MS = 30_000;
@@ -109,7 +110,7 @@ export default function ChatPage() {
   // The segment stays an alias (old tabs, bookmarks, notifications) and
   // forwards to /threads; it is never a channel id (Convex ids can't collide).
   const isThreadsView = urlChannelId === "threads";
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isThreadsView) router.replace("/threads");
   }, [isThreadsView, router]);
   // A channel created here is navigated to by its local stub id. When the server
@@ -117,7 +118,7 @@ export default function ChatPage() {
   // channel that no longer exists — an empty room beside the real one in the
   // rail. The server row carries the stub as its client_id, so it forwards.
   const supersededTo = useSupersededChannelId(urlChannelId);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (supersededTo) router.replace(`/chat/${supersededTo}`);
   }, [supersededTo, router]);
 
@@ -232,7 +233,7 @@ export default function ChatPage() {
   // A permalink to a REPLY names a message that lives in a thread, so the panel
   // has to open for the link to land anywhere at all.
   const openedForRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!targetRow || openedForRef.current === targetRow._id) return;
     openedForRef.current = targetRow._id;
     if (targetRow.thread_root_id) setThreadRootId(targetRow.thread_root_id);
@@ -255,7 +256,7 @@ export default function ChatPage() {
   // interrupt the person already reading it. On screen, not merely mounted — a
   // chat tab hidden behind Inbox was silencing its own toasts for a room the
   // reader could not see.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!present) {
       clearChatFocus();
       return;
@@ -270,7 +271,7 @@ export default function ChatPage() {
   // they came back to, mid-read. See the note in ChatMessageList.
   const [frozenReadAt, setFrozenReadAt] = useState<number | undefined>(undefined);
   const frozenForRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
+  useWatchEffect(() => {
     // Wait for a RESOLVED channel, not merely for an id. On a cold load of
     // /chat/<id> — a reload, or a link from a notification — the id is known on
     // the first commit while the rail is still hydrating, and freezing there
@@ -358,7 +359,7 @@ export default function ChatPage() {
   const searchParam = search.get("search") || undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchSeed, setSearchSeed] = useState<{ q: string; n: number } | undefined>(undefined);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!searchParam) return;
     setSearchSeed((prev) => ({ q: searchParam, n: (prev?.n ?? 0) + 1 }));
     setSearchOpen(true);

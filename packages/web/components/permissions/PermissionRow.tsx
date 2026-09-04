@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Bell, Camera, CheckCircle, Mic, Monitor, type LucideIcon } from "lucide-react";
 import { SettingsRow } from "../settings/ui";
 import { isElectron } from "../../lib/desktop";
@@ -11,6 +11,7 @@ import {
   type PermissionReadiness,
 } from "../../lib/osPermissions";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 export const PERMISSION_ICONS: Record<OsPermissionKind, LucideIcon> = {
   notifications: Bell,
   microphone: Mic,
@@ -40,7 +41,7 @@ export function PermissionRow({
   // screen — point at it, because a button that appears to do nothing reads
   // as broken.
   const [awaitingPrompt, setAwaitingPrompt] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (readiness !== "ask") setAwaitingPrompt(false);
   }, [readiness]);
 

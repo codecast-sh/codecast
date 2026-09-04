@@ -1,7 +1,7 @@
 "use client";
 
 import { copyToClipboard } from "../../lib/utils";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useConvex } from "convex/react";
@@ -62,6 +62,8 @@ import {
 } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const api = _api as any;
 
 // ── Time helpers (parseDuration is a parity port of `cast trigger add --in/--every`) ──
@@ -427,7 +429,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
     isDeepLinked && deepLinkEdit ? "edit" : null,
   );
   const rowRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isDeepLinked) {
       setExpanded(true);
       if (deepLinkEdit) setFormMode("edit");
@@ -1628,10 +1630,10 @@ function TriggersContent() {
   const [now, setNow] = useState(() => Date.now());
 
   // Tick so countdowns ("in 23m", "due now") stay live without resubscribing.
-  useEffect(() => {
+  useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
-  }, []);
+  });
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const update = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));

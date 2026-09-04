@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, useState } from "react";
+import { useRef, useCallback, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession, classifySession, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
@@ -16,6 +16,7 @@ import { cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcil
 import { collectGhostSweepCandidates } from "./ghostSweep";
 import { applyEntityIds, emptyIdsByCollection } from "./useSyncChangeFeed";
 
+import { useMountEffect } from "./useMountEffect";
 // The completeness floor for the inbox session list. The live listInboxSessions
 // subscription returns only the ~200 most-recently-updated sessions, so idle ones
 // sink below that window and are absent from a cold cache. The floor pages EVERY
@@ -144,7 +145,7 @@ export function useSyncInboxSessions() {
   // it is idempotent and cheap once the visible rows sit at their tier depth.
   const warm = useCallback(() => warmVisibleSessions(convex), [convex]);
   const warmViewSig = useInboxStore(visualOrderViewSig);
-  useEffect(() => { warm(); }, [warm, warmViewSig]);
+  useWatchEffect(() => { warm(); }, [warm, warmViewSig]);
 
 
   // The base live session list — syncTable + liveInboxIds — is shared with the
@@ -274,7 +275,7 @@ export function useSyncInboxSessions() {
   // not move the view (that's the "desktop randomly jumps" bug class); the
   // click on the toast is the gesture that authorizes the navigation.
   // eslint-disable-next-line no-restricted-syntax -- toast side effect on session list change
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!inboxSessions) return;
     const sessionsList = (inboxSessions as any).sessions ?? inboxSessions;
     const activeIds = new Set<string>(
@@ -322,7 +323,7 @@ export function useSyncInboxSessions() {
   // relaunch within the window serves the hydrated cache. Reuses runReconcileCrawl.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const redroveHydratedPendingRef = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!hydrated || redroveHydratedPendingRef.current) return;
     redroveHydratedPendingRef.current = true;
     // Covers the crash-sized gap between a parked create's by_session_id rekey
@@ -350,8 +351,8 @@ export function useSyncInboxSessions() {
   const floorStamped = useInboxStore((s) => !!s.syncMeta[floorKey]?.backfilledAt);
   const logStamped = useInboxStore((s) => currentUser?._id != null && s.syncLogScopeStamps[`user:${String(currentUser._id)}`] !== undefined);
   // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels an in-flight floor on wsKey change
-  useEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
-  useEffect(() => {
+  useWatchEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
+  useWatchEffect(() => {
     if (!hydrated || sessWsKey === "skip" || floorStamped || !logStamped) return;
     // ONE stable lower bound for the whole floor — it becomes the paginated
     // index bound, and a wall-clock value recomputed per page would make each
@@ -393,16 +394,16 @@ export function useSyncInboxSessions() {
   // this sweep's job: a hard delete is a sync-log delete action, and the log
   // applier prunes the row on authorized absence (useSyncChangeFeed).
   const [sweepNonce, setSweepNonce] = useState(0);
-  useEffect(() => {
+  useMountEffect(() => {
     const id = setInterval(() => setSweepNonce((n) => n + 1), STUB_SWEEP_INTERVAL_MS);
     const offWake = onSyncWake(() => setSweepNonce((n) => n + 1));
     return () => {
       clearInterval(id);
       offWake();
     };
-  }, []);
+  });
   const lastSweepRef = useRef(0);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!hydrated) return;
     // Wake events can bump the nonce in bursts (cmd-tab flurries).
     if (Date.now() - lastSweepRef.current < 60 * 1000) return;

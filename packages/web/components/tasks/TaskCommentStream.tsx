@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
 import { ArrowUp, ImagePlus, MessageSquare } from "lucide-react";
@@ -12,6 +12,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AgentIcon } from "../ConversationList";
 import { Badge } from "../ui/badge";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to
@@ -165,7 +166,7 @@ export function TaskCommentComposer({
   }, [generateUploadUrl]);
 
   // Dropped files open the box: a drop onto a closed composer must land somewhere visible.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!dropFilesRef) return;
     dropFilesRef.current = (files: File[]) => {
       setCommentOpen(true);
@@ -174,7 +175,7 @@ export function TaskCommentComposer({
     return () => { dropFilesRef.current = null; };
   }, [dropFilesRef, uploadCommentImage]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (autoFocus) setTimeout(() => commentRef.current?.focus(), 0);
   }, [autoFocus]);
 

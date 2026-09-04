@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useBottomAnchoredList, prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
@@ -6,6 +6,7 @@ import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import "./chat.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The channel transcript.
 //
 // Presentational: it takes messages and handlers, never the store, so it renders
@@ -174,7 +175,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   // and doing that during render makes React flush inside its own lifecycle.
   const reportedRef = useRef<string | null>(null);
   const newestKey = rows.length ? rows[rows.length - 1].key : "";
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!atBottom) {
       if (reportedRef.current !== null) reportedRef.current = null;
       return;
@@ -227,7 +228,7 @@ export const ChatMessageList = memo(function ChatMessageList({
     ownSendScrolledRef.current = ownSendKey;
   }
   const { scrollToBottom } = list;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!ownSendKey || ownSendScrolledRef.current === ownSendKey) return;
     ownSendScrolledRef.current = ownSendKey;
     scrollToBottom({ smooth: !prefersReducedMotion() });
@@ -257,7 +258,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   // Fired once per target: re-flashing would make the message strobe while it is
   // being read.
   const flashedRef = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!targetMessageId || !targetFound || flashedRef.current === targetMessageId) return;
     flashedRef.current = targetMessageId;
     listRef.current.scrollToIndex(targetIndexRef.current, { align: "center" });

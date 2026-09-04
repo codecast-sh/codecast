@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The Threads page's mount window. With unread cards open by default, dozens
 // of expanded bodies would each mount a feeder (channel messages, session
 // messages, task detail) at once. Instead the card SHELL always renders, and
@@ -20,14 +22,14 @@ const NEAR_MARGIN = "900px 0px";
  *  screenful should paint bodies, not ghosts. */
 export function useNearViewport(ref: RefObject<Element | null>, defaultNear: boolean): boolean {
   const [near, setNear] = useState(defaultNear);
-  useEffect(() => {
+  useMountEffect(() => {
     const el = ref.current;
     if (!el) return;
     const obs = new IntersectionObserver(([e]) => setNear(e.isIntersecting), { rootMargin: NEAR_MARGIN });
     obs.observe(el);
     return () => obs.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
   return near;
 }
 
@@ -35,7 +37,7 @@ export function useNearViewport(ref: RefObject<Element | null>, defaultNear: boo
  *  the read law's witness. False whenever disabled (body not mounted). */
 export function useOnScreen(ref: RefObject<Element | null>, enabled: boolean): boolean {
   const [seen, setSeen] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!enabled) {
       setSeen(false);
       return;

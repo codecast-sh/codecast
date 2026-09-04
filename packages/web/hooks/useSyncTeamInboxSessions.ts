@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { useConvex, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -7,6 +7,7 @@ import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { warmVisibleSessions } from "./inboxWarm";
 
+import { useWatchEffect } from "./useWatchEffect";
 // Record the team-mode active id set, change-guarded so an identical payload
 // doesn't allocate a new Set and re-render every subscriber. The panel gates the
 // visible list on this while inbox_scope is "team" (see filterInboxScope). Mirror
@@ -86,7 +87,7 @@ export function useSyncTeamInboxSessions() {
   // hygiene, not correctness — filterInboxScope only reads teamInboxIds in team
   // scope — but it keeps the set honest so a later switch back to team can't
   // briefly render another team's stale membership after an active-team change.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (active) return;
     if (useInboxStore.getState().teamInboxIds.size === 0) return;
     useInboxStore.setState({ teamInboxIds: new Set<string>() });

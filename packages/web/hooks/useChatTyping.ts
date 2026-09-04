@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useTrackedStore } from "../store/inboxStore";
@@ -6,6 +6,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { isConvexId } from "../lib/entityLinks";
 import type { ChatMember } from "../lib/chatViews";
 
+import { useWatchEffect } from "./useWatchEffect";
 // Typing presence, client half. Deliberately OUTSIDE the store: these rows
 // live for seconds, nothing persists them, and their only reader is the
 // composer strip of the channel on screen. Running them through syncTable/IDB
@@ -69,7 +70,7 @@ export function useTypingReporter(
   // Leaving the box (channel switch, thread close, unmount) is a stop: the row
   // would age out anyway, but deleting it now is what makes the indicator drop
   // instantly for everyone else.
-  useEffect(() => stop, [stop, channelId, threadRootId]);
+  useWatchEffect(() => stop, [stop, channelId, threadRootId]);
 
   return { onTyping, stop };
 }
@@ -97,7 +98,7 @@ export function useTypingMembers(
   // Age rows out locally; the ticker only runs while rows exist.
   const [, setTick] = useState(0);
   const rowCount: number = data?.length ?? 0;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (rowCount === 0) return;
     const t = setInterval(() => setTick((n) => n + 1), TICK_MS);
     return () => clearInterval(t);

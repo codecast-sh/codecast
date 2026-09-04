@@ -4,7 +4,6 @@
 // global slide-over alike — the same store-fed conversation, the same composer,
 // so talking to the anchor feels identical wherever you open it.
 
-import { useEffect } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ConversationDiffLayout } from "../ConversationDiffLayout";
@@ -15,9 +14,10 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useState } from "react";
 import { AnchorGlyph } from "./AnchorIdentity";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 export function AnchorConversation({ conversationId, hideHeader }: { conversationId: string; hideHeader?: boolean }) {
   // Seed ownership so the embedded conversation shows owner UI immediately.
-  useEffect(() => {
+  useWatchEffect(() => {
     useInboxStore.getState().syncRecord("conversations", conversationId, { _id: conversationId, is_own: true });
   }, [conversationId]);
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -22,6 +22,8 @@ import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { cn } from "../../../../lib/utils";
 
+import { useMountEffect } from "../../../../hooks/useMountEffect";
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 const NAME_MAX = 40;
 const NAME_FORM_ID = "team-create-name";
 const TEAM_FEED_PATH = "/team/activity";
@@ -73,12 +75,12 @@ export default function CreateTeamPage() {
   // mount, unmount, remount cycle runs the cleanup once, and a ref does
   // not reinitialize. Without the setup write, alive stays false and the
   // resolved team id never lands, so steps 3 and 4 load forever.
-  useEffect(() => {
+  useMountEffect(() => {
     alive.current = true;
     return () => { alive.current = false; };
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     setMaxVisited((m) => Math.max(m, step));
   }, [step]);
 

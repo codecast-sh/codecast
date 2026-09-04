@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronRight, ExternalLink } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -9,6 +9,7 @@ import type { ThreadCardModel } from "../../lib/threadCards";
 import { ghostHeight, useBodyMeasure, useNearViewport, useOnScreen } from "./cardWindow";
 import { useThreadsPage } from "./threadsContext";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // One card, whatever the kind: the generic shell — kind tile and object
 // label, unread badge, age, caret, and beside them the open-in-place link —
 // around the kind's own Root (collapsed body) and Expanded (the thread in
@@ -89,7 +90,7 @@ export const ThreadCard = memo(function ThreadCard({
   // (focusComposer below), so focus rides the gesture, never the mount.
   const prevExpandedRef = useRef(expanded);
   const justUserExpanded = expanded && !prevExpandedRef.current && expandedBy === "user";
-  useEffect(() => {
+  useWatchEffect(() => {
     prevExpandedRef.current = expanded;
     if (!justUserExpanded) return;
     ref.current?.scrollIntoView({ block: "start" });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -13,6 +13,7 @@ import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { AGENT_LAUNCH_OPTIONS } from "@codecast/shared/contracts";
 import type { DraftImageRow } from "../lib/draftImages";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // The draft content held for a compose stub, or null when there is none worth
 // keeping. Read straight from the store — MessageInput persists text and pasted
 // images (blob previews included) into drafts[id] synchronously as they change.
@@ -220,7 +221,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
   // content routes through a confirm dialog instead of silently dropping it.
   const [confirmClose, setConfirmClose] = useState(false);
   const confirmCloseRef = useRef(false);
-  useEffect(() => { confirmCloseRef.current = confirmClose; }, [confirmClose]);
+  useWatchEffect(() => { confirmCloseRef.current = confirmClose; }, [confirmClose]);
   // MessageInput reports when Escape belongs to UI inside it (lightbox, image /
   // queued-message selection, slash menu) — see escapeOwnedRef prop.
   const escapeOwnedRef = useRef(false);
@@ -261,7 +262,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
 
   // Hand the guarded close to the host so its backdrop click gets the same
   // draft confirm as Escape (the backdrop lives outside this component).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!closeGuardRef) return;
     closeGuardRef.current = requestClose;
     return () => { closeGuardRef.current = null; };
@@ -457,7 +458,7 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
 
   // Capture phase, like the composer's Escape listener: MessageInput swallows
   // keys in the bubble phase, and the dialog owns the keyboard while it shows.
-  useEffect(() => {
+  useWatchEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== "d" && e.key !== "D") return;

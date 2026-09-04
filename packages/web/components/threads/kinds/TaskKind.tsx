@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useInboxStore, useTrackedStore, type TaskDetail, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
@@ -10,6 +10,7 @@ import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The task kind: the task itself, then its comment stream. The collapsed card
 // is the short id, the title, the status and the latest comment; expanded,
 // the status row grows the task's metadata (priority, assignee, plan, age),
@@ -132,7 +133,7 @@ export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
   // cache the body renders empty and short, so the sentinel is trivially in
   // view with the newest comment never rendered. The count dep fires the mark
   // once the detail feeder answers.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && commentCount === 0) return;
     if (row.last_read_at >= row.last_activity_at && row.unread === 0) return;

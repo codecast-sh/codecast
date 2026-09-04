@@ -1,10 +1,11 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { useRef, type CSSProperties, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { TeamCrest } from "./TeamCrest";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { cn } from "../../lib/utils";
 import "./teamFlow.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 export interface TeamFlowStep {
   key: string;
   label: string;
@@ -88,7 +89,7 @@ export function TeamFlowShell({
   // second run would steal focus from the step's autofocused field.
   const lastStep = useRef(stepIndex);
   const navigatedRef = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (lastStep.current !== stepIndex) {
       headingRef.current?.focus();
       navigatedRef.current = true;
@@ -103,7 +104,7 @@ export function TeamFlowShell({
   const navigated = navigatedRef.current || lastStep.current !== stepIndex;
   const stepDir = stepIndex >= lastStep.current ? 1 : -1;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       // A held key repeats fast enough to walk through several steps at

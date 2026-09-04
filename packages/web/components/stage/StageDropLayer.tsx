@@ -10,7 +10,7 @@
 // than flashing highlights. The prediction runs the real split op on the
 // real tree (predictDrop), so what you see is what you get.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { AppTab } from "../../store/inboxStore";
 import {
   findLeaf,
@@ -31,6 +31,7 @@ import {
 } from "../../lib/stage";
 import { pathLabel } from "../../lib/pathLabel";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 type Hover = {
   key: string;
   zone: DropZone;
@@ -76,7 +77,7 @@ export function StageDropLayer({
   // is showing — a drag cancelled while the hover was suppressed (its own
   // pane's area) must still reset the depth counter, or the NEXT drag's veil
   // wedges on.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!enabled) return;
     window.addEventListener("dragend", clear);
     window.addEventListener("drop", clear);

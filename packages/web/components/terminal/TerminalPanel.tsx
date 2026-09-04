@@ -9,7 +9,7 @@
 // backed by tmux sessions on the user's machine, so they also survive page
 // reloads: reopening the panel reattaches to whatever was running.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -37,6 +37,7 @@ import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../ui/contex
 import { SplitResizeHandle } from "../SplitResizeHandle";
 import "@xterm/xterm/css/xterm.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const MIN_HEIGHT = 110;
 const DEFAULT_HEIGHT = 280;
 
@@ -121,7 +122,7 @@ export function TerminalPanel() {
     [convex, openShellTab],
   );
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (open && !everOpened.current) {
       everOpened.current = true;
       void resolve();
@@ -173,7 +174,7 @@ export function TerminalPanel() {
     },
     [maximized],
   );
-  useEffect(() => {
+  useWatchEffect(() => {
     heightRef.current = storedHeight;
   }, [storedHeight]);
 
@@ -428,7 +429,7 @@ export function ConnectingNote({ label }: { label: string }) {
 
 function TermContainer({ tab, active }: { tab: TermTabState; active: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (ref.current) attachToContainer(tab.id, ref.current);
   }, [tab.id]);
   // overflow-auto matters for ATTACH tabs: they render at the agent pane's

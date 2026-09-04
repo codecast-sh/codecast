@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useImperativeHandle, useRef, useState } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -9,6 +9,7 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { isConvexId } from "../lib/entityLinks";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // A suggested reply, shown as ghost text inside the empty composer — the way
 // a shell autosuggests from history: dim, sitting where the words would go,
 // and Tab makes it yours. Nothing renders outside the input, so an idle
@@ -99,7 +100,7 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   // Ask for fresh suggestions when the agent's turn has settled and the
   // stored row targets an older tail. The server dedupes by anchor, so a
   // double-fire (second device, remount) is a cheap no-op.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isRealId || hidden || !idle) return;
     if (tailRole !== "assistant" || !tailKey || tailKey === "opt") return;
     if (row === undefined) return; // still loading — the row may already match
@@ -122,8 +123,8 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   const suggestions = visible ? row!.suggestions : [];
 
   // A new anchor starts at the top suggestion again.
-  useEffect(() => { setIdx(0); }, [anchor]);
-  useEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
+  useWatchEffect(() => { setIdx(0); }, [anchor]);
+  useWatchEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
 
   const stateRef = useRef({ visible, suggestions, idx, anchor });
   stateRef.current = { visible, suggestions, idx, anchor };

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { MessageSquare, CornerUpRight, Quote, FileCode2, CheckCircle2, RotateCcw } from "lucide-react";
 import { SlotActions } from "../workspace/Slot";
 import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
@@ -12,6 +12,7 @@ import { useConversationComments } from "../../hooks/useConversationComments";
 import { isAgentComment } from "../../lib/commentThread";
 import { CommentThread } from "./CommentThread";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The conversation's GLOBAL comment thread as a right-docked, full-height rail —
 // like the sidebar, on the other side. It slides away to nothing when closed (no
 // minimized stub) and is reopened from the header's comments toggle, mirroring
@@ -90,7 +91,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   );
   const [width, setW] = useState(() => slotWidth ?? loadWidth());
   const dragRef = useRef<{ x: number; w: number } | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (slotWidth !== undefined && !dragRef.current) setW(slotWidth);
   }, [slotWidth]);
 
@@ -98,7 +99,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   // of the left sidebar). Keep the heavy thread in the DOM through the slide-out,
   // then unmount it a beat later so a closed rail renders nothing off-screen.
   const [mounted, setMounted] = useState(open);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (open) { setMounted(true); return; }
     const t = setTimeout(() => setMounted(false), 240);
     return () => clearTimeout(t);
@@ -109,7 +110,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   // Publish the rail width while open — the transcript does NOT pad for it (the
   // rail hangs over the right edge as an overlay), but the floating scroll arrows
   // read it to slide clear of the rail instead of hiding under it.
-  useEffect(() => {
+  useWatchEffect(() => {
     setWidth(conversationId, open && railEnabled ? width : 0);
     return () => setWidth(conversationId, 0);
   }, [conversationId, open, width, railEnabled, setWidth]);

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail, type DocItem } from "../../../store/inboxStore";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
@@ -39,6 +39,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { undoableArchiveDoc } from "../../../store/undoActions";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 const api = _api as any;
 
 const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -154,7 +155,7 @@ function DocDetailContent() {
   // the conversation instead of a dead-end. Mirrors /tasks/[id].
   const notADoc = detailResult === null && !listItem;
   const sessionForBadId = useInboxStore((s) => (notADoc ? s.sessions[id] : undefined));
-  useEffect(() => {
+  useWatchEffect(() => {
     if (notADoc && sessionForBadId) router.replace(`/conversation/${id}`);
   }, [notADoc, sessionForBadId, id, router]);
 

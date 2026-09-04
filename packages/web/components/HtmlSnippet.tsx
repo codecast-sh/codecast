@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
+import { useRef, useState, useMemo, useCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { sanitizeCanvasHtml } from "../lib/canvasSanitize";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -193,7 +193,7 @@ export function HtmlSnippet({ code }: { code: string }) {
   // hydrate async, tabs re-show panels) to decide whether the collapse control is
   // needed. The observer targets the host INSIDE the clipped container, because
   // the container's own box is capped and would never report growth.
-  useEffect(() => {
+  useWatchEffect(() => {
     const host = clipRef.current?.firstElementChild;
     if (!host || showSource) return;
     const ro = new ResizeObserver(() => {
@@ -214,7 +214,7 @@ export function HtmlSnippet({ code }: { code: string }) {
   }, [code]);
 
   // Esc closes fullscreen.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!fullscreen) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setFullscreen(false);

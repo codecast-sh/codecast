@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
@@ -16,6 +16,7 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). Its size follows what the ask means for the thread:
@@ -74,7 +75,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // composer) is inert: the composer takes focus on mount, and every card key
   // was landing in its textarea. Set imperatively — `inert` only became a real
   // React attribute in 19. Docked, the thread gets itself back.
-  useEffect(() => {
+  useWatchEffect(() => {
     const root = rootRef.current;
     const pane = root?.parentElement;
     if (!root || !pane) return;
@@ -202,7 +203,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const grow = useCallback(() => setSize((s) => (s === "line" ? "dock" : "full")), []);
 
   const onSkip = stepper?.onSkip;
-  useEffect(() => {
+  useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const action = routeQueueKey(e, {

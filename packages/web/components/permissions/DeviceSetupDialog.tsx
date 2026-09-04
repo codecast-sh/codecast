@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
@@ -13,6 +13,8 @@ import {
 } from "../../lib/osPermissions";
 import { PermissionRow } from "./PermissionRow";
 
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The sign-up moment for a DEVICE. Permissions are per machine and per
 // browser, so this runs once per device — not once per account — the first
 // time the dashboard opens with a required permission still unset. It asks
@@ -52,18 +54,18 @@ export function DeviceSetupDialog() {
   // Holds the first-run turn while open; waits for it before opening unasked.
   const { blocked, claim } = useFirstRunDialog("device-setup", open);
 
-  useEffect(() => {
+  useMountEffect(() => {
     const onOpen = () => setOpen(true);
     window.addEventListener(OPEN_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_EVENT, onOpen);
-  }, []);
+  });
 
   // First run: wait for a real read (all-unknown is the pre-read state, and
   // an old shell that stays unknown never opens this), then open once if a
   // required kind is still actionable. Another first-run dialog on screen
   // (the inbox tour) defers the check, not the decision: it re-runs the
   // moment that dialog closes.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (autoChecked || open || blocked) return;
     if (isDetachedTabWindow()) return;
     if (OS_PERMISSION_KINDS.every((k) => permissions[k] === "unknown")) return;

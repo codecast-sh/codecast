@@ -6,7 +6,7 @@
 // state in the store (`anchorPanel`), opened by the header chip, ⌘⇧A, or the
 // palette; the /anchor page remains the full home (settings, Slack, routines).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, Plus, X } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -18,6 +18,7 @@ import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { TeamIcon } from "../TeamIcon";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // A pending "create" choice, encoded in anchorPanel.anchorId so the picker
 // and the body agree without a second field.
 const NEW_USER = "new:user";
@@ -41,7 +42,7 @@ export function AnchorPanel() {
   // Keep mounted after first open so the conversation's scroll/composer state
   // survives close/reopen; slide via transform.
   const [everOpen, setEverOpen] = useState(false);
-  useEffect(() => { if (open) setEverOpen(true); }, [open]);
+  useWatchEffect(() => { if (open) setEverOpen(true); }, [open]);
   const rootRef = useRef<HTMLDivElement>(null);
   if (!everOpen) return null;
 

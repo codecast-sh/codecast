@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { EditorProvider, useCurrentEditor } from "@tiptap/react";
 import { Editor as HeadlessEditor, Extension } from "@tiptap/core";
 import { getVersion, sendableSteps } from "prosemirror-collab";
@@ -218,7 +218,7 @@ function EditorInner({
   const convex = useConvex();
   const serverVersion = useQuery(api.docSync.latestVersion, { id: docId }) as number | null | undefined;
   const checkedVersionRef = useRef<number | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!editor || editor.isDestroyed || serverVersion == null) return;
     const local = getVersion(editor.state);
     if (serverVersion <= local || checkedVersionRef.current === serverVersion) return;

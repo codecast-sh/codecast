@@ -25,7 +25,7 @@
 // switching conversations and back preserves the split (and its xterm buffer)
 // without touching inboxStore — same reasoning as termSessions.ts.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { X, RotateCw, Radio } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -53,6 +53,7 @@ import {
   type SplitState,
 } from "../../lib/terminal/conversationTerminalState";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const MIN_HEIGHT = 90;
 // Comfortably more than the daemon's heartbeat, so a slow round-trip doesn't
 // flicker the "paused" label on and off.
@@ -147,7 +148,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
     }
   }, [convex, convKey, target, machine?.device_id, machine?.via_bot, foreign, machineName]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     // Wait for the machine lookup: connecting before it lands would broadcast
     // to every device and then have to tear the wrong transport back down.
     if (!machineSettled) return;
@@ -181,7 +182,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
   const now = useCoarseNow(2000);
   const stale = isRemote && status === "open" && lastFrameAt > 0 && now - lastFrameAt > STALE_AFTER_MS;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (split.termId && containerRef.current && status === "open") {
       attachToContainer(split.termId, containerRef.current);
     }

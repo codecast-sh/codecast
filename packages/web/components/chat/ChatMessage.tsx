@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall } from "lucide-react";
 import { parseHuddleDigestContent } from "@codecast/shared/contracts";
@@ -19,6 +19,7 @@ import { ImageLightbox } from "../ImageGallery";
 import "./chat.css";
 import "../editor/editor.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // One chat message.
 //
 // The row is a two column grid: a fixed gutter (--ch-gutter in chat.css) and the body. When a message
@@ -223,7 +224,7 @@ export const ChatMessage = memo(function ChatMessage({
   const rowRef = useRef<HTMLDivElement | null>(null);
   // One outside click closes whichever popover is open. Both are anchored to the
   // hover toolbar, which disappears the moment the pointer leaves the row.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!menuOpen && !pickerOpen) return;
     const onDown = (e: MouseEvent) => {
       if (rowRef.current?.contains(e.target as Node)) return;

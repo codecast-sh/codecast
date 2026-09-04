@@ -26,7 +26,7 @@
 // The root carries the `dark` class: this floats over the desktop, and theme
 // tokens on dark glass invert to navy-on-navy in light mode (the call stage
 // learned this the loud way).
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -81,7 +81,7 @@ function CallRingRoot() {
   // name change the height, and a card clipped by its own window would hide
   // the two buttons this surface exists for.
   const cardRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = cardRef.current;
     if (!el || !invite) return;
     const report = () => {
@@ -107,7 +107,7 @@ function CallRingRoot() {
   // answered anywhere, cancelled by the caller, or expired server-side — so
   // there is no teardown protocol to get wrong.
   const quiet = useInboxStore((st) => st.currentUser?.status === "busy");
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!invite || quiet) return;
     soundCallRing();
     const t = setInterval(soundCallRing, CALL_RING_PERIOD_MS);

@@ -15,11 +15,12 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https
 (globalThis as any).navigator = dom.window.navigator;
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { resetFirstRunDialogsForTests, useFirstRunDialog } from "../firstRunDialogs";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 const opened: Record<string, boolean> = {};
 const closers: Record<string, () => void> = {};
 
@@ -28,7 +29,7 @@ function FirstRunDialog({ id, wants }: { id: string; wants: boolean }) {
   const [open, setOpen] = useState(false);
   const [seen, setSeen] = useState(false);
   const { blocked, claim } = useFirstRunDialog(id, open);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (wants && !seen && !open && !blocked && claim()) setOpen(true);
   }, [wants, seen, open, blocked, claim]);
   opened[id] = open;

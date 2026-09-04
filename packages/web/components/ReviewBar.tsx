@@ -5,7 +5,7 @@
 // Each row is removable with an ✕; "Edit in input" optionally materializes the
 // batch as editable text in the composer; "Clear" discards it.
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X, Trash2, PencilLine } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
@@ -13,6 +13,7 @@ import { useReviewComposer } from "./reviewContext";
 import { cancelReview } from "../lib/reviewActions";
 import { sortPendingComments } from "../lib/quoteFormat";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 export function ReviewBar({ conversationId }: { conversationId: string }) {
   const composer = useReviewComposer();
   const comments = useInboxStore(useShallow((s) => s.reviewComments[conversationId] ?? []));
@@ -21,7 +22,7 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
   // Clear discards the whole batch, so it arms on first click ("Discard N?") and
   // only fires on the second; the armed state disarms itself after a beat.
   const [confirmClear, setConfirmClear] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!confirmClear) return;
     const t = setTimeout(() => setConfirmClear(false), 4000);
     return () => clearTimeout(t);

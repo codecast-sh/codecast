@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { toast } from "sonner";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { soundCallRing, soundCallDeclined } from "../lib/sounds";
@@ -12,6 +12,8 @@ import {
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
 import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
+import { useMountEffect } from "./useMountEffect";
+import { useWatchEffect } from "./useWatchEffect";
 // THE RING HAS A WINDOW OF ITS OWN (route /call-ring, main.js
 // createCallRingWindow), and it is the ring on every build that has one.
 // A ring arrives unannounced, usually while the person is in another app
@@ -46,7 +48,7 @@ export function useCallRing(): void {
   const incoming: any[] = s.myCalls.incoming;
   const outgoing: any[] = s.myCalls.outgoing;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const me = useInboxStore.getState().currentUser;
     // Manual "busy" is the closed door: the toast still appears (a silent,
     // dismissable card), but no sound and no native banner.
@@ -206,7 +208,7 @@ export function useCallRing(): void {
   }, [incoming, outgoing]);
 
   // Outgoing ring settled as a decline → one soft note, once per invite.
-  useEffect(() => {
+  useWatchEffect(() => {
     for (const inv of outgoing) {
       if (inv.status === "declined" && !seenDeclines.current.has(String(inv._id))) {
         seenDeclines.current.add(String(inv._id));
@@ -215,10 +217,9 @@ export function useCallRing(): void {
     }
   }, [outgoing]);
 
-  useEffect(
+  useMountEffect(
     () => () => {
       if (ringTimer.current) clearInterval(ringTimer.current);
     },
-    [],
-  );
+    []);
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, memo, lazy, Suspense } from "react";
+import { useState, useMemo, useCallback, useRef, memo, lazy, Suspense } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -19,6 +19,7 @@ import "prismjs/components/prism-yaml";
 import type { PatchHunk } from "../lib/patchParser";
 import type { PendingComment } from "../lib/quoteFormat";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // Lazy on purpose, not just for bundle size: FileLineThread pulls the comment
 // rail machinery (CommentComposer → ConversationView's MessageInput), and this
 // module sits under MarkdownRenderer, which ConversationView itself imports. A
@@ -562,7 +563,7 @@ export const DiffView = memo(function DiffView({
     }, 140);
   }, [cancelClear]);
 
-  useEffect(() => cancelClear, [cancelClear]);
+  useWatchEffect(() => cancelClear, [cancelClear]);
 
   const commentOnHoveredRow = useCallback(() => {
     const line = hoveredLine.current;

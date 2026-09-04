@@ -1,6 +1,6 @@
 "use client";
 
-import React, { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { memo, useLayoutEffect, useRef, useState } from "react";
 import { Pin, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
@@ -8,6 +8,7 @@ import { useCoarseNow } from "../hooks/useCoarseNow";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
 import { FormattedSummary } from "./FormattedSummary";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // The pinned thread state, rendered directly above the composer: the agent's own
 // standing answer to "where does this thread stand?", so a human opening a long
 // or multi-party session sees the situation before reading any of it.
@@ -53,7 +54,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
-  useEffect(() => setExpanded(false), [conversationId]);
+  useWatchEffect(() => setExpanded(false), [conversationId]);
   useLayoutEffect(() => {
     if (expanded) return;
     const el = bodyRef.current;

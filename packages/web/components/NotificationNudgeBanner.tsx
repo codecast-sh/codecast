@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { BellOff, BellRing, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -12,6 +12,7 @@ import {
   type NotificationMiss,
 } from "../lib/notificationNudge";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // The pushy "turn on desktop notifications" strip. Sits with the other
 // dashboard banners; policy (when to show, when a dismiss holds, when a missed
 // message overrides it) lives in lib/notificationNudge so it's unit-testable.
@@ -33,7 +34,7 @@ export function NotificationNudgeBanner() {
   });
 
   // The prompt hint outlives its usefulness once consent lands either way.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (readiness !== "ask") setAwaitingPrompt(false);
   }, [readiness]);
 

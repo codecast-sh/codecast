@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 
+import { useWatchEffect } from "./useWatchEffect";
 // Shared coarse clocks. One interval timer per distinct intervalMs, fanned out to
 // every subscriber — so a list of N cards all calling useCoarseNow(30000) costs a
 // SINGLE 30s timer, not N. Returns a millisecond timestamp that advances every
@@ -73,7 +74,7 @@ export function useNowWhen(sig: (now: number) => string, intervalMs: number): nu
   sigRef.current = sig;
   const renderedSigRef = useRef("");
   renderedSigRef.current = sig(now);
-  useEffect(() => {
+  useWatchEffect(() => {
     const id = setInterval(() => {
       const t = Date.now();
       if (sigRef.current(t) !== renderedSigRef.current) setNow(t);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { CornerDownRight, ExternalLink } from "lucide-react";
 import { useInboxStore, useTrackedStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import { newPageCommentClientId } from "../../../store/chatSlice";
@@ -9,6 +9,7 @@ import { CommentAvatar } from "../../comments/CommentAvatar";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The page kind: the comment discussion on a published page (cast publish).
 // The collapsed card is the page title and the newest comment; expanded, the
 // whole discussion oldest first with replies indented one level, and a reply
@@ -94,7 +95,7 @@ export function PageExpanded({ card, seen }: { card: ThreadCardModel; present: b
   // cold cache the body renders empty and short, so the sentinel is trivially
   // in view with the newest comment never rendered. The count dep fires the
   // mark once the page thread syncs in.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && commentCount === 0) return;
     if (row.last_read_at >= row.last_activity_at && row.unread === 0) return;

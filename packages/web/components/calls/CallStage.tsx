@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -202,7 +202,7 @@ export function CallStage({
   const [pinned, setPinned] = useState<string | null>(null);
   // The face SPEAKER view follows when nothing is pinned: whoever spoke last.
   const [lastSpeaker, setLastSpeaker] = useState<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const first = call.speaking?.[0];
     if (first) setLastSpeaker(String(first));
   }, [call.speaking]);
@@ -794,7 +794,7 @@ export function StageVideo({
   contain?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = ref.current;
     if (!el) return;
     tile.track.attach(el);
@@ -1017,7 +1017,7 @@ function TranscriptRail({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const segCount = call?.segments?.length ?? 0;
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [segCount]);

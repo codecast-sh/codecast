@@ -3,7 +3,7 @@ import { dragCarriesPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -313,7 +313,7 @@ const EMPTY_QUEUE: string[] = [];
 // non-critical query cascade fires.
 function useDeferUntilSettled(key: string | null | undefined): boolean {
   const [enabledKey, setEnabledKey] = useState<string | null | undefined>(key);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!key || enabledKey === key) return;
     const id = setTimeout(() => setEnabledKey(key), 0);
     return () => clearTimeout(id);
@@ -1318,7 +1318,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // called from a native window listener (the ⌥-chord router), where React 18
   // batches the state update past any rAF — an immediate/rAF focus() races the
   // mount and silently leaves focus where it was.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (picking) pickerRef.current?.focus();
   }, [picking]);
 
@@ -1395,7 +1395,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
 
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
   // Re-assigned every render so isOpen/commitAndClose read fresh state.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!handleRef) return;
     handleRef.current = {
       focus: focusPicker,
@@ -1411,7 +1411,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       },
     };
   });
-  useEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
+  useWatchEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
 
   // Focus lives in a real <input> (below) so the global capture-phase shortcut
   // dispatcher treats us as "typing" and suppresses single-letter hotkeys
@@ -1748,7 +1748,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }, [currentAgent, picking]);
 
   // Post-commit focus — same race as the project picker's (see note there).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (picking) holderRef.current?.focus();
   }, [picking]);
 
@@ -1783,7 +1783,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }, [hi, handleAgentSwitch, exitAgentPicker, showWorkflow, onToggleWorkflow]);
 
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!handleRef) return;
     handleRef.current = {
       focus: focusAgentPicker,
@@ -1791,7 +1791,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       move: moveAgentPicker,
     };
   });
-  useEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
+  useWatchEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
 
   return (
     <div className="flex flex-col items-center gap-2 px-4 pb-7">
@@ -1905,7 +1905,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
   // A pre-warmed blank opened while a bucket chip is focused files itself there
   // (the create-time stamp in beginOptimisticSession covers fresh creates; this
   // covers blanks that existed before the filter was set).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!activeBucketFilter || assigned) return;
     const store = useInboxStore.getState();
     const real = store.getConvexId(convId) ?? convId;
@@ -1969,7 +1969,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // the folder list), but it renders down on the Context line — this slot is
   // the portal target StableContextPicker mounts at the end of that line.
   const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => {
+  useMountEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       // altChordDirection also releases ⌥←/⌥→ from a text caret (word jump).
       const dir = altChordDirection(e);
@@ -1993,7 +1993,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
     };
     window.addEventListener("keydown", onChord, true);
     return () => window.removeEventListener("keydown", onChord, true);
-  }, []);
+  });
 
   // Project picker sits up top; a flex spacer pushes the agent picker down so it
   // pins to the bottom, directly above the message input (the host renders the
@@ -3239,7 +3239,7 @@ function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, restore
   restoredLabel?: string;
 }) {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
+  useWatchEffect(() => {
     if (phase !== "restarting") return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -5422,7 +5422,7 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   // Discovery of the daemon's loopback endpoint can outlast a click's
   // activation window, so start it as soon as a row that can focus a tab
   // renders — by the time the human clicks, the endpoint is cached.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (browserTabId) prefetchBrowserFocusEndpoint(convex);
   }, [browserTabId, convex]);
 
@@ -7953,7 +7953,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
-  const chatOn = useTeamFeature("chat");
   const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   const handleToggleExpand = () => {
@@ -8793,6 +8792,11 @@ function AssistantBlockImpl({
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
+  // Hooks sit above BOTH visibility early-returns — hooks can't be conditional.
+  const chatOn = useTeamFeature("chat");
+  // Right-click mirrors the corner toolbar (meta actions only).
+  const ctxMenu = useContextMenu<void>();
+
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
   }
@@ -8804,17 +8808,12 @@ function AssistantBlockImpl({
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
-  const chatOn = useTeamFeature("chat");
   const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   // Show Claude header for first message in sequence (regardless of content type)
   const shouldShowHeader = showHeader;
   const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
   const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
-
-  // Right-click mirrors the corner toolbar (meta actions only). Declared
-  // before the visibility early-return — hooks can't be conditional.
-  const ctxMenu = useContextMenu<void>();
 
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
@@ -9838,10 +9837,10 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 // re-renders each second, not the whole composer.
 function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolLabel?: string }) {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
+  useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  });
   const elapsedMs = startedAt ? now - startedAt : 0;
   const showElapsed = shouldShowElapsed(startedAt, now);
   return (
@@ -10148,7 +10147,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // deletes back past that point. Without this every further keystroke would
   // reopen the popup on a spinner and fire another server search.
   const mentionDeadEndRef = useRef<{ startPos: number; len: number } | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!acTrigger || acTrigger.type !== "@" || acServerLoading) return;
     if (acItems.length > 0 || !acQuery.includes(" ")) return;
     mentionDeadEndRef.current = { startPos: acTrigger.startPos, len: acQuery.length };
@@ -13733,7 +13732,7 @@ const ConversationViewInner = (
     all.sort(byRecency);
     mentionItemsRef.current = all;
   }, [convTeamId]);
-  useEffect(() => { buildMentionItems(); }, [buildMentionItems]);
+  useWatchEffect(() => { buildMentionItems(); }, [buildMentionItems]);
   const handleMentionQuery = useCallback((_q: string) => { buildMentionItems(); }, [buildMentionItems]);
 
   const isWaitingForResponse = useMemo(() => {
@@ -13821,7 +13820,7 @@ const ConversationViewInner = (
   // Publish the sticky prompt card's height on the header as --conv-sticky-h so
   // header-anchored overlays (the files-changed pill) slide below it instead of
   // overlapping at narrow widths. Imperative write: no re-render on resize.
-  useEffect(() => {
+  useWatchEffect(() => {
     const header = headerRef.current;
     if (!header) return;
     const el = stickyElRef.current;
@@ -15592,7 +15591,7 @@ const ConversationViewInner = (
   // owner-only, once per opened conversation.
   const backfillImagePreview = useMutation(api.conversations.backfillImagePreview);
   const imagePreviewBackfilledRef = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const cid = conversation?._id?.toString();
     if (!cid || !isConvexId(cid) || sessionImageEntries.length === 0) return;
     if (conversation?.is_own === false) return;
@@ -15617,7 +15616,7 @@ const ConversationViewInner = (
   // The window check stays as a second trigger for rows that predate it.
   const backfillConversationImages = useMutation(api.messages.backfillConversationImages);
   const imagesBackfilledRef = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const cid = conversation?._id?.toString();
     if (!cid || !isConvexId(cid) || !serverSessionImages || conversation?.is_own === false) return;
     if (imagesBackfilledRef.current === cid) return;

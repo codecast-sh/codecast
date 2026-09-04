@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
+import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AvatarImg } from "../lib/avatarCache";
 import { imageBytes } from "../lib/imageByteCache";
@@ -63,6 +63,7 @@ import { useAckAssignment } from "../hooks/useAckAssignment";
 import { sessionPanePath, startPaneDrag } from "../lib/stage";
 import { PaneControls } from "./stage/PaneControls";
 
+import { useMountEffect } from "../hooks/useMountEffect";
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
@@ -400,7 +401,7 @@ export function SignInCta({
   // the auth-blocked sessions as revive-in-flight so the counts drop on the
   // spot instead of on the kill/continue round trip.
   const handledConfirmRef = useRef(0);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (flow?.status !== "confirmed" || !flow.finished_at) return;
     if (handledConfirmRef.current === flow.finished_at) return;
     handledConfirmRef.current = flow.finished_at;
@@ -1909,7 +1910,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
   // gets: Esc exits, arrows move a cursor, Enter opens the selected schedule.
   // Arrow keys only bind once the roster is open, so global shortcuts and the
   // session list's own nav never contend with it.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -1941,7 +1942,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
     return () => window.removeEventListener("keydown", onKey);
   }, [open, rows, cursor, onOpen, close]);
   // A closed roster has no cursor — reopening starts fresh in mouse mode.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) setCursor(-1);
   }, [open]);
   if (rows.length === 0) return null;
@@ -2176,7 +2177,7 @@ export const SessionCard = memo(function SessionCard({
   // A preview URL whose image fails to load must drop the whole thumb slot —
   // an invisible broken img still reserves ~46px and wraps the text early.
   const [thumbBroken, setThumbBroken] = useState(false);
-  useEffect(() => setThumbBroken(false), [session.image_preview_url]);
+  useWatchEffect(() => setThumbBroken(false), [session.image_preview_url]);
   // Cache-first bytes: a thumbnail seen once paints locally (and offline)
   // instead of re-fetching per scroll-through of the inbox.
   const thumbSrc = imageBytes.useSrc(showImageThumb ? session.image_preview_url : undefined);
@@ -3242,7 +3243,7 @@ function ActiveSessionBeacon({
   // restructures, which is when the active card's node can change identity.
   // The body is a single querySelector + ref compare, so the steady-state
   // cost per render is negligible.
-  useEffect(() => {
+  useWatchEffect(() => {
     const container = containerRef.current;
     const el = container && activeSessionId
       ? container.querySelector(`[data-session-id="${activeSessionId}"]`)
@@ -3272,11 +3273,11 @@ function ActiveSessionBeacon({
   // Unmount teardown also forgets the node: under StrictMode's mount/unmount/
   // mount rehearsal the effect above re-runs against the same node and must
   // re-observe rather than short-circuit on the ref compare.
-  useEffect(() => () => {
+  useMountEffect(() => () => {
     ioRef.current?.disconnect();
     ioRef.current = null;
     observedRef.current = null;
-  }, []);
+  });
 
   const handleJump = useCallback(() => {
     const container = containerRef.current;
@@ -3715,7 +3716,7 @@ function SessionListPanelImpl({
       "|" + triggerOrder.map((g) => `${g.key}:${g.ids.join("+")}`).join(","),
     [schedulePartition.absorbedIds, triggerOrder],
   );
-  useEffect(() => {
+  useWatchEffect(() => {
     useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds, triggerOrder });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSetsKey]);
@@ -3792,7 +3793,7 @@ function SessionListPanelImpl({
   const blockedMountedAtRef = useRef(Date.now());
   const prevBlockedCountRef = useRef(0);
   const [blockedIncidentTs, setBlockedIncidentTs] = useState(0);
-  useEffect(() => {
+  useWatchEffect(() => {
     const prev = prevBlockedCountRef.current;
     prevBlockedCountRef.current = blockedSessions.length;
     if (prev === 0 && blockedSessions.length > 0 && Date.now() - blockedMountedAtRef.current > 5000) {

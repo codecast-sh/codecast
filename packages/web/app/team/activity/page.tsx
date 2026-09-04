@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -9,6 +8,7 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 import { useInboxStore } from "../../../store/inboxStore";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The single activity feed (the former /dashboard folded in here). It's driven
 // entirely by the URL so the sidebar/command-palette/team-avatar links and tab
 // routing all share one source of truth:
@@ -30,7 +30,7 @@ export default function TeamActivityPage() {
   // entry and again on exit so activity that landed while the feed was open is
   // not re-counted.
   const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (mode !== "team") return;
     void markTeamSeen({});
     return () => { void markTeamSeen({}); };

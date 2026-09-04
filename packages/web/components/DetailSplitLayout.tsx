@@ -1,10 +1,11 @@
 "use client";
-import { ReactNode, useEffect } from "react";
+import { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { hasOpenModal } from "../shortcuts/registry";
 import { useTabContext } from "../lib/tabParams";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 // List, then detail — each taking the full stage:
 //   click/enter → the detail covers the list
 //   Esc / ✕     → back to the list
@@ -34,7 +35,7 @@ export function DetailSplitLayout({
 
   // Esc returns to the list. Never from an editable (editors own Esc), never
   // under a modal or the shortcuts panel.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || hasOpenModal()) return;

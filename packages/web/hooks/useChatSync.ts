@@ -16,7 +16,7 @@
 // subscribes to a SIGNATURE of the fields it renders (store/wakeSig.ts) and
 // reads the raw collection in the body.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useIsSyncHost } from "./useSyncRole";
 import { useConvex } from "convex/react";
 import { useRouter } from "next/navigation";
@@ -55,6 +55,7 @@ import {
 import type { ChatMessageView } from "../components/chat/chatTypes";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 
+import { useWatchEffect } from "./useWatchEffect";
 const api = _api as any;
 
 /** Warm the image cache (id→URL mapping AND bytes) for every image attachment
@@ -183,7 +184,7 @@ export function useChatChannelsSync(): { error?: Error } {
   // an off team anyway; skipping it keeps the console clean.
   const chatOn = useTeamFeature("chat");
   const isSyncHost = useIsSyncHost();
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!chatOn) syncTable("chatRail", []);
   }, [chatOn, syncTable]);
   // useQueryNoThrow, not useQuery: chat is local-first — the components read the
@@ -645,7 +646,7 @@ export function useEnsureChatMessage(messageId: string | undefined): void {
   const convex = useConvex();
   const known = !!useChatMessageRow(messageId);
   const askedRef = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!messageId || !isConvexId(messageId) || known) return;
     if (askedRef.current === messageId) return;
     askedRef.current = messageId;

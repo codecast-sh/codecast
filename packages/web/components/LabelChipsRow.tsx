@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Plus, X, Tag, Filter, FilterX, EyeOff, Trash2, ChevronRight } from "lucide-react";
@@ -20,6 +20,8 @@ import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from ".
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
 
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 type ChipCtxPayload =
   | { kind: "label"; bucket: BucketItem }
   | { kind: "project"; name: string };
@@ -255,7 +257,7 @@ export function LabelChipsRow({
     return cb;
   };
 
-  useEffect(() => {
+  useMountEffect(() => {
     if (!rowRef.current || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver((entries) => {
       setHiddenKeys((prev) => {
@@ -274,7 +276,7 @@ export function LabelChipsRow({
     ioRef.current = io;
     for (const el of chipEls.current.values()) io.observe(el);
     return () => { io.disconnect(); ioRef.current = null; };
-  }, []);
+  });
 
   const hiddenCount = hiddenKeys.size;
   // Filter terms whose in-row chip is clipped away — each gets a pinned twin
@@ -364,7 +366,7 @@ export function LabelChipsRow({
   // Expanding restores the FULL sortLabels order, so the index-based reorder
   // gap math is untouched. Collapses again on every close.
   const [emptyOpen, setEmptyOpen] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!popoverOpen) setEmptyOpen(false);
   }, [popoverOpen]);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
@@ -382,7 +384,7 @@ export function LabelChipsRow({
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
   }, [popoverOpen]);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!popoverOpen) return;
     const onDown = (e: MouseEvent) => {
       if (!popoverRef.current?.contains(e.target as Node)) setPopoverOpen(false);

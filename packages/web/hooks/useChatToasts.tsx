@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -17,6 +17,7 @@ import { soundChatMessage } from "../lib/sounds";
 import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 
+import { useWatchEffect } from "./useWatchEffect";
 // Arriving chat messages → in-app toasts.
 //
 // Mounted once, app-wide, beside the other background sync effects — the point
@@ -98,7 +99,7 @@ export function useChatToasts(): void {
     toast.dismiss();
   }, []);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const state: any = useInboxStore.getState();
     const rail: ChatRailRow[] = state.chatRail ?? [];
     if (!viewerId || rail.length === 0 || !railLive) return;

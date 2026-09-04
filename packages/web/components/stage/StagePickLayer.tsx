@@ -9,7 +9,7 @@
 // extra click, total control — and because it shares the drop preview's
 // geometry and styling, the two gestures read as one system.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../../store/inboxStore";
 import { stageGeometry } from "../../store/stageSplit";
@@ -18,6 +18,7 @@ import { pathLabel } from "../../lib/pathLabel";
 import { hasOpenModal } from "../../shortcuts/registry";
 import { PageIcon } from "../RecentVisitRow";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 export function StagePickLayer({ tab, enabled }: { tab: AppTab; enabled: boolean }) {
   const s = useTrackedStore([(st) => st.stagePick]);
   const pick = enabled ? s.stagePick : null;
@@ -29,7 +30,7 @@ export function StagePickLayer({ tab, enabled }: { tab: AppTab; enabled: boolean
 
   // Esc cancels; Enter takes the hovered pane, or the focused one — a full
   // keyboard path through the picker. Listeners exist only while a pick is up.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pick) return;
     const onKey = (e: KeyboardEvent) => {
       // The veil covers only the stage — the palette or a modal can open on
@@ -54,7 +55,7 @@ export function StagePickLayer({ tab, enabled }: { tab: AppTab; enabled: boolean
 
   // A pick with nothing to choose (layout collapsed meanwhile) resolves to
   // plain navigation instead of stranding the request.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (pick && !layout) placeStagePick("newTab");
   }, [pick, layout]);
 

@@ -10,13 +10,14 @@
 // misses whatever the cache lacks. The floor is re-established every time; the
 // cursor only advances within a session.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 
+import { useWatchEffect } from "./useWatchEffect";
 /** How often the in-session cursor may advance. Reports change on heartbeat
  *  cadence, so a minute keeps the reactive window a beat or two wide. */
 const CURSOR_REFRESH_MS = 60_000;
@@ -62,7 +63,7 @@ export function useSyncCapabilityStateWithArgs(wsArgs: WorkspaceArgs) {
   );
 
   // The header chip: loading only while the FIRST answer is pending.
-  useEffect(() => {
+  useWatchEffect(() => {
     useInboxStore.getState().setLiveLoading("capabilityState", wsArgs !== "skip" && result === undefined);
     return () => useInboxStore.getState().setLiveLoading("capabilityState", false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mirrors useSyncTasks: re-run on resolution flips only
@@ -70,7 +71,7 @@ export function useSyncCapabilityStateWithArgs(wsArgs: WorkspaceArgs) {
 
   // Advance the cursor within this session only — trims the reactive payload,
   // never persisted, resets on load.
-  useEffect(() => {
+  useWatchEffect(() => {
     const timer = setInterval(() => {
       if (lastSeen.current !== undefined && lastSeen.current !== cursor) {
         setCursor(lastSeen.current);
@@ -129,7 +130,7 @@ export function useSyncCapabilityBindingsWithArgs(wsArgs: WorkspaceArgs) {
     ),
   );
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const timer = setInterval(() => {
       if (lastSeen.current !== undefined && lastSeen.current !== cursor) setCursor(lastSeen.current);
     }, CURSOR_REFRESH_MS);

@@ -1,6 +1,6 @@
 import { ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { ReactNode, useEffect, useRef } from "react";
+import { ReactNode, useRef } from "react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { subscribeGestures } from "../store/gestureBridge";
@@ -19,6 +19,7 @@ import { identifyUser, resetUser } from "@/lib/analytics";
 import { durableAuthStorage } from "@/lib/durableAuthStorage";
 import { CONVEX_URL } from "@/lib/localAuth";
 
+import { useWatchEffect } from "../hooks/useWatchEffect";
 function PrefsMigration() {
   useLocalStorageMigration();
   return null;
@@ -82,7 +83,7 @@ function describeDispatchFailure(f: { action: string; args: unknown; message: st
 function DispatchFailureToast() {
   const failure = useInboxStore((s) => s.lastDispatchFailure);
   const lastShownAt = useRef(0);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!failure || failure.at === lastShownAt.current) return;
     lastShownAt.current = failure.at;
     toast.error(describeDispatchFailure(failure));

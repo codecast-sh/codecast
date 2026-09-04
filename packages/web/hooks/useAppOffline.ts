@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 
+import { useMountEffect } from "./useMountEffect";
+import { useWatchEffect } from "./useWatchEffect";
 // How long the connection must stay down before we call it "disconnected".
 // Covers the normal boot handshake, a reconnect after a laptop wake, and the
 // few seconds a Wi-Fi handoff or VPN toggle drops the OS's online flag —
@@ -33,7 +35,7 @@ export function useAppOffline(): { offline: boolean; online: boolean } {
   const [online, setOnline] = useState(() => navigator.onLine);
   const [downLong, setDownLong] = useState(false);
 
-  useEffect(() => {
+  useMountEffect(() => {
     const sync = () => setOnline(navigator.onLine);
     window.addEventListener("online", sync);
     window.addEventListener("offline", sync);
@@ -41,10 +43,10 @@ export function useAppOffline(): { offline: boolean; online: boolean } {
       window.removeEventListener("online", sync);
       window.removeEventListener("offline", sync);
     };
-  }, []);
+  });
 
   const down = wsDown || !online;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!down) {
       setDownLong(false);
       return;

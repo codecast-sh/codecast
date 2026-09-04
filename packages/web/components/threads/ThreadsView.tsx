@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LayoutList } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -35,6 +35,7 @@ import { ThreadsPageCtx, type ThreadsPageContextValue } from "./threadsContext";
 import "../chat/chat.css";
 import "./threads.css";
 
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The Threads page body: every conversation the viewer is in — chat threads,
 // DMs, session comment threads, task comment streams, and (toggle) inbox
 // sessions — one card list, newest activity first, filtered by a single
@@ -121,7 +122,7 @@ export function ThreadsView({ present }: { present: boolean }) {
   // is settled, so marking itself read never collapses it under the reader.
   const openEntries = useInboxStore((s) => s.threadCardOpen);
   const sightedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
+  useWatchEffect(() => {
     const sighted = sightedRef.current;
     const patch: Record<string, ThreadCardOpenEntry> = {};
     for (const card of cards) {
