@@ -87,8 +87,7 @@ export interface TargetChoice {
  */
 const CLONE_ONLY: Record<string, string> = {
   grant: "the extension cannot grant site permissions in the human's Chrome",
-  eval: "it has no real mode path yet",
-  login: "it has no real mode path yet",
+  login: "the human's Chrome already holds their logins; a sign-in there is the human's own",
 };
 
 /**
@@ -112,15 +111,19 @@ function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint:
  * reads from the state file. Real mode (bridge/real.ts isRealMode) is a
  * second engine session, keyed `<session>-real`, on the bridge host's socket;
  * the daemon resets its tab when a session's flags change, so the two never
- * share a key. Dies when real mode was asked for but the bridge was never
- * set up, or the host on its port cannot prove it is ours: silently driving
- * the clone instead would act on the wrong browser.
+ * share a key. The human's Chrome is already running with its own logins;
+ * the bridge host and the extension are what must be up for it, so a host
+ * that is not running is started here (requireRealBridge), before the socket
+ * URL is built. Dies when real mode was asked for but the bridge was never
+ * set up, the extension is not on the host, or the host on its port cannot
+ * prove it is ours: silently driving the clone instead would act on the
+ * wrong browser.
  */
 async function ctx(choice: TargetChoice = {}): Promise<Ctx> {
   const session = engineSession();
   if (!isRealMode(choice, auditOwner())) return { session };
   try {
-    return await engineBrowserFor(realSessionKey(session));
+    return await engineBrowserFor(realSessionKey(session), await requireRealBridge());
   } catch (err) {
     die((err as Error).message);
   }
@@ -518,10 +521,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     const url = args.find((a) => !a.startsWith("--"));
     const deny = url ? refuseNavigation(url, owner, "open") : null;
     if (deny) die(deny.message, deny.hint);
-    // The real Chrome is the human's, already running with its own logins:
-    // the bridge host and the extension are what must be up for it.
-    if (real) await requireRealBridge().catch((err) => die((err as Error).message));
-    else await ensureBrowser();
+    // The real Chrome is the human's, already running; its bridge came up in
+    // ctx. The clone is ours to start.
+    if (!real) await ensureBrowser();
     // The pre-action hook ran before the browser existed on a cold start;
     // now that it does, bind this session's tab quietly (pinnedTab.ts).
     await ensurePinnedTab(session);

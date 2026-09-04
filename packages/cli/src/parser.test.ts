@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
 
 describe("Parser malformed JSON handling", () => {
   test("parseSessionLine logs warning and returns null for malformed JSON", () => {
@@ -920,6 +920,42 @@ describe("per-message model extraction", () => {
     expect(messages).toHaveLength(2);
     expect(messages[0].model).toBeUndefined();
     expect(messages[1].model).toBeUndefined();
+  });
+});
+
+describe("API-error banner rewrite (burst throttle vs quota park)", () => {
+  const banner = (extra: Record<string, unknown>) => ({
+    type: "assistant" as const,
+    uuid: "b1",
+    timestamp: "2026-09-04T19:14:41.028Z",
+    message: {
+      role: "assistant" as const,
+      model: "<synthetic>",
+      content: [{ type: "text" as const, text: "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model." }],
+    },
+    isApiErrorMessage: true,
+    ...extra,
+  });
+  const transient = `429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011Ceiw6MEu34wgEmTDQ8e2Y"}`;
+
+  test("a transient 429 is synced as the marked throttle banner", () => {
+    const [msg] = extractMessages([banner({ apiErrorStatus: 429, errorDetails: transient })]);
+    expect(msg.content.startsWith("Rate limited ·")).toBe(true);
+    expect(msg.content).toContain("Claude Code showed: You've reached your Fable limit.");
+    expect(msg.model).toBeUndefined();
+  });
+
+  test("a quota park keeps the CLI's own words", () => {
+    // A real weekly exhaustion writes the same line with no transient body.
+    const [plain] = extractMessages([banner({ apiErrorStatus: 429 })]);
+    expect(plain.content).toBe("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.");
+    const [quota] = extractMessages([banner({ apiErrorStatus: 429, errorDetails: `429 {"type":"error","error":{"type":"exceeded_limit"}}` })]);
+    expect(quota.content).toBe("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.");
+  });
+
+  test("claudeBannerText leaves ordinary assistant text alone", () => {
+    expect(claudeBannerText({}, "hello")).toBe("hello");
+    expect(claudeBannerText({ isApiErrorMessage: true, apiErrorStatus: 429, errorDetails: transient }, "x").startsWith("Rate limited ·")).toBe(true);
   });
 });
 

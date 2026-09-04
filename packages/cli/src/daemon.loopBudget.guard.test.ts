@@ -72,17 +72,31 @@ const ROWS: Row[] = [
   { file: D, name: "saveDaemonState", kind: "function", minLines: 5, mustContain: "STATE_FILE" },
   { file: D, name: "readDaemonState", kind: "function", minLines: 5, mustContain: "STATE_FILE" },
   { file: D, name: "resolveTurnEndStatus", kind: "function", minLines: 15, mustContain: "declaredSettleVerdict" },
+  { file: D, name: "runHibernationPass", kind: "function", minLines: 15, mustContain: "selectHibernationCandidates" },
+  { file: D, name: "collectHibernationCandidates", kind: "function", minLines: 20, mustContain: "resumeSessionCache" },
+  { file: D, name: "hibernationRefusalReason", kind: "function", minLines: 20, mustContain: "hibernationBlockReason" },
+  // The pass itself only calls io methods, so without this row the guard would
+  // watch a body that cannot hold a sync call. Every real filesystem, tmux and
+  // Convex call of the pass lives in this object. Its two sync callees
+  // (readConversationCache, findReapTranscript) are memoized single stats and
+  // are shared with the reaper, which runs on the same tick.
+  { file: D, name: "productionHibernationIo", find: "const productionHibernationIo", kind: "call", minLines: 30, mustContain: "tmuxExec" },
+  { file: D, name: "sweepStaleTmuxServers", kind: "function", minLines: 10, mustContain: "staleTmuxServerKillPlan" },
   // Nested in main().
   { file: D, name: "handleStatusData", kind: "function", from: MAIN, minLines: 100, mustContain: "resolveTurnEndStatus" },
   { file: D, name: "handleStatusFile", kind: "function", from: MAIN, minLines: 5, mustContain: "handleStatusData" },
-  { file: D, name: "persistHookStatus", kind: "function", from: MAIN, minLines: 5, mustContain: "lastHookStatus" },
+  { file: D, name: "queueAgentStatusWrite", kind: "function", minLines: 5, mustContain: "AGENT_STATUS_DIR" },
   { file: D, name: "handlePlanFile", kind: "function", from: MAIN, minLines: 15, mustContain: "syncPlanFromPlanMode" },
   { file: D, name: "findMostRecentSessionId", kind: "function", from: MAIN, minLines: 5, mustContain: "listFilesByMtime" },
   { file: D, name: 'watcher.on("session")', find: 'watcher.on("session"', kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
-  { file: D, name: "hookServer = startHookServer(", kind: "call", from: MAIN, minLines: 15, mustContain: "processSessionFile" },
+  { file: D, name: "setHookStatusSink(", kind: "call", from: MAIN, minLines: 15, mustContain: "processSessionFile" },
   { file: D, name: "main setInterval", kind: "intervals", from: MAIN, minLines: 1, mustContain: "", minCount: 14 },
   { file: D, name: "module setInterval", kind: "intervals", from: "", to: MAIN, minLines: 1, mustContain: "", minCount: 1 },
-  { file: D, name: "boot slice", kind: "slice", from: 'logLifecycle("daemon_start"', to: "hookServer = startHookServer(", minLines: 500, mustContain: "waitForConfig" },
+  // The loopback server listens a few lines into boot (pl-497 unit D1), so
+  // this window is short by design: nothing heavy may creep back in front of
+  // the listen, and the guard reads that window as its own slice below.
+  { file: D, name: "pre-listen boot slice", kind: "slice", from: 'logLifecycle("daemon_start"', to: "hookServer = startHookServer(", minLines: 20, mustContain: "waitForConfig" },
+  { file: D, name: "boot slice", kind: "slice", from: 'logLifecycle("daemon_start"', to: "setHookStatusSink(", minLines: 500, mustContain: "waitForConfig" },
   // Loopback server routes.
   { file: "terminal/terminalServer.ts", name: "handleTerminalHttp", kind: "function", minLines: 20, mustContain: "listTerminalSessions" },
   { file: "terminal/terminalServer.ts", name: "listTerminalSessions", kind: "function", minLines: 3, mustContain: "tmuxRunAsync" },

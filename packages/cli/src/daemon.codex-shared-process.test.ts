@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readCodexSessionMetaHeadAsync, sessionMetaHeadCut, sessionProcessOwnership } from "./daemon.js";
+import { processLookupAllowsCwdFallback, readCodexSessionMetaHeadAsync, sessionMetaHeadCut, sessionProcessOwnership } from "./daemon.js";
 import { planSessionTeardown, shortId } from "./sessionProcessMatcher.js";
 
 // ct-41071, anchored to the incident that produced it: ~/.codex/sessions/2026/08/02.
@@ -127,6 +127,11 @@ afterAll(() => {
 });
 
 describe("sessionProcessOwnership — the incident's own sessions", () => {
+  test("Codex never guesses a process from working directory and start time", () => {
+    expect(processLookupAllowsCwdFallback("codex")).toBe(false);
+    expect(processLookupAllowsCwdFallback("claude")).toBe(true);
+  });
+
   test("every in-process subagent THREAD of 019fc25f borrows the parent's process", () => {
     for (const sid of THREAD_SUBAGENTS) {
       expect(sessionProcessOwnership(sid)).toBe("borrowed");
