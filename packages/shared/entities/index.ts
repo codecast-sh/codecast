@@ -324,24 +324,81 @@ export function parseEntityUrl(
  * not a page link.
  */
 export function parsePublishedPageUrl(href: string | undefined | null): { slug: string } | null {
+  const loc = appLocationOf(href);
+  if (!loc) return null;
+  const m = /^\/(?:cli\/)?a\/([A-Za-z0-9]{8,24})$/.exec(loc.path);
+  return m ? { slug: m[1] } : null;
+}
+
+/**
+ * The path and fragment of an href that addresses one of OUR pages: an
+ * absolute URL on an app host, or a path-only href. Anything on another host
+ * or another protocol (mailto:, entity://, …) is not ours and yields null.
+ * Query strings are dropped; the fragment survives because message deep links
+ * live in it (`/conversation/<id>#msg-<id>`).
+ */
+function appLocationOf(href: string | undefined | null): { path: string; hash: string } | null {
   if (!href || typeof href !== "string") return null;
-  let path = href.trim();
-  if (/^https?:\/\//i.test(path)) {
+  const raw = href.trim();
+  if (/^https?:\/\//i.test(raw)) {
     let u: URL;
     try {
-      u = new URL(path);
+      u = new URL(raw);
     } catch {
       return null;
     }
     if (!isAppHost(u.host)) return null;
-    path = u.pathname;
-  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
-    return null;
-  } else {
-    path = path.split(/[?#]/)[0];
+    return { path: u.pathname, hash: u.hash };
   }
-  const m = /^\/(?:cli\/)?a\/([A-Za-z0-9]{8,24})$/.exec(path);
-  return m ? { slug: m[1] } : null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return null;
+  const hashIdx = raw.indexOf("#");
+  const beforeHash = hashIdx === -1 ? raw : raw.slice(0, hashIdx);
+  return { path: beforeHash.split("?")[0], hash: hashIdx === -1 ? "" : raw.slice(hashIdx) };
+}
+
+// ---------------------------------------------------------------------------
+// Message references
+//
+// A conversation message is addressed two ways, and both circulate as links:
+//
+//   /share/message/<token>              a public excerpt (token minted by the
+//                                       sharer; anyone holding it may read)
+//   /conversation/<id>#msg-<message id> the message in place (readable by
+//                                       whoever can read the conversation)
+//
+// Neither is an entity route (no `/messages/<id>` page exists), so the message
+// is its own reference kind rather than an EntityType. A reference is carried
+// through markdown as `msg:<token>` or `msg:<message id>` — the two never
+// collide, a share token is a UUID and a message id a 32-char Convex id.
+// ---------------------------------------------------------------------------
+
+export const MESSAGE_REF_PREFIX = "msg:";
+
+export type MessageRef = { kind: "share"; token: string } | { kind: "message"; id: string };
+
+/** If `href` addresses a conversation message (either form above), its reference. */
+export function parseMessageRefUrl(href: string | undefined | null): MessageRef | null {
+  const loc = appLocationOf(href);
+  if (!loc) return null;
+  const share = parseSharePath(loc.path);
+  if (share) return share.kind === "message" ? { kind: "share", token: share.token } : null;
+  const entity = parseEntityUrl(loc.path);
+  if (!entity || entity.type !== "session") return null;
+  const m = /^#msg-([a-z0-9]{32})$/.exec(loc.hash);
+  return m ? { kind: "message", id: m[1] } : null;
+}
+
+/** The markdown payload for a message reference (`msg:<token or id>`). */
+export function messageRefPayload(ref: MessageRef): string {
+  return `${MESSAGE_REF_PREFIX}${ref.kind === "share" ? ref.token : ref.id}`;
+}
+
+/** The inverse of messageRefPayload; null for any other payload. */
+export function parseMessageRefPayload(payload: string | undefined | null): MessageRef | null {
+  if (!payload || !payload.startsWith(MESSAGE_REF_PREFIX)) return null;
+  const value = payload.slice(MESSAGE_REF_PREFIX.length).trim();
+  if (isConvexId(value)) return { kind: "message", id: value };
+  return /^[A-Za-z0-9_-]{6,80}$/.test(value) ? { kind: "share", token: value } : null;
 }
 
 /**

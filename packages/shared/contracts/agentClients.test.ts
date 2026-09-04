@@ -146,6 +146,15 @@ describe("new-session launch options", () => {
     const opencode = launchRailOptions(AGENT_CLIENTS.opencode.modelConfig!);
     expect(opencode.efforts).toEqual(["default"]);
   });
+
+  it("offers the current Codex models and extended reasoning levels", () => {
+    const codex = launchRailOptions(AGENT_CLIENTS.codex.modelConfig!);
+    expect(codex.models.map((model) => model.key)).toEqual([
+      "default", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+      "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
+    ]);
+    expect(codex.efforts).toEqual(["default", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
 });
 
 // capabilitySupport is derived from agentFileTargets — the same slots a driver

@@ -28,6 +28,14 @@ export const DAEMON_COMMANDS = [
   "run_workflow",
   "reinstall",
   "move_to_device",
+  // The web asked for a session on the cloud host. Targeted at an online LOCAL
+  // daemon (the one with the host registry + SSH key): it wakes the host,
+  // refreshes the checkout there, copies the manifest's secret files, acquires
+  // an isolated worktree with `cast ws acquire` on the host, then places the
+  // conversation on the host's device (cloud.placeConversation). Runs as
+  // `cast cloud start <conversation>` in a child, like move_to_device. args:
+  // { conversation_id, cloud_device_id? }. Old daemons: "Unknown command".
+  "cloud_spawn",
   // Fork fast path: resume a fork by copying the parent's local JSONL. A
   // SEPARATE command (not resume_session) so daemons that predate it report
   // "Unknown command" and do nothing — falling into their resume_session path
@@ -80,6 +88,13 @@ export const DAEMON_COMMANDS = [
   // split reports the machine can't stream and offers the ssh command instead).
   // See packages/shared/contracts/terminalStream.ts.
   "stream_pane",
+  // Park a session's pane to give the machine back its resources: the reaper's
+  // teardown (heartbeat stopped first, transcript kept, tmux session and its
+  // process tree killed) plus the "hibernated" agent status. The next message
+  // resumes it. args: { session_id, conversation_id }. Old daemons: "Unknown
+  // command" (the session just stays live). There is no wake_session: waking is
+  // a resume, so `cast wake` sends resume_session.
+  "hibernate_session",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
