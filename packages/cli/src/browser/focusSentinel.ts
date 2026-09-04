@@ -20,13 +20,13 @@
  *    both funnel through focusBrowserTab, which stamps noteDeliberateRaise()
  *    (same process, the daemon) — and login also stamps
  *    InstanceState.loginRaisedAt (a CLI process the daemon can't see).
+ *  - the human choosing the window with Cmd-Tab or Option-Tab: the physical
+ *    chord is sampled through CoreGraphics and remembered across the app switch.
  *  - the human clicking into the window: a click activates an app, so a left
  *    or right mouse-down within the last couple of seconds means a person did
- *    this. Read via CGEventSourceSecondsSinceLastEventType (bun:ffi, no
- *    spawn). Cmd-tabbing into an agent Chrome is indistinguishable from a
- *    steal and bounces — click the window instead.
+ *    this. Read via CoreGraphics as well (bun:ffi, no spawn).
  *
- * If the click detector cannot load, the sentinel stays off: without it a
+ * If the input detector cannot load, the sentinel stays off: without it a
  * human clicking into the agent browser would be bounced out, which is worse
  * than the theft.
  */
@@ -40,6 +40,10 @@ import { readState } from "./instance.js";
 export const DELIBERATE_RAISE_GRACE_MS = 120_000;
 /** A mouse-down this recent means the human activated the window themselves. */
 export const HUMAN_CLICK_GRACE_S = 2;
+export const HUMAN_APP_SWITCH_GRACE_MS = 2_000;
+
+const TAB_KEY_CODE = 48;
+const APP_SWITCH_FLAGS = (1n << 20n) | (1n << 19n);
 
 let lastDeliberateRaiseAt = 0;
 
@@ -57,32 +61,49 @@ export function isAgentChromeCommand(cmd: string): boolean {
   return /--remote-debugging-port=\d+/.test(cmd) && /--user-data-dir=/.test(cmd) && !/--headless/.test(cmd);
 }
 
+export function isAppSwitchChord(tabDown: boolean, flags: bigint): boolean {
+  return tabDown && (flags & APP_SWITCH_FLAGS) !== 0n;
+}
+
 /** The whole policy, pure: bounce exactly the unprovoked machine raise. */
 export function shouldRestoreFocus(i: {
   agentChrome: boolean;
   msSinceDeliberateRaise: number;
+  msSinceAppSwitch: number;
   secondsSinceClick: number;
 }): boolean {
   if (!i.agentChrome) return false;
   if (i.msSinceDeliberateRaise < DELIBERATE_RAISE_GRACE_MS) return false;
+  if (i.msSinceAppSwitch <= HUMAN_APP_SWITCH_GRACE_MS) return false;
   if (i.secondsSinceClick <= HUMAN_CLICK_GRACE_S) return false;
   return true;
 }
 
 /** Seconds since the last mouse-down, via CoreGraphics — or null when the
  *  symbol can't load (non-darwin, no bun:ffi), which turns the sentinel off. */
-async function loadClickAge(): Promise<(() => number) | null> {
+async function loadHumanInput(): Promise<{ clickAge: () => number; appSwitchAge: () => number } | null> {
   if (process.platform !== "darwin") return null;
   try {
     const { dlopen, FFIType } = await import("bun:ffi");
     const cg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", {
       CGEventSourceSecondsSinceLastEventType: { args: [FFIType.i32, FFIType.u32], returns: FFIType.f64 },
+      CGEventSourceKeyState: { args: [FFIType.i32, FFIType.u16], returns: FFIType.bool },
+      CGEventSourceFlagsState: { args: [FFIType.i32], returns: FFIType.u64 },
     });
     const since = cg.symbols.CGEventSourceSecondsSinceLastEventType;
-    // kCGEventSourceStateHIDSystemState = 1; left mouse down = 1, right = 3.
-    const age = () => Math.min(Number(since(1, 1)), Number(since(1, 3)));
-    age(); // probe now so a broken symbol disables the sentinel, not a tick
-    return age;
+    const keyState = cg.symbols.CGEventSourceKeyState;
+    const flagsState = cg.symbols.CGEventSourceFlagsState;
+    const clickAge = () => Math.min(Number(since(1, 1)), Number(since(1, 3)));
+    let lastAppSwitchAt = 0;
+    const sampleAppSwitch = () => {
+      const tabDown = Boolean(keyState(1, TAB_KEY_CODE));
+      const flags = BigInt(flagsState(1));
+      if (isAppSwitchChord(tabDown, flags)) lastAppSwitchAt = Date.now();
+    };
+    clickAge();
+    sampleAppSwitch();
+    setInterval(sampleAppSwitch, 25).unref?.();
+    return { clickAge, appSwitchAge: () => Date.now() - lastAppSwitchAt };
   } catch {
     return null;
   }
@@ -104,9 +125,9 @@ export async function commandOfPidAsync(pid: number): Promise<string> {
  * idle cost stays at one small spawn a second.
  */
 export async function startFocusSentinel(log: (line: string) => void): Promise<NodeJS.Timeout | null> {
-  const clickAge = await loadClickAge();
-  if (!clickAge) {
-    if (process.platform === "darwin") log("[FOCUS] sentinel off: mouse-click detector unavailable");
+  const input = await loadHumanInput();
+  if (!input) {
+    if (process.platform === "darwin") log("[FOCUS] sentinel off: human-input detector unavailable");
     return null;
   }
   let lastAsn: string | null = null;
@@ -137,7 +158,8 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
       const restore = shouldRestoreFocus({
         agentChrome: true,
         msSinceDeliberateRaise: Date.now() - Math.max(lastDeliberateRaiseAt, loginRaisedAt),
-        secondsSinceClick: clickAge(),
+        msSinceAppSwitch: input.appSwitchAge(),
+        secondsSinceClick: input.clickAge(),
       });
       if (restore && lastHumanPid) {
         log(`[FOCUS] agent Chrome ${pid} took the front unprovoked — returning focus to pid ${lastHumanPid}`);

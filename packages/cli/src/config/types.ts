@@ -158,6 +158,21 @@ export interface Config {
   // disables it — re-warming is speculative, so it's opt-in.
   warm_pool_size?: number;
 
+  // --- Fleet cap (daemon.ts, hibernation.ts) ---
+  // How many sessions may hold a live pane on this machine. Past the cap the
+  // heartbeat maintenance pass parks the longest-idle ones: the reaper's
+  // teardown, the transcript kept, the agent status set to "hibernated", and
+  // the next message resumes it. 0 or absent = no cap.
+  max_live_sessions?: number;
+  // A session awake and idle for this long is parked whatever the fleet size.
+  // The clock is awake idle time (machine sleep excluded), which the resource
+  // monitor only measures on macOS, so on other platforms only the cap above
+  // does anything. 0 or absent = no idle bar.
+  //
+  // The daemon reads both knobs from the config it loaded at boot, so editing
+  // them here changes nothing until the daemon restarts (`cast restart`).
+  hibernate_idle_ms?: number;
+
   // --- OpenCode rich transport (daemon.ts, opencodeServer.ts) ---
   // The optional `opencode serve` sidecar the daemon attaches to for opencode's
   // fork-by-id API and live SSE state (opencodeServer.ts). Absent → default ON

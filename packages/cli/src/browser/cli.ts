@@ -17,7 +17,6 @@
  * second call asking.
  */
 
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -63,7 +62,7 @@ import {
 } from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
-import { readHosts, ensureUp, toRemoteHost, stopHost, hostState, upsertHost, type CloudHost } from "./cloudHost.js";
+import { buildHostsCommand } from "../hosts/cli.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
@@ -229,6 +228,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .alias("br")
     .description("Drive a real Chrome: snapshot pages, click, type, screenshot, read console");
 
+  // The host group is shared with the top-level `cast hosts`: same builder,
+  // two mount points, so the documented `cast browser hosts ...` keeps working.
+  buildHostsCommand(br);
+
   // The agent-browser engine drives everything it covers, which is nearly all
   // of it. Our own CDP driver stays behind it as a fallback for a machine that
   // cannot install the engine — no npm, no network — so `cast browser` keeps
@@ -237,168 +240,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // The choice is made once, at registration, because two implementations of
   // the same verb cannot both be registered and a per-call decision would make
   // the help text lie about what is going to run.
-  const hosts = br.command("hosts").description("Remote machines a browser can run on");
-
-  hosts
-    .command("ls", { isDefault: true })
-    .description("List remote hosts, what they cost, and whether they are awake")
-    .action(() => {
-      const rows = readHosts();
-      if (!rows.length) {
-        console.log(fmt.muted("no remote hosts registered — `cast browser hosts add --help`"));
-        return;
-      }
-      for (const h of rows) {
-        let line: string;
-        try {
-          const s = hostState(h);
-          const mark = s.state === "running" ? fmt.success("awake") : s.state === "stopped" ? fmt.muted("asleep") : fmt.warning(s.state);
-          line = `${mark.padEnd(18)} ${s.address ?? fmt.muted("(no address until it wakes)")}`;
-        } catch (err) {
-          line = fmt.warning(`state unknown — ${(err as Error).message}`);
-        }
-        console.log(`  ${h.id.padEnd(22)} ${h.provider.padEnd(13)} ${line}`);
-      }
-      console.log(
-        fmt.muted(
-          "\n  A Linux host sleeps when idle and then costs only its disk, about a dollar a month.\n" +
-            "  An Apple silicon Mac cannot sleep — Apple's licence sets a 24-hour minimum lease, so it\n" +
-            "  bills continuously (~EUR75/month) until deleted. Use one only for work that needs macOS.",
-        ),
-      );
-    });
-
-  hosts
-    .command("add <instanceId>")
-    .description("Register an existing EC2 instance as a browser host")
-    .requiredOption("--key <path>", "SSH private key for it")
-    .option("--region <name>", "AWS region", "us-west-2")
-    .option("--user <name>", "SSH user for the image", "ubuntu")
-    .action((instanceId: string, o: { key: string; region: string; user: string }) => {
-      const host: CloudHost = {
-        id: instanceId, provider: "aws", region: o.region, user: o.user,
-        keyPath: path.resolve(o.key),
-      };
-      const s = hostState(host);
-      if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
-      upsertHost({ ...host, address: s.address });
-      console.log(`${OK} registered ${instanceId} (${s.state})`);
-    });
-
-  hosts
-    .command("provision [id]")
-    .description("Set up a Linux host as a full remote service: display, live stream, idle auto-stop, codecast daemon")
-    .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables)", "20")
-    .option("--no-daemon", "Skip the codecast daemon (browser + stream only; sessions cannot move there)")
-    .action(async (id: string | undefined, o: { idle: string; daemon: boolean }) => {
-      const rows = readHosts();
-      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
-      if (!h) die(id ? `no host ${id}` : "no linux host registered", "`cast browser hosts add <instance-id> --key <pem>` first");
-      const idle = parseInt(o.idle, 10);
-      const { provisionLinuxHost } = await import("./provisionLinux.js");
-      console.log(`provisioning ${h.id} (${h.region})…`);
-      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      try {
-        const report = await provisionLinuxHost(toRemoteHost(up), { idleStopMinutes: idle, skipDaemon: !o.daemon }, (m) =>
-          console.log(fmt.muted(`  ${m}`)),
-        );
-        upsertHost({ ...up, idleStopMinutes: idle });
-        console.log(`${OK} ${h.id} is a full remote service`);
-        console.log(`  chrome:   ${report.chrome.trim()}`);
-        console.log(`  cast:     ${report.cast.trim()}`);
-        console.log(`  claude:   ${report.claude.trim()}`);
-        console.log(`  services: ${report.services.trim()}`);
-        console.log(`  daemon:   ${report.device.trim()}`);
-        console.log(fmt.muted(`  idle auto-stop: ${idle ? `${idle}m` : "disabled"} — it powers itself off and costs only its disk`));
-        console.log(fmt.muted(`  watch it: cast browser hosts view`));
-      } catch (err) {
-        die((err as Error).message);
-      }
-    });
-
-  hosts
-    .command("view [id]")
-    .description("Live view of the host's screen — VLC (RTSP) or any browser (HLS), over an SSH tunnel")
-    .option("--vlc", "Open it in VLC")
-    .action(async (id: string | undefined, o: { vlc?: boolean }) => {
-      const rows = readHosts();
-      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
-      if (!h) die(id ? `no host ${id}` : "no linux host registered");
-      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      const { ensureViewTunnel } = await import("./liveView.js");
-      try {
-        const v = await ensureViewTunnel(toRemoteHost(up));
-        console.log(`${OK} live view is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
-        console.log(`  VLC:     ${fmt.highlight(v.rtsp)}`);
-        console.log(`  browser: ${fmt.highlight(v.hls)}`);
-        console.log(fmt.muted("  the stream only encodes while someone is watching; closing the player stops it"));
-        if (o.vlc) {
-          try {
-            execFileSync("open", ["-a", "VLC", v.rtsp], { stdio: "ignore", timeout: 10_000 });
-            console.log(`${OK} opened in VLC`);
-          } catch {
-            console.log(fmt.warning("  VLC is not installed — `brew install --cask vlc`, or open the browser URL"));
-          }
-        }
-      } catch (err) {
-        die((err as Error).message);
-      }
-    });
-
-  hosts
-    .command("vnc [id]")
-    .description("Interactive view of the host's whole screen (noVNC in your browser) — for anything outside the agent's tab")
-    .option("--no-open", "Print the URL without opening it")
-    .action(async (id: string | undefined, o: { open: boolean }) => {
-      const rows = readHosts();
-      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
-      if (!h) die(id ? `no host ${id}` : "no linux host registered");
-      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      const { ensureVncTunnel } = await import("./liveView.js");
-      try {
-        const v = await ensureVncTunnel(toRemoteHost(up));
-        console.log(`${OK} VNC is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
-        console.log(`  ${fmt.highlight(v.url)}`);
-        console.log(fmt.muted("  the whole display, with mouse and keyboard — for a page's own sign-in, prefer the CONTROL button in the session's browser view"));
-        if (o.open) {
-          try { execFileSync("open", [v.url], { stdio: "ignore", timeout: 10_000 }); } catch { /* headless shell */ }
-        }
-      } catch (err) {
-        die((err as Error).message);
-      }
-    });
-
-  hosts
-    .command("shot [id]")
-    .description("One screenshot of the host's screen, saved locally")
-    .action(async (id: string | undefined) => {
-      const rows = readHosts();
-      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
-      if (!h) die(id ? `no host ${id}` : "no linux host registered");
-      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      const { machineShot } = await import("./liveView.js");
-      try {
-        const file = machineShot(toRemoteHost(up));
-        console.log(file);
-      } catch (err) {
-        die((err as Error).message);
-      }
-    });
-
-  hosts
-    .command("sleep [id]")
-    .description("Stop a host so it stops costing money")
-    .action((id: string | undefined) => {
-      const rows = readHosts();
-      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
-      if (!h) die(id ? `no host ${id}` : "no stoppable host registered");
-      try {
-        stopHost(h);
-        console.log(`${OK} ${h.id} is stopping — it will cost only its disk until something wakes it`);
-      } catch (err) {
-        die((err as Error).message);
-      }
-    });
 
   if (useEngine()) {
     registerEngineCommands(br, deps);

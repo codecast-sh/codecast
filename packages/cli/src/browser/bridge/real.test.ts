@@ -9,12 +9,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  bridgeEndpointIfConfigured, engineBrowserFor, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint, realTabOwnership, rememberRealTab,
-  resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget,
+  bridgeEndpointIfConfigured, connectRealBridge, engineBrowserFor, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint,
+  realTabOwnership, rememberRealTab, resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget,
 } from "./real.js";
 import * as http from "node:http";
-import { writeBridgeState } from "./host.js";
-import { testBridgeHost } from "./host.testutil.js";
+import { startBridgeHost, writeBridgeState, type BridgeState, type RunningHost } from "./host.js";
+import { FakeExtension, TEST_TOKEN, testBridgeHost } from "./host.testutil.js";
 import { freePort } from "../instance.js";
 import { isRealSession, realSessionKey } from "../engine.js";
 import { tabIdOfTarget, targetIdOfTab } from "./protocol.js";
@@ -213,6 +213,48 @@ describe("the browser behind an engine session key", () => {
       for (const url of seen) expect(url).toMatch(/^\/healthz\?nonce=[0-9a-f]{64}$/);
     } finally {
       await new Promise<void>((r) => squatter.close(() => r()));
+    }
+  });
+});
+
+describe("bringing the bridge up for a verb", () => {
+  test("a verb's engine context starts a down host and waits for the extension, where the bare lookup refuses", async () => {
+    const port = await freePort();
+    writeBridgeState({ port, token: TEST_TOKEN, extensionSeenAt: 1 });
+    let host: RunningHost | null = null;
+    let ext: FakeExtension | null = null;
+    const starter = async (state: BridgeState) => {
+      host = await startBridgeHost({ port: state.port, token: state.token });
+      // background.js finds a new host a beat after it comes up; the grace
+      // wait is what turns that beat into a connected answer.
+      setTimeout(() => {
+        ext = new FakeExtension([]);
+        ext.connect(state.port).catch(() => {});
+      }, 300);
+    };
+    try {
+      // The reaper's lookup: a down host is a refusal, never a start.
+      await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/no bridge host is answering/);
+
+      const { bridge, status } = await connectRealBridge(starter);
+      expect(bridge.started).toBe(true);
+      expect(status.extensionConnected).toBe(true);
+      expect(await engineBrowserFor("env-abc-real", bridge)).toEqual({
+        session: "env-abc-real",
+        cdp: `ws://127.0.0.1:${port}/devtools/browser/${TEST_TOKEN}`,
+      });
+
+      // The next verb finds the host up: nothing is started twice.
+      let starts = 0;
+      const again = await connectRealBridge(async () => {
+        starts++;
+      });
+      expect(again.bridge.started).toBe(false);
+      expect(again.status.extensionConnected).toBe(true);
+      expect(starts).toBe(0);
+    } finally {
+      (ext as FakeExtension | null)?.ws.close();
+      await (host as RunningHost | null)?.close();
     }
   });
 });

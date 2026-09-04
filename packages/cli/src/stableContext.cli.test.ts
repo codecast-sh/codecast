@@ -8,6 +8,7 @@ import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
 
 const scratchHomes: string[] = [];
 const cliEntry = path.join(import.meta.dir, "index.ts");
+const processEntry = path.join(import.meta.dir, "main.ts");
 
 interface CliResult {
   code: number | null;
@@ -32,7 +33,7 @@ function runCli(
   extraEnv: Record<string, string> = {},
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliEntry, ...args], {
+    const child = spawn(process.execPath, [processEntry, ...args], {
       env: {
         ...process.env,
         HOME: home,
@@ -199,19 +200,38 @@ Use --mine for only your sessions, -g for all teams.
   }, 20_000);
 
   test("source guard keeps update checks and global CLI effects out of the fast path", () => {
-    const source = fs.readFileSync(cliEntry, "utf8");
-    expect(source).toContain("if (!isStableContextFastPath) checkForUpdates()");
-    expect(source).toContain("if (isStableContextFastPath) {");
+    // main.ts must claim the hot-path verbs BEFORE index.js loads: index.ts's
+    // static imports are hoisted, so nothing inside it can be cheap.
+    const main = fs.readFileSync(path.join(import.meta.dir, "main.ts"), "utf8");
+    expect(main.indexOf("runFastPath(process.argv)")).toBeGreaterThan(0);
+    expect(main.indexOf("runFastPath(process.argv)")).toBeLessThan(main.indexOf('import("./index.js")'));
+    expect(main).not.toContain('from "./index.js"');
 
-    const fastPath = source.slice(source.indexOf("if (isStableContextFastPath) {"));
-    const fallback = fastPath.indexOf("} else if (process.argv[2] === \"__fugitive_blame@@\")");
-    expect(fallback).toBeGreaterThan(0);
-    expect(fastPath.slice(0, fallback)).toContain(
-      "runStableContextHook(readConfig(), parseStableHookClient(process.argv[4]))",
+    // fastPath.ts reaches every module through a dynamic import(), so a verb
+    // pays only for what it uses and the compiled bundle keeps index.js lazy.
+    const fastPath = fs.readFileSync(path.join(import.meta.dir, "fastPath.ts"), "utf8");
+    expect(fastPath.match(/^import .* from /gm)).toBeNull();
+    expect(fastPath).toContain(
+      "hook.runStableContextHook(\n          cfg.readAuthConfig(cfg.defaultConfigDir()),\n          hook.parseStableHookClient(argv[4]),",
     );
-    expect(fastPath.slice(0, fallback)).not.toContain("ensureCastAlias()");
-    expect(fastPath.slice(0, fallback)).not.toContain("autoBindFromEnv()");
-    expect(fastPath.slice(0, fallback)).not.toContain("program.parse()");
+    for (const effect of ["ensureCastAlias()", "autoBindFromEnv()", "program.parse()", "checkForUpdates()"]) {
+      expect(fastPath).not.toContain(effect);
+    }
+
+    // index.ts (older wrapper scripts still start here) keeps the same shape:
+    // fast path claimed first, update check gated off it.
+    const source = fs.readFileSync(cliEntry, "utf8");
+    // CODECAST_NO_AUTO_UPDATE is the second gate: the `_build-id` child that
+    // an update spawns must not start an update of its own.
+    expect(source).toContain(
+      "if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates()",
+    );
+    const claimed = source.slice(source.indexOf("if (runFastPath(process.argv)) {"));
+    const fallback = claimed.indexOf("} else if (process.argv[2] === \"__fugitive_blame@@\")");
+    expect(fallback).toBeGreaterThan(0);
+    for (const effect of ["ensureCastAlias()", "autoBindFromEnv()", "program.parse()"]) {
+      expect(claimed.slice(0, fallback)).not.toContain(effect);
+    }
   });
 });
 

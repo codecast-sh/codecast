@@ -185,25 +185,46 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
   );
 }
 
+/** The host's own stdout and stderr. Append-only, so a host that died says why. */
+export function bridgeHostLogPath(): string {
+  return path.join(browserHome(), "bridge-host.log");
+}
+
+/** Brings a host up for ensureBridgeHost: the detached respawn, or an in-process host in tests. */
+export type BridgeHostStarter = (state: BridgeState) => void | Promise<void>;
+
+/**
+ * Respawn ourselves as the host, detached, writing to bridgeHostLogPath().
+ * Under bun/node the entry script must be repeated; in the compiled binary
+ * process.execPath IS the cast binary.
+ */
+const respawnDetached: BridgeHostStarter = () => {
+  const base = path.basename(process.execPath).toLowerCase();
+  const viaRuntime = base.includes("bun") || base.includes("node");
+  const args = viaRuntime ? [process.argv[1], "browser", "bridge-host"] : ["browser", "bridge-host"];
+  fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
+  const log = fs.openSync(bridgeHostLogPath(), "a", 0o600);
+  try {
+    const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", log, log] });
+    child.unref();
+  } finally {
+    fs.closeSync(log);
+  }
+};
+
 /**
  * Make sure a host is running, starting one detached if not. Mirrors the
  * managed browser's auto-start: callers should not have to know the host is a
  * separate process. An impostor on the port is named rather than raced: a
  * host we start could not bind anyway.
  */
-export async function ensureBridgeHost(): Promise<ProvenBridge & { started: boolean }> {
+export async function ensureBridgeHost(start: BridgeHostStarter = respawnDetached): Promise<ProvenBridge & { started: boolean }> {
   const state = ensureBridgeConfig();
   const probe = await probeHost(state);
   if (probe === "alive") return { ...state, proven: true, started: false };
   if (probe === "impostor") return { ...(await proveBridgeHost(state)), started: false };
 
-  // Respawn ourselves. Under bun/node the entry script must be repeated;
-  // in the compiled binary process.execPath IS the cast binary.
-  const base = path.basename(process.execPath).toLowerCase();
-  const viaRuntime = base.includes("bun") || base.includes("node");
-  const args = viaRuntime ? [process.argv[1], "browser", "bridge-host"] : ["browser", "bridge-host"];
-  const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
-  child.unref();
+  await start(state);
 
   // Generous on purpose: run from source, the detached host is a fresh bun
   // parsing the whole CLI, which on a loaded machine takes longer than the
@@ -785,22 +806,32 @@ export async function runBridgeHost(): Promise<void> {
     console.error(`a bridge host is already answering on 127.0.0.1:${state.port}`);
     process.exit(0);
   }
+  // Detached, this process's stderr is bridgeHostLogPath(): the only trace
+  // a host leaves of why it is no longer running.
+  const log = (line: string): void => console.error(`${new Date().toISOString()} ${line}`);
   // The state file is how every short-lived CLI process learns, without a
   // round trip, whether the extension is here: the host is the only writer
   // of these two fields, and it clears the flag on the way out.
   const record = (connected: boolean): void => {
     const cur = readBridgeState() ?? state;
+    if (!!cur.extensionConnected !== connected) log(connected ? "extension connected" : "extension disconnected");
     writeBridgeState({ ...cur, extensionConnected: connected, ...(connected ? { extensionSeenAt: Date.now() } : {}) });
   };
   const host = await startBridgeHost({ port: state.port, token: state.token, onExtension: record });
   writeBridgeState({ ...state, hostPid: process.pid, startedAt: Date.now(), extensionConnected: false });
-  const shutdown = async () => {
+  log(`bridge host pid ${process.pid} listening on 127.0.0.1:${state.port}`);
+  const shutdown = async (why: string, code = 0) => {
+    log(`stopping: ${why}`);
     await host.close();
     record(false);
-    process.exit(0);
+    process.exit(code);
   };
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  // A crash leaves a line and a clean state file behind: with stdio ignored
+  // and the flag left set, a host that died took the reason with it.
+  process.on("uncaughtException", (err: Error) => shutdown(`uncaught exception: ${err?.stack ?? err}`, 1));
+  process.on("unhandledRejection", (err) => shutdown(`unhandled rejection: ${(err as Error)?.stack ?? err}`, 1));
   // Keep the event loop alive forever; the sockets do the actual work.
   await new Promise(() => {});
 }

@@ -313,3 +313,71 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(actions).toEqual([]);
   });
 });
+
+// 2026-09-03: a resume's "continue" sat in the composer for good. The verify
+// loop caught one frame without a prompt glyph (the TUI mid-redraw) and acked
+// "submitted"; the daemon then reported "thinking" and the row went terminal.
+// A single frame is thin evidence — the loop must look once more and, if the
+// text is still at the prompt, press Enter instead of acking.
+describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
+  const REDRAW_BLANK_PANE = `
+ ▐▛███▜▌   Claude Code v2.1.175
+▝▜█████▛▘  Fable 5 with high effort · Claude Max
+
+
+`;
+  // Transcript above the box carries a word the activity regex matches
+  // ("Read"), while the composer still holds our text.
+  const STUCK_WITH_TRANSCRIPT_KEYWORD_PANE = `
+⏺ Read the settings file and found nothing.
+────────────────────────────────────────
+❯ settings ui looks like crap - also it is slow also its broken
+────────────────────────────────────────
+  ⏵⏵ don't ask on (shift+tab to cycle)
+`;
+
+  test("a promptless redraw with the text still in the box gets a discrete Enter, not an ack", async () => {
+    const { io, actions } = scriptedIO([REDRAW_BLANK_PANE, STUCK_PANE, STUCK_PANE, WORKING_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(actions).toEqual(["enter", "enter"]);
+  });
+
+  test("an activity-looking frame with the text still at the prompt gets a discrete Enter", async () => {
+    const { io, actions } = scriptedIO([STUCK_WITH_TRANSCRIPT_KEYWORD_PANE, STUCK_WITH_TRANSCRIPT_KEYWORD_PANE, WORKING_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(actions[0]).toBe("enter");
+  });
+
+  test("the same holds when the prefix was already on screen (uncheckable payload)", async () => {
+    const { io, actions } = scriptedIO([REDRAW_BLANK_PANE, STUCK_PANE, WORKING_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: STUCK_PANE, // transcript already showed the text before the paste
+      pasteConfirmed: false,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(res.payloadCheckable).toBe(false);
+    expect(actions).toEqual(["enter"]);
+  });
+
+  test("a genuine submit (box empty on the second look) still acks without extra keys", async () => {
+    const { io, actions } = scriptedIO([REDRAW_BLANK_PANE, WORKING_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(actions).toEqual([]);
+  });
+});

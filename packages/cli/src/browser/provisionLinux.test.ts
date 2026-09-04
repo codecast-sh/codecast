@@ -45,6 +45,27 @@ describe("baseProvisionScript", () => {
   });
 });
 
+describe("idle watchdog and the daemon's activity stamp", () => {
+  const script = baseProvisionScript(20);
+  test("a fresh stamp keeps the box awake; a stale one lets it sleep", () => {
+    expect(script).toContain("STAMP=/home/ubuntu/.codecast/host-active");
+    expect(script).toContain('[ -f "$STAMP" ]');
+    expect(script).toMatch(/stat -c %Y "\$STAMP".*-lt 180/);
+  });
+  test("process rules survive only as the fallback for a daemon that never stamped", () => {
+    const fallback = script.slice(script.indexOf("else"), script.indexOf("fi", script.indexOf("else")));
+    expect(fallback).toContain("pgrep -x claude");
+    expect(fallback).toContain("pgrep -f 'chrome'");
+    // The stamp branch must not count processes: that is the whole point.
+    const stampBranch = script.slice(script.indexOf('if [ -f "$STAMP" ]'), script.indexOf("else"));
+    expect(stampBranch).not.toContain("pgrep");
+  });
+  test("a watcher or a stream viewer still counts as activity", () => {
+    expect(script).toContain("sport = :22");
+    expect(script).toContain("x11grab");
+  });
+});
+
 describe("remoteHome", () => {
   const base = { address: "1.2.3.4", user: "m1", keyPath: "/k", remoteBaseDir: "/Users/m1/work" };
 

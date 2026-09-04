@@ -6,9 +6,11 @@ import { SyncService } from "./syncService.js";
 import { setPosition } from "./positionTracker.js";
 import { updateSyncRecord } from "./syncLedger.js";
 import {
+  isClaudeTranscriptOutOfWatchScope,
   isPathExcluded,
   isProjectAllowedToSync,
   isTestScratchPath,
+  watchDirFilter,
 } from "./syncScope.js";
 import type { Config } from "./config/types.js";
 
@@ -103,6 +105,7 @@ export function isTranscriptFileInSyncScope(
   config?: Config,
 ): boolean {
   if (isTestScratchPath(filePath)) return false;
+  if (isClaudeTranscriptOutOfWatchScope(filePath)) return false;
   if (!config) return true;
 
   const recordedCwd = readTranscriptCwd(filePath);
@@ -145,7 +148,7 @@ export async function performReconciliation(
   // thousands of files, and a sync scan pinned the loop for the whole read.
   await walkFiles(
     claudeProjectsDir,
-    { fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
+    { dirFilter: watchDirFilter, fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
     (f) => {
       if (now - f.stat.mtimeMs >= maxAgeMs) return;
       if (!isTranscriptFileInSyncScope(f.path, config)) return;

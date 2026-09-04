@@ -66,7 +66,7 @@ export interface TurnStartResponse {
 }
 
 export interface ThreadResumeResponse {
-  thread: { id: string; path?: string | null; forkedFromId?: string | null };
+  thread: { id: string; path?: string | null; forkedFromId?: string | null; status?: { type: string; activeFlags?: string[] }; turns?: Turn[] };
   cwd: string;
   model: string;
 }
@@ -76,7 +76,7 @@ export interface ThreadForkResponse extends ThreadStartResponse {}
 export interface FileUpdateChange {
   path: string;
   diff: string;
-  kind: string;
+  kind: string | { type: string; move_path?: string | null };
 }
 
 interface UserMessageItem { type: "userMessage"; id: string; content: UserInput[] }
@@ -140,11 +140,18 @@ interface PendingRequest {
 interface TurnAccumulator {
   items: ThreadItem[];
   threadId: string;
+  model?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const THREAD_START_TIMEOUT_MS = 60_000;
 const MAX_RESTART_DELAY_MS = 30_000;
+
+export function threadForkTimeoutMsForBytes(bytes: number): number {
+  const mib = 1024 * 1024;
+  const extraMib = Math.ceil(Math.max(0, bytes - mib) / mib);
+  return Math.min(10 * 60_000, THREAD_START_TIMEOUT_MS + extraMib * 15_000);
+}
 
 const APPROVAL_METHODS = new Set([
   "execCommandApproval",
@@ -200,6 +207,7 @@ export class CodexAppServer extends EventEmitter {
   private nextId = 1;
   private pendingRequests = new Map<number | string, PendingRequest>();
   private turnAccumulators = new Map<string, TurnAccumulator>();
+  private threadModels = new Map<string, string>();
   private restartDelay = 1000;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -251,10 +259,13 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadStart(params: ThreadStartParams): Promise<ThreadStartResponse> {
-    return this.sendRequest("thread/start", params, THREAD_START_TIMEOUT_MS) as Promise<ThreadStartResponse>;
+    const response = await this.sendRequest("thread/start", params, THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
+    this.threadModels.set(response.thread.id, response.model);
+    return response;
   }
 
   async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
+    if (params.model) this.threadModels.set(params.threadId, params.model);
     return this.sendRequest("turn/start", params, DEFAULT_TIMEOUT_MS) as Promise<TurnStartResponse>;
   }
 
@@ -263,11 +274,15 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
-    return this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS) as Promise<ThreadResumeResponse>;
+    const response = await this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
+    this.threadModels.set(response.thread.id, response.model);
+    return response;
   }
 
-  async threadFork(params: ThreadForkParams): Promise<ThreadForkResponse> {
-    return this.sendRequest("thread/fork", params, THREAD_START_TIMEOUT_MS) as Promise<ThreadForkResponse>;
+  async threadFork(params: ThreadForkParams, timeoutMs = THREAD_START_TIMEOUT_MS): Promise<ThreadForkResponse> {
+    const response = await this.sendRequest("thread/fork", params, timeoutMs) as ThreadForkResponse;
+    this.threadModels.set(response.thread.id, response.model);
+    return response;
   }
 
   respondToApproval(id: number | string, approved: boolean, method?: string, params?: Record<string, unknown>): void {
@@ -541,8 +556,9 @@ export class CodexAppServer extends EventEmitter {
       case "turn/started": {
         const threadId = params.threadId as string;
         const turn = params.turn as Turn;
-        this.turnAccumulators.set(turn.id, { items: [], threadId });
-        this.emit("turnStarted", threadId, turn.id);
+        const model = this.threadModels.get(threadId);
+        this.turnAccumulators.set(turn.id, { items: [], threadId, model });
+        this.emit("turnStarted", threadId, turn.id, model);
         break;
       }
 
@@ -552,7 +568,7 @@ export class CodexAppServer extends EventEmitter {
         const acc = this.turnAccumulators.get(turn.id);
         const items = acc?.items || [];
         this.turnAccumulators.delete(turn.id);
-        const messages = threadItemsToMessages(items);
+        const messages = threadItemsToMessages(items).map(message => ({ ...message, model: acc?.model }));
         this.emit("turnCompleted", threadId, turn.id, messages, turn.status, turn.error);
         break;
       }
@@ -684,8 +700,20 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
     }
 
     case "fileChange": {
-      const diffSummary = item.changes.map(c => `${c.kind}: ${c.path}`).join("\n");
-      const fullDiff = item.changes.map(c => c.diff).join("\n");
+      const diffSummary = item.changes.map(c => `${typeof c.kind === "string" ? c.kind : c.kind.type}: ${c.path}`).join("\n");
+      const fullDiff = item.changes.map(c => {
+        const kind = typeof c.kind === "string" ? c.kind : c.kind.type;
+        if (kind === "add" || kind === "delete") {
+          const lines = c.diff ? c.diff.replace(/\n$/, "").split("\n") : [];
+          const adding = kind === "add";
+          return `--- ${adding ? "/dev/null" : c.path}\n+++ ${adding ? c.path : "/dev/null"}\n`
+            + `@@ -${adding ? "0,0" : `1,${lines.length}`} +${adding ? `1,${lines.length}` : "0,0"} @@\n`
+            + lines.map(line => `${adding ? "+" : "-"}${line}`).join("\n");
+        }
+        return /^diff --git |^--- [^\n]*\n\+\+\+ /m.test(c.diff)
+          ? c.diff
+          : `--- ${c.path}\n+++ ${c.path}\n${c.diff}`;
+      }).join("\n");
       const toolCalls: ToolCall[] = [{
         id: item.id,
         name: "fileChange",
@@ -694,7 +722,7 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
       const toolResults: ToolResult[] = [{
         toolUseId: item.id,
         content: fullDiff,
-        isError: item.status === "failed",
+        isError: item.status === "failed" || item.status === "declined",
       }];
       return {
         uuid: item.id,

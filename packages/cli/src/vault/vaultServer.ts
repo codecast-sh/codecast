@@ -1,9 +1,9 @@
 // The /vault/* routes on the daemon's loopback bridge — the channel the browser
 // reads and writes a local markdown vault through. Mounted beside /term/* on the
-// same server and behind the same envelope (per-boot bearer token, origin
-// allowlist, CORS + Private Network Access headers), because a route here can
-// read and write the user's disk: it must never authenticate differently from
-// the one that spawns shells.
+// same server and behind the same envelope (the daemon's persisted loopback
+// bearer token, origin allowlist, CORS + Private Network Access headers),
+// because a route here can read and write the user's disk: it must never
+// authenticate differently from the one that spawns shells.
 //
 // Every path the browser sends goes through vaultScope.resolveVaultPath. Nothing
 // in this file may construct a filesystem path any other way.
@@ -330,7 +330,7 @@ export function handleVaultHttp(
 
   // Attachments are loaded straight into <img>/<video> tags, which can set
   // neither an Authorization header nor an Origin — so a file READ may instead
-  // present the same per-boot token as a query param, and stands on that token
+  // present the same loopback token as a query param, and stands on that token
   // alone. Reads only: a write or an op that arrived without the full header
   // envelope is refused, so a URL that leaks (history, a referrer) can never be
   // more than a read of a vault the leaker already had the token for.

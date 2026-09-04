@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { buildLoginFlowCommand, buildMintFlowCommand, summarizeLoginPaneTail } from "./daemon.js";
+
+const daemonSource = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 
 // The login-flow watcher reports the dying pane's last meaningful line as the
 // rejection reason — the CLI's own words are the most honest "why" available.
@@ -61,5 +64,13 @@ describe("buildMintFlowCommand", () => {
   test("a hook path with a quote cannot break out of the shell word", () => {
     const cmd = buildMintFlowCommand("/tmp/it's/hook.sh");
     expect(cmd).toContain("BROWSER='/tmp/it'\\''s/hook.sh' claude setup-token");
+  });
+});
+
+describe("automatic session tokens", () => {
+  test("checks the active account on every heartbeat without a settings gate", () => {
+    expect(daemonSource).not.toContain("sessionTokensEnabled");
+    expect(daemonSource).toContain("if (isRemoteDevice() || mintFlowActive) return;");
+    expect(daemonSource).toMatch(/async function sendHeartbeat[\s\S]*?maybeAutoMintToken\(\);/);
   });
 });

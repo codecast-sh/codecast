@@ -7,7 +7,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   DELIBERATE_RAISE_GRACE_MS,
+  HUMAN_APP_SWITCH_GRACE_MS,
   HUMAN_CLICK_GRACE_S,
+  isAppSwitchChord,
   isAgentChromeCommand,
   shouldRestoreFocus,
 } from "./focusSentinel.js";
@@ -43,6 +45,7 @@ describe("shouldRestoreFocus", () => {
   const steal = {
     agentChrome: true,
     msSinceDeliberateRaise: DELIBERATE_RAISE_GRACE_MS * 10,
+    msSinceAppSwitch: HUMAN_APP_SWITCH_GRACE_MS * 10,
     secondsSinceClick: HUMAN_CLICK_GRACE_S * 100,
   };
 
@@ -52,6 +55,12 @@ describe("shouldRestoreFocus", () => {
 
   test("a non-agent app in front is never touched", () => {
     expect(shouldRestoreFocus({ ...steal, agentChrome: false })).toBe(false);
+  });
+
+  test("a recent keyboard app switch means the human did it — spared", () => {
+    expect(shouldRestoreFocus({ ...steal, msSinceAppSwitch: 50 })).toBe(false);
+    expect(shouldRestoreFocus({ ...steal, msSinceAppSwitch: HUMAN_APP_SWITCH_GRACE_MS })).toBe(false);
+    expect(shouldRestoreFocus({ ...steal, msSinceAppSwitch: HUMAN_APP_SWITCH_GRACE_MS + 1 })).toBe(true);
   });
 
   test("a deliberate raise (login, web open-tab) is spared for the grace window", () => {
@@ -64,5 +73,14 @@ describe("shouldRestoreFocus", () => {
     expect(shouldRestoreFocus({ ...steal, secondsSinceClick: 0.3 })).toBe(false);
     expect(shouldRestoreFocus({ ...steal, secondsSinceClick: HUMAN_CLICK_GRACE_S })).toBe(false);
     expect(shouldRestoreFocus({ ...steal, secondsSinceClick: HUMAN_CLICK_GRACE_S + 0.5 })).toBe(true);
+  });
+});
+
+describe("isAppSwitchChord", () => {
+  test("recognizes Command-Tab and Option-Tab only while Tab is down", () => {
+    expect(isAppSwitchChord(true, 1n << 20n)).toBe(true);
+    expect(isAppSwitchChord(true, 1n << 19n)).toBe(true);
+    expect(isAppSwitchChord(false, 1n << 20n)).toBe(false);
+    expect(isAppSwitchChord(true, 1n << 18n)).toBe(false);
   });
 });

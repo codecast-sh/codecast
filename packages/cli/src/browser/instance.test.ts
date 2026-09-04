@@ -237,4 +237,11 @@ describe("chromeLaunchArgs", () => {
     const args = chromeLaunchArgs(base);
     expect(args.some((a) => a.includes("fake"))).toBe(false);
   });
+
+  test("background tabs retain Chrome's timer throttling", () => {
+    const args = chromeLaunchArgs(base);
+    expect(args).toContain("--disable-backgrounding-occluded-windows");
+    expect(args).toContain("--disable-renderer-backgrounding");
+    expect(args).not.toContain("--disable-background-timer-throttling");
+  });
 });

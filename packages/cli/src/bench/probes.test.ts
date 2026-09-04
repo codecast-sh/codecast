@@ -19,7 +19,7 @@ describe("readLoopbackIdentity", () => {
   });
 
   test("port mismatch marks the token stale", () => {
-    fs.writeFileSync(path.join(dir, "loopback-identity.json"), JSON.stringify({ port: 1, token: "t", pid: process.pid }));
+    fs.writeFileSync(path.join(dir, "loopback-identity.json"), JSON.stringify({ port: 40124, token: "t", pid: process.pid }));
     expect(readLoopbackIdentity(dir)).toEqual({ port: 40123, token: null, reason: "port mismatch" });
   });
 

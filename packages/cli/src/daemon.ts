@@ -1,13 +1,23 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
-import { parseProcessTable } from "./processTable.js";
+import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
+import {
+  DEFAULT_HIBERNATE_IDLE_MS,
+  DEFAULT_MAX_LIVE_SESSIONS,
+  HIBERNATE_MAX_PER_PASS,
+  HIBERNATE_SUBAGENT_QUIET_MS,
+  hibernationBlockReason,
+  selectHibernationCandidates,
+  type HibernationCandidate,
+} from "./hibernation.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -19,7 +29,9 @@ import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
-import { listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
+import { hostForDevice, listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
+import { worktreeEnvPrefix } from "./worktreeEnv.js";
+import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
@@ -80,8 +92,11 @@ import {
   WATCHDOG_PASS_STAMP_FILENAME,
 } from "./supervision.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
+import { parseCodexSessionFile } from "./parser.js";
 import {
   CodexAppServer,
+  threadForkTimeoutMsForBytes,
   threadItemsToMessages,
   type ApprovalPolicy,
   type ApprovalRequest,
@@ -108,17 +123,20 @@ import {
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
-import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractTeamInfo, detectCliFlags, isCursorRoleHeaderLine, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, claudeBannerText, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractTeamInfo, detectCliFlags, isCursorRoleHeaderLine, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, scrubAgentEnv } from "./agentEnv.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
+import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
+import { BUILD_ID_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
-import { RetryQueue, type RetryOperation } from "./retryQueue.js";
+import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
+import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
@@ -132,7 +150,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import {
@@ -146,11 +164,17 @@ import {
 import { formatFeedResults } from "./formatter.js";
 import {
   attachTerminalServer,
-  generateTerminalToken,
   handleTerminalHttp,
   reapStaleTerminalSessions,
   type TerminalServerOptions,
 } from "./terminal/terminalServer.js";
+import {
+  hookPortFile,
+  listenOnSavedPort,
+  loadOrCreateIdentity,
+  type LoopbackIdentity,
+} from "./loopbackIdentity.js";
+import { HookStatusGate } from "./hookStatusGate.js";
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
@@ -187,6 +211,7 @@ import {
   resumeShortId,
   resumeTmuxName,
   rewriteSubagentJsonlToUuid,
+  upgradedLegacyResumeTmuxName,
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, launchBinary } from "./launchCommand.js";
@@ -208,6 +233,7 @@ import {
 import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
 import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
+import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -660,6 +686,39 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 }
 
+// A gap shorter than this is neither a suspend nor a freeze worth recovering
+// from: machines do not sleep for five seconds, and the loop is allowed to be
+// late under load. Short gaps therefore always count as load: a 5s sleep is not
+// a thing, and a 5s blocked spawn is real.
+// One name for one policy. Both loop watchers ask "did the machine sleep" and
+// both answer with this floor: the tick monitor below, and the freeze probe's
+// CPU rule (isSuspendGap). Tuning it in one place used to leave the two
+// watchers disagreeing about the same window. Exported for tests.
+export const SUSPEND_GAP_MIN_MS = 30_000;
+
+// The one rule both loop watchers use to answer "did the machine sleep during
+// this window". The wall clock runs through a suspend and the monotonic clock
+// does not, so the difference between the two gaps IS the time spent asleep.
+// The bar is a parameter because the two watchers measure different windows:
+// the tick monitor sees one 30s or 60s timer gap and needs an absolute floor
+// under it, while the freeze probe sees 100ms ticks and asks instead whether
+// the sleep was a large FRACTION of the gap. One name, two bars, so the next
+// reader cannot pick whichever rule they find first.
+export function clocksDisagree(wallMs: number, monoMs: number, minGapMs: number): boolean {
+  return wallMs - monoMs >= minGapMs;
+}
+
+// "Did the machine sleep in this window" — a different question from
+// classifyTickGap's "was the loop pinned in it", and one window can answer yes
+// to both.
+// The wake work (restart the watcher, sweep for unsynced files, clear the
+// backend outage clock) is owed to the sleep whatever the loop did around it:
+// the FSEvents stream can go silent across a suspend without erroring, and a
+// stall verdict on the same window must not swallow that recovery.
+export function sawSuspend(wallMs: number, monoMs: number): boolean {
+  return clocksDisagree(wallMs, monoMs, SUSPEND_GAP_MIN_MS);
+}
+
 // A long gap between timer ticks has two very different causes: the MACHINE slept
 // (the process consumed ~no CPU during the gap) or the EVENT LOOP was pinned by
 // synchronous work (the process burned CPU the whole time). They demand opposite
@@ -669,8 +728,39 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
 // loop (observed 2026-08-14: stall → "Sleep detected" → sweep → stall → …).
 // Threshold is deliberately low: a truly suspended process accrues ~zero CPU, so
 // anything above 20% of wall time can only be a busy process.
-export function classifyTickGap(elapsedMs: number, cpuMs: number): "sleep" | "stall" {
-  return cpuMs >= elapsedMs * 0.2 ? "stall" : "sleep";
+// The wall clock keeps running while the machine is suspended and the monotonic
+// clock does not, so the time the loop actually failed to run is the smaller of
+// the two gaps. A gap the monotonic clock barely saw is a suspend however busy
+// the CPU counter looks, because the loop was ticking normally on both sides of
+// it. A big monotonic gap is a real stall even when it straddles a wake, where
+// the wall number alone reads as hours of sleep with a few percent of CPU and
+// answers a freeze with the recovery sweep that feeds it.
+// The sleep shortcut asks for BOTH halves: the monotonic clock barely moved AND
+// it disagrees with the wall clock. Without the second half a caller that has
+// only the wall clock (monoElapsedMs defaults to it) would hear "sleep" for
+// every gap under 30s, including a short window where the loop was genuinely
+// pinned. With it, that caller keeps exactly the old CPU verdict, since the two
+// clocks it passes are the same number.
+export function classifyTickGap(
+  elapsedMs: number,
+  cpuMs: number,
+  monoElapsedMs: number = elapsedMs,
+): "sleep" | "stall" {
+  if (monoElapsedMs < SUSPEND_GAP_MIN_MS && sawSuspend(elapsedMs, monoElapsedMs)) return "sleep";
+  return cpuMs >= Math.min(elapsedMs, monoElapsedMs) * 0.2 ? "stall" : "sleep";
+}
+
+// Both verdicts for one long tick gap, in one call, because the two timers that
+// watch the loop must answer it identically. `recover` falls back to the stall
+// verdict so a platform whose monotonic clock runs through suspend keeps the
+// behavior it had before the monotonic cross check existed.
+export function classifyTickWindow(
+  elapsedMs: number,
+  cpuMs: number,
+  monoElapsedMs: number,
+): { stalled: boolean; recover: boolean } {
+  const stalled = classifyTickGap(elapsedMs, cpuMs, monoElapsedMs) === "stall";
+  return { stalled, recover: sawSuspend(elapsedMs, monoElapsedMs) || !stalled };
 }
 
 // Backend outage clock behind the self-heal restart. It must count only time the
@@ -699,31 +789,54 @@ const backendOutage = new BackendOutageClock();
 // The grace period applies to stalls too — after the loop unfreezes, a short polling
 // pause helps drain the backlog before piling new work on.
 let lastTickTime = Date.now();
+let lastTickMono = performance.now();
 let lastTickCpu = process.cpuUsage();
-const SLEEP_DETECTION_THRESHOLD_MS = 30_000;
 const WAKE_GRACE_PERIOD_MS = 5_000;
 let wakeGraceUntil = 0;
 setInterval(() => {
   const now = Date.now();
+  const nowMono = performance.now();
   const elapsed = now - lastTickTime;
+  const monoElapsed = nowMono - lastTickMono;
   const cpuDelta = process.cpuUsage(lastTickCpu);
   lastTickCpu = process.cpuUsage();
-  if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
+  if (elapsed > SUSPEND_GAP_MIN_MS) {
     const cpuMs = (cpuDelta.user + cpuDelta.system) / 1000;
     wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
-    if (classifyTickGap(elapsed, cpuMs) === "stall") {
-      log(`Event-loop stall (${Math.round(elapsed / 1000)}s gap, ${Math.round(cpuMs / 1000)}s CPU), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
-    } else {
+    const { stalled, recover } = classifyTickWindow(elapsed, cpuMs, monoElapsed);
+    if (stalled) {
+      log(`Event-loop stall (${Math.round(Math.min(elapsed, monoElapsed) / 1000)}s of loop time, ${Math.round(elapsed / 1000)}s wall, ${Math.round(cpuMs / 1000)}s CPU), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+    }
+    // The outage clock asks whether the machine was awake, so a suspend clears
+    // it even when the same window also held a stall.
+    if (recover) {
       log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
       backendOutage.noteSuspend();
     }
   }
   lastTickTime = now;
+  lastTickMono = nowMono;
 }, 5_000);
 function isInWakeGrace(): boolean { return Date.now() < wakeGraceUntil; }
 
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
+
+// On the cloud host the idle watchdog (provisionLinux.ts cast-idle-check) reads
+// this file's mtime instead of counting claude processes: a dormant session's
+// process is still alive but doing nothing, and counting it kept the box awake
+// and billing forever. The daemon touches it when work actually happens —
+// a delivered message, transcript output, a launch — throttled to one write per
+// 30s. On a laptop this is a no-op.
+const HOST_ACTIVITY_FILE = path.join(CONFIG_DIR, "host-active");
+let lastHostActivityTouch = 0;
+function touchHostActivity(): void {
+  if (!isRemoteDevice()) return;
+  const now = Date.now();
+  if (now - lastHostActivityTouch < 30_000) return;
+  lastHostActivityTouch = now;
+  try { fs.writeFileSync(HOST_ACTIVITY_FILE, String(now)); } catch { /* best-effort */ }
+}
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 // Under `bun test` (which sets NODE_ENV=test) every log() from imported daemon
 // code must NOT append to the real daemon.log: test noise interleaved with the
@@ -735,11 +848,28 @@ const LOG_FILE = process.env.NODE_ENV === "test"
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
-const HOOK_PORT_FILE = path.join(CONFIG_DIR, "hook-port");
-// Port plus terminal token for local tools (cast bench, and the boot reuse in
-// pl-497 unit D). The token sits at rest at mode 0600, the same trust boundary
-// as the api token in config.json; the decision is recorded on pl-497.
-const LOOPBACK_IDENTITY_FILE = path.join(CONFIG_DIR, "loopback-identity.json");
+// The build id of the code this daemon is running, written beside the version
+// so a CLI deciding whether to bounce it can ask "did the daemon's code change"
+// instead of "is the version string different". Missing file = a daemon from
+// before this existed, and every reader falls back to the version compare.
+const BUILD_FILE = path.join(CONFIG_DIR, "daemon.build");
+// Which daemon process this is. Two daemons can briefly share a device (an
+// upgrade, a rogue self spawn); the boot id is what lets the server hand each
+// command to exactly one of them.
+const BOOT_ID = randomBytes(8).toString("hex");
+// Command leases this process holds, kept on disk so the NEXT daemon can give
+// them back. A restart is the common case on a busy machine, and most restart
+// paths never reach the graceful shutdown: launchd kickstart kills us, the self
+// heal exits straight away, the watchdog sends SIGKILL. Whatever this daemon
+// claimed and did not finish would then stay hidden from its own replacement
+// for the whole grace window, which is exactly the resume or kill a user is
+// waiting on.
+//
+// One file per boot id, because only the boot id that took a lease may give it
+// back. Two daemons briefly sharing a device would otherwise overwrite and
+// delete each other's record, and the survivor's leases would strand.
+const heldClaimsFile = (bootId: string) => path.join(CONFIG_DIR, `daemon.claims.${bootId}.json`);
+const HELD_CLAIMS_FILE_RE = /^daemon\.claims\.([0-9a-f]+)\.json$/;
 const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // Learned project-path map: basename/recorded-path -> local dir, auto-populated from
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
@@ -849,6 +979,9 @@ interface DaemonState {
   lastHeartbeatTick?: number;
   runtimeVersion?: string;
   lastSelfHealRestart?: number;
+  // Loop freeze budget, written by the 30s monitor tick so `cast health` can
+  // print it without asking the daemon.
+  loopFreeze?: LoopFreezeState;
   // macOS App Data (TCC) outcome for Cursor's data dir, recorded so later
   // logins can start the watcher without re-touching an undecided TCC state
   // (see cursorWatcherDecision) and doctor can explain a denial.
@@ -1068,6 +1201,43 @@ const closedSyntheticPrompts = new Map<string, number>();
 // lifecycle is otherwise only reachable through live tmux scrapes.
 export const syntheticPromptTestSeam = { lastEmittedSyntheticPrompt, closedSyntheticPrompts };
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
+// A session id that is safe to use as a file name inside AGENT_STATUS_DIR. The
+// leading character cannot be a dot, so no id can name a parent directory, and
+// no separator is allowed, so no id can leave the directory at all. Real ids
+// are uuids, so this rejects nothing a real caller sends. Exported for the
+// test that covers the traversal shapes.
+const SAFE_STATUS_SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
+export function isSafeStatusSessionId(sessionId: string): boolean {
+  return SAFE_STATUS_SESSION_ID.test(sessionId);
+}
+// Every write of an agent status file rides this one chain. Two statuses for a
+// session (a PostToolUse then a Stop) must land in that order, and two writes
+// racing on one path can also leave bytes the boot replay cannot parse. One
+// chain for all writers rather than one each, because the boot window ends mid
+// flight: a status deferred by the gate below and one persisted by the handler
+// can be in the air for the same session at the same moment.
+//
+// `payload` is a thunk so the record written is the one that is current when
+// the write runs, not the one that was current when it was queued.
+let agentStatusWriteChain: Promise<void> = Promise.resolve();
+function queueAgentStatusWrite(sessionId: string, payload: () => HookStatusData): void {
+  agentStatusWriteChain = agentStatusWriteChain
+    .then(() => fs.promises.mkdir(AGENT_STATUS_DIR, { recursive: true }))
+    .then(() => fs.promises.writeFile(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(payload())))
+    .catch(() => {});
+}
+
+// The loopback server listens seconds into boot; the /hook/status handler
+// exists only once the caches it closes over do. Until then a status lands in
+// the agent-status directory, where the chokidar watcher and the boot replay
+// below already drain it. See hookStatusGate.ts for why the daemon writes that
+// file rather than letting the hook script fall back on its own.
+const hookStatusGate = new HookStatusGate<HookStatusData>((sessionId, data) => {
+  queueAgentStatusWrite(sessionId, () => data);
+});
+export function setHookStatusSink(sink: (sessionId: string, data: HookStatusData) => void): void {
+  hookStatusGate.setSink(sink);
+}
 // Where codecast-status.sh drops a pending AskUserQuestion's full tool_input, keyed by
 // session id. The buffered turn isn't in the JSONL yet, so this sidecar is the only
 // full-fidelity source for the question while it waits to be answered.
@@ -1345,10 +1515,21 @@ function sendAgentStatus(
   status: AgentStatus,
   clientTs?: number,
   permissionMode?: PermissionMode,
+  // The status is our own presumption (a paste just went in, so "thinking"),
+  // not something a hook or the pane reported. The server paints it but does
+  // not take it as proof that injected messages landed.
+  presumed?: boolean,
+  // hibernatedAt stamps or clears the park on managed_sessions in the same
+  // write as the status: `now` when the pass parks the pane, null when a resume
+  // brings it back.
+  opts?: { hibernatedAt?: number | null },
 ): void {
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const isTransition = prevStatus !== status;
-  if (status === "working" && !permissionMode && !isTransition) {
+  // The throttle drops redundant "working" re-sends. A write carrying a park
+  // stamp is never redundant: dropping it would leave hibernated_at set on a
+  // session that is back at work.
+  if (status === "working" && !permissionMode && !isTransition && opts?.hibernatedAt === undefined) {
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
     if (Date.now() - last < WORKING_STATUS_THROTTLE_MS) return;
   }
@@ -1373,7 +1554,7 @@ function sendAgentStatus(
     lastOpenTasksSentAt.set(sessionId, Date.now());
     lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
   }
-  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
@@ -1429,21 +1610,36 @@ function logHeartbeatStatus(sessionId: string, status: AgentStatus | undefined):
 
 let hookServer: http.Server | null = null;
 let hookServerPort = 0;
-// Per-boot secret for the integrated terminal. The web fetches it through the
+// Secret for the integrated terminal. The web fetches it through the
 // authenticated get_terminal_endpoint daemon command, then presents it on the
-// loopback WebSocket — an unauthenticated socket that spawns shells would be
-// remote code execution for any page the user visits.
-const terminalToken = generateTerminalToken();
+// loopback WebSocket. An unauthenticated socket that spawns shells would be
+// remote code execution for any page the user visits. The daemon keeps this
+// token on disk (loopbackIdentity.ts) so a restart does not invalidate an open
+// panel; `cast daemon rotate-token` replaces it. Being on disk makes it state
+// rather than a module constant: read it through terminalToken().
+let loopbackIdentity: LoopbackIdentity | null = null;
+// Empty until the identity loads at the top of startHookServer. Nothing can
+// authenticate against an empty value: terminalServer.ts refuses an empty
+// configured token outright, because a constant-time compare of two
+// zero-length buffers reports a match.
+function terminalToken(): string {
+  return loopbackIdentity?.token ?? "";
+}
+// Resolves with the real port the moment the server is listening. Anything
+// that would otherwise answer port 0 waits on this instead. Never rejected,
+// so an unresolved promise in a test that imports daemon.ts stays inert.
+let resolveHookListening: (port: number) => void = () => {};
+const hookListening = new Promise<number>((resolve) => { resolveHookListening = resolve; });
 let terminalServerHandle: { close(): void } | null = null;
 let vaultServerHandle: { close(): void } | null = null;
 let watchServerHandle: { close(): void } | null = null;
 let vaultMirror: VaultMirror | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
-  return { token: terminalToken, log };
+  return { token: terminalToken(), log };
 }
 
-// The vault routes ride the same loopback server and the same per-boot token;
+// The vault routes ride the same loopback server and the same persisted token;
 // they only additionally need to know where the vault registry lives.
 function vaultServerOptions(): VaultServerOptions {
   return { ...terminalServerOptions(), configDir: CONFIG_DIR };
@@ -1471,9 +1667,12 @@ function startVaultMirror(): void {
   vaultMirror.start();
 }
 
-function startHookServer(
-  handleStatus: (sessionId: string, data: HookStatusData) => void,
-): http.Server {
+function startHookServer(): http.Server {
+  // Reading the saved port and token is the first thing boot does with the
+  // config dir. It is one small file read in another module, which is what
+  // keeps it off the loop budget guard's list of forbidden calls here.
+  loopbackIdentity = loadOrCreateIdentity(CONFIG_DIR);
+
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url?.startsWith("/hook/status")) {
       const url = new URL(req.url, `http://localhost`);
@@ -1490,6 +1689,17 @@ function startHookServer(
         return;
       }
 
+      // Both status paths below build a file path out of this id, and the
+      // route is unauthenticated: `session_id=../config` would write over
+      // ~/.codecast/config.json. Session ids are uuids, so anything that is
+      // not a plain id is a caller trying something. Checking here covers the
+      // gate's deferred write and persistHookStatus alike.
+      if (!isSafeStatusSessionId(sessionId)) {
+        res.writeHead(400);
+        res.end("bad session_id");
+        return;
+      }
+
       const data: HookStatusData = {
         status,
         ts: parseInt(ts, 10),
@@ -1498,10 +1708,13 @@ function startHookServer(
         ...(transcriptPath && { transcript_path: transcriptPath }),
       };
 
-      handleStatus(sessionId, data);
-
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("ok");
+      if (hookStatusGate.deliver(sessionId, data) === "delivered") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+      } else {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end('{"status":"warming"}');
+      }
       return;
     }
 
@@ -1538,30 +1751,24 @@ function startHookServer(
   // Bounce unprovoked raises by agent-driven Chromes (see focusSentinel.ts).
   void startFocusSentinel(log).then((t) => t?.unref?.());
 
-  server.listen(0, "127.0.0.1", () => {
-    const addr = server.address();
-    if (addr && typeof addr === "object") {
-      hookServerPort = addr.port;
-      try {
-        fs.writeFileSync(HOOK_PORT_FILE, String(hookServerPort));
-      } catch {}
-      try {
-        // Not unlinked on stop: unit D reads it back at boot. Readers detect a
-        // stale file through the port in hook-port and the pid.
-        fs.writeFileSync(
-          LOOPBACK_IDENTITY_FILE,
-          JSON.stringify({ port: hookServerPort, token: terminalToken, pid: process.pid }),
-          { mode: 0o600 },
-        );
-        // writeFileSync applies mode only when it creates the file.
-        fs.chmodSync(LOOPBACK_IDENTITY_FILE, 0o600);
-      } catch {}
-      log(`Hook server listening on 127.0.0.1:${hookServerPort}`);
-    }
-  });
+  // The identity file is not unlinked on stop: the next boot reads it back to
+  // keep the port and token. Readers tell a stale file apart through the port
+  // in hook-port and the pid.
+  //
+  // A daemon with no loopback surface is a serious state, so the failure paths
+  // go to logWarn, which is uploaded, rather than to log. The catch is the last
+  // net: an unhandled rejection aborts the process under node, which is how the
+  // npm build runs the daemon.
+  listenOnSavedPort(server, { configDir: CONFIG_DIR, identity: loopbackIdentity, log, warn: (m) => logWarn(m) })
+    .then((port) => {
+      hookServerPort = port;
+      resolveHookListening(port);
+    })
+    .catch((err) => logWarn(`Hook server listen threw: ${err instanceof Error ? err.message : String(err)}`));
 
+  // listenOnSavedPort owns errors up to the listen; this catches the rest.
   server.on("error", (err) => {
-    log(`Hook server error: ${err.message}`);
+    if (hookServerPort > 0) log(`Hook server error: ${err.message}`);
   });
 
   return server;
@@ -1588,7 +1795,7 @@ function stopHookServer(): void {
     hookServer.close();
     hookServer = null;
   }
-  try { fs.unlinkSync(HOOK_PORT_FILE); } catch {}
+  try { fs.unlinkSync(hookPortFile(CONFIG_DIR)); } catch {}
 }
 
 function truncateForNotification(text: string, maxLen = 200): string {
@@ -1960,7 +2167,242 @@ function isAutostartEnabled(): boolean {
   return false;
 }
 
+// A command this daemon has already taken off the queue. Two sets because the
+// three delivery paths were built separately; both are module scope so the
+// claim can UNDO the marking when another daemon wins the command, and a
+// lapsed lease can then come back to us.
 const processedPollCommandIds = new Set<string>();
+const processedCommandIds = new Set<string>();
+
+/** Forget a command so a later offer of it is honoured. Called when a claim is
+ *  refused: the winner may die before executing, and the lease then lapses. */
+function forgetProcessedCommand(commandId: string): void {
+  processedPollCommandIds.delete(commandId);
+  processedCommandIds.delete(commandId);
+}
+
+// Commands this process holds a lease on and has not finished. A crashed
+// claimer is what the lease grace window is for, but a `cast restart` is the
+// common case on a busy machine and it is not a crash: without a release the
+// command stays hidden from this device's next daemon for the full two
+// minutes, so a resume or a kill lands that late.
+const heldClaimIds = new Set<string>();
+
+/** Mirror the held set to disk under this process's boot id. Only the boot id
+ *  that took a lease can give it back, so the next daemon needs the id as much
+ *  as it needs the list. Writes are tiny and only happen when a command is
+ *  claimed or reported. */
+function persistHeldClaims(): void {
+  try {
+    if (heldClaimIds.size === 0) {
+      fs.unlinkSync(heldClaimsFile(BOOT_ID));
+      return;
+    }
+    fs.writeFileSync(
+      heldClaimsFile(BOOT_ID),
+      JSON.stringify({ boot_id: BOOT_ID, device_id: deviceId(), ids: [...heldClaimIds] }),
+      { mode: 0o600 },
+    );
+  } catch {}
+}
+
+function holdClaim(commandId: string): void {
+  heldClaimIds.add(commandId);
+  persistHeldClaims();
+}
+
+function dropClaim(commandId: string): void {
+  if (heldClaimIds.delete(commandId)) persistHeldClaims();
+}
+
+/** Ask the server for the lease on one command, or give it back. Answers null
+ *  when the endpoint is unreachable, wedged or older than the claim. The caller
+ *  reads that as "carry on". A claim that cannot be reached must never wedge
+ *  every command on the machine. */
+async function requestCommandClaim(
+  siteUrl: string,
+  apiToken: string,
+  commandId: string,
+  opts: { release?: boolean; timeoutMs?: number; bootId?: string } = {},
+): Promise<{ claimed?: boolean; released?: boolean; reason?: string } | null> {
+  try {
+    const response = await fetch(`${siteUrl}/cli/command-claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 5000),
+      body: JSON.stringify({
+        api_token: apiToken,
+        command_id: commandId,
+        // Usually this process. A release left behind by the previous daemon
+        // carries ITS boot id, because the server only lets the holder let go.
+        boot_id: opts.bootId ?? BOOT_ID,
+        // The lease is scoped to this machine. An untargeted command
+        // (kill_session, an admin restart) is inserted for the whole fleet, so
+        // a hold by another device must not hide it from this one.
+        device_id: deviceId(),
+        ...(opts.release ? { release: true } : {}),
+      }),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Hand back every lease this process still holds. Bounded hard: it runs on
+ *  the way out, where the whole shutdown has to fit under the caller's kill
+ *  deadline. */
+async function releaseHeldCommandClaims(config: Config, budgetMs = 1_500): Promise<number> {
+  if (heldClaimIds.size === 0) return 0;
+  if (!config.auth_token || !config.convex_url) return 0;
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+  const ids = [...heldClaimIds];
+  heldClaimIds.clear();
+  const results = await Promise.all(
+    ids.map((id) => requestCommandClaim(siteUrl, config.auth_token!, id, { release: true, timeoutMs: budgetMs })),
+  );
+  // The disk record goes only once the releases have landed. A hard kill in
+  // the middle of this leaves it behind on purpose: the next daemon then
+  // finishes the job instead of the leases sitting out the grace window.
+  persistHeldClaims();
+  return results.filter((r) => r?.released).length;
+}
+
+/** Give back the leases the PREVIOUS daemon on this machine left behind, once,
+ *  at boot. It covers every exit that skips the graceful shutdown: a launchd
+ *  kickstart, a self heal, a watchdog SIGKILL, a crash. Without it the
+ *  replacement cannot see those commands at all, because a hold is hidden from
+ *  the other daemons on its own device. */
+export async function releaseStrandedCommandClaims(
+  config: Config,
+  dir = CONFIG_DIR,
+  currentBootId = BOOT_ID,
+): Promise<number> {
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  const work: Array<{ bootId: string; ids: string[] }> = [];
+  for (const name of entries) {
+    // The boot id comes from the file NAME, which is what the writer could not
+    // get wrong. The copy inside the body is there for a human reading it.
+    const bootId = name.match(HELD_CLAIMS_FILE_RE)?.[1];
+    if (!bootId || bootId === currentBootId) continue;
+    const file = path.join(dir, name);
+    let ids: string[] = [];
+    try {
+      const record = JSON.parse(fs.readFileSync(file, "utf-8"));
+      ids = Array.isArray(record?.ids) ? record.ids.filter((id: unknown) => typeof id === "string") : [];
+    } catch {}
+    // Read once. A second boot must not re-release commands the fleet has
+    // moved on from, and an unreadable record is never going to become
+    // readable.
+    try { fs.unlinkSync(file); } catch {}
+    if (ids.length > 0) work.push({ bootId, ids });
+  }
+  if (work.length === 0) return 0;
+  if (!config.auth_token || !config.convex_url) return 0;
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+  const results = await Promise.all(
+    work.flatMap(({ bootId, ids }) =>
+      ids.map((id) => requestCommandClaim(siteUrl, config.auth_token!, id, { release: true, bootId, timeoutMs: 5_000 })),
+    ),
+  );
+  const released = results.filter((r) => r?.released).length;
+  if (released > 0) log(`Released ${released} command claim(s) stranded by a previous daemon`);
+  return released;
+}
+
+// Claim answers already in flight for a batch of commands. All three delivery
+// paths hand the daemon a list and then execute it one at a time, so a claim
+// started inside the executor cost one round trip per command before any of
+// them ran. Starting them together makes a batch cost one round trip.
+type ClaimAnswer = { claimed?: boolean; released?: boolean; reason?: string } | null;
+const primedClaims = new Map<string, Promise<ClaimAnswer>>();
+const pendingAgentSwitches = new Map<string, string>();
+
+export function agentSwitchConversationId(
+  command: { command: string; args?: string },
+): string | undefined {
+  if (command.command !== "resume_session" || !command.args) return undefined;
+  try {
+    const parsed = JSON.parse(command.args);
+    return parsed.switch_agent === true && typeof parsed.conversation_id === "string"
+      ? parsed.conversation_id
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function primeCommandClaims(ids: string[], siteUrl: string, apiToken: string): void {
+  for (const id of ids) {
+    if (primedClaims.has(id)) continue;
+    primedClaims.set(id, requestCommandClaim(siteUrl, apiToken, id).catch(() => null));
+  }
+}
+
+/** The primed answer for one command, or a fresh claim when nothing primed it
+ *  (a caller outside the batch paths). */
+export function takePrimedClaim(commandId: string, siteUrl: string, apiToken: string): Promise<ClaimAnswer> {
+  const primed = primedClaims.get(commandId);
+  primedClaims.delete(commandId);
+  return primed ?? requestCommandClaim(siteUrl, apiToken, commandId);
+}
+
+/** Hand back a lease this daemon primed but will not execute. The owner guard
+ *  defers a session command to the device that owns the session, and that
+ *  device is a different machine, but a peer daemon HERE would still be blocked
+ *  by our hold. */
+export function discardPrimedClaim(commandId: string, siteUrl: string, apiToken: string): void {
+  const primed = primedClaims.get(commandId);
+  if (!primed) return;
+  primedClaims.delete(commandId);
+  void primed.then((claim) => {
+    if (claim?.claimed) return requestCommandClaim(siteUrl, apiToken, commandId, { release: true });
+  }).catch(() => {});
+}
+
+/** Run one delivery batch: drop what this daemon already handled, claim the
+ *  whole batch in one round trip, then execute in order. Shared by the three
+ *  paths a command arrives on (the subscription, the 10s poll, the heartbeat
+ *  response), which differed only in their log line. */
+async function executeCommandBatch(
+  cmds: Array<{ id: string; command: string; args?: string }>,
+  config: Config,
+  source: string,
+): Promise<void> {
+  const fresh = cmds.filter((c) => !processedCommandIds.has(c.id) && !processedPollCommandIds.has(c.id));
+  if (fresh.length === 0) return;
+  for (const cmd of fresh) {
+    processedCommandIds.add(cmd.id);
+    processedPollCommandIds.add(cmd.id);
+  }
+  const switches = fresh.flatMap((cmd) => {
+    const conversationId = agentSwitchConversationId(cmd);
+    return conversationId ? [{ conversationId, commandId: cmd.id }] : [];
+  });
+  for (const { conversationId, commandId } of switches) {
+    pendingAgentSwitches.set(conversationId, commandId);
+  }
+  const siteUrl = config.convex_url?.replace(".cloud", ".site");
+  if (siteUrl && config.auth_token) primeCommandClaims(fresh.map((c) => c.id), siteUrl, config.auth_token);
+  try {
+    for (const cmd of fresh) {
+      log(`[${source}] Executing command: ${cmd.command} (${cmd.id})`);
+      await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+    }
+  } finally {
+    for (const { conversationId, commandId } of switches) {
+      if (pendingAgentSwitches.get(conversationId) === commandId) {
+        pendingAgentSwitches.delete(conversationId);
+      }
+    }
+  }
+}
 
 
 async function pollDaemonCommands(): Promise<void> {
@@ -1984,6 +2426,7 @@ async function pollDaemonCommands(): Promise<void> {
         // along (cached, no I/O) so this beat never reads as label-less.
         device_id: deviceId(),
         device_label: deviceLabel(),
+        boot_id: BOOT_ID,
         ...syncHealthFields(),
       }),
     });
@@ -2011,11 +2454,7 @@ async function pollDaemonCommands(): Promise<void> {
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
       log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c: any) => c.command).join(", ")}`);
-      for (const cmd of data.commands) {
-        if (processedPollCommandIds.has(cmd.id)) continue;
-        processedPollCommandIds.add(cmd.id);
-        await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
-      }
+      await executeCommandBatch(data.commands, config, "POLL");
     }
   } catch {
     backendOutage.markFailure();
@@ -2064,6 +2503,25 @@ export function invalidateLocalProjectRoots(): void {
 // "sync stalled" warning while the daemon is still alive (fresh heartbeat but
 // data isn't flowing). Reads the live retry queue, not the persisted state
 // snapshot (which only refreshes inside the retry executor).
+/** The freeze numbers a heartbeat carries, rounded here rather than only in the
+ * server's projection. The server rewrites the devices row whenever any
+ * heartbeat field changed, and every viewer's roster re-renders with it, so a
+ * raw millisecond value would churn the roster on every 30s beat while the
+ * rendered number stayed the same. Exported for tests. */
+export function freezeBeatFields(freeze: LoopFreezeSummary): {
+  loop_freeze_ms: number;
+  loop_freeze_1h_ms: number;
+  loop_freeze_max_ms: number;
+  loop_freeze_top: string;
+} {
+  return {
+    loop_freeze_ms: freeze.recentMs,
+    loop_freeze_1h_ms: Math.round(freeze.hourMs / 5_000) * 5_000,
+    loop_freeze_max_ms: Math.round(freeze.hourMaxMs / 1_000) * 1_000,
+    loop_freeze_top: freeze.top,
+  };
+}
+
 function syncHealthFields(): {
   pending_sync_count: number;
   oldest_pending_ms: number;
@@ -2071,6 +2529,9 @@ function syncHealthFields(): {
   pending_sync_conversations: number;
   daemon_started_at: number;
   loop_freeze_ms: number;
+  loop_freeze_1h_ms: number;
+  loop_freeze_max_ms: number;
+  loop_freeze_top: string;
 } {
   const health = retryQueueRef?.getHealth();
   return {
@@ -2078,10 +2539,10 @@ function syncHealthFields(): {
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
     pending_sync_messages: health?.messages ?? 0,
     pending_sync_conversations: health?.conversations ?? 0,
-    // Boot time and recent loop-freeze budget: the web reads these as
-    // "restarted, catching up" and "under load" (see LoopFreezeLedger).
+    // Boot time and the loop freeze budget: the web reads these as "restarted,
+    // catching up" and "under load" (see LoopFreezeLedger).
     daemon_started_at: daemonStartedAt,
-    loop_freeze_ms: loopFreezes.recentMs(),
+    ...freezeBeatFields(loopFreezes.summary()),
   };
 }
 
@@ -2113,6 +2574,32 @@ let lastCredSkipReason: string | null = null;
  * at the next move anyway (refreshRemoteCredential runs at move time, and
  * provisioning pushes one too).
  */
+// One wake per device at a time, and one "no registry entry" line per device
+// rather than one per beat: the stamp stays set until the host's own beat
+// clears it, so every 30s beat would otherwise repeat the same story.
+const cloudWakeInFlight = new Set<string>();
+const cloudWakeUnknownLogged = new Set<string>();
+async function wakeCloudDevice(deviceId: string, label?: string): Promise<void> {
+  if (isRemoteDevice() || cloudWakeInFlight.has(deviceId)) return;
+  const host = hostForDevice(deviceId);
+  if (!host) {
+    if (!cloudWakeUnknownLogged.has(deviceId)) {
+      cloudWakeUnknownLogged.add(deviceId);
+      log(`[CLOUD] work is waiting for ${label ?? deviceId.slice(0, 8)} but this machine's host registry has no entry for it — another machine (or \`cast hosts wake\`) must boot it`);
+    }
+    return;
+  }
+  cloudWakeInFlight.add(deviceId);
+  try {
+    log(`[CLOUD] waking ${host.id} (${label ?? deviceId.slice(0, 8)}) — work is queued for it`);
+    const res = await runCastCommand(["cloud", "wake", host.id], { timeoutMs: 6 * 60 * 1000 });
+    if (res.code === 0) log(`[CLOUD] ${host.id} is up: ${res.stdout.trim().split("\n").pop()}`);
+    else log(`[CLOUD] wake of ${host.id} failed (exit ${res.code}): ${childErrorDetail(res.stderr, res.stdout)}`, "warn");
+  } finally {
+    cloudWakeInFlight.delete(deviceId);
+  }
+}
+
 async function reachableTransferHosts(): Promise<RemoteHost[]> {
   const candidates = [...listScalewayHosts(), ...listCloudRemoteHosts()];
   if (!candidates.length) return [];
@@ -2228,8 +2715,6 @@ const MINT_FLOW_POLL_MS = 2000;
 const MINT_RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000;
 let mintFlowActive = false;
 let mintFlowGeneration = 0;
-// The heartbeat reads the web-set device flag back; off until the first beat.
-let sessionTokensEnabled = false;
 // One auto-mint attempt per account per daemon lifetime — a rejected mint
 // (wrong browser account, closed tab) is not nagged; the web's "try again"
 // relaunches explicitly. Attempts are also stamped on disk so a daemon
@@ -2430,12 +2915,11 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
   return finish("rejected", "timed out waiting for the browser approval (5 min)");
 }
 
-// With per-session accounts on, the active login needs a live token (only the
-// active one can be minted — see startMintFlow). Runs on every beat that
-// carries the flag; acts once per account per daemon lifetime, and again a
-// week before a token's expiry.
+// The active login needs a live per-session token (only the active one can be
+// minted — see startMintFlow). Runs on every beat; acts once per account per
+// daemon lifetime, and again a week before a token's expiry.
 function maybeAutoMintToken(): void {
-  if (!sessionTokensEnabled || isRemoteDevice() || mintFlowActive) return;
+  if (isRemoteDevice() || mintFlowActive) return;
   try {
     const active = listProfiles().find((p) => p.active);
     if (!active) return;
@@ -2668,11 +3152,11 @@ let ccUsageRefreshInFlight = false;
 // device reports its own inventory.
 let codexUsageRefreshInFlight = false;
 
-async function maintainCodexUsageSnapshot(reason: string): Promise<void> {
+async function maintainCodexUsageSnapshot(reason: string, opts: { force?: boolean } = {}): Promise<void> {
   if (codexUsageRefreshInFlight) return;
   codexUsageRefreshInFlight = true;
   try {
-    const res = await refreshCodexUsageSnapshots();
+    const res = await refreshCodexUsageSnapshots(opts.force ? { minIntervalMs: 0 } : {});
     if (res.probed.length > 0 || res.failed.length > 0) {
       const failNote = res.failed.length
         ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
@@ -2686,8 +3170,22 @@ async function maintainCodexUsageSnapshot(reason: string): Promise<void> {
   }
 }
 
-async function maintainCcUsageSnapshots(reason: string): Promise<void> {
-  if (isRemoteDevice() || ccUsageRefreshInFlight) return;
+// `force` (the web's refresh button) probes every account regardless of the
+// per-account throttle, and queues behind a tick already in flight instead of
+// silently dropping — a click that does nothing reads as a broken button.
+let ccUsageRefreshInFlightPromise: Promise<void> | null = null;
+async function maintainCcUsageSnapshots(reason: string, opts: { force?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice()) return;
+  if (ccUsageRefreshInFlight) {
+    if (!opts.force) return;
+    await ccUsageRefreshInFlightPromise?.catch(() => {});
+  }
+  const run = maintainCcUsageSnapshotsInner(reason, opts);
+  ccUsageRefreshInFlightPromise = run;
+  return run;
+}
+
+async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boolean }): Promise<void> {
   ccUsageRefreshInFlight = true;
   try {
     // Prove whose the machine's login is while we are already talking to the
@@ -2701,12 +3199,14 @@ async function maintainCcUsageSnapshots(reason: string): Promise<void> {
           `${readOauthAccount()?.emailAddress ?? "unknown"}; using the verified identity`,
       );
     }
-    const res = await refreshUsageSnapshots();
-    if (res.probed.length > 0 || res.failed.length > 0) {
+    const res = await refreshUsageSnapshots(opts.force ? { minIntervalMs: 0 } : {});
+    if (res.probed.length > 0 || res.failed.length > 0 || res.expired.length > 0) {
       const failNote = res.failed.length
         ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
         : "";
-      log(`[ACCOUNTS] Usage refreshed for ${res.probed.length} account(s) (${reason})${failNote}`);
+      const rotatedNote = res.rotated.length ? ` rotated=${res.rotated.join(",")}` : "";
+      const expiredNote = res.expired.length ? ` login-expired=${res.expired.join(",")}` : "";
+      log(`[ACCOUNTS] Usage refreshed for ${res.probed.length} account(s) (${reason})${rotatedNote}${expiredNote}${failNote}`);
     }
   } catch (err) {
     log(`[ACCOUNTS] Usage refresh failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
@@ -2875,6 +3375,9 @@ async function sendHeartbeat(): Promise<void> {
         git_pubkey: deviceGitPubkey(),
         device_id: deviceId(),
         device_label: deviceLabel(),
+        // Which daemon PROCESS is beating, so the server withholds a command
+        // another daemon on this device already claimed.
+        boot_id: BOOT_ID,
         // The machine's own name, kept separate from device_label (which a human
         // can override to anything). Purely a suggested default for the SSH host
         // in Settings → Devices — the daemon can't know whether it's reachable,
@@ -2923,11 +3426,7 @@ async function sendHeartbeat(): Promise<void> {
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
       log(`Received ${data.commands.length} remote command(s)`);
-      for (const cmd of data.commands) {
-        if (processedPollCommandIds.has(cmd.id)) continue;
-        processedPollCommandIds.add(cmd.id);
-        await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
-      }
+      await executeCommandBatch(data.commands, config, "HEARTBEAT");
     }
 
     // Capability convergence: one field read + one integer store per beat,
@@ -2937,12 +3436,16 @@ async function sendHeartbeat(): Promise<void> {
     // waits for the next beat. The kill switch works the moment the server
     // flips capabilities_mode, no CLI ship needed.
     recordConvergenceSignals(data);
-    // Per-session accounts flag (web-set on the device row) — drives the
-    // daemon's auto-mint of setup-tokens for the active login.
-    if (typeof data.cc_session_tokens === "boolean") {
-      sessionTokensEnabled = data.cc_session_tokens;
-      maybeAutoMintToken();
+    // Cloud hosts asleep with work queued for them (cloud.requestRemoteWake).
+    // Only a local daemon gets the list, and only one whose registry knows the
+    // host can boot it; the wake runs in a child so a 3-minute EC2 boot never
+    // blocks this loop. Off the beat, fire-and-forget.
+    if (Array.isArray(data.wake_devices) && data.wake_devices.length > 0) {
+      for (const w of data.wake_devices as Array<{ device_id: string; label: string | null }>) {
+        void wakeCloudDevice(w.device_id, w.label ?? undefined);
+      }
     }
+    maybeAutoMintToken();
     // Team-gated agent snippets follow the team feature flags: install when a
     // team turns chat/calls on, disable when the last team turns it off.
     if (data.snippet_availability && typeof data.snippet_availability === "object") {
@@ -3034,7 +3537,7 @@ async function sendHeartbeat(): Promise<void> {
 /**
  * Resolve how to invoke this CLI's own `cast` entrypoint as a child process,
  * coping with the three ways the daemon itself can be running:
- *   - from source   (`bun .../daemon.ts`)  -> bun + .../index.ts
+ *   - from source   (`bun .../daemon.ts`)  -> bun + .../main.ts
  *   - compiled bin   (`cast _daemon`)       -> the cast binary itself
  *   - on PATH        (fallback)             -> `cast`
  * Returns argv parts so callers can spawn without shell-quoting hazards.
@@ -3051,8 +3554,8 @@ function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
   const argv1 = process.argv[1] || "";
   if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
     const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
-    const indexPath = path.join(path.dirname(argv1), `index${ext}`);
-    return { cmd: process.argv[0], prefixArgs: [indexPath] };
+    const entryPath = path.join(path.dirname(argv1), `main${ext}`);
+    return { cmd: process.argv[0], prefixArgs: [entryPath] };
   }
   if (argv1 === "_daemon" || !argv1.includes("/")) {
     return { cmd: process.execPath, prefixArgs: [] };
@@ -3226,6 +3729,7 @@ export function clearSessionTrackingForKill(sessionId: string | null | undefined
   // session instead of restarting it. If you couple them, drop this line.
   stopManagedSessionHeartbeat(sessionId);
   stopCodexPermissionPoller(sessionId);
+  forgetHibernationPark(sessionId);
   resumeSessionCache.delete(sessionId);
   sessionProcessCache.delete(sessionId);
   resumeInFlight.delete(sessionId);
@@ -3323,6 +3827,13 @@ async function killConversationBackends(
   let result: string | undefined;
   let error: string | undefined;
 
+  // The worktree this session ran in, read BEFORE anything is torn down: the
+  // started registry names the launch cwd, and a re-adopted pane knows its own.
+  // Released at the end when it is a codecast worktree holding no work
+  // (worktreeGc.ts) — killing a session is the one moment a worktree stops
+  // being anybody's.
+  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath;
+
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
   // start_session so "one backend per conversation" is enforced identically
@@ -3382,6 +3893,7 @@ async function killConversationBackends(
       const tmuxTarget = await findTmuxPaneForTty(proc.tty);
       if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
         const tmuxSessionName = tmuxTarget.split(":")[0];
+        gcCwd ??= await tmuxPaneCwd(tmuxTarget);
         await killTmuxSessionAndTree(tmuxSessionName);
         await reapPidTree(proc.pid); // belt-and-suspenders for anything outside the pane
         result = "killed_tmux";
@@ -3413,6 +3925,7 @@ async function killConversationBackends(
     }
     stopManagedSessionHeartbeat(sessionId);
     stopCodexPermissionPoller(sessionId);
+    forgetHibernationPark(sessionId);
     sessionProcessCache.delete(sessionId);
     resumeInFlight.delete(sessionId);
     resumeInFlightStarted.delete(sessionId);
@@ -3433,8 +3946,54 @@ async function killConversationBackends(
   // injected message.
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
+  if (gcCwd) void releaseSessionWorktree(gcCwd, log).catch((err) => log(`[WORKTREE-GC] ${String(err).slice(0, 160)}`));
+
   if (!result) result = sessionId ? "no_process" : "no_session";
   return { result, error };
+}
+
+async function killConversationBackendsForAgentSwitch(
+  conversationId: string,
+  sessionIdHint?: string,
+): Promise<{ result?: string; error?: string }> {
+  const cache = readConversationCache();
+  const sessionId = buildReverseConversationCache(cache)[conversationId] ?? sessionIdHint;
+  const startedTmux = startedSessionTmux.get(conversationId)?.tmuxSession;
+  const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+  let result = teardown.killedAppServer
+    ? "killed_app_server"
+    : teardown.killedTmux
+      ? "killed_tmux"
+      : undefined;
+
+  if (sessionId) {
+    const plan = planSessionTeardown(sessionProcessOwnership(sessionId));
+    const cachedTmux = resumeSessionCache.get(sessionId);
+    if (cachedTmux && cachedTmux !== startedTmux && validateTmuxTarget(cachedTmux) && plan.killCachedResumeTmux) {
+      await killTmuxSessionAndTree(cachedTmux);
+      result = "killed_tmux";
+      log(`[AGENT-SWITCH] Killed cached tmux ${cachedTmux} for ${shortId(sessionId)}`);
+    } else if (!result && (!cachedTmux || !plan.killCachedResumeTmux)) {
+      return killConversationBackends(conversationId, sessionIdHint);
+    }
+    clearSessionTrackingForKill(sessionId);
+  } else if (!result) {
+    return killConversationBackends(conversationId, sessionIdHint);
+  }
+
+  await clearConversationDeliveryAndResumeState(conversationId, sessionId, "AGENT-SWITCH");
+  return { result: result ?? "no_process" };
+}
+
+/** The cwd of a tmux pane, or undefined when tmux cannot say. */
+async function tmuxPaneCwd(target: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_current_path}"], { timeout: 4000 });
+    const p = stdout.trim();
+    return p.startsWith("/") ? p : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function executeRemoteCommand(
@@ -3456,7 +4015,7 @@ async function executeRemoteCommand(
   // races the owner — e.g. after a move-to-remote the local daemon would resume a
   // local copy and answer in parallel with the remote (split-brain). An OFFLINE
   // owner does NOT skip, so this daemon can reclaim a session whose owner died.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind", "hibernate_session"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const parsedArgs = JSON.parse(commandArgs);
@@ -3484,11 +4043,49 @@ async function executeRemoteCommand(
               ? `[OWNER] kill_session for ${String(convId).slice(0, 12)} swept ${swept} local pane(s) and cleared in-flight resume state before deferring to the owner`
               : `[OWNER] kill_session for ${String(convId).slice(0, 12)} — no local panes; cleared in-flight resume state`);
           }
+          // A lease primed for this batch would otherwise sit here unheld
+          // until the grace window, blocking a peer daemon on this machine.
+          discardPrimedClaim(commandId, siteUrl, config.auth_token);
           return; // leave the rest of the command for the owner device
         }
       }
     } catch { /* on any error, fall through and execute (fail-open) */ }
   }
+
+  // Claim the command before running it. Two daemons can share a device (both
+  // sides of an upgrade, a rogue self spawn) and both poll the same queue, so
+  // without this both execute every command: a resume runs twice, a kill races
+  // a resume. One insertion covers all three delivery paths (subscription, 10s
+  // poll, heartbeat embedded) because all three funnel through here.
+  //
+  // The answer is usually already in flight: executeCommandBatch primes the
+  // whole batch together, so N commands cost one round trip instead of N. The
+  // lease is scoped to this device, so priming ahead of the owner guard cannot
+  // take work away from the machine that owns the session. What it can do is
+  // hold a lease this daemon then defers, and the owner guard hands that back.
+  //
+  // It fails OPEN on purpose. Only the two answers that mean another daemon
+  // owns the work skip: held_by_other and already_executed. A 404 from an older
+  // server, a network error, a timeout, an auth failure, a missing row or a
+  // malformed body all execute. A claim endpoint that is missing, unreachable
+  // or wedged must never wedge every command on the machine, which is far worse
+  // than the double execution this prevents.
+  //
+  // The request is bounded for the same reason the heartbeat is: a socket that
+  // opens and never answers must not stall the batch behind it.
+  const claim = await takePrimedClaim(commandId, siteUrl, config.auth_token);
+  if (claim && claim.claimed === false && (claim.reason === "held_by_other" || claim.reason === "already_executed")) {
+    // The caller already marked this id as handled here. For a live hold, undo
+    // that: the holder can die before executing, and once the lease lapses the
+    // 10s poll offers the command again. Keep the marking for already_executed,
+    // which is final.
+    if (claim.reason === "held_by_other") forgetProcessedCommand(commandId);
+    log(`[CLAIM] skipping ${command} (${commandId}): ${claim.reason}`);
+    return;
+  }
+  // Held from here until the result is reported, so a graceful stop in between
+  // gives the command back instead of stranding it for the grace window.
+  if (claim?.claimed) holdClaim(commandId);
 
   try {
     switch (command) {
@@ -3521,13 +4118,26 @@ async function executeRemoteCommand(
         // loopback endpoint, then connects to whichever answers on 127.0.0.1
         // — only the machine the browser is physically on is reachable, so
         // multi-device resolution falls out for free.
+        //
+        // Never answer port 0. Asked before the listen resolves, wait for it:
+        // an answer of 0 is one the web has to discard anyway, and a device
+        // that stays silent is a case discover() already handles.
+        const port = hookServerPort || await Promise.race([
+          hookListening,
+          new Promise<number>((r) => setTimeout(() => r(0), 5000)),
+        ]);
+        if (port === 0) {
+          error = "terminal endpoint not listening yet";
+          log(`[REMOTE] Terminal endpoint requested before listen`);
+          break;
+        }
         result = JSON.stringify({
-          port: hookServerPort,
-          token: terminalToken,
+          port,
+          token: terminalToken(),
           device_id: deviceId(),
           tmux: hasTmux(),
         });
-        log(`[REMOTE] Terminal endpoint requested (port ${hookServerPort})`);
+        log(`[REMOTE] Terminal endpoint requested (port ${port})`);
         break;
       }
       case "stream_pane": {
@@ -3948,9 +4558,17 @@ async function executeRemoteCommand(
         if (stablePrefs.stable_exclude?.length) stableEnvParts.push(`${STABLE_ENV_EXCLUDE}=${stablePrefs.stable_exclude.join(",")}`);
         if (conversationId && /^[a-z0-9]+$/i.test(conversationId)) stableEnvParts.push(`${STABLE_ENV_CONVERSATION_ID}=${conversationId}`);
         const stableEnv = stableEnvParts.length ? ` ${stableEnvParts.join(" ")}` : "";
+        // PORT_<NAME> and the worktree identity from the workspace state, for
+        // any cwd inside a codecast worktree — the ones this daemon made
+        // (--isolated) and the ones `cast spawn --cloud` acquired on this host
+        // before placing the session here. A session can then bind the port it
+        // was allocated (vite --port "$PORT_WEB") instead of guessing from the
+        // index. Same shell-safe token rule as the stable env above.
+        const wtEnvRaw = worktreeEnvPrefix(cwd);
+        const wtEnv = wtEnvRaw ? ` ${wtEnvRaw}` : "";
         const envPrefix = worktreeResult
-          ? `${AGENT_ENV_SCRUB} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${stableEnv}`
-          : `${AGENT_ENV_SCRUB}${stableEnv}`;
+          ? `${AGENT_ENV_SCRUB} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
+          : `${AGENT_ENV_SCRUB}${wtEnv}${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -4058,6 +4676,7 @@ async function executeRemoteCommand(
           }
           result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
+          touchHostActivity();
           if (conversationId) {
             const initialManagedSessionId = assignedClaudeSessionId ?? getInitialManagedSessionId(agentType, expectedSessionId);
             startedSessionTmux.set(conversationId, {
@@ -4108,6 +4727,11 @@ async function executeRemoteCommand(
         const escapeThreadId = appServerConversations.get(conversationId);
         if (escapeThreadId && codexAppServerInstance?.running) {
           const activeTurnId = findActiveTurnForThread(escapeThreadId);
+          const persisted = persistedAppServerThreads.get(conversationId);
+          if (persisted?.activeTurnId) {
+            persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
+            persistAppServerThreadRegistrations();
+          }
           if (activeTurnId) {
             await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
             result = "escape_interrupted";
@@ -4348,12 +4972,28 @@ async function executeRemoteCommand(
           error = "Missing conversation_id";
           break;
         }
-        const killed = await killConversationBackends(
-          conversationId,
-          typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined
-        );
+        const sessionIdHint = typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined;
+        const killed = pendingAgentSwitches.has(conversationId)
+          ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
+          : await killConversationBackends(conversationId, sessionIdHint);
         result = killed.result;
         error = killed.error;
+        break;
+      }
+      // `cast hibernate <session>`: park the pane now. Being asked by a person
+      // excuses the fleet cap and the idle bar, never the safety rules: the
+      // same refusals the pass applies, through the same function.
+      case "hibernate_session": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const sessionId: string | undefined = typeof parsed.session_id === "string" ? parsed.session_id : undefined;
+        const conversationId: string | undefined = typeof parsed.conversation_id === "string" ? parsed.conversation_id : undefined;
+        if (!sessionId) {
+          error = "Missing session_id";
+          break;
+        }
+        const outcome = await hibernateSessionNow(sessionId, conversationId);
+        result = outcome.result;
+        error = outcome.error;
         break;
       }
       // "Update now" from the in-app banner: apply the published desktop release
@@ -4421,10 +5061,23 @@ async function executeRemoteCommand(
           break;
         }
 
+        // refresh_usage mode: the web's refresh button. Probe every account's
+        // usage now (both providers), then heartbeat so the meters move
+        // before the command's caller stops watching.
+        if (parsed.refresh_usage === true) {
+          await Promise.all([
+            maintainCcUsageSnapshots("manual", { force: true }),
+            maintainCodexUsageSnapshot("manual", { force: true }),
+          ]);
+          await sendHeartbeat().catch(() => {});
+          result = JSON.stringify({ refreshed: true });
+          break;
+        }
+
         // mint mode: mint a setup-token for the machine's current login (the
-        // web toggle / "mint now"). Returns at once — the browser approval
-        // outlives any command TTL — and the detached watcher reports the
-        // outcome through reportMintFlow (see the MINT-FLOW block).
+        // web "mint now" action or automatic provisioning). Returns at once —
+        // the browser approval outlives any command TTL — and the detached
+        // watcher reports the outcome through reportMintFlow (see MINT-FLOW).
         if (typeof parsed.mint === "string" && parsed.mint) {
           try {
             result = await startMintFlow(parsed.mint, parsed.force === true);
@@ -4470,23 +5123,45 @@ async function executeRemoteCommand(
           }
         }
         if (sendContinue && syncServiceRef) {
-          for (const convId of conversationIds) {
+          // Paced, not fired at once: each continue resumes a process whose
+          // first request carries the whole context, and twenty of those in
+          // the same half-minute trip the provider's per-minute cap — the
+          // fleet then parks on a 429 the CLI renders as a limit, and the
+          // loop rotates to the next account to do it again (2026-09-04).
+          // The spacing keeps the revive under the cap; the enqueue runs on
+          // after the command reports so the ack isn't held for minutes.
+          const sync = syncServiceRef;
+          const enqueueContinue = async (convId: string) => {
             try {
               // client_id keyed by command id: re-running the command can't
               // double-queue, but a deliberate second switch still can.
-              await syncServiceRef.enqueueUserMessage(
+              await sync.enqueueUserMessage(
                 convId,
                 "continue",
                 continueClientIds[convId] || `acct-switch-${commandId}-${convId}`,
               );
-              continued++;
+              return true;
             } catch (err) {
               log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+              return false;
             }
+          };
+          const [first, ...rest] = conversationIds;
+          if (first && (await enqueueContinue(first))) continued++;
+          if (rest.length > 0) {
+            continued += rest.length;
+            void (async () => {
+              let sent = 0;
+              for (const convId of rest) {
+                await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
+                if (await enqueueContinue(convId)) sent++;
+              }
+              log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
+            })();
           }
         }
         result = JSON.stringify({ switched, killed, continued });
-        log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}`);
+        log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}${conversationIds.length > 1 ? ` (paced ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart)` : ""}`);
         break;
       }
       // Web sign-in CTA: run the browser OAuth flow via `claude auth login` and
@@ -4520,6 +5195,11 @@ async function executeRemoteCommand(
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const sessionId = parsed.session_id;
         const conversationId = parsed.conversation_id;
+        const resumeOptions: ResumeOptions = {
+          ...USER_RESUME,
+          ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+          ...(typeof parsed.effort === "string" ? { effort: parsed.effort } : {}),
+        };
         if (!sessionId) {
           error = "Missing session_id";
           break;
@@ -4578,7 +5258,7 @@ async function executeRemoteCommand(
         // In-place agent switch: ignore the old transcript, rebuild as the
         // TARGET agent under a new native session id, rebind this conversation.
         // A live-pane reuse of the OLD agent would silently no-op the switch.
-        if (parsed.switch_agent === true && conversationId) {
+        if (parsed.switch_agent === true && conversationId && resumeAgentType !== "codex") {
           const targetAgent: AgentClientId = resumeAgentType || "claude";
           log(`[REMOTE] Agent switch conv=${conversationId.slice(0, 12)} ${sessionId.slice(0, 8)} → ${targetAgent}`);
           restartingSessionIds.set(sessionId, Date.now());
@@ -4597,22 +5277,14 @@ async function executeRemoteCommand(
                 const siteUrl = config.convex_url.replace(".cloud", ".site");
                 const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
                 if (exportData.messages.length > 0) {
-                  let reconJsonl: string;
-                  let newSessionId: string;
-                  let reconFilePath: string;
-                  if (targetAgent === "codex") {
-                    ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData));
-                    ({ filePath: reconFilePath } = writeCodexSession(reconJsonl, newSessionId));
-                  } else {
-                    const tailMessages = chooseClaudeAutoTrim(exportData);
-                    ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages }));
-                    ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
-                  }
+                  const tailMessages = chooseClaudeAutoTrim(exportData);
+                  const { jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
+                  const { filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd);
                   setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                   remapConversationSession(sessionId, newSessionId, conversationId);
                   void pushSessionIdBinding(conversationId, newSessionId, cwd);
                   const resumed = await autoResumeSession(
-                    newSessionId, "", readTitleCache(), cwd, conversationId, targetAgent, USER_RESUME,
+                    newSessionId, "", readTitleCache(), cwd, conversationId, targetAgent, resumeOptions,
                   );
                   if (resumed) {
                     const cache = readConversationCache();
@@ -4694,7 +5366,7 @@ async function executeRemoteCommand(
 
           if (realForkId) {
             restartingSessionIds.set(realForkId, Date.now());
-            const resumed = await autoResumeSession(realForkId, "", readTitleCache(), projectPath, conversationId, "opencode", USER_RESUME);
+            const resumed = await autoResumeSession(realForkId, "", readTitleCache(), projectPath, conversationId, "opencode", resumeOptions);
             restartingSessionIds.delete(realForkId);
             if (resumed) {
               syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
@@ -4760,6 +5432,7 @@ async function executeRemoteCommand(
         // Where the session ran before this machine — captured before the
         // reparent checkout repoints projectPath, so the notice can name it.
         const priorCwd = projectPath;
+        let pendingForkParentId: string | undefined;
         let reparentCheckout: ReparentedCheckout | undefined;
         if (reparented) {
           reparentCheckout = await ensureReparentedCheckout(conversationId, projectPath, parsed.git_remote_url);
@@ -4784,15 +5457,28 @@ async function executeRemoteCommand(
             }
             const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId });
             const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
-            setPosition(importPath, fs.statSync(importPath).size);
+            const importBytes = fs.statSync(importPath).size;
+            setPosition(importPath, importBytes);
             const approvalPolicy = resolveCodexApprovalPolicy(config);
+            pendingAppServerForkParents.add(importSessionId);
+            pendingForkParentId = importSessionId;
+            const forkTimeoutMs = threadForkTimeoutMsForBytes(importBytes);
+            if (forkTimeoutMs > 60_000) {
+              log(`[REMOTE] Codex history import is ${Math.ceil(importBytes / (1024 * 1024))} MiB; allowing ${Math.round(forkTimeoutMs / 1000)}s for thread/fork`);
+            }
             const forked = await activeCodexAppServer.threadFork({
               threadId: "",
               path: importPath,
               cwd,
+              ...(resumeOptions.model && resumeOptions.model !== "default"
+                ? { model: resumeOptions.model }
+                : {}),
+              ...(resumeOptions.effort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(resumeOptions.effort)
+                ? { config: { model_reasoning_effort: resumeOptions.effort } }
+                : {}),
               approvalPolicy,
               sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
-            });
+            }, forkTimeoutMs);
             const realThreadId = forked.thread.id;
             remapConversationSession(sessionId, realThreadId, conversationId);
             registerAppServerConversation(conversationId, realThreadId, {
@@ -4811,15 +5497,27 @@ async function executeRemoteCommand(
             syncServiceRef?.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
             ensureManagedSessionHeartbeat(realThreadId);
             conversationResumeFailures.delete(conversationId);
-            await clearConversationDeliveryAndResumeState(conversationId, sessionId, "codex_app_server_fork");
-            result = JSON.stringify({ forked: true, session_id: realThreadId, transport: "app-server" });
-            log(`[REMOTE] Codex fork ${sessionId.slice(0, 8)} imported as app-server thread ${realThreadId.slice(0, 8)} for conv ${conversationId.slice(0, 12)}`);
+            const switchingAgent = parsed.switch_agent === true;
+            await clearConversationDeliveryAndResumeState(
+              conversationId,
+              sessionId,
+              switchingAgent ? "codex_app_server_switch" : "codex_app_server_fork",
+            );
+            result = JSON.stringify({
+              ...(switchingAgent ? { switched: true } : { forked: true }),
+              session_id: realThreadId,
+              transport: "app-server",
+            });
+            log(`[REMOTE] Codex ${switchingAgent ? "switch" : "fork"} ${sessionId.slice(0, 8)} imported as app-server thread ${realThreadId.slice(0, 8)} for conv ${conversationId.slice(0, 12)}`);
           } catch (forkErr) {
             const message = forkErr instanceof Error ? forkErr.message : String(forkErr);
             logError(`[REMOTE] Codex app-server fork import failed for ${sessionId.slice(0, 8)}`, forkErr instanceof Error ? forkErr : new Error(message));
             error = `Codex history import failed: ${message}`;
-            syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
+            stopManagedSessionHeartbeat(sessionId);
+            await syncServiceRef?.unregisterManagedSession(sessionId).catch(logConvexFailure);
+            await syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
           } finally {
+            if (pendingForkParentId) pendingAppServerForkParents.delete(pendingForkParentId);
             restartingSessionIds.delete(sessionId);
           }
           break;
@@ -4827,13 +5525,13 @@ async function executeRemoteCommand(
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, USER_RESUME);
+          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, USER_RESUME);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
           if (!resumed) {
             log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, USER_RESUME);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
           }
         }
         if (resumed) {
@@ -4903,7 +5601,7 @@ async function executeRemoteCommand(
                 setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
 
-                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType, USER_RESUME);
+                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType, resumeOptions);
                 if (reconResumed) {
                   const cache = readConversationCache();
                   cache[newSessionId] = conversationId;
@@ -5291,6 +5989,35 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "cloud_spawn": {
+        // The web asked for a session on the cloud host and this (local) daemon
+        // was picked to prepare it: wake the box, refresh its checkout, copy the
+        // manifest's secret files, acquire the worktree there, place the row.
+        // A multi-minute SSH job, so it runs as `cast cloud start` in a child
+        // exactly like move_to_device runs `cast remote move`.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = parsed.conversation_id;
+        const cloudDeviceId: string | undefined = parsed.cloud_device_id;
+        if (!conversationId) {
+          error = "cloud_spawn: missing conversation_id";
+          break;
+        }
+        log(`[CLOUD] placing ${conversationId.slice(0, 12)} on the cloud host (async child)`);
+        const res = await runCastCommand(
+          ["cloud", "start", conversationId, ...(cloudDeviceId ? ["--device", cloudDeviceId] : [])],
+          { timeoutMs: 25 * 60 * 1000 },
+        );
+        if (res.code === 0) {
+          result = res.stdout.trim().split("\n").reverse().find((l) => l.startsWith("{")) ?? JSON.stringify({ placed: true });
+          log(`[CLOUD] placed ${conversationId.slice(0, 12)}: ${result}`);
+        } else {
+          const detail = childErrorDetail(res.stderr, res.stdout);
+          error = `cloud host preparation failed (exit ${res.code})${detail ? `: ${detail}` : ""}`;
+          log(`[CLOUD] FAILED ${conversationId.slice(0, 12)}: ${error}`, "warn");
+          syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+        }
+        break;
+      }
       case "release_session": {
         // Ownership was reassigned AWAY from this device ("Run here" on another
         // machine). Targeted at us — the previous owner — so we must NOT sit
@@ -5395,6 +6122,10 @@ async function executeRemoteCommand(
     });
   } catch {
     // Ignore
+  } finally {
+    // The lease dies with the report either way: a reported command carries an
+    // executed_at, and the server refuses to release one of those.
+    dropClaim(commandId);
   }
 }
 
@@ -6799,6 +7530,39 @@ export function subagentParentSessionFromPath(filePath: string): string | undefi
   return idx >= 1 ? parts[idx - 1] : undefined;
 }
 
+// When a subagent last wrote to its own transcript, keyed by the PARENT session
+// id. A headless child has no pane: it runs as a process inside the parent
+// pane's tree, so killing that pane kills the child mid-turn and nobody ever
+// reports its result. The hibernation policy reads this to keep such a parent
+// live. The transcript path is the only place the parent is named, and
+// processSessionFile is the one function every append passes through.
+const subagentActivityByParent = new Map<string, number>();
+const SUBAGENT_ACTIVITY_MAX_ENTRIES = 500;
+
+export function noteSubagentActivity(filePath: string, at: number = Date.now()): void {
+  const parent = subagentParentSessionFromPath(filePath);
+  if (!parent) return;
+  subagentActivityByParent.set(parent, at);
+  // A machine that ran thousands of subagents would otherwise hold every parent
+  // id forever. Anything past the quiet window can no longer block a park.
+  if (subagentActivityByParent.size > SUBAGENT_ACTIVITY_MAX_ENTRIES) {
+    const cutoff = at - HIBERNATE_SUBAGENT_QUIET_MS;
+    for (const [id, seen] of subagentActivityByParent) if (seen < cutoff) subagentActivityByParent.delete(id);
+  }
+}
+
+/** How long since a subagent of `sessionId` produced output. Infinity when the
+ *  daemon has never seen one write. */
+export function subagentActiveAgoMs(sessionId: string, now: number = Date.now()): number {
+  const seen = subagentActivityByParent.get(sessionId);
+  return seen === undefined ? Infinity : now - seen;
+}
+
+/** Test seam: forget every recorded subagent append. */
+export function resetSubagentActivityForTests(): void {
+  subagentActivityByParent.clear();
+}
+
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
 // backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
 // in full every pass and synced as one all-or-nothing batch — which never completed
@@ -7029,6 +7793,10 @@ export async function processSessionFile(
   const stats = await ingestStat(filePath, getPosition(filePath));
   if (!stats) return;
   const lastPosition = stats.lastPosition;
+  // New bytes in a subagent transcript mean its parent has a live child inside
+  // its pane's process tree. Recorded here because this is where every append
+  // arrives; read by the hibernation policy, which must not park that parent.
+  if (isSubagent && stats.size > lastPosition) noteSubagentActivity(filePath);
 
   if (stats.size <= lastPosition) {
     // Nothing new to read, but the watchdog uses sync-ledger.json (NOT
@@ -8265,6 +9033,8 @@ async function processCursorTranscriptFile(
   }
 }
 
+const codexModelPositions = new Map<string, { offset: number; model?: string }>();
+
 async function processCodexSession(
   filePath: string,
   sessionId: string,
@@ -8296,15 +9066,29 @@ async function processCodexSession(
       }
       throw err;
     }
-    if (isAppServerManagedCodexSessionHead(sessionMetaHead)) {
-      setPosition(filePath, lastPosition + bytesConsumed);
-      markSynced(filePath, lastPosition + bytesConsumed, 0);
+    const persistedAppServerThreadIds = new Set(
+      [...persistedAppServerThreads.values()].map((record) => record.threadId),
+    );
+    if (isAppServerOwnedCodexTranscript(
+      sessionId,
+      sessionMetaHead,
+      new Set(appServerThreads.keys()),
+      persistedAppServerThreadIds,
+      pendingAppServerForkParents,
+    )) {
+      setPosition(filePath, stats.size);
+      markSynced(filePath, stats.size, 0);
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
     const codexMetadata = codexSessionMetadataFor(filePath);
     const nativeParentSessionId = codexMetadata?.parentThreadId;
-    const messages = parseTranscriptFor("codex", newContent);
+    const cachedModel = codexModelPositions.get(filePath);
+    const modelState = { model: cachedModel?.offset === lastPosition
+      ? cachedModel.model
+      : await readCodexModelBeforeOffset(filePath, lastPosition) };
+    const messages = parseCodexSessionFile(newContent, modelState);
+    codexModelPositions.set(filePath, { offset: lastPosition + bytesConsumed, model: modelState.model });
 
     // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
     // session embeds its lineage back to a common root, so we key the conversation off that
@@ -9536,6 +10320,61 @@ async function psSnapshotLines(args: string[]): Promise<string[]> {
 async function psAuxLines(): Promise<string[]> {
   return psSnapshotLines(["aux"]);
 }
+
+// tmux verbs the daemon runs to completion through tmuxExec. A client running one
+// of these whose parent is launchd (pid 1) has outlived the daemon that spawned
+// it: the spawn's timeout would have SIGKILLed a slow one, but a daemon shutdown
+// mid-call takes that timer with it, and a client wedged against a tmux server
+// that died in the same restart then spins forever (three `tmux has-session`
+// clients at ~90% CPU each for 2.5h, load average 266, 2026-09-03). The server
+// (`new-session`) and interactive clients (`attach`) are long-lived by design and
+// are never listed here. Note psSnapshotLines drops lines containing "codecast",
+// so a client whose argument text carries that word is not seen.
+const TMUX_ONE_SHOT_VERBS = new Set([
+  "has-session", "show-options", "set-option", "capture-pane", "send-keys",
+  "list-panes", "list-sessions", "list-windows", "list-clients", "display-message",
+  "kill-session", "kill-window", "kill-pane", "select-pane", "select-window",
+  "resize-window", "resize-pane", "respawn-pane", "rename-session", "rename-window",
+  "paste-buffer", "load-buffer", "set-buffer", "delete-buffer", "clear-history",
+  "show-environment", "set-environment", "set-hook", "show-hooks", "refresh-client",
+]);
+// tmux options that take a value, so the verb is the token after the value.
+const TMUX_VALUE_OPTIONS = new Set(["-S", "-L", "-f", "-c", "-T"]);
+
+/** Orphaned one-shot tmux clients in `ps -axo pid=,ppid=,args=` output. Exported for tests. */
+export function orphanedTmuxClientPids(psLines: string[], orphanParentPid = 1): Array<{ pid: number; args: string }> {
+  const out: Array<{ pid: number; args: string }> = [];
+  for (const line of psLines) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (!m) continue;
+    if (parseInt(m[2], 10) !== orphanParentPid) continue;
+    const argv = m[3].trim().split(/\s+/);
+    if (path.basename(argv[0]) !== "tmux") continue;
+    let verb: string | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i].startsWith("-")) {
+        if (TMUX_VALUE_OPTIONS.has(argv[i])) i++;
+        continue;
+      }
+      verb = argv[i];
+      break;
+    }
+    if (verb && TMUX_ONE_SHOT_VERBS.has(verb)) out.push({ pid: parseInt(m[1], 10), args: m[3].trim() });
+  }
+  return out;
+}
+
+async function reapOrphanedTmuxClients(): Promise<void> {
+  const orphans = orphanedTmuxClientPids(await psSnapshotLines(["-axo", "pid=,ppid=,args="]));
+  const killed: string[] = [];
+  for (const { pid, args } of orphans) {
+    try {
+      process.kill(pid, "SIGKILL");
+      killed.push(`${pid} ${args.slice(0, 80)}`);
+    } catch {}
+  }
+  if (killed.length > 0) log(`[TMUX-REAP] killed ${killed.length} orphaned tmux client(s): ${killed.join("; ")}`);
+}
 /** Lines of the shared `ps aux` snapshot matching an ERE-style pattern. */
 async function psAuxGrep(pattern: string): Promise<string[]> {
   const re = new RegExp(pattern);
@@ -9564,6 +10403,10 @@ export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern:
   // the distinctive package path that always appears in the process command line.
   if (agentType === "pi") return "pi-coding-agent";
   return claudePattern;
+}
+
+export function processLookupAllowsCwdFallback(agentType: AgentClientId): boolean {
+  return agentType !== "codex";
 }
 
 async function findSessionProcess(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
@@ -9867,7 +10710,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
     } catch {}
 
     // Strategy C: CWD-based matching for non-resumed sessions
-    const jsonlPath = findSessionJsonlPath(sessionId);
+    const jsonlPath = processLookupAllowsCwdFallback(agentType) ? findSessionJsonlPath(sessionId) : null;
     if (jsonlPath) {
       const jsonlStat = fs.statSync(jsonlPath);
       const recentlyModified = Date.now() - jsonlStat.mtimeMs < 60_000;
@@ -10120,7 +10963,11 @@ function extractPromptHeading(lines: string[], firstOptionIdx: number): { header
 
 export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
-  const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
+  // '›' (U+203A) belongs here alongside '❯': codex draws its menu cursor with it.
+  // Without it the cursor ROW of a codex menu fails to parse, so a three-option
+  // menu reads as two options with no cursor — enough to miss the menu entirely
+  // and let the readiness poll declare the pane idle while a modal is up.
+  const optionPattern = /^\s*[❯›>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
   const options: Array<{ label: string; description?: string }> = [];
   let firstOptionIdx = -1;
   let lastOptionIdx = -1;
@@ -10142,7 +10989,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
     if (m) {
       if (lastOptionIdx < 0) lastOptionIdx = i;
       firstOptionIdx = i;
-      if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
+      if (/^\s*[❯›>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
       if (CHECKBOX_PREFIX.test(m[2])) hasCheckbox = true;
       const label = m[2]
         .replace(CHECKBOX_PREFIX, "")        // multiSelect checkbox: "[ ]" / "[x]" / "☐"
@@ -10558,7 +11405,8 @@ export function jsonlTailEndsWithLimitBanner(jsonlText: string): boolean {
     const hasContent = (typeof text === "string" && text.trim().length > 0)
       || (Array.isArray(content) && content.some((b: any) => b?.type === "tool_use" || b?.type === "tool_result"));
     if (!hasContent) continue;
-    lastIsLimitBanner = !!entry?.isApiErrorMessage && classifyApiErrorBanner(text) === "limit";
+    lastIsLimitBanner = !!entry?.isApiErrorMessage
+      && classifyApiErrorBanner(typeof text === "string" ? claudeBannerText(entry, text) : text) === "limit";
   }
   return lastIsLimitBanner;
 }
@@ -10823,6 +11671,7 @@ export type TmuxLiveState =
   | "rewind"        // Rewind/Restore modal — Escape to cancel (NEVER Enter, that rewinds)
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
+  | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
@@ -10869,6 +11718,36 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // an Enter-press-loop that mis-classifies as AGENT_STUCK_WARNING for any
   // Claude Code session with an update pending. Mirrors injectViaTmuxInner's
   // own guard, which only acks warnings when no prompt is visible.
+  // A numbered menu the agent never asked for, checked BEFORE the idle rule
+  // below because it defeats that rule twice over. Codex's startup banner is:
+  //
+  //     Update available! 0.147.0 -> 0.153.0
+  //   › 1. Update now (runs `bun install -g @openai/codex`)
+  //     2. Skip
+  //     3. Skip until next version
+  //     Press enter to continue
+  //
+  // Its selection cursor is '›', which `promptVisible` reads as a live composer,
+  // so the whole pane classified "idle" and took a paste + Enter. And its footer
+  // says "Press enter to continue", so the warning rule would ALSO press Enter.
+  // Both are wrong in the same direction: the cursor rests on "Update now", so
+  // Enter runs a global package install inside the agent's pane. Escape is the
+  // only safe key here (verified against codex 0.147.0), which is why this needs
+  // its own state rather than folding into "warning".
+  // Keyed on the menu's SHAPE, not on the banner text: the live region is the
+  // last few lines, so "Update available!" has usually scrolled out of it by the
+  // time we classify. What is always in view is a numbered option row carrying
+  // the selection cursor, together with the "Press enter to continue" footer.
+  //
+  // That pair is specific enough to be safe. A Claude warning banner has the same
+  // footer but no numbered options, so it stays "warning" and still gets Enter. An
+  // AskUserQuestion menu has numbered options but not this footer, so it stays a
+  // blocking menu for parseInteractivePrompt to handle rather than being dismissed
+  // out from under the user.
+  const numberedCursorRow = /^[^\S\n]*[›❯>][^\S\n]*\d+[.)][^\S\n]/m.test(region);
+  if (numberedCursorRow && /Press enter to continue|Update available!/i.test(region)) {
+    return "update_menu";
+  }
   const promptVisible = region.includes("❯") || region.includes("›");
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
@@ -10972,7 +11851,9 @@ export function paneReconcileTarget(
   stored: AgentStatus | undefined,
 ): AgentStatus | null {
   if (state === "idle") {
-    const staleActive = stored === "working" || stored === "thinking" || stored === "connected" || stored === "permission_blocked";
+    // "hibernated" is here as a backstop: the pane exists, so the park is over
+    // whatever cleared it (or failed to).
+    const staleActive = stored === "working" || stored === "thinking" || stored === "connected" || stored === "permission_blocked" || stored === "hibernated";
     // A parked "waiting" is re-derived too: the caller runs the settle verdict
     // again, which re-checks the open tasks against live processes — a task
     // that died without a notice drains the session back to idle here instead
@@ -10989,7 +11870,7 @@ export function paneReconcileTarget(
     // ("waiting" / "dormant" / "done") session is the wake whose activity hook
     // was lost — promote it, or the row stays filed as parked while it works.
     const quiet = stored === undefined || stored === "idle" || stored === "connected" || stored === "permission_blocked"
-      || stored === "waiting" || stored === "dormant" || stored === "done";
+      || stored === "waiting" || stored === "dormant" || stored === "done" || stored === "hibernated";
     return quiet ? "working" : null;
   }
   return null;
@@ -11460,10 +12341,12 @@ function ensureProcessSnapshotFresh(): void {
   if (processSnapshot && Date.now() - processSnapshot.at < PROCESS_SNAPSHOT_TTL_MS) return;
   processSnapshotInFlight = true;
   const startedAt = Date.now();
-  execFile("ps", ["-axww", "-o", "pid=,ppid=,command="], { maxBuffer: 64 * 1024 * 1024, timeout: 10_000 }, (err, stdout) => {
+  // One `ps` invocation for the whole CLI lives in processTable.ts. An empty
+  // table means the spawn failed or timed out, and the previous snapshot is
+  // better than none: consumers stay lenient either way.
+  void snapshotProcessTableAsync({ timeout: 10_000 }).then((procs) => {
     processSnapshotInFlight = false;
-    if (err || typeof stdout !== "string") return; // keep the previous snapshot; consumers stay lenient
-    processSnapshot = { at: startedAt, procs: parseProcessTable(stdout) };
+    if (procs.length > 0) processSnapshot = { at: startedAt, procs };
   });
 }
 export { parseProcessTable };
@@ -12158,6 +13041,209 @@ async function healSqueezedAgentWindows(): Promise<number> {
   return healed;
 }
 
+// Reported when the pane holds no agent process. Prefixed SESSION_EXITED so it
+// routes through the existing transient path: short backoff, then a retry that
+// recreates the pane. That retry is the whole point — a pane we cannot classify
+// must end in a rebuild, never in an unbounded defer.
+const DEAD_PANE_ERROR = "SESSION_EXITED: no agent process in the pane";
+
+/**
+ * Positive evidence that a pane exists and has NO agent process in its tree.
+ *
+ * The asymmetry is deliberate and load-bearing: a `true` here authorizes tearing
+ * the pane down, so every uncertain path must return `false`. A failed tmux
+ * probe, an unreadable process tree, a pane that has already vanished — none of
+ * those are evidence of death, and treating them as such would kill live panes
+ * on a transient hiccup. Only "the pane is there, and nothing agent-shaped is
+ * running under it" returns true.
+ *
+ * This is the check that makes recovery total. Pane TEXT can only be classified
+ * against shapes we have already seen, so `classifyTmuxLiveState` will always
+ * have an unknown case; process liveness has no vocabulary to fall outside of.
+ */
+async function paneHasNoAgent(target: string): Promise<boolean> {
+  const bare = target.split(":")[0];
+  if (!bare || !hasTmux()) return false;
+  try {
+    // The pane must demonstrably exist. A missing one is handled by the callers
+    // that recreate it, and must not be reported as "alive but empty".
+    const { stdout } = await tmuxExec(
+      ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const panePid = parseInt(stdout.trim().split("\n")[0] ?? "", 10);
+    if (!Number.isInteger(panePid)) return false;
+    return (await findAgentPidInTree(panePid)) === null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is `pid` reachable through `target`'s pane — that is, is the pane's shell one
+ * of its ancestors?
+ *
+ * Walks UP from the process rather than down from the pane: the chain is short
+ * and bounded, and it answers the question directly. An orphan reparented to
+ * init has `1` as its whole chain, so it can never match a pane.
+ *
+ * Uncertainty returns `true` (assume the pane does own it). A false negative
+ * here would discard a perfectly good route to a live agent, which is the more
+ * expensive mistake: the orphan case is rare, a broken ps read is not.
+ */
+async function paneOwnsPid(target: string, pid: number): Promise<boolean> {
+  const bare = target.split(":")[0];
+  if (!bare || !hasTmux() || !Number.isInteger(pid)) return true;
+  try {
+    const { stdout } = await tmuxExec(
+      ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const panePids = new Set(
+      stdout.trim().split("\n").map(s => parseInt(s.trim(), 10)).filter(Number.isInteger),
+    );
+    if (panePids.size === 0) return true;
+    let cur = pid;
+    for (let hop = 0; hop < 12 && cur > 1; hop++) {
+      if (panePids.has(cur)) return true;
+      const { stdout: out } = await execAsync(`ps -o ppid= -p ${cur} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+      const parent = parseInt(out.trim(), 10);
+      if (!Number.isInteger(parent) || parent === cur) return true;
+      cur = parent;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Clean up an agent process that no pane can reach any more.
+ *
+ * Such a process is pure cost: it cannot be talked to, and it keeps holding the
+ * tty that makes `ps` lookups resolve to a pane which can no longer drive it.
+ * The one in ct-48187 sat at ~45% of a core for forty minutes.
+ *
+ * Killing the WRONG process here is a mistake this codebase has already paid for
+ * once: a Codex subagent resolves to its PARENT's pid, so reaping on the
+ * subagent's behalf SIGKILLs the parent TUI and every sibling thread. So all four
+ * conditions must hold independently:
+ *
+ *   1. the caller established that the pane is not an ancestor of the pid,
+ *   2. it is orphaned to init — a process with a living parent is somebody's
+ *      child and not ours to collect,
+ *   3. its argv names THIS session, which a borrowed parent pid never does,
+ *   4. the session positively OWNS its process (planSessionTeardown refuses on
+ *      "unknown" rather than guessing).
+ *
+ * Any doubt skips the reap. Skipping costs one stray process; guessing wrong
+ * kills a live agent somebody is talking to.
+ */
+async function reapOrphanedAgent(sessionId: string, pid: number, pane: string): Promise<void> {
+  try {
+    const { stdout } = await execAsync(
+      `ps -o ppid=,command= -p ${pid} 2>/dev/null`,
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const line = stdout.trim();
+    if (!line) return;
+    const ppid = parseInt(line.split(/\s+/)[0] ?? "", 10);
+    if (ppid !== 1) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: parent ${ppid} is alive, so it is not orphaned`);
+      return;
+    }
+    if (!line.includes(sessionId)) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: argv does not name this session (likely a borrowed parent pid)`);
+      return;
+    }
+    if (!planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: session does not positively own its process`);
+      return;
+    }
+    const killed = await reapPidTree(pid);
+    log(`[ORPHAN] reaped ${killed} process(es) for ${shortId(sessionId)} (pid=${pid}, stranded off ${pane})`);
+  } catch {}
+}
+
+/**
+ * Accept Claude Code's workspace trust dialog by SELECTING the affirmative
+ * option, never by pressing a key blind. Returns true once it confirmed.
+ *
+ * The dialog, verified against Claude Code 2.1.259:
+ *
+ *     ❯ No, exit
+ *       Yes, I trust this folder
+ *     Enter to confirm · Esc to cancel
+ *
+ * "No, exit" is the DEFAULT highlight. So the bare Enter this used to send chose
+ * it, the agent quit, the pane died, the resume rebuilt it, and the next Enter
+ * killed it again — an unbounded loop that never delivered (jx745rs5). Escape is
+ * no better: it is this dialog's cancel, which is the same "No, exit". The 2026-08-21
+ * fix swapped Escape for Enter and moved the check earlier, but both keys share
+ * the real defect — they act on a selection nobody read.
+ *
+ * Hence the loop below: read the dialog, move the highlight onto the line that
+ * grants trust, re-read to prove it moved, and only then confirm. If the
+ * highlight cannot be placed, press NOTHING and let the caller retry or escalate.
+ * Never confirming is recoverable; confirming the wrong option is not.
+ */
+export type TrustPromptStep =
+  | { action: "confirm"; option: string }
+  | { action: "move"; key: "Down" | "Up"; times: number }
+  | { action: "none"; reason: string };
+
+/**
+ * What to do about the trust dialog currently on the pane — the whole decision,
+ * as a pure function of what is rendered, so it can be tested against real
+ * captures instead of against a live agent.
+ *
+ * "confirm" is returned ONLY when the highlight is provably on the affirmative
+ * option. Everything uncertain returns "none", which presses nothing.
+ */
+export function planTrustPromptStep(lines: string[]): TrustPromptStep {
+  const CURSOR = /^\s*[❯>]\s*\S/;
+  const AFFIRMATIVE = /^\s*[❯>]?\s*Yes\b/i;
+  const yesIdx = lines.findIndex(l => AFFIRMATIVE.test(l));
+  if (yesIdx < 0) return { action: "none", reason: "no affirmative option on the pane" };
+  const cursorIdx = lines.findIndex(l => CURSOR.test(l));
+  if (cursorIdx < 0) return { action: "none", reason: "cannot see which option is highlighted" };
+  if (cursorIdx === yesIdx) return { action: "confirm", option: lines[yesIdx].trim() };
+  const delta = yesIdx - cursorIdx;
+  return { action: "move", key: delta > 0 ? "Down" : "Up", times: Math.abs(delta) };
+}
+
+export async function acceptTrustPrompt(target: string): Promise<boolean> {
+  const capture = async (): Promise<string[]> => {
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
+    return stdout.split("\n");
+  };
+  const press = async (key: string, times = 1) => {
+    for (let i = 0; i < times; i++) {
+      await tmuxExec(["send-keys", "-t", target, key]);
+      await new Promise(r => setTimeout(r, 120));
+    }
+  };
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const step = planTrustPromptStep(await capture());
+    if (step.action === "none") {
+      log(`Not touching the trust dialog in ${target}: ${step.reason}`);
+      return false;
+    }
+    if (step.action === "confirm") {
+      log(`Accepting workspace trust prompt in ${target} (Enter on "${step.option}")`);
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await new Promise(r => setTimeout(r, 2000));
+      return true;
+    }
+    await press(step.key, step.times);
+    await new Promise(r => setTimeout(r, 300));
+    // Loop re-reads and only confirms once the highlight is provably on "Yes".
+  }
+  log(`Could not place the trust-dialog highlight on the affirmative option in ${target}; pressing nothing`);
+  return false;
+}
+
 export async function ensureTmuxReady(target: string, agentType?: AgentClientId): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
@@ -12195,6 +13281,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
 
     // Corrective states: cap total time and bail if our key didn't move the state.
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
+      if (await paneHasNoAgent(target)) throw new Error(DEAD_PANE_ERROR);
       throw new Error(`AGENT_NOT_READY: live state '${state}' did not settle within ${STUCK_BUDGET_MS}ms`);
     }
 
@@ -12209,6 +13296,11 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
 
     if (state === lastCorrectiveState) {
       if (++sameStateAttempts >= 3) {
+        // Our key changed nothing three times running. The commonest reason is
+        // that there is nobody to press it AT: a dead pane's shell echoes a new
+        // prompt for every Enter, so the state "never settles" forever. Ask the
+        // process tree before blaming the UI.
+        if (await paneHasNoAgent(target)) throw new Error(DEAD_PANE_ERROR);
         throw new Error(`AGENT_STUCK_${state.toUpperCase()}: corrective input did not change live state`);
       }
     } else {
@@ -12217,6 +13309,18 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
     }
 
     if (state === "unknown") {
+      // "Unknown" is a statement about our vocabulary, not about the pane. Text
+      // classification can only recognize shapes someone has already seen, so it
+      // can never be complete — and an unrecognized pane used to defer forever
+      // (ct-48187: a resume with cwd=/ left a bare shell whose "/:" prompt matched
+      // no rule, and delivery retried into it for 40 minutes). The process tree
+      // answers the question that actually matters and cannot be out of
+      // vocabulary: if no agent lives in this pane, the pane is dead whatever it
+      // renders. Report that as the terminating state so the caller recreates it.
+      if (await paneHasNoAgent(target)) {
+        log(`Unrecognized live UI in ${target} AND no agent process in the pane — treating as exited: ${region.replace(/\s+/g, " ").slice(0, 160)}`);
+        throw new Error(DEAD_PANE_ERROR);
+      }
       log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
       throw new Error("AGENT_UNKNOWN_STATE: deferring");
     }
@@ -12230,9 +13334,13 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     } else if (state === "trust") {
-      log(`Accepting workspace trust prompt in ${target} (Enter)`);
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await acceptTrustPrompt(target);
+    } else if (state === "update_menu") {
+      // Escape, never Enter: the cursor sits on "Update now", so Enter would run
+      // a package install inside the agent's pane. See classifyTmuxLiveState.
+      log(`Dismissing agent update menu in ${target} (Escape, never Enter)`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 800));
     } else if (state === "warning") {
       log(`Dismissing warning banner in ${target}`);
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -12326,7 +13434,36 @@ export async function verifyTmuxSubmitAfterPaste(
       return { outcome: "exited", rePasted, payloadSeen, payloadCheckable };
     }
 
-    if (hasActivity && !foreignTurnPossible) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
+    // One frame is thin evidence for "submitted": a TUI mid-redraw captures as
+    // a promptless pane, and a transcript word can pass as activity, while our
+    // text still sits in the box. One such frame acked a resume's "continue"
+    // that never left the composer (2026-09-03) — and the daemon's follow-up
+    // "thinking" report then terminalized the row, so nothing ever retried.
+    // Before trusting the frame, look once more: text still at the prompt
+    // means the submit did not take — press a discrete Enter and keep going.
+    const confirmedGone = async (): Promise<boolean> => {
+      await io.sleep(TICK);
+      elapsed += TICK;
+      let again: string;
+      try {
+        again = await io.capture();
+      } catch {
+        return true;
+      }
+      const stillStuck =
+        tmuxPromptStillHasInput(again, opts.contentPrefix) ||
+        (!!opts.multiline && tmuxPromptShowsPastePlaceholder(again));
+      if (!stillStuck) return true;
+      pasteSeen = true;
+      io.log("message still in input box after an apparent submit, pressing Enter");
+      await io.sendEnter();
+      return false;
+    };
+
+    if (hasActivity && !foreignTurnPossible) {
+      if (await confirmedGone()) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
+      continue;
+    }
 
     // Frozen pane = the agent hasn't consumed the pty buffer yet (cold boot).
     // No evidence either way — keep waiting. Critically, do NOT re-paste or
@@ -12348,7 +13485,7 @@ export async function verifyTmuxSubmitAfterPaste(
     if (!hasPrompt) {
       // No prompt + text not in input = processing — unless a foreign turn
       // (garbage submit) could explain it; then keep watching for content.
-      if (!foreignTurnPossible) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
+      if (!foreignTurnPossible && (await confirmedGone())) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
       continue;
     }
 
@@ -13705,6 +14842,29 @@ export function findSessionFile(sessionId: string, opts?: { staleOk?: boolean })
 }
 
 const resumeSessionCache = new Map<string, string>();
+// Sessions this daemon parked to stay under the fleet cap. They keep beating
+// (see runHibernationPass) but hold no pane, so the entry is what tells a live
+// session apart from a parked one without a Convex read.
+const hibernatedSessions = new Set<string>();
+// Session ids whose park stamp this daemon has cleared since it booted. The set
+// above is emptied by a restart, so after one the daemon cannot tell a session
+// it parked from one it never touched, and a wake that trusts only the set
+// leaves hibernated_at on a session that visibly has a pane. The first wake of
+// any session therefore clears the stamp whether or not the daemon remembers
+// parking it, and this set keeps that to one extra write per session per boot
+// instead of one per message delivery.
+const hibernationStampCleared = new Set<string>();
+// A teardown retires the session, so there is no wake coming to clear the mark
+// and nothing left on the server to clear it from. Local bookkeeping only: no
+// status write, no log line. Without this a killed parked session stayed in the
+// set for the life of the daemon and the live-versus-parked count over-reported.
+function forgetHibernationPark(sessionId: string | undefined): void {
+  if (sessionId) hibernatedSessions.delete(sessionId);
+}
+// When each session last finished a resume. The hibernation policy refuses to
+// park a session somebody just asked for; the reaper has no equivalent because
+// a five-hour-idle transcript already proves nobody resumed it.
+const lastResumeAt = new Map<string, number>();
 // Sessions whose liveness we heartbeat. A single global flush loop batches all
 // of these into ONE mutation per tick (flushManagedHeartbeats) instead of one
 // mutation per session — so the inbox/plans/tasks subscriptions, which collect
@@ -13743,11 +14903,12 @@ const codexPermissionRunning = new Set<string>(); // sessionIds with an in-fligh
 
 let codexAppServerInstance: CodexAppServer | null = null;
 type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
-type PersistedAppServerThreadRecord = { threadId: string; updatedAt: number; cwd?: string };
+type PersistedAppServerThreadRecord = PersistedCodexThread;
 type AppServerStreamingPartial = { itemId: string; content: string };
 type AppServerPartialMessage = AppServerStreamingPartial;
 type AppServerTurnProgress = {
   threadId: string;
+  model?: string;
   items: ThreadItem[];
   lastSyncedSignature?: string;
   partials: Map<string, AppServerPartialMessage>;
@@ -13759,9 +14920,39 @@ const appServerThreads = new Map<string, AppServerThreadEntry>();
 const appServerConversations = new Map<string, string>();
 const persistedAppServerThreads = new Map<string, PersistedAppServerThreadRecord>();
 const appServerTurnProgress = new Map<string, AppServerTurnProgress>();
+const pendingAppServerForkParents = new Set<string>();
 const APP_SERVER_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const APP_SERVER_DELTA_FLUSH_MS = 500;
 let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
+const appServerRecoveryRetryAt = new Map<string, number>();
+const appServerRecoveringThreads = new Set<string>();
+let appServerShuttingDown = false;
+
+export function codexForkParentIdFromHead(headContent: string): string | undefined {
+  const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
+  if (!firstLine) return undefined;
+  try {
+    const parsed = JSON.parse(firstLine) as { type?: string; payload?: { forked_from_id?: string } };
+    return parsed.type === "session_meta" && typeof parsed.payload?.forked_from_id === "string"
+      ? parsed.payload.forked_from_id
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isAppServerOwnedCodexTranscript(
+  sessionId: string,
+  headContent: string,
+  liveThreadIds: ReadonlySet<string>,
+  persistedThreadIds: ReadonlySet<string>,
+  pendingForkParents: ReadonlySet<string>,
+): boolean {
+  if (isAppServerManagedCodexSessionHead(headContent)) return true;
+  if (liveThreadIds.has(sessionId) || persistedThreadIds.has(sessionId)) return true;
+  const forkParentId = codexForkParentIdFromHead(headContent);
+  return !!forkParentId && pendingForkParents.has(forkParentId);
+}
 
 export function upsertAppServerThreadRegistration(
   threads: Map<string, AppServerThreadEntry>,
@@ -13941,6 +15132,7 @@ async function stopLocalSessionBackends(conversationId: string, sessionId: strin
   }
   stopManagedSessionHeartbeat(sessionId);
   stopCodexPermissionPoller(sessionId);
+  forgetHibernationPark(sessionId);
   sessionProcessCache.delete(sessionId);
   resumeInFlight.delete(sessionId);
   resumeInFlightStarted.delete(sessionId);
@@ -13954,9 +15146,10 @@ async function stopLocalSessionBackends(conversationId: string, sessionId: strin
   } catch { /* best-effort */ }
 }
 
-function makeAppServerTurnProgress(threadId: string): AppServerTurnProgress {
+function makeAppServerTurnProgress(threadId: string, model?: string): AppServerTurnProgress {
   return {
     threadId,
+    model,
     items: [],
     partials: new Map(),
     partialOrder: [],
@@ -13989,6 +15182,7 @@ function buildAppServerProgressSignature(messages: RawMessage[]): string {
     toolResults: message.toolResults,
     images: message.images,
     subtype: message.subtype,
+    model: message.model,
   })));
 }
 
@@ -14112,6 +15306,9 @@ async function syncAppServerTurnMessagesIfChanged(
   const progress = appServerTurnProgress.get(turnId);
   if (!progress) return;
   const previous = progress.syncChain ?? Promise.resolve();
+  messages = messages.map(message => message.role === "assistant" && !message.model
+    ? { ...message, model: progress.model }
+    : message);
   const run = previous.catch(() => {}).then(async () => {
     const current = appServerTurnProgress.get(turnId);
     if (!current) return;
@@ -14145,7 +15342,9 @@ function persistAppServerThreadRegistrations(): void {
         data[conversationId] = record;
       }
     }
-    fs.writeFileSync(APP_SERVER_THREADS_FILE, JSON.stringify(data), "utf-8");
+    const temp = `${APP_SERVER_THREADS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(data), "utf-8");
+    fs.renameSync(temp, APP_SERVER_THREADS_FILE);
   } catch {}
 }
 
@@ -14160,22 +15359,23 @@ function registerAppServerConversation(
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
-  const existingThreadId = appServerConversations.get(conversationId);
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
   upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
   }
-  persistedAppServerThreads.set(conversationId, { threadId, updatedAt, cwd: opts.cwd });
-  if (existingThreadId && existingThreadId !== threadId) {
-    persistedAppServerThreads.delete(conversationId);
-  }
+  const previous = persistedAppServerThreads.get(conversationId);
+  persistedAppServerThreads.set(conversationId, {
+    ...(previous?.threadId === threadId ? previous : {}),
+    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
+  });
   persistAppServerThreadRegistrations();
 }
 
 function forgetPersistedAppServerConversation(conversationId: string): void {
   if (!persistedAppServerThreads.delete(conversationId)) return;
+  appServerRecoveryRetryAt.delete(conversationId);
   persistAppServerThreadRegistrations();
 }
 
@@ -14187,41 +15387,98 @@ function markAppServerConversationResumable(
   const resolvedThreadId = threadId ?? appServerConversations.get(conversationId);
   if (!resolvedThreadId) return;
   const liveEntry = appServerThreads.get(resolvedThreadId);
+  const previous = persistedAppServerThreads.get(conversationId);
   persistedAppServerThreads.set(conversationId, {
+    ...(previous?.threadId === resolvedThreadId ? previous : {}),
     threadId: resolvedThreadId,
     updatedAt,
     cwd: liveEntry?.cwd,
+    approvalPolicy: liveEntry?.approvalPolicy,
   });
   persistAppServerThreadRegistrations();
 }
 
 async function rehydratePersistedAppServerThreads(): Promise<void> {
-  if (!codexAppServerInstance?.running || persistedAppServerThreads.size === 0) return;
+  const server = codexAppServerInstance;
+  if (!server?.running || appServerShuttingDown || persistedAppServerThreads.size === 0) return;
 
   const entries = [...persistedAppServerThreads.entries()];
   let resumed = 0;
   let dropped = 0;
 
   for (const [conversationId, record] of entries) {
-    if (appServerConversations.has(conversationId)) continue;
+    if (!server.running || appServerShuttingDown) break;
+    if (persistedAppServerThreads.get(conversationId) !== record) continue;
+    if (pendingAgentSwitches.has(conversationId)) continue;
+    if ((appServerRecoveryRetryAt.get(conversationId) ?? 0) > Date.now()) continue;
+    if (appServerConversations.has(conversationId) && (!record.activeTurnId || findActiveTurnForThread(record.threadId))) continue;
     try {
-      await codexAppServerInstance.threadResume({
+      if (record.activeTurnId) {
+        const service = syncServiceRef;
+        if (!service) continue;
+        const [lifecycle, owner] = await Promise.all([
+          service.getConversationLifecycle(conversationId),
+          service.getConversationOwnerInfo(conversationId),
+        ]);
+        if (!lifecycle?.hideStateKnown || !owner) throw new Error("Codex recovery is waiting to verify the conversation owner and lifecycle");
+        if (lifecycle.inboxKilledAt || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
+          forgetPersistedAppServerConversation(conversationId);
+          continue;
+        }
+        if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
+      }
+      const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
+      const response = await server.threadResume({
         threadId: record.threadId,
         ...(record.cwd ? { cwd: record.cwd } : {}),
+        approvalPolicy: policy,
       });
-      const rehydratedPolicy = resolveCodexApprovalPolicy(activeConfig);
+      if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
         persist: false,
-        approvalPolicy: rehydratedPolicy,
+        approvalPolicy: policy,
       });
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
+      appServerRecoveringThreads.add(record.threadId);
+      try {
+        const action = await recoverCodexTurn({
+          record,
+          thread: response.thread,
+          save: (next) => {
+            persistedAppServerThreads.set(conversationId, next);
+            persistAppServerThreadRegistrations();
+          },
+          start: (input) => server.turnStart(input),
+        });
+        if (action === "exhausted") throw new Error("Codex could not continue after three recovery attempts. The saved conversation is intact; send a message to retry.");
+        if (action === "continue") {
+          log(`[codex-app-server] recovered interrupted turn ${record.activeTurnId?.slice(0, 8)} for conv=${conversationId.slice(0, 12)}`);
+          syncServiceRef?.setSessionError(conversationId, undefined, { force: true }).catch(logConvexFailure);
+        }
+        if (action === "active") {
+          const turn = response.thread.turns?.findLast(t => t.status === "inProgress");
+          if (turn) appServerTurnProgress.set(turn.id, makeAppServerTurnProgress(record.threadId, response.model));
+        }
+        appServerRecoveryRetryAt.delete(conversationId);
+      } finally {
+        appServerRecoveringThreads.delete(record.threadId);
+      }
     } catch (err) {
-      dropped++;
-      persistedAppServerThreads.delete(conversationId);
-      log(`[codex-app-server] dropping persisted thread ${record.threadId.slice(0, 8)} for conv=${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      if (/thread not found|no rollout found/i.test(message)) {
+        dropped++;
+        forgetPersistedAppServerConversation(conversationId);
+      } else {
+        appServerRecoveryRetryAt.set(conversationId, Date.now() + 30_000);
+      }
+      logError(`[codex-app-server] recovery failed for conv=${conversationId.slice(0, 12)}`, err instanceof Error ? err : new Error(message));
+      if (record.activeTurnId && syncServiceRef) {
+        sendAgentStatus(syncServiceRef, conversationId, record.threadId, "stopped");
+        syncServiceRef.setSessionError(conversationId, message, { force: true }).catch(logConvexFailure);
+      }
     }
   }
 
@@ -14236,7 +15493,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
 function loadPersistedAppServerThreadRegistrations(): void {
   try {
     if (!fs.existsSync(APP_SERVER_THREADS_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(APP_SERVER_THREADS_FILE, "utf-8")) as Record<string, { threadId: string; updatedAt?: number; cwd?: string }>;
+    const raw = JSON.parse(fs.readFileSync(APP_SERVER_THREADS_FILE, "utf-8")) as Record<string, PersistedAppServerThreadRecord>;
     const now = Date.now();
     let loaded = 0;
     for (const [conversationId, record] of Object.entries(raw)) {
@@ -14247,6 +15504,9 @@ function loadPersistedAppServerThreadRegistrations(): void {
         threadId: record.threadId,
         updatedAt,
         cwd: record.cwd,
+        approvalPolicy: record.approvalPolicy,
+        activeTurnId: record.activeTurnId,
+        recoveryAttempts: record.recoveryAttempts,
       });
       loaded++;
     }
@@ -14428,6 +15688,11 @@ const RESTART_GUARD_TTL_MS = 60_000;
 export const MAX_RESUME_READINESS_POLL_MS = 120_000;
 
 // Prevent concurrent resume attempts on the same session
+// Gap between the continues a mass revive enqueues (switch_account). Each
+// resume's first request is the session's whole context; at ~300k tokens a
+// session, six seconds apart stays under the provider's per-minute cap that
+// a same-second burst of eighteen tripped.
+const SWITCH_CONTINUE_SPACING_MS = 6_000;
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
 // Must stay STRICTLY LARGER than the longest a single resume can legitimately
@@ -14510,6 +15775,58 @@ const sessionDeliveryFailures = new Map<string, { count: number; lastFailure: nu
 const SESSION_CIRCUIT_BREAKER_THRESHOLD = 3;
 const SESSION_CIRCUIT_BREAKER_COOLDOWN_MS = 300_000; // 5 minutes — fatal failures
 const SESSION_CIRCUIT_BREAKER_TRANSIENT_COOLDOWN_MS = 15_000; // 15s — transient (slow/raced boot)
+
+// ── Last-resort pane rebuild ────────────────────────────────────────────────
+// The classifier and the process probe together cover every failure we know how
+// to name, and that is exactly why this exists: it covers the ones we don't.
+//
+// The residual case is a pane that still HAS an agent process, so `paneHasNoAgent`
+// says nothing is wrong, whose UI we cannot classify — a hung TUI, a redraw we've
+// never seen, a future client's screen. Backing off and retrying into it produces
+// the same verdict forever, which is precisely the shape of the ct-48187 wedge:
+// three messages retried for forty minutes with no path that ever rebuilt.
+//
+// So deferral is made finite. After enough consecutive unresolvable attempts the
+// pane is torn down and the ordinary resume path builds a fresh one. Recovery
+// then no longer depends on recognizing the failure, which is the only way a
+// session can be recoverable from a state nobody anticipated.
+const PANE_REBUILD_THRESHOLD = 5;
+const PANE_REBUILD_WINDOW_MS = 10 * 60_000;
+// A booting pane fails this check several times per SECOND while its TUI paints,
+// and those are all one symptom, not five. Without a floor the threshold was
+// reachable in four seconds and tore down a pane that was merely slow to start
+// (observed on the first deploy, 2026-09-03). Counting at most one failure per
+// gap makes five counts mean roughly a minute of genuine failure.
+const PANE_REBUILD_MIN_GAP_MS = 15_000;
+const unresolvablePanes = new Map<string, { count: number; last: number }>();
+
+// Errors meaning "a pane is there but we could not act on it". SESSION_EXITED is
+// deliberately absent: it already terminates in a rebuild. So are the two
+// rethrown "payload not consumed yet" signals, which mean the pane is fine.
+const UNRESOLVABLE_PANE_ERRORS = /^(AGENT_UNKNOWN_STATE|AGENT_NOT_READY|AGENT_STUCK_|AGENT_CAPTURE_FAILED)/;
+
+/** Record an unresolvable inject and report whether this pane has earned a rebuild. */
+export function noteUnresolvablePane(
+  sessionId: string,
+  errorMessage: string,
+  now = Date.now(),
+  store = unresolvablePanes,
+): boolean {
+  if (!UNRESOLVABLE_PANE_ERRORS.test(errorMessage)) return false;
+  const prev = store.get(sessionId);
+  // Too soon after the last counted failure: same episode, already counted.
+  if (prev && now - prev.last < PANE_REBUILD_MIN_GAP_MS) return false;
+  // A gap longer than the window means the pane recovered in between; start over
+  // rather than accumulating unrelated failures into a teardown.
+  const count = prev && now - prev.last <= PANE_REBUILD_WINDOW_MS ? prev.count + 1 : 1;
+  store.set(sessionId, { count, last: now });
+  return count >= PANE_REBUILD_THRESHOLD;
+}
+
+/** Any successful delivery clears the streak — the pane demonstrably works. */
+export function clearUnresolvablePane(sessionId: string, store = unresolvablePanes): void {
+  store.delete(sessionId);
+}
 
 export function isSessionCircuitOpen(sessionId: string): boolean {
   const entry = sessionDeliveryFailures.get(sessionId);
@@ -14691,6 +16008,9 @@ async function runHeartbeatMaintenance(): Promise<void> {
   // and logged to a dedicated reaper.log. See reapIdleOrphanTerminals.
   if (tick % REAP_EVERY_N_FLUSHES === 0) {
     await reapIdleOrphanTerminals().catch((e) => log(`[REAPER] pass error: ${(e as Error)?.message ?? e}`));
+    // Same cadence as the reaper, and deliberately after it: a session the
+    // reaper just retired is not a live session the cap has to park.
+    await runHibernationPass().catch((e) => log(`[HIBERNATE] pass error: ${(e as Error)?.message ?? e}`));
   }
 
   // Keep each session's working tree recoverable from another machine. See
@@ -14986,7 +16306,12 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
 // A reaped session loses only its warm process — the full transcript is on disk,
 // so it cold-resumes on click. The kill first removes the session from the
 // heartbeat / pane-tracking sets so heartbeatHealthCheck can't reconstitute it.
-const REAPER_LOG_FILE = path.join(CONFIG_DIR, "reaper.log");
+// Same rule as LOG_FILE: a test that exercises a teardown must not append fake
+// kills to the real audit log, which is the one place the machine records why a
+// pane died.
+const REAPER_LOG_FILE = process.env.NODE_ENV === "test"
+  ? path.join(process.env.TMPDIR || "/tmp", "codecast-test-reaper.log")
+  : path.join(CONFIG_DIR, "reaper.log");
 const REAPER_LOG_MAX_BYTES = 1_000_000;
 const REAP_IDLE_MS = 5 * 60 * 60 * 1000;    // 5h of no transcript activity
 // The higher bar a DANGLING USER TURN must clear (measured from the last real
@@ -15255,9 +16580,10 @@ function findReapTranscript(sessionId: string, now: number = Date.now()): Sessio
 
 // mtime of the pending-AskUserQuestion sidecar, or null when the session never
 // asked one. See askUserQuestionStillPending for why mtime and not existence.
-function askInputSidecarMtimeMs(sessionId: string): number | null {
+// Async because both callers run on the maintenance tick.
+async function askInputSidecarMtimeMs(sessionId: string): Promise<number | null> {
   try {
-    return fs.statSync(path.join(ASK_INPUT_DIR, `${sessionId}.json`)).mtimeMs;
+    return (await fs.promises.stat(path.join(ASK_INPUT_DIR, `${sessionId}.json`))).mtimeMs;
   } catch {
     return null;
   }
@@ -15298,7 +16624,7 @@ async function reapBlockReason(
   let idleHours = Math.round(idleMs / 3600000);
   if (turn !== "idle") {
     const lastRealTimestampMs = transcriptTailLastRealTimestamp(tail);
-    const askSidecarMtimeMs = askInputSidecarMtimeMs(sessionId);
+    const askSidecarMtimeMs = await askInputSidecarMtimeMs(sessionId);
     const reapable = danglingUserTurnIsReapable({
       turn,
       lastRealRole: transcriptTailLastRealRole(tail),
@@ -15322,13 +16648,26 @@ async function reapBlockReason(
   return { reason: null, idleHours };
 }
 
-async function reapOneTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<void> {
+// The one teardown, used for two reasons. A REAP retires a terminal nobody is
+// coming back to; a HIBERNATE parks a healthy session to give the machine back
+// its resources. Everything up to the kill is identical — that is the point of
+// sharing it — and only two things differ after: the status left behind, and
+// whether the session keeps beating.
+async function reapOneTerminal(
+  sessionId: string,
+  tmux: string,
+  convId: string | undefined,
+  idleHours: number,
+  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated" } = {},
+): Promise<boolean> {
+  const hibernating = opts.parkAs === "hibernated";
   // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
+  // False here means the pane survived, so no caller may count or report a kill.
   try {
     const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 });
     const live = classifyLivePaneFor(detectSessionAgentType(sessionId), pane);
-    if (live !== "idle") { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): pane became "${live}" at kill time`); return; }
-  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck capture failed`); return; }
+    if (live !== "idle") { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): pane became "${live}" at kill time`); return false; }
+  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck capture failed`); return false; }
 
   // Stop tracking BEFORE the kill so heartbeatHealthCheck can't see the vanished
   // tmux and reconstitute it.
@@ -15339,10 +16678,41 @@ async function reapOneTerminal(sessionId: string, tmux: string, convId: string |
   // path decay a frozen "working" into "stopped"/needs-attention. No session_error
   // (this is a tidy reap, not a crash).
   if (convId && syncServiceRef) {
-    await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
+    if (hibernating) {
+      const now = Date.now();
+      sendAgentStatus(syncServiceRef, convId, sessionId, "hibernated", now, undefined, undefined, { hibernatedAt: now });
+    } else {
+      await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
+    }
   }
+  // A dismissed or killed conversation's worktree goes with its terminal when
+  // it holds no work (worktreeGc.ts); a stash is a park, and keeps it.
+  const gcCwd = opts.gcWorktree ? await tmuxPaneCwd(tmux + ":0.0") : undefined;
   await killTmuxSessionAndTree(tmux);
-  reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  if (hibernating) {
+    // Put the session BACK in the heartbeat set, after the pane is gone and
+    // after resumeSessionCache.delete above. Two facts make that safe and
+    // necessary: reapStaleManagedSessions deletes any managed_sessions row that
+    // stops beating for an hour, which would throw away the park stamp and the
+    // status; and heartbeatHealthCheck returns at once for a session with no
+    // resumeSessionCache entry, so it cannot reconstitute the pane we just
+    // killed.
+    hibernatedSessions.add(sessionId);
+    // Straight into the set rather than through ensureManagedSessionHeartbeat,
+    // which is a no-op until the sync service exists: what must survive is the
+    // membership, and the flush loop (started once, never stopped) is already
+    // running by the time anything can be parked.
+    managedHeartbeatSessions.add(sessionId);
+    ensureHeartbeatFlushLoop();
+    reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  } else {
+    reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  }
+  if (gcCwd) {
+    const verdict = await releaseSessionWorktree(gcCwd, log).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
+    reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
+  }
+  return true;
 }
 
 async function reapIdleOrphanTerminals(): Promise<void> {
@@ -15380,14 +16750,303 @@ async function reapIdleOrphanTerminals(): Promise<void> {
         : null;
       const eligibility = stampedPaneReapEligibility(lifecycle);
       if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
+      const gcWorktree = !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
+      if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
+      else skips.push("busy-at-kill");
+      continue;
     }
-    await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours);
-    reaped++;
+    if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours)) reaped++;
+    else skips.push("busy-at-kill");
   }
   // Every pass leaves a line: without it the skip reasons were invisible and a
   // reaper that had quietly stopped reaping looked identical to one with nothing
   // to do. File-only (mirror=false) — this fires every ~5 min.
   reaperLog(`pass: ${candidates.length} candidates, reaped ${reaped}, skipped: ${summarizeReapSkips(skips)}`, false);
+}
+
+// ─── Hibernation ───────────────────────────────────────────────────────────
+// Park healthy sessions to keep the live fleet under max_live_sessions. The
+// policy (which sessions, in what order, how many) is pure and lives in
+// hibernation.ts; this is the pass that gathers the facts, applies the three
+// gates too expensive to run fleet-wide, and calls the reaper's teardown.
+//
+// Every dependency goes through an injected io so the test can drive the fleet
+// without a real one. The production io below is the only place that touches
+// tmux, the transcript or Convex.
+export type HibernationPassIo = {
+  policy(): { maxLive: number; idleMs: number; maxPerPass: number };
+  /** tmux session name to the number of clients attached to it. */
+  tmuxSessions(): Promise<Map<string, number>>;
+  awakeIdleMs(sessionId: string): number;
+  /** Since a subagent of this session last wrote. Infinity when it has none. */
+  subagentActiveAgoMs(sessionId: string): number;
+  /** session id to conversation id, read once per pass. */
+  conversationIds(): Record<string, string>;
+  askSidecarMtimeMs(sessionId: string): Promise<number | null>;
+  transcriptLastRealMs(sessionId: string): Promise<number | null>;
+  lifecycle(conversationId: string, sessionId: string): Promise<ConversationLifecycle | null>;
+  /** False when the session runs inside another session's process tree. */
+  canReapPidTree(sessionId: string): boolean;
+  /** True when work is reaching this session right now. Read again at the kill. */
+  deliveryActive(sessionId: string, conversationId: string | undefined): boolean;
+  /** True when the pane is gone; false when the kill-time recheck refused it. */
+  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<boolean>;
+  now(): number;
+};
+
+const productionHibernationIo: HibernationPassIo = {
+  policy: () => ({
+    // The cached config, never readConfig: that is a synchronous file read and
+    // this runs on the maintenance tick.
+    maxLive: activeConfig?.max_live_sessions ?? DEFAULT_MAX_LIVE_SESSIONS,
+    idleMs: activeConfig?.hibernate_idle_ms ?? DEFAULT_HIBERNATE_IDLE_MS,
+    maxPerPass: HIBERNATE_MAX_PER_PASS,
+  }),
+  // Its own listing rather than the reaper's rows from the same tick, for one
+  // reason: REAP_LIST_FORMAT carries no session_attached, so those rows cannot
+  // answer the attached client rule, which is the rule that keeps the pane a
+  // human is watching alive. Sharing them would mean changing the reaper's
+  // format and its parser, which is safety critical code, to save one async
+  // tmux call every five minutes that only runs when the knobs are on.
+  tmuxSessions: async () => {
+    const attached = new Map<string, number>();
+    const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}|#{session_attached}"], { timeout: 5000 });
+    for (const line of stdout.split("\n")) {
+      const [name, count] = line.trim().split("|");
+      if (name) attached.set(name, Number(count) || 0);
+    }
+    return attached;
+  },
+  awakeIdleMs: (sessionId) => getSessionAwakeIdleMs(sessionId),
+  subagentActiveAgoMs: (sessionId) => subagentActiveAgoMs(sessionId),
+  conversationIds: () => readConversationCache(),
+  askSidecarMtimeMs: (sessionId) => askInputSidecarMtimeMs(sessionId),
+  transcriptLastRealMs: async (sessionId) => {
+    const file = findReapTranscript(sessionId);
+    if (!file) return null;
+    try {
+      return transcriptTailLastRealTimestamp(await readFileTailAsync(file.path));
+    } catch {
+      return null;
+    }
+  },
+  lifecycle: async (conversationId, sessionId) =>
+    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId, sessionId).catch(() => null) : null,
+  // Asked FRESH, like every other destructive caller (killConversationBackends,
+  // teardownConversationBackends). staleOk answers from the session file index
+  // alone, and a Codex subagent whose rollout is younger than that index reads
+  // as "owned" — the exact wrong answer, because the teardown would then kill
+  // the parent's process tree on the child's behalf. The cost is bounded: at
+  // most HIBERNATE_MAX_PER_PASS lookups per pass, and the probes behind a miss
+  // only read directories that changed since the last index build.
+  canReapPidTree: (sessionId) => planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree,
+  deliveryActive: (sessionId, conversationId) =>
+    resumeInFlight.has(sessionId) ||
+    (!!conversationId &&
+      (conversationDeliveryActive.has(conversationId) ||
+        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId))),
+  park: (sessionId, tmux, convId, idleHours) =>
+    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated" }),
+  now: () => Date.now(),
+};
+
+/** Test seam: install a stand-in sync service so a test can read the status
+ *  writes a park and a wake produce. Pass null to remove it again. */
+export function setSyncServiceForTests(service: SyncService | null): void {
+  syncServiceRef = service;
+}
+
+/** Test seam: register a live pane the way a resume would, so a test can build
+ *  a fleet for the pass to look at. `facts` sets the two things the policy reads
+ *  from daemon memory rather than from the io. Pass null to forget the session. */
+export function trackSessionPaneForTests(
+  sessionId: string,
+  tmux: string | null,
+  facts: { status?: AgentStatus; resumedAt?: number; parked?: boolean } = {},
+): void {
+  if (tmux === null) {
+    resumeSessionCache.delete(sessionId);
+    managedHeartbeatSessions.delete(sessionId);
+    hibernatedSessions.delete(sessionId);
+    hibernationStampCleared.delete(sessionId);
+    lastSentAgentStatus.delete(sessionId);
+    lastResumeAt.delete(sessionId);
+    return;
+  }
+  resumeSessionCache.set(sessionId, tmux);
+  managedHeartbeatSessions.add(sessionId);
+  // `parked` stands in for a park this daemon did, which only a real teardown
+  // sets: the pass tests stub io.park, so without it nothing local is marked.
+  if (facts.parked) hibernatedSessions.add(sessionId);
+  if (facts.status) lastSentAgentStatus.set(sessionId, facts.status);
+  if (facts.resumedAt !== undefined) lastResumeAt.set(sessionId, facts.resumedAt);
+}
+
+/** Test seam: what the daemon believes about one session's pane. `beating` is
+ *  the load-bearing one — a parked session that stops beating is deleted by the
+ *  server's stale-row cron within the hour. */
+export function sessionParkStateForTests(sessionId: string): {
+  parked: boolean;
+  beating: boolean;
+  paneTracked: boolean;
+  status?: AgentStatus;
+} {
+  return {
+    parked: hibernatedSessions.has(sessionId),
+    beating: managedHeartbeatSessions.has(sessionId),
+    paneTracked: resumeSessionCache.has(sessionId),
+    status: lastSentAgentStatus.get(sessionId),
+  };
+}
+
+/**
+ * Every live session with a pane, described the way the policy reads it.
+ *
+ * Shared by the pass and by `cast hibernate`, so the two can never disagree
+ * about what a session is doing. Returns null when tmux itself is unreachable:
+ * no facts, so nothing may be killed.
+ */
+async function collectHibernationCandidates(io: HibernationPassIo): Promise<HibernationCandidate[] | null> {
+  let attachedByTmux: Map<string, number>;
+  try {
+    attachedByTmux = await io.tmuxSessions();
+  } catch {
+    return null;
+  }
+
+  // One tmux name held by two session ids is a parent running a subagent inside
+  // its own pane. Killing it would take down a session the policy never picked.
+  const sessionsPerTmux = new Map<string, number>();
+  for (const tmux of resumeSessionCache.values()) {
+    sessionsPerTmux.set(tmux, (sessionsPerTmux.get(tmux) ?? 0) + 1);
+  }
+  const now = io.now();
+  const convCache = io.conversationIds();
+  const candidates: HibernationCandidate[] = [];
+  for (const [sessionId, tmux] of resumeSessionCache) {
+    if (!managedHeartbeatSessions.has(sessionId)) continue;
+    const attached = attachedByTmux.get(tmux);
+    if (attached === undefined) continue; // no live pane: nothing to park
+    const convId = convCache[sessionId];
+    candidates.push({
+      sessionId,
+      tmux,
+      conversationId: convId,
+      status: lastSentAgentStatus.get(sessionId),
+      awakeIdleMs: io.awakeIdleMs(sessionId),
+      statusDwellMs: now - (lastHeartbeatLogged.get(sessionId)?.since ?? now),
+      attachedClients: attached,
+      sharedPane: (sessionsPerTmux.get(tmux) ?? 1) > 1,
+      subagentActiveAgoMs: io.subagentActiveAgoMs(sessionId),
+      resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
+      // The same delivery fact the refusal reads again in the instant before
+      // the kill: one source, so the pick and the kill cannot disagree.
+      messagesInFlight: io.deliveryActive(sessionId, convId),
+    });
+  }
+  return candidates;
+}
+
+/**
+ * Why this session must keep its pane, or null when it may be parked. The pure
+ * rules first (hibernationBlockReason, free), then the gates that cost a stat,
+ * a transcript tail, an index lookup or a Convex round trip.
+ *
+ * One function for both callers on purpose. `cast hibernate` is an explicit
+ * human gesture, which excuses the SIZE of the fleet as a reason to park — it
+ * never excuses parking a session that is mid-turn, watched by a human, holding
+ * a live subagent, or borrowing a parent's process, because those kill work the
+ * person asking did not mean to kill.
+ */
+async function hibernationRefusalReason(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
+  const blocked = hibernationBlockReason(cand);
+  if (blocked) return blocked;
+
+  const sidecarMtimeMs = await io.askSidecarMtimeMs(cand.sessionId);
+  if (sidecarMtimeMs !== null) {
+    const lastRealMs = await io.transcriptLastRealMs(cand.sessionId);
+    if (askUserQuestionStillPending(sidecarMtimeMs, lastRealMs)) return "pending-question";
+  }
+  if (cand.conversationId) {
+    const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
+    // A null lifecycle PROCEEDS, the opposite of the reaper's
+    // stampedPaneReapEligibility. The reaper retires a session for good, so it
+    // must refuse to guess; hibernation retires nothing and the next message
+    // brings the session back, so an unreachable backend is not a reason to
+    // keep burning a pane.
+    //
+    // A DEGRADED answer is different from no answer. The legacy fallback route
+    // carries the status and nothing else, so the pin and the pending messages
+    // come back undefined and read exactly like "not pinned, nothing queued".
+    // Refuse instead: a wrong yes here parks a pinned session.
+    if (lifecycle && lifecycle.hideStateKnown === false) return "lifecycle-degraded";
+    if (lifecycle?.inboxPinnedAt) return "pinned";
+    if (lifecycle?.hasPendingMessages) return "pending-messages";
+  }
+  // A borrowed process means the pane belongs to a parent. Killing the tree
+  // would kill the parent on the child's behalf.
+  if (!io.canReapPidTree(cand.sessionId)) return "borrowed-process";
+  // The delivery facts came from a snapshot taken before the gates above, and
+  // each gate can wait seconds on a stat, a transcript tail and a Convex round
+  // trip. A message that started delivering inside that window is already
+  // marked delivered, so read the facts again in the instant before the kill.
+  if (io.deliveryActive(cand.sessionId, cand.conversationId)) return "in-flight-messages";
+  return null;
+}
+
+/**
+ * `cast hibernate <session>`: park one named session now.
+ *
+ * The cap and the idle bar do not apply — a person named this session — but
+ * every safety rule does, through the same function the pass uses.
+ */
+export async function hibernateSessionNow(
+  sessionId: string,
+  conversationId?: string,
+  overrides: Partial<HibernationPassIo> = {},
+): Promise<{ result?: string; error?: string }> {
+  const io: HibernationPassIo = { ...productionHibernationIo, ...overrides };
+  const candidates = await collectHibernationCandidates(io);
+  if (candidates === null) return { error: "tmux is not answering, so nothing was parked" };
+  const cand = candidates.find((c) => c.sessionId === sessionId);
+  // Nothing live here to park. Not an error the user can act on: the session is
+  // already cold, which is what hibernation produces.
+  if (!cand) return { result: "already_parked" };
+  const refusal = await hibernationRefusalReason(cand, io);
+  if (refusal) return { result: `skipped_${refusal}`, error: `not parked: ${refusal}` };
+  const parked = await io.park(
+    cand.sessionId,
+    cand.tmux,
+    cand.conversationId ?? conversationId,
+    Math.round(cand.awakeIdleMs / 3600000),
+  );
+  return parked ? { result: "hibernated" } : { result: "skipped_busy", error: "the pane went busy at kill time" };
+}
+
+// `io` overrides only the parts a test needs; everything else stays real, so
+// the end-to-end test runs the actual tmux listing and the actual teardown.
+export async function runHibernationPass(overrides: Partial<HibernationPassIo> = {}): Promise<number> {
+  const io: HibernationPassIo = { ...productionHibernationIo, ...overrides };
+  const policy = io.policy();
+  // Both knobs off is the shipping default: no tmux call, no log line, nothing.
+  if (policy.maxLive <= 0 && policy.idleMs <= 0) return 0;
+  if (!hasTmux()) return 0;
+
+  const candidates = await collectHibernationCandidates(io);
+  if (candidates === null) return 0; // tmux unreachable: no facts, so no kills
+  if (candidates.length === 0) return 0;
+
+  const { picked, skips } = selectHibernationCandidates(candidates, policy);
+  let hibernated = 0;
+  for (const cand of picked) {
+    const refusal = await hibernationRefusalReason(cand, io);
+    if (refusal) { skips.push(refusal); continue; }
+    if (await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000))) hibernated++;
+    else skips.push("busy-at-kill");
+  }
+  // File-only, like the reaper's pass line: this fires every ~5 min.
+  reaperLog(`hibernation pass: ${candidates.length} live, cap=${policy.maxLive}, hibernated ${hibernated}, skipped: ${summarizeReapSkips(skips)}`, false);
+  return hibernated;
 }
 
 // Reads the last ~64KB of a file as UTF-8 without loading the whole thing --
@@ -15625,6 +17284,8 @@ export type ResumeOptions = {
    * Only the gate reads this; nothing downstream does.
    */
   userInitiated?: boolean;
+  model?: string;
+  effort?: string;
 };
 
 // Convex side of the gate. Runs only on resurrection paths (rare), never per
@@ -15650,6 +17311,7 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   resumeSessionCache.delete(sessionId);
   stopCodexPermissionPoller(sessionId);
   stopManagedSessionHeartbeat(sessionId);
+  forgetHibernationPark(sessionId);
 
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
@@ -15703,6 +17365,14 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 }
 
 export function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
+  // A pane is coming back for a session this daemon parked. autoResumeSession is
+  // the wake most parks end in, but not the only one: the transcript driven pane
+  // adoption and the warm restart scan land here instead, and without this the
+  // session would carry hibernated_at while visibly holding a pane. Gated on the
+  // park mark rather than the boot scoped clear, because this also runs for
+  // sessions that are merely starting, and a status write there would race the
+  // start's own "resuming".
+  if (hibernatedSessions.has(sessionId)) clearHibernationPark(sessionId, conversationId);
   // Track the pane immediately, exactly as a resumed/warm-recovered session is. The periodic
   // health sweep (heartbeatHealthCheck) and the pane-authoritative status reconcile both gate
   // on resumeSessionCache membership. A freshly-started session that was never resumed wasn't
@@ -15786,9 +17456,10 @@ async function probeStartedPane(entry: StartedSessionInfo): Promise<{ state: Sta
   }
   const state = classifyStartedPane(paneContent, AGENT_CLIENTS[entry.agentType].promptReadyPattern);
   if (state === "trust") {
-    log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
-    await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Same dialog, same hazard as the resume path: "No, exit" is the default
+    // highlight, so a bare Enter here quit the agent it had just started.
+    log(`Started session ${entry.tmuxSession} showing trust prompt, selecting the affirmative option`);
+    await acceptTrustPrompt(entry.tmuxSession).catch(() => false);
   }
   return { state, pane: paneContentAfterLaunchEcho(paneContent) };
 }
@@ -16489,6 +18160,26 @@ async function resolveLiveTmuxTarget(
       return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
     }
     let pane = await findTmuxPaneForTty(proc.tty);
+    // A process can OUTLIVE the pane that launched it while still holding that
+    // pane's tty. Kill the launch wrapper and the agent is reparented to init,
+    // but its controlling terminal is unchanged, so the tty→pane map still points
+    // here and this lookup "finds" a pane that can no longer reach it. Injecting
+    // then types into whatever the shell left behind and the agent never sees it.
+    //
+    // This is what made ct-48187 unrecoverable rather than merely broken. The
+    // pane tree check above had ALREADY reported the session dead and cleared the
+    // cache; this branch then resurrected the same dead pane from a `ps` match,
+    // claimed "already alive, reusing", and every retry re-entered the same loop.
+    // Two liveness oracles disagreed and the weaker one won, so the recreate path
+    // was never reached at all.
+    //
+    // A pane is only a route to a process if it is an ancestor of that process.
+    if (pane && !(await paneOwnsPid(pane, proc.pid))) {
+      log(`[ORPHAN] ${shortId(sessionId)} pid=${proc.pid} holds ${proc.tty} but is not in ${pane}'s process tree — pane cannot reach it`);
+      await reapOrphanedAgent(sessionId, proc.pid, pane);
+      sessionProcessCache.delete(sessionId);
+      return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
+    }
     // Claude often runs in a tmux pane whose pty mapping isn't visible (nested tmux, fresh
     // pane): fall back to a still-valid cached target rather than the AppleScript path,
     // which would type into the foreground terminal and silently drop the message.
@@ -16563,15 +18254,71 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       }
     }
   }
-  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint);
+  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
   try {
-    return await promise;
+    const resumed = await promise;
+    // Every automatic and user-driven resume path funnels through here, so this
+    // is the one place that has to know the park is over.
+    if (resumed) clearHibernationPark(sessionId, conversationId);
+    return resumed;
   } finally {
+    lastResumeAt.set(sessionId, Date.now());
     resumeInFlight.delete(sessionId);
     resumeInFlightStarted.delete(sessionId);
   }
+}
+
+/**
+ * The status to publish when a parked session comes back.
+ *
+ * The park is the last thing that wrote lastSentAgentStatus for this session,
+ * so "hibernated" means the resume reported nothing of its own yet and
+ * "connected" is the honest value: the pane is up and no turn is in flight.
+ * Anything else is a status the session earned after the park, and re-asserting
+ * it is what keeps a mid-turn row from being painted "connected".
+ *
+ * Writing "hibernated" back is the one answer that cannot be right. The
+ * heartbeat re-sends the map's value every 30s, so a park that survived its own
+ * wake would latch: a live pane filed as parked with nothing able to correct it.
+ */
+export function wakeStatusAfterPark(stored: AgentStatus | undefined): AgentStatus {
+  return !stored || stored === "hibernated" ? "connected" : stored;
+}
+
+/**
+ * A session came back: drop the local mark and clear the server stamp.
+ *
+ * The write is not gated on the local mark. A daemon restart empties
+ * hibernatedSessions, so a session parked before the restart and resumed after
+ * it would otherwise keep hibernated_at set on managed_sessions until the stale
+ * row cron deleted the row, and that stamp is what tells the inbox a session is
+ * parked. The first wake of a session after boot therefore always writes; every
+ * later wake writes only if this daemon parked it (hibernationStampCleared),
+ * which keeps the common case — a message reaching an already live session — at
+ * zero extra Convex writes.
+ */
+export function clearHibernationPark(sessionId: string, conversationId?: string): void {
+  const wasParked = hibernatedSessions.delete(sessionId);
+  if (!wasParked && hibernationStampCleared.has(sessionId)) return;
+  // Forgetting the memo costs one extra status write the next time a session
+  // wakes and can never cost a missed clear, so a flat cap is enough to keep a
+  // daemon that runs for weeks from holding every id it ever woke.
+  if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
+  hibernationStampCleared.add(sessionId);
+  const convId = conversationId ?? readConversationCache()[sessionId];
+  if (convId && syncServiceRef) {
+    // Through sendAgentStatus, not straight to the mutation: the map it writes
+    // is what the 30s heartbeat re-asserts, so a wake that skipped it would
+    // clear the stamp on the server and keep sending "hibernated" forever.
+    const status = wakeStatusAfterPark(lastSentAgentStatus.get(sessionId));
+    sendAgentStatus(syncServiceRef, convId, sessionId, status, Date.now(), undefined, undefined, { hibernatedAt: null });
+  }
+  // The log line reports a park ending. A first wake that only clears a stamp
+  // this daemon cannot remember setting is bookkeeping, and saying WOKE for it
+  // would put a park in the log for every session after every restart.
+  if (wasParked) reaperLog(`WOKE session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)}`);
 }
 
 /**
@@ -16621,7 +18368,7 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
   }
 }
 
-async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId): Promise<boolean> {
+async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -16812,6 +18559,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // conversation row inside the claude branch, sourced on the resume line.
   let resumeAccountPrefix = "";
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
+    model: opts?.model,
+    effort: opts?.effort,
     codexArgs: getAgentArgs(config, "codex"),
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
     grokArgs: getAgentArgs(config, "grok"),
@@ -16899,7 +18648,17 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const convEffort = convInfo?.effort;
       if (convEffort && /^[a-z]+$/.test(convEffort)) effortFlag = ` --effort ${convEffort}`;
     }
-    resumeAccountPrefix = accountSourcePrefix(convInfo?.cc_account ?? undefined, log);
+    // The pin is the SERVER's answer, not the raw row: a session parked on a
+    // limit under a spent account's token would otherwise re-source that
+    // token on every resume (accountSwitch.pinForResume rewrites such a pin
+    // to the account this device continues on). The raw read is the fallback.
+    const resumePin = conversationId && syncServiceRef
+      ? await syncServiceRef.pinForResume(conversationId)
+      : null;
+    resumeAccountPrefix = accountSourcePrefix(
+      resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined,
+      log,
+    );
     resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
@@ -17679,6 +19438,12 @@ async function deliverMessage(
   titleCache: TitleCache
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
+  touchHostActivity();
+
+  if (pendingAgentSwitches.has(conversationId)) {
+    logDelivery(`[AGENT-SWITCH] Deferring msg=${messageId.slice(0, 8)} until conversation ${conversationId.slice(0, 12)} is rebound`);
+    return false;
+  }
 
   const childConvId = planHandoffChildren.get(conversationId);
   if (childConvId) {
@@ -18000,6 +19765,7 @@ async function deliverMessage(
         agentDetectedDead = true;
       } else {
         if (live.source === "cache") syncService.setSessionError(conversationId).catch(logConvexFailure);
+        clearUnresolvablePane(sessionId);
         logDelivery(`Injected via tmux ${injectTarget} (source=${live.source})`);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -18017,6 +19783,16 @@ async function deliverMessage(
         throw err;
       }
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
+      if (noteUnresolvablePane(sessionId, msg)) {
+        // Deferring again would just reproduce this verdict. Tear the pane down
+        // and let the resume below build a fresh one.
+        logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: ${tmuxSessionName} unresolvable ${PANE_REBUILD_THRESHOLD}x running — rebuilding the pane`);
+        await killTmuxSessionAndTree(tmuxSessionName);
+        resumeSessionCache.delete(sessionId);
+        sessionProcessCache.delete(sessionId);
+        clearUnresolvablePane(sessionId);
+        agentDetectedDead = true;
+      }
     }
   }
 
@@ -18679,25 +20455,34 @@ function restartDaemonProcess(reason: string): void {
 // code. lastEventLoopTick is refreshed by the event-loop monitor every ~30s; if it
 // drifts far past that, the monitor's timer is dead rather than merely slow.
 let lastEventLoopTick = Date.now();
+let lastEventLoopTickMono = performance.now();
 let selfHealing = false;
 const SELF_HEAL_TICK_STALE_MS = 5 * 60 * 1000;
 
 // Restart only when the event-loop monitor's timer is dead (tick far past its ~30s
 // cadence), never when it is merely slow under load, and never twice.
+// Staleness is the smaller of the wall gap and the monotonic gap, because the
+// monotonic clock stops while the machine is suspended. A wake from hibernate
+// shows hours of wall staleness and about none of monotonic: on 2026-09-02 a
+// 2234s wall gap restarted a daemon whose timers were fine. A genuinely dead
+// timer keeps accruing monotonic staleness and still restarts, one threshold
+// after the wake.
 export function shouldSelfHeal(
   staleMs: number,
   alreadyHealing: boolean,
   thresholdMs: number = SELF_HEAL_TICK_STALE_MS,
+  monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  return staleMs > thresholdMs;
+  return Math.min(staleMs, monoStaleMs) > thresholdMs;
 }
 
 function selfHealIfTimersStalled(source: string): void {
   const stale = Date.now() - lastEventLoopTick;
-  if (!shouldSelfHeal(stale, selfHealing)) return;
+  const monoStale = performance.now() - lastEventLoopTickMono;
+  if (!shouldSelfHeal(stale, selfHealing, SELF_HEAL_TICK_STALE_MS, monoStale)) return;
   selfHealing = true;
-  log(`[SELF-HEAL] event-loop timer stalled ${Math.round(stale / 1000)}s (timers dead, likely post-sleep), restarting via ${source}`);
+  log(`[SELF-HEAL] event-loop timer stalled ${Math.round(monoStale / 1000)}s of loop time (${Math.round(stale / 1000)}s wall, timers dead, likely post-sleep), restarting via ${source}`);
   logLifecycle("self_heal_restart", `tick stalled ${Math.round(stale / 1000)}s, via ${source}`);
   restartDaemonProcess(`event-loop timers stalled, via ${source}`);
 }
@@ -18860,20 +20645,106 @@ function acquireLock(): boolean {
       try { process.kill(holder, "SIGKILL"); } catch {}
       releasePidFileIfOwned(PID_FILE, holder);
     }
-  } else {
-    // Even without a PID file, check for zombie daemon processes (e.g. from a
-    // shutdown that deleted the PID file but failed to exit).
-    try {
-      const pgrepOut = execSync(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
-      const pids = pgrepOut.trim().split("\n").map(Number).filter(p => p && p !== process.pid && isProcessRunning(p));
-      for (const zombiePid of pids) {
-        log(`Killing zombie daemon process ${zombiePid}`);
-        try { process.kill(zombiePid, "SIGKILL"); } catch {}
-      }
-    } catch {}
   }
 
+  // The pid file is the only thing consulted here, and deliberately so. A
+  // daemon whose pid file is gone is swept AFTER this process has won the lock
+  // and opened its listener (sweepOrphanDaemons), because a `ps` on this
+  // machine has run for 26 seconds and the boot blackout is what unit D1 just
+  // shortened.
   return tryAcquirePidFileLock(PID_FILE, process.pid);
+}
+
+// The stamps describe whichever daemon holds the lock, so clear them only when
+// no live daemon does. A second daemon on its way out used to erase the running
+// one's version and build id, and an absent build id turns the restart veto
+// off, which bounces a daemon nobody needed to bounce. The guard cannot be "do
+// I own the pid file": `cast stop` unlinks the pid file before the daemon gets
+// here, so ownership alone would leave the stamps behind after every stop.
+// Both exit paths call this, the graceful one and the hard exit timer.
+function clearDaemonStampsIfUnheld(): void {
+  const stampHolder = readPidFile(PID_FILE);
+  if (stampHolder && stampHolder !== process.pid && isProcessRunning(stampHolder)) return;
+  try { fs.unlinkSync(VERSION_FILE); } catch {}
+  try { fs.unlinkSync(BUILD_FILE); } catch {}
+}
+
+// Whether the orphan sweep has run this boot. It is a boot step, not a loop.
+let orphanDaemonSweepDone = false;
+
+/**
+ * Kill any other daemon process on this machine, once, after this one holds the
+ * pid file and answers on its port.
+ *
+ * Matched off the process table, not `pgrep -f daemon.ts`, which only ever saw
+ * a source install: a built JS or binary daemon went unnoticed and both kept
+ * running. What it must never match is the LEGITIMATE incumbent. By the time
+ * this runs, this process owns the pid file, so a daemon still holding a live
+ * pid file is a holder we lost a race to and is left alone. Everything else has
+ * no lock and is a split brain.
+ *
+ * SIGTERM first, then SIGKILL, so the victim releases its own resources and
+ * flushes its retry queue instead of dropping it.
+ */
+async function sweepOrphanDaemons(): Promise<void> {
+  if (orphanDaemonSweepDone) return;
+  orphanDaemonSweepDone = true;
+  try {
+    const holder = readPidFile(PID_FILE);
+    const protectedPid = holder && holder !== process.pid && isProcessRunning(holder) ? holder : null;
+    const pids = findOtherDaemonPids(await snapshotProcessTableAsync({ timeout: 15_000 }))
+      .filter((pid) => pid !== protectedPid)
+      .filter(isProcessRunning);
+    if (pids.length === 0) return;
+    log(`Sweeping ${pids.length} orphan daemon process(es): ${pids.join(", ")}`);
+    // The same budget `cast stop` gives a daemon, because the victim runs the
+    // same shutdown: it drains the retry queue and gives its command leases
+    // back, and both of those have to finish before the hard kill. This sweep
+    // runs off the boot path, so waiting longer costs nothing.
+    const { killed } = await killProcessTree(pids, DAEMON_STOP_SIGKILL_MS);
+    if (killed > 0) log(`Orphan daemon sweep hard killed ${killed} process(es)`);
+  } catch {}
+}
+
+/**
+ * Kill tmux server generations the live server has orphaned.
+ *
+ * When the default socket file is replaced, the previous server keeps running
+ * unreachable, holding every pane and agent of its generation — invisible to
+ * `tmux list-sessions`, so the daemon re-resumes the same session ids on the
+ * new server and doubles every agent. `cast doctor` has found these for a while
+ * behind --reap-tmux; this is the same detector, run automatically.
+ *
+ * Every guard lives in staleTmuxServerKillPlan so it can be tested without a
+ * process table: no kills when tmux cannot name the live server, no kills of
+ * another account's server, and no kill of a server whose tree holds this
+ * daemon.
+ */
+async function sweepStaleTmuxServers(): Promise<void> {
+  try {
+    const procs = await snapshotProcessTableAsync({ timeout: 15_000 });
+    const livePid = await liveTmuxServerPid();
+    const { kill: stale, selfHosted, refused } = staleTmuxServerKillPlan(procs, livePid, process.getuid?.());
+    if (refused) {
+      log(`[TMUX-SWEEP] WARNING: tmux did not answer, so no server can be identified as live — skipping the sweep`);
+      return;
+    }
+    for (const server of selfHosted) {
+      log(`[TMUX-SWEEP] WARNING: stale tmux server pid ${server.pid} holds this daemon, so it stays up. Restart the daemon from outside tmux to let the sweep retire it.`);
+    }
+    if (stale.length === 0) {
+      // One line an hour, so a sweep that has quietly stopped running looks
+      // different from one with nothing to do.
+      if (selfHosted.length === 0) log(`[TMUX-SWEEP] one server on the default socket (pid ${livePid})`);
+      return;
+    }
+    for (const server of stale) {
+      log(`[TMUX-SWEEP] WARNING: killing stale tmux server pid ${server.pid} holding ${server.tree.length} process(es), ${server.agents} agent(s) (live server is ${livePid})`);
+      await killProcessTree([...server.tree, server.pid]);
+    }
+  } catch (err) {
+    log(`[TMUX-SWEEP] sweep error: ${(err as Error)?.message ?? err}`);
+  }
 }
 
 // The watchdog's three stale sweeps differ only in where they look and what
@@ -19199,6 +21070,28 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
   }
 }
 
+// The build id of the daemon code sitting on disk next to this module. Same
+// two-name dance, and the same reach, as the version read below: both look for
+// a sibling module of __dirname, so both see a SOURCE install and nothing else.
+// A compiled binary has neither file on disk and a bundled dist has only
+// daemon.js, so checkDiskVersionMismatch returns early there before it ever
+// asks for a build id. The veto covers exactly the install shape the check
+// itself covers, which is the one that runs on developer machines.
+async function readDiskBuildId(): Promise<string | null> {
+  for (const name of ["daemonBuildId.ts", "daemonBuildId.js"]) {
+    try {
+      const content = await fs.promises.readFile(path.join(__dirname, name), "utf-8");
+      const match = content.match(BUILD_ID_RE);
+      if (match) return match[1];
+    } catch {}
+  }
+  return null;
+}
+
+// The disk version this daemon has already stood down for. Logged once, not
+// once every five minutes.
+let vetoedDiskVersion: string | null = null;
+
 async function checkDiskVersionMismatch(): Promise<void> {
   try {
     let content: string | null = null;
@@ -19214,6 +21107,21 @@ async function checkDiskVersionMismatch(): Promise<void> {
 
     const diskVersion = match[1];
     if (diskVersion !== daemonVersion) {
+      // A version bump that did not touch daemon code is not worth a restart:
+      // this daemon may hold hundreds of live panes. Read the build id stamped
+      // beside the code on disk and stand down when it matches what we run.
+      // Unknown id (an older tree, an unreadable file) keeps the old behavior.
+      const diskBuildId = await readDiskBuildId();
+      if (daemonBuildUnchanged(DAEMON_BUILD_ID, diskBuildId)) {
+        // This check runs every 5 minutes and the veto is a steady state, so
+        // say it once per disk version. Repeating it forever would bury the
+        // freeze and delivery evidence operators read this file for.
+        if (vetoedDiskVersion !== diskVersion) {
+          vetoedDiskVersion = diskVersion;
+          log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, but the daemon build id is unchanged (${DAEMON_BUILD_ID}), not restarting`);
+        }
+        return;
+      }
       log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
       logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
       flushRemoteLogs()
@@ -19244,22 +21152,69 @@ const LOOP_FREEZE_REPORT_MS = 5_000;
 // state and the per-message delivery note reads it: a message that has not
 // echoed while the loop was frozen 40s of the last 60s is delayed by the
 // daemon, not lost by the session, and must not prompt a kill & restart.
+// The attribution string travels through the heartbeat, the devices row and the
+// web roster signature, which joins fields with "|" and rows with newlines. A
+// stack summary carrying either character would corrupt that whole encoding, so
+// the ledger is where they get stripped: one place, every consumer safe.
+const FREEZE_TOP_MAX_CHARS = 120;
 export class LoopFreezeLedger {
-  private events: Array<{ at: number; ms: number }> = [];
-  constructor(private readonly windowMs = 60_000) {}
-  record(ms: number, now = Date.now()): void {
-    this.events.push({ at: now, ms });
+  private events: Array<{ at: number; ms: number; top: string }> = [];
+  private bootTotalMs = 0;
+  private bootTotalCount = 0;
+  constructor(
+    private readonly windowMs = 60_000,
+    private readonly retentionMs = 60 * 60_000,
+  ) {}
+  record(ms: number, now = Date.now(), top = ""): void {
+    this.events.push({ at: now, ms, top });
+    this.bootTotalMs += ms;
+    this.bootTotalCount += 1;
     this.prune(now);
   }
-  /** Total ms the loop was blocked inside the trailing window. */
+  /** Total ms the loop was blocked inside the trailing minute. */
   recentMs(now = Date.now()): number {
     this.prune(now);
-    return this.events.reduce((sum, e) => sum + e.ms, 0);
+    const cutoff = now - this.windowMs;
+    return this.events.reduce((sum, e) => (e.at >= cutoff ? sum + e.ms : sum), 0);
+  }
+  summary(now = Date.now()): LoopFreezeSummary {
+    this.prune(now);
+    const minuteCutoff = now - this.windowMs;
+    let recent = 0;
+    let hourMs = 0;
+    let hourMaxMs = 0;
+    let worstTop = "";
+    for (const e of this.events) {
+      if (e.at >= minuteCutoff) recent += e.ms;
+      hourMs += e.ms;
+      // The worst freeze in the hour, not the newest: the biggest one is the
+      // one worth acting on, and a newer 6s blip would otherwise hide it.
+      if (e.ms >= hourMaxMs) {
+        hourMaxMs = e.ms;
+        worstTop = e.top;
+      }
+    }
+    return {
+      recentMs: recent,
+      hourMs,
+      hourCount: this.events.length,
+      hourMaxMs,
+      bootMs: this.bootTotalMs,
+      bootCount: this.bootTotalCount,
+      top: sanitizeFreezeTop(worstTop),
+    };
   }
   private prune(now: number): void {
-    const cutoff = now - this.windowMs;
+    const cutoff = now - this.retentionMs;
     while (this.events.length && this.events[0].at < cutoff) this.events.shift();
   }
+}
+
+function sanitizeFreezeTop(raw: string): string {
+  return (raw || "")
+    .replace(/[|\r\n]+/g, " ")
+    .trim()
+    .slice(0, FREEZE_TOP_MAX_CHARS);
 }
 const loopFreezes = new LoopFreezeLedger();
 const daemonStartedAt = Date.now();
@@ -19269,13 +21224,43 @@ const daemonStartedAt = Date.now();
 // gap with ~6ms of CPU, while a loop genuinely blocked on a busy disk still
 // accrues tens of ms per second churning between syscalls (the 42s walk freeze
 // of 2026-09-02 burned 928ms). Counting a suspend as a freeze lit "daemon under
-// load" for a minute after every wake — ~30 times a day on a laptop — over a
-// daemon that was doing nothing wrong. Short gaps always count: a 5s sleep is
-// not a thing, and a 5s blocked spawn is real. Exported for tests.
-export const SUSPEND_GAP_MIN_MS = 30_000;
+// load" for a minute after every wake, about 30 times a day on a laptop, over a
+// daemon that was doing nothing wrong.
+// The floor is SUSPEND_GAP_MIN_MS, the same one the tick monitor uses.
 export const SUSPEND_CPU_RATE = 0.005;
 export function isSuspendGap(lateMs: number, cpuMs: number): boolean {
   return lateMs >= SUSPEND_GAP_MIN_MS && cpuMs < lateMs * SUSPEND_CPU_RATE;
+}
+
+// The monotonic clock does not run while the machine is suspended, so the time
+// the loop actually failed to run is the SMALLER of the wall gap and the
+// monotonic gap. A wall gap with little monotonic lateness is a sleep whatever
+// the CPU counter says, and a big monotonic gap is a real freeze even when it
+// straddles a wake (the wall number would then wildly overstate it).
+// The CPU rule stays as the second signal, so on a platform where the monotonic
+// clock DOES advance across suspend this degrades to exactly the old behavior.
+// Exported for tests.
+export function classifyLoopGap(
+  wallLateMs: number,
+  monoLateMs: number,
+  cpuMs: number,
+): { kind: "freeze" | "suspend"; freezeMs: number } {
+  const blockedMs = Math.min(wallLateMs, monoLateMs);
+  if (blockedMs < LOOP_FREEZE_REPORT_MS) return { kind: "suspend", freezeMs: 0 };
+  // The two clocks disagreed, which proves this platform's monotonic clock
+  // stops while the machine sleeps. The sleep is already subtracted by the min
+  // above, so what remains is time the loop truly failed to run: a freeze,
+  // whatever the CPU counter says about the window as a whole. This is the case
+  // the CPU rule gets wrong on its own — a blocking read or a child wait burns
+  // almost no CPU and would read as more sleep.
+  // The bar here is a tenth of the gap rather than the tick monitor's absolute
+  // 30s: this probe ticks every 100ms, so any real suspend dwarfs the gap it
+  // lands in, and an absolute floor would miss every sleep shorter than 30s.
+  if (clocksDisagree(wallLateMs, monoLateMs, wallLateMs * 0.1)) return { kind: "freeze", freezeMs: blockedMs };
+  // The clocks agree: either nothing slept, or the monotonic clock kept running
+  // through the sleep. Only the CPU rule is left to tell those apart.
+  if (isSuspendGap(blockedMs, cpuMs)) return { kind: "suspend", freezeMs: 0 };
+  return { kind: "freeze", freezeMs: blockedMs };
 }
 
 export function summarizeSamplingTraces(raw: unknown, top = 5): string {
@@ -19326,6 +21311,10 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
     } catch {}
   }
   let lastProbe = Date.now();
+  // Monotonic twin of lastProbe. performance.now() is frozen while the machine
+  // is suspended, so comparing the two clocks tells a sleep from a freeze
+  // without depending on the CPU counter (see classifyLoopGap).
+  let lastProbeMono = performance.now();
   let lastCpu = process.cpuUsage();
   // Snapshot of lastLogLine at the previous tick: the newest line written
   // before the loop stopped ticking. (Reading lastLogLine at report time would
@@ -19333,21 +21322,37 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
   let logAtLastProbe = lastLogLine;
   const t = setInterval(() => {
     const now = Date.now();
+    const nowMono = performance.now();
     const late = now - lastProbe - LOOP_FREEZE_PROBE_INTERVAL_MS;
+    const monoLate = nowMono - lastProbeMono - LOOP_FREEZE_PROBE_INTERVAL_MS;
     const cpu = process.cpuUsage(lastCpu);
     lastProbe = now;
+    lastProbeMono = nowMono;
     lastCpu = process.cpuUsage();
     let traces: unknown = null;
     try { traces = drainTraces?.(); } catch {}
     if (late >= LOOP_FREEZE_REPORT_MS) {
       const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
-      const suspend = isSuspendGap(late, cpuMs);
-      if (!suspend) loopFreezes.record(late, now);
       const hot = summarizeSamplingTraces(traces);
+      const verdict = classifyLoopGap(late, monoLate, cpuMs);
+      const suspend = verdict.kind === "suspend";
+      if (!suspend) loopFreezes.record(verdict.freezeMs, now, hot);
+      const reported = suspend ? late : verdict.freezeMs;
       log(
-        `[LOOP-FREEZE] event loop blocked ${Math.round(late / 1000)}s (${cpuMs}ms CPU during the freeze${suspend ? "; machine was suspended, not counted as load" : ""}); ` +
+        `[LOOP-FREEZE] event loop blocked ${Math.round(reported / 1000)}s (${cpuMs}ms CPU during the freeze${suspend ? `; machine was suspended, not counted as load (wall ${Math.round(late / 1000)}s, loop ${Math.round(Math.max(0, monoLate) / 1000)}s)` : ""}); ` +
         `last log before it: ${logAtLastProbe}${hot ? `; hot stacks: ${hot}` : ""}`,
       );
+      // Everything here rests on performance.now() stopping while the machine
+      // is suspended. If it does not, a dark wake reaches this branch as an
+      // ordinary freeze and inflates the hour budget straight into the alert,
+      // and the line above would never say so: only the suspend branch prints
+      // the two clocks. So the freeze branch prints them too, on its own line
+      // so the parser in bench/logReport.ts keeps matching the line above byte
+      // for byte. Two numbers far apart prove the assumption holds; two numbers
+      // that track each other through a laptop sleep disprove it.
+      if (!suspend) {
+        log(`[LOOP-FREEZE-CLOCKS] wall ${Math.round(late)}ms, loop ${Math.round(Math.max(0, monoLate))}ms, cpu ${cpuMs}ms`);
+      }
     }
     logAtLastProbe = lastLogLine;
   }, LOOP_FREEZE_PROBE_INTERVAL_MS);
@@ -19357,18 +21362,25 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
 
 function startEventLoopMonitor(): NodeJS.Timeout {
   let lastTickTime = Date.now();
+  // Monotonic twin of lastTickTime: it stops while the machine is suspended, so
+  // the pair tells a wake from a freeze (see classifyTickGap).
+  let lastTickMono = performance.now();
   let lastTickCpu = process.cpuUsage();
   startLoopFreezeProbe();
 
   return setInterval(() => {
     const now = Date.now();
+    const nowMono = performance.now();
     const elapsed = now - lastTickTime;
+    const monoElapsed = nowMono - lastTickMono;
     lastTickTime = now;
+    lastTickMono = nowMono;
     const cpuDelta = process.cpuUsage(lastTickCpu);
     lastTickCpu = process.cpuUsage();
 
-    saveDaemonState({ lastHeartbeatTick: now });
+    saveDaemonState({ lastHeartbeatTick: now, loopFreeze: { ...loopFreezes.summary(now), at: now } });
     lastEventLoopTick = now;
+    lastEventLoopTickMono = performance.now();
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
       // Only a genuine suspend gets recovery. A busy stall means the loop was
@@ -19377,10 +21389,17 @@ function startEventLoopMonitor(): NodeJS.Timeout {
       // classifyTickGap). The watcher never died during a stall — the process was
       // running the whole time — so there is nothing to recover.
       const cpuMs = (cpuDelta.user + cpuDelta.system) / 1000;
-      if (classifyTickGap(elapsed, cpuMs) === "stall") {
-        logLifecycle("event_loop_stall", `Event loop pinned for ${Math.round(elapsed / 1000)}s (${Math.round(cpuMs / 1000)}s CPU) — skipping wake recovery`);
-        return;
+      // Two independent questions. A pure stall (both clocks agree) gets no
+      // recovery: the watcher never died, the process was running the whole
+      // time, and the sweep recovery fires is itself the kind of work that pins
+      // the loop. A window that also holds a suspend gets recovery whatever the
+      // stall verdict says, because the FSEvents stream really can go silent
+      // across a sleep and only the sweep brings it back.
+      const { stalled, recover } = classifyTickWindow(elapsed, cpuMs, monoElapsed);
+      if (stalled) {
+        logLifecycle("event_loop_stall", `Event loop pinned for ${Math.round(Math.min(elapsed, monoElapsed) / 1000)}s of loop time (${Math.round(elapsed / 1000)}s wall, ${Math.round(cpuMs / 1000)}s CPU)${recover ? "" : ", skipping wake recovery"}`);
       }
+      if (!recover) return;
       logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
       // Re-arm to `now` so the watchdog's 60-min idle path doesn't also fire a
       // redundant restart in the gap before recovery completes. We no longer rely
@@ -19432,6 +21451,7 @@ async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<
     claudeProjectsDir,
     undefined,
     (filePath) => isTranscriptFileInSyncScope(filePath, config),
+    watchDirFilter,
   );
   const droppedCount = retryQueue.getDroppedOperationCount();
   const queueSize = retryQueue.getLogicalQueueSize();
@@ -19648,6 +21668,8 @@ function startWatchdog(
   deps: WatchdogDependencies
 ): NodeJS.Timeout {
   log("Watchdog started");
+  // Sweep at boot (the previous daemon's orphans) and on every tick.
+  reapOrphanedTmuxClients().catch(() => {});
   let watchdogRunning = false;
   let watchdogStartedAt = 0;
   const WATCHDOG_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes - must complete before next 5-min interval
@@ -19681,6 +21703,7 @@ function startWatchdog(
 
     // Validate process cache
     validateProcessCache().catch(() => {});
+    reapOrphanedTmuxClients().catch(() => {});
 
     // Prune the daemon's internal tracking of started sessions older than
     // STARTED_SESSION_TTL_MS. Two cases:
@@ -20022,6 +22045,10 @@ async function main(): Promise<void> {
     fs.writeFileSync(VERSION_FILE, daemonVersion, { mode: 0o600 });
   } catch {}
 
+  try {
+    fs.writeFileSync(BUILD_FILE, DAEMON_BUILD_ID, { mode: 0o600 });
+  } catch {}
+
   activeConfig = readConfig();
   loadPersistedLogQueue();
 
@@ -20106,6 +22133,28 @@ async function main(): Promise<void> {
   syncServiceRef = syncService;
   resumeStartedSessionDiscovery();
 
+  // Listen NOW, before the forced update check, the warm restart scan and the
+  // skills sweep. Everything between daemon_start and this line used to be
+  // boot blackout: the terminal panel, the vault, the browser watch and the
+  // health probe were all unreachable, and every hook status fell back to a
+  // polled file. Config and the sync service exist by here, which is all the
+  // routes attached below need; /hook/status answers 503 until its handler
+  // registers at the end of boot (setHookStatusSink).
+  hookServer = startHookServer();
+
+  // Now that the port answers, sweep any daemon that is running without the
+  // pid file. Off the loop and off the boot path: it spawns `ps`.
+  void sweepOrphanDaemons();
+
+  // And any tmux server generation the live one has orphaned, which holds panes
+  // and agents nothing can reach. Same shape: off the loop, off the boot path.
+  void sweepStaleTmuxServers();
+
+  // Hand back whatever the previous daemon on this machine claimed and never
+  // finished, so a resume or a kill it was holding is offered to us now instead
+  // of after the two minute grace window.
+  void releaseStrandedCommandClaims(config).catch(() => {});
+
   // Register this device EARLY + on its own interval, so device presence never
   // depends on the rest of (potentially slow/headless-stalling) init. Logs the
   // first result for diagnosability.
@@ -20117,6 +22166,10 @@ async function main(): Promise<void> {
   // Hourly re-assert of the settings-level transcript pin (asserted once at
   // boot already) — converges a settings.json rewritten out from under us.
   setInterval(assertClaudePersistencePin, 3_600_000);
+
+  // Hourly too: a socket replacement can happen at any point in a daemon's life,
+  // and the boot sweep only covers generations orphaned before we started.
+  setInterval(() => { void sweepStaleTmuxServers(); }, 3_600_000);
 
   // Check for forced updates immediately on startup before anything else
   // This allows recovery from broken versions by downloading a fix early
@@ -20276,11 +22329,23 @@ async function main(): Promise<void> {
             getTmuxSessionOption(tmuxSession, "@codecast_project_path"),
           ]);
 
+          let recoveredTmuxSession = tmuxSession;
           if (sessionId) {
-            resumeSessionCache.set(sessionId, tmuxSession);
+            const upgradedName = upgradedLegacyResumeTmuxName(tmuxSession, sessionId);
+            if (upgradedName) {
+              try {
+                await tmuxExec(["rename-session", "-t", tmuxSession, upgradedName]);
+                recoveredTmuxSession = upgradedName;
+                log(`[WARM-RESTART] Renamed collision-prone pane ${tmuxSession} -> ${upgradedName}`);
+              } catch {}
+            }
+          }
+
+          if (sessionId) {
+            resumeSessionCache.set(sessionId, recoveredTmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
             if (syncServiceRef) {
-              syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, (convId || undefined) as any).catch(logConvexFailure);
+              syncServiceRef.registerManagedSession(sessionId, process.pid, recoveredTmuxSession, (convId || undefined) as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(sessionId);
             }
             recovered++;
@@ -20291,33 +22356,33 @@ async function main(): Promise<void> {
             const agentType = (tmuxAgentType as StartedSessionInfo["agentType"] | null) || "claude";
             const cachedSessionId = findCachedSessionIdForConversation(conversationCache, tmuxConvId);
             if (cachedSessionId) {
-              resumeSessionCache.set(cachedSessionId, tmuxSession);
+              resumeSessionCache.set(cachedSessionId, recoveredTmuxSession);
               if (syncServiceRef) {
-                registerManagedStartedSession(tmuxConvId, cachedSessionId, tmuxSession);
+                registerManagedStartedSession(tmuxConvId, cachedSessionId, recoveredTmuxSession);
                 if (agentType === "codex") {
-                  startCodexPermissionPoller(cachedSessionId, tmuxSession, tmuxConvId, syncServiceRef);
+                  startCodexPermissionPoller(cachedSessionId, recoveredTmuxSession, tmuxConvId, syncServiceRef);
                 }
               }
               recovered++;
               return;
             }
             startedSessionTmux.set(tmuxConvId, {
-              tmuxSession,
+              tmuxSession: recoveredTmuxSession,
               projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
               startedAt: Date.now(),
               agentType,
             });
             if (syncServiceRef) {
-              syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, tmuxConvId as any).catch(logConvexFailure);
-              ensureManagedSessionHeartbeat(tmuxSession);
+              syncServiceRef.registerManagedSession(recoveredTmuxSession, process.pid, recoveredTmuxSession, tmuxConvId as any).catch(logConvexFailure);
+              ensureManagedSessionHeartbeat(recoveredTmuxSession);
             }
             recovered++;
             return;
           }
 
           if (syncServiceRef) {
-            syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession).catch(logConvexFailure);
-            ensureManagedSessionHeartbeat(tmuxSession);
+            syncServiceRef.registerManagedSession(recoveredTmuxSession, process.pid, recoveredTmuxSession).catch(logConvexFailure);
+            ensureManagedSessionHeartbeat(recoveredTmuxSession);
             recovered++;
           }
         } catch {}
@@ -20695,6 +22760,7 @@ async function main(): Promise<void> {
   const projectDirExists = new Map<string, boolean>();
   watcher.on("session", (event: SessionEvent) => {
     selfHealIfTimersStalled("watcher");
+    touchHostActivity();
     const filePath = event.filePath;
     lastWatcherEventTime = Date.now();
 
@@ -21096,21 +23162,16 @@ async function main(): Promise<void> {
 
   // Persist the normalized record (with inherited permission_mode) so a
   // daemon restart can correctly classify cached permission_blocked events
-  // from sessions running in bypassPermissions mode. Writes ride one chain so
-  // two statuses for a session land in order; the payload is what
-  // lastHookStatus holds when the write runs.
-  let persistChain: Promise<void> = Promise.resolve();
+  // from sessions running in bypassPermissions mode. queueAgentStatusWrite is
+  // the one ordered writer for this directory.
   function persistHookStatus(sessionId: string, data: HookStatusData): void {
-    persistChain = persistChain
-      .then(() => {
-        const persistData = lastHookStatus.get(sessionId) || data;
-        return fs.promises.writeFile(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(persistData));
-      })
-      .catch(() => {});
+    queueAgentStatusWrite(sessionId, () => lastHookStatus.get(sessionId) || data);
   }
 
-  // HTTP hook server -- instant push path (file watcher above is the fallback)
-  hookServer = startHookServer((sessionId, data) => {
+  // The instant push path is now live (the file watcher above is the
+  // fallback). The server has been listening since early boot; this is the
+  // handler it was warming for.
+  setHookStatusSink((sessionId, data) => {
     const deferred = handleStatusData(sessionId, data);
     if (!deferred) persistHookStatus(sessionId, data);
 
@@ -21257,6 +23318,7 @@ async function main(): Promise<void> {
         claudeProjectsDir,
         undefined,
         (filePath) => isTranscriptFileInSyncScope(filePath, config),
+        watchDirFilter,
       );
     } catch (err) {
       logError(`${reason} failed to find unsynced files`, err instanceof Error ? err : new Error(String(err)));
@@ -21662,7 +23724,7 @@ async function main(): Promise<void> {
     },
   });
 
-  codexAppServerInstance.on("ready", () => {
+  const recoverAppServerThreads = () => {
     if (rehydratePersistedAppServerThreadsPromise) return;
     rehydratePersistedAppServerThreadsPromise = rehydratePersistedAppServerThreads()
       .catch((err) => {
@@ -21671,7 +23733,10 @@ async function main(): Promise<void> {
       .finally(() => {
         rehydratePersistedAppServerThreadsPromise = null;
       });
-  });
+  };
+  codexAppServerInstance.on("ready", recoverAppServerThreads);
+  const appServerRecoveryTimer = setInterval(recoverAppServerThreads, 30_000);
+  appServerRecoveryTimer.unref();
 
   codexAppServerInstance.on("exited", () => {
     if (appServerThreads.size > 0 || appServerConversations.size > 0) {
@@ -21686,10 +23751,21 @@ async function main(): Promise<void> {
     clearLiveAppServerThreadRegistrations();
   });
 
-  codexAppServerInstance.on("turnCompleted", async (threadId: string, turnId: string, messages: any[], status: string) => {
+  codexAppServerInstance.on("turnCompleted", async (threadId: string, turnId: string, messages: any[], status: string, turnError?: { message?: string } | null) => {
     const entry = appServerThreads.get(threadId);
     try {
       if (!entry) return;
+      const record = persistedAppServerThreads.get(entry.conversationId);
+      if (record && !(appServerShuttingDown && status === "interrupted")) {
+        persistedAppServerThreads.set(entry.conversationId, settledCodexRecord(record, turnId));
+        persistAppServerThreadRegistrations();
+      }
+      if (status === "failed") {
+        const message = turnError?.message || "Codex turn failed without an error message";
+        logError(`[codex-app-server] turn ${turnId.slice(0, 8)} failed`, new Error(message), threadId);
+        await syncService.setSessionError(entry.conversationId, message, { force: true });
+      }
+      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? resolveTurnEndStatus(threadId, null) : "stopped");
       await syncAppServerTurnMessagesIfChanged(
         turnId,
         entry.conversationId,
@@ -21701,16 +23777,29 @@ async function main(): Promise<void> {
       if (status === "completed") {
         markAppServerConversationResumable(entry.conversationId, threadId);
       }
-      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? resolveTurnEndStatus(threadId, null) : "working");
+    } catch (err) {
+      logError(`[codex-app-server] could not sync completed turn ${turnId.slice(0, 8)}`, err instanceof Error ? err : new Error(String(err)), threadId);
     } finally {
       clearAppServerTurnProgress(turnId);
     }
   });
 
-  codexAppServerInstance.on("turnStarted", (threadId: string, turnId: string) => {
+  codexAppServerInstance.on("turnStarted", (threadId: string, turnId: string, model?: string) => {
     const entry = appServerThreads.get(threadId);
-    appServerTurnProgress.set(turnId, makeAppServerTurnProgress(threadId));
+    appServerTurnProgress.set(turnId, makeAppServerTurnProgress(threadId, model));
     if (entry) {
+      const previous = persistedAppServerThreads.get(entry.conversationId);
+      persistedAppServerThreads.set(entry.conversationId, {
+        threadId,
+        cwd: entry.cwd,
+        approvalPolicy: entry.approvalPolicy,
+        updatedAt: Date.now(),
+        activeTurnId: turnId,
+        recoveryAttempts: appServerRecoveringThreads.has(threadId) ? previous?.recoveryAttempts : 0,
+      });
+      persistAppServerThreadRegistrations();
+      appServerRecoveryRetryAt.delete(entry.conversationId);
+      markTurnStarted(threadId, Date.now());
       sendAgentStatus(syncService, entry.conversationId, threadId, "working");
       // Persist early so mid-turn threads survive an app-server crash
       markAppServerConversationResumable(entry.conversationId, threadId);
@@ -21728,6 +23817,11 @@ async function main(): Promise<void> {
     const entry = appServerThreads.get(threadId);
     const progress = appServerTurnProgress.get(turnId);
     if (!entry || !progress) return;
+    const record = persistedAppServerThreads.get(entry.conversationId);
+    if (record?.activeTurnId === turnId && record.recoveryAttempts) {
+      persistedAppServerThreads.set(entry.conversationId, { ...record, recoveryAttempts: 0 });
+      persistAppServerThreadRegistrations();
+    }
     removeAppServerPartial(progress, item.id);
     progress.items.push(item);
     const messages = threadItemsToMessages(progress.items) as RawMessage[];
@@ -22071,7 +24165,6 @@ async function main(): Promise<void> {
   let permissionUnsubscribe: (() => void) | null = null;
   let commandUnsubscribe: (() => void) | null = null;
   const processedPermissionIds = new Set<string>();
-  const processedCommandIds = new Set<string>();
   const messageRetryTimers = new Set<string>();
 
   function scheduleMessageRetry(
@@ -22238,11 +24331,15 @@ async function main(): Promise<void> {
             // up. sendAgentStatus updates lastSentAgentStatus so heartbeats
             // carry the new status instead of stomping it; the pane
             // reconcile corrects the rare case where the submit didn't take.
+            // Presumed, not observed: the server must not read this report as
+            // proof the paste landed (activeStatusAcksInjected) — the pending
+            // row stays "injected" until the JSONL echo or a hook-reported
+            // turn acks it, so a paste whose Enter never took is re-pended.
             const injectedSessionId = buildReverseConversationCache(conversationCache)[msg.conversation_id];
             if (injectedSessionId) {
-              sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking");
+              sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking", undefined, undefined, true);
             } else {
-              syncService.updateSessionAgentStatus(msg.conversation_id, "thinking").catch(logConvexFailure);
+              syncService.updateSessionAgentStatus(msg.conversation_id, "thinking", undefined, undefined, undefined, true).catch(logConvexFailure);
             }
             // Restamp ts but keep the confirmed flag: markInjectedBestEffort registered the
             // entry pre-paste and may have already confirmed the status write.
@@ -22507,7 +24604,7 @@ async function main(): Promise<void> {
       log("Setting up daemon commands subscription");
       commandUnsubscribe = subscriptionClient.onUpdate(
         "users:getMyPendingCommands" as any,
-        { api_token: config.auth_token, device_id: deviceId() },
+        { api_token: config.auth_token, device_id: deviceId(), boot_id: BOOT_ID },
         async (commands: any) => {
           if (!commands || !Array.isArray(commands) || commands.length === 0) {
             return;
@@ -22515,16 +24612,7 @@ async function main(): Promise<void> {
 
           log(`Command subscription update: ${commands.length} pending command(s)`);
 
-          for (const cmd of commands) {
-            if (processedCommandIds.has(cmd.id) || processedPollCommandIds.has(cmd.id)) {
-              continue;
-            }
-
-            processedCommandIds.add(cmd.id);
-            processedPollCommandIds.add(cmd.id);
-            log(`[SUBSCRIPTION] Executing command: ${cmd.command} (${cmd.id})`);
-            await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
-          }
+          await executeCommandBatch(commands, config, "SUBSCRIPTION");
 
           resetReconnectDelay();
         },
@@ -22589,6 +24677,8 @@ async function main(): Promise<void> {
   }
 
   const shutdown = async () => {
+    appServerShuttingDown = true;
+    clearInterval(appServerRecoveryTimer);
     skipRespawn = true;
     log("Shutting down gracefully");
 
@@ -22597,7 +24687,7 @@ async function main(): Promise<void> {
     const hardExitTimer = setTimeout(() => {
       try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [CRITICAL] Hard exit after shutdown timeout\n`); } catch {}
       releasePidFileIfOwned(PID_FILE, process.pid);
-      try { fs.unlinkSync(VERSION_FILE); } catch {}
+      clearDaemonStampsIfUnheld();
       process.exit(1);
     }, 15_000);
     hardExitTimer.unref();
@@ -22635,11 +24725,37 @@ async function main(): Promise<void> {
     codexAppServerInstance?.stop();
     opencodeServerInstance?.stop();
 
+    // Drain the retry queue before stopping it. The ops survive a restart
+    // either way (the queue persists on process exit), but every one of them
+    // otherwise waits out the whole restart before its first retry. A few
+    // seconds here delivers most of them now, and fits inside the 15s hard exit.
+    // Guarded on its own. A throw from the queue here would reach the signal
+    // handler's catch, which exits(1) before the pid file release, the stamp
+    // cleanup, the remote log flush and the stop lifecycle line.
+    try {
+      const pendingOps = retryQueue.getQueueSize();
+      if (pendingOps > 0) {
+        log(`Flushing ${pendingOps} pending retry operation(s) before exit`);
+        const remaining = await flushRetryQueueForShutdown(retryQueue);
+        log(remaining > 0
+          ? `Retry flush left ${remaining} operation(s) queued for the next boot`
+          : `Retry flush drained the queue`);
+      }
+    } catch (err) {
+      log(`Retry flush failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     retryQueue.stop();
 
-    const pendingOps = retryQueue.getQueueSize();
-    if (pendingOps > 0) {
-      log(`Dropping ${pendingOps} pending retry operations`);
+    // Give back any command lease still held, so the next daemon on this device
+    // is offered the command now rather than after the grace window.
+    try {
+      const shutdownConfig = readConfig();
+      if (shutdownConfig) {
+        const released = await releaseHeldCommandClaims(shutdownConfig);
+        if (released > 0) log(`Released ${released} command claim(s)`);
+      }
+    } catch (err) {
+      log(`Command claim release failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     for (const sync of fileSyncs.values()) {
@@ -22655,7 +24771,8 @@ async function main(): Promise<void> {
     if (releasePidFileIfOwned(PID_FILE, process.pid)) {
       log("PID file removed");
     }
-    try { fs.unlinkSync(VERSION_FILE); } catch {}
+
+    clearDaemonStampsIfUnheld();
 
     logLifecycle("daemon_stop", "graceful shutdown");
     sendLogImmediate("info", "[LIFECYCLE] daemon_stop: graceful shutdown", { error_code: "daemon_stop" });

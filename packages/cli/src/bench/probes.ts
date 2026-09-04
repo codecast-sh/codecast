@@ -3,10 +3,10 @@
 // direct meter of loop lag, independent of the daemon's own freeze log.
 
 import * as fs from "node:fs";
-import * as path from "node:path";
+import { hookPortFile, readIdentity } from "../loopbackIdentity.js";
 import { summarizeLatency, type LatencySummary } from "./stats.js";
 
-export interface LoopbackIdentity {
+export interface ProbeIdentity {
   port: number | null;
   token: string | null;
   /** Why the token is unusable; null when it is valid. */
@@ -15,27 +15,23 @@ export interface LoopbackIdentity {
 
 /**
  * Port from hook-port (written on every listen) plus the token the daemon
- * persists in loopback-identity.json. The token counts only when the identity
- * file names the live port and its pid is alive, so a file left by an older
- * daemon never authenticates against a newer one.
+ * persists in loopback-identity.json. loopbackIdentity.ts owns both paths and
+ * the parse; the rules on top of it are the bench's own. The token counts only
+ * when the identity file names the live port and its pid is alive, so a file
+ * left by an older daemon never authenticates against a newer one.
  */
-export function readLoopbackIdentity(configDir: string): LoopbackIdentity {
+export function readLoopbackIdentity(configDir: string): ProbeIdentity {
   let port: number | null = null;
   try {
-    const raw = fs.readFileSync(path.join(configDir, "hook-port"), "utf-8").trim();
+    const raw = fs.readFileSync(hookPortFile(configDir), "utf-8").trim();
     const n = Number.parseInt(raw, 10);
     if (Number.isFinite(n) && n > 0) port = n;
   } catch {}
   if (port === null) return { port: null, token: null, reason: "hook-port missing" };
-  let identity: { port?: unknown; token?: unknown; pid?: unknown };
-  try {
-    identity = JSON.parse(fs.readFileSync(path.join(configDir, "loopback-identity.json"), "utf-8"));
-  } catch {
-    return { port, token: null, reason: "missing" };
-  }
+  const identity = readIdentity(configDir);
+  if (!identity) return { port, token: null, reason: "missing" };
   if (identity.port !== port) return { port, token: null, reason: "port mismatch" };
-  if (typeof identity.token !== "string" || !identity.token) return { port, token: null, reason: "no token" };
-  if (typeof identity.pid === "number") {
+  if (identity.pid !== undefined) {
     try {
       process.kill(identity.pid, 0);
     } catch {

@@ -62,6 +62,17 @@ describe("parseLoopFreeze", () => {
     expect(lastLogTag(ev.lastLog)).toBe("[LOOP-FREEZE]");
   });
 
+  // The freeze branch prints the two clocks on a line of its own, so the daemon
+  // can be caught if performance.now() ever runs through a machine suspend. It
+  // must not look like a freeze to the report: the count of freezes is what the
+  // SLO is read from.
+  test("the clocks line beside a freeze is not itself a freeze", () => {
+    const line = "[2026-09-03T10:00:00.000Z] [LOOP-FREEZE-CLOCKS] wall 42000ms, loop 41800ms, cpu 928ms";
+    const p = parseDaemonLogLine(line)!;
+    expect(p.message.startsWith("[LOOP-FREEZE]")).toBe(false);
+    expect(parseLoopFreeze(p.ts, p.message)).toBeNull();
+  });
+
   test("the primary stack skips bare anonymous frames", () => {
     const p = parseDaemonLogLine(FREEZE_SWEEP)!;
     const ev = parseLoopFreeze(p.ts, p.message)!;

@@ -3,7 +3,7 @@
  * pushed to the web UI as JPEG frames.
  *
  * Rides the daemon's loopback hook server exactly like the integrated
- * terminal: same per-boot token, same origin allowlist, one more WS path
+ * terminal: same persisted token, same origin allowlist, one more WS path
  * (/watch/ws). The web already discovers this endpoint for the terminal
  * (get_terminal_endpoint), so watching needs no new discovery and no new
  * Convex surface — a viewer that can open the terminal can open this.

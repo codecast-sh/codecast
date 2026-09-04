@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./publish.js";
-import { expandStdinArgs } from "./sendBody.js";
+import { stdinText } from "./sendBody.js";
 import { fmt, c } from "./colors.js";
 import {
   normalizeThreadState,
@@ -220,7 +220,8 @@ function printState(text: string, provenance: string): void {
 
 export function registerStateCommand(program: Command, deps: PublishDeps): void {
   program
-    .command("state [args...]")
+    .command("state")
+    .argument("[args...]", stdinText("clear | show <session> | the text to pin"))
     .description(
       "Pin the current state of this thread — the standing answer to \"where does this stand?\"\n\n" +
       "The text renders pinned above the composer in the dashboard and on the inbox\n" +
@@ -259,15 +260,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--json", "Machine-readable output")
     .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string }) => {
-      let args = rawArgs ?? [];
-      if (args.includes("-")) {
-        try {
-          args = expandStdinArgs(args);
-        } catch (err) {
-          console.error((err as Error).message);
-          process.exit(1);
-        }
-      }
+      const args = rawArgs ?? [];
 
       const intent = parseStateArgs(args, options.for);
       const session = intent.session || deps.detectCurrentSessionId();

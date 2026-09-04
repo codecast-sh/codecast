@@ -11,6 +11,13 @@ mkdir -p "$OUTPUT_DIR"
 # bundles daemon.ts directly, so no pre-compiled daemon.js intermediate is needed.
 bash scripts/guard-no-src-shadow.sh
 
+# The daemon build id must match the source it is stamped from. Both release
+# paths (deploy.sh and cut-cli-release.yml) run this script, so one check line
+# covers both. It only verifies: the finalize workflow rejects a release whose
+# packages/cli tree differs from the commit it built, so the stamp has to be a
+# source edit a developer committed.
+bun scripts/stamp-daemon-build-id.ts --check
+
 echo "Building codecast binaries..."
 
 # Build for each platform
@@ -33,7 +40,7 @@ for target in "${targets[@]}"; do
     outfile="$OUTPUT_DIR/codecast-$target"
   fi
 
-  bun build src/index.ts --compile --target="bun-$target" --minify --sourcemap --outfile="$outfile"
+  bun build src/main.ts --compile --target="bun-$target" --minify --sourcemap --outfile="$outfile"
 
   echo "  -> $outfile"
 done

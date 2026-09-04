@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "./proc.js";
+import { stdinText } from "./sendBody.js";
 import type { Command } from "commander";
 import open from "open";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
@@ -45,6 +46,18 @@ const THUMB_TIMEOUT_MS = 10_000;
 
 // ── backend calls ────────────────────────────────────────────────────────────
 
+/**
+ * A route the deployment does not have answers with an HTML page, not JSON, so
+ * a CLI newer than the server otherwise reports the page body as a parse
+ * failure. Returns the message to print, or null when the status says nothing
+ * about a missing route.
+ */
+export function missingRouteError(urlPath: string, status: number): string | null {
+  return status === 404
+    ? `this codecast server has no ${urlPath} route — it needs a newer deployment.`
+    : null;
+}
+
 export async function apiPost(
   deps: PublishDeps,
   urlPath: string,
@@ -63,8 +76,10 @@ export async function apiPost(
   try {
     result = JSON.parse(text);
   } catch {
-    if (opts.exitOnError === false) throw new Error(`API error (${response.status}): ${text.slice(0, 200)}`);
-    console.error(`API error (${response.status}): ${text.slice(0, 200)}`);
+    const message = missingRouteError(urlPath, response.status)
+      ?? `API error (${response.status}): ${text.slice(0, 200)}`;
+    if (opts.exitOnError === false) throw new Error(message);
+    console.error(message);
     process.exit(1);
   }
   if (result?.error) {
@@ -688,7 +703,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     )
     .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set")
     .argument("[args...]", "subcommand arguments")
-    .option("--title <title>", "Override the page title (default: <title> tag / first heading / filename)")
+    .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
     .option("--json", "Emit the raw JSON response")
     .option("--watch", "Keep watching the file/directory and republish on change")

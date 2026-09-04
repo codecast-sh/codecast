@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { parseCodecastPaneRows, pickPaneForSession } from "./tmux.js";
-import { resumeShortId, resumeTmuxName } from "./resumeCommand.js";
+import { resumeShortId, resumeTmuxName, upgradedLegacyResumeTmuxName } from "./resumeCommand.js";
 
 const SESSION = "58f3cdd1-4027-4850-be9f-d5039fbf2055";
 const SUFFIX = `-${resumeShortId(SESSION)}`;
@@ -115,5 +115,21 @@ describe("resumeTmuxName", () => {
     const a = resumeTmuxName("claude", "agent-a920233e1ad3a0d16");
     const b = resumeTmuxName("claude", "agent-a9b62ebc367b5ffa6");
     expect(a).not.toBe(b);
+  });
+
+  test("Codex UUIDv7 ids with the same time prefix get distinct pane names", () => {
+    const a = "01a06e13-0e36-7202-b795-4719aa020cf4";
+    const b = "01a06e13-0de8-75c2-a580-88de14265d82";
+    expect(resumeTmuxName("codex", a)).toBe("cx-resume-01a06e13-b7954719aa020cf4");
+    expect(resumeTmuxName("codex", a)).not.toBe(resumeTmuxName("codex", b));
+  });
+
+  test("upgrades an existing eight-character resume pane without losing its title", () => {
+    const sessionId = "01a06e13-6afb-71a1-9acc-deeac20e9ce5";
+    expect(upgradedLegacyResumeTmuxName("cx-resume-01a06e13", sessionId))
+      .toBe("cx-resume-01a06e13-9accdeeac20e9ce5");
+    expect(upgradedLegacyResumeTmuxName("cx-resume-cloud-01a06e13", sessionId))
+      .toBe("cx-resume-cloud-01a06e13-9accdeeac20e9ce5");
+    expect(upgradedLegacyResumeTmuxName("cx-resume-01a06e13-9accdeeac20e9ce5", sessionId)).toBeNull();
   });
 });

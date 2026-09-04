@@ -26,6 +26,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { Command } from "commander";
 import { apiPost, buildPublishPayload, type PublishDeps } from "./publish.js";
+import { stdinText } from "./sendBody.js";
 import { cliFetch } from "./cliHttp.js";
 import { fmt } from "./colors.js";
 
@@ -43,13 +44,6 @@ export function parseDecideOption(raw: string): DecideOption {
   return description ? { label, description } : { label };
 }
 
-export function readStdinSync(): string {
-  try {
-    return fs.readFileSync(0, "utf-8");
-  } catch {
-    return "";
-  }
-}
 
 export interface DecisionRow {
   id: string;
@@ -299,8 +293,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       (val: string, acc: string[]) => [...acc, val],
       [] as string[]
     )
-    .option("--question <text>", "edit: replace the question")
-    .option("--context <text>", "Markdown context: the reasoning, the tradeoff, what happens under each choice. Pass - to read stdin")
+    .option("--question <text>", stdinText("edit: replace the question"))
+    .option("--context <text>", stdinText("Markdown context: the reasoning, the tradeoff, what happens under each choice"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
@@ -318,8 +312,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         fail("Provide 2-9 options (-o), they map to keys 1-9 in the queue.");
       }
 
-      let contextMd: string | undefined = options.context;
-      if (contextMd === "-") contextMd = readStdinSync().trim() || undefined;
+      const contextMd: string | undefined = options.context?.trim() || undefined;
 
       // ── ls ──
       if (sub === "ls" || sub === "list") {

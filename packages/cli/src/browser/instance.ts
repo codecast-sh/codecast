@@ -214,12 +214,13 @@ export function chromeLaunchArgs(opts: LaunchOptions): string[] {
     // a window another app fully covers reports visibilityState "hidden" —
     // Chrome then freezes requestAnimationFrame, so WebGL surfaces (maplibre,
     // three.js) never paint and screenshots of them come back blank. These
-    // three keep occluded windows and background tabs rendering and their
-    // timers honest; a MINIMIZED window still freezes regardless (macOS treats
-    // minimize as stronger than occlusion), which /json/activate can undo.
+    // first two keep an occluded window's selected tab rendering. Normal timer
+    // throttling stays enabled: this Chrome is shared across sessions, so
+    // letting every hidden tab run timers at full speed exhausts the host.
+    // A MINIMIZED window still freezes regardless (macOS treats minimize as
+    // stronger than occlusion), which /json/activate can undo.
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
-    "--disable-background-timer-throttling",
     // A moving test pattern as the camera and a tone as the mic — getUserMedia
     // succeeds without hardware. The permission prompt is still real; the
     // second flag auto-accepts it browser-wide (fake-media launches are for

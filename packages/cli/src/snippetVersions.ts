@@ -11,15 +11,15 @@
 // ./update.ts re-exports every getter here, so existing importers are unchanged.
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
-const TASK_VERSION = "5"; // bumped: triggers have short ids (tr-42) + shared "Referencing objects" section
-const WORK_VERSION = "8"; // bumped: "Reading tasks" — server-side filters, --json on every read, show takes several ids and lists linked sessions
+const TASK_VERSION = "6"; // bumped: issue_* events on --on (Linear and GitHub issues)
+const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "9"; // bumped: a plain stash pops back on a trigger wake; cast stash --hide keeps it silent
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
 const FORKS_VERSION = "6"; // bumped: cast exec — print mode for every harness (run, print, exit)
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
-const BROWSER_VERSION = "11"; // bumped: the human's Chrome is the default once the extension is connected; sign-in notes point at it
+const BROWSER_VERSION = "12";
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "2"; // v2: age + messages-since on ls, stale-ask sweeping guidance
 const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
