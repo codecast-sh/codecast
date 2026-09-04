@@ -11,7 +11,8 @@ import { stripMarkdown } from "../lib/notificationText";
 import { MessageBlock, type SharedMessageData } from "../app/share/message/[token]/SharedMessageView";
 import { CardMarkdown, ObjectCardFrame } from "./EntityObjectCard";
 import { ACCENT } from "../lib/entityCardAccent";
-import { AuthorAvatar, relativeTime } from "./entityDisplay";
+import { AuthorAvatar } from "./entityDisplay";
+import { relativeTime } from "../lib/entityDisplay";
 import { clipFade } from "./CollapsibleBody";
 
 // A conversation message shared into chat — by its public share link

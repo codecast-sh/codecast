@@ -2,9 +2,8 @@ import { ArrowUpRight, FolderOpen, MessageSquare } from "lucide-react";
 import {
   AuthorAvatar,
   SessionSummaryBlock,
-  abbrevModel,
-  relativeTime,
 } from "./entityDisplay";
+import { abbrevModel, relativeTime } from "../lib/entityDisplay";
 
 export function SessionHoverContent({ session }: { session: any }) {
   const isActive = session.status === "active";
