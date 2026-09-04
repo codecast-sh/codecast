@@ -1,9 +1,12 @@
+import { FolderGit2 } from "lucide-react";
+import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
+import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
 import { useTeamFeature, useCallsAvailable } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { useState, useCallback, useMemo, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutAction, useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
+import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
 import { useTheme } from "./ThemeProvider";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useRouter, usePathname } from "next/navigation";
@@ -14,7 +17,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
 import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
-import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
@@ -40,6 +43,12 @@ import {
   ChevronsRight as StageNextGlyph,
 } from "lucide-react";
 import { popOutPeople } from "./people/popOutPeople";
+import { AgentTypeIcon } from "./AgentTypeIcon";
+import { openForwardToChat } from "../lib/forwardToChat";
+import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
+import { paletteActions, paletteObjectPath, paletteDigitIndex, type PaletteTargetType } from "../lib/paletteActions";
+import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+import { captureException } from "@sentry/react";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { sortedWorkbenches, switchToWorkbench } from "../lib/workbenchSwitch";
 import type { WorkbenchSnapshot } from "../store/workbench";
@@ -120,7 +129,7 @@ import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "rename" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -143,15 +152,11 @@ const PLAN_STATUS_META: Record<string, { label: string; color: string }> =
   Object.fromEntries(PLAN_STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color ?? "" }]));
 
 
-const AGENT_OPTIONS = [
-  { key: "agent:claude_code", label: "Claude Code" },
-  { key: "agent:codex", label: "Codex" },
-  { key: "agent:cursor", label: "Cursor" },
-  { key: "agent:gemini", label: "Gemini" },
-  { key: "agent:opencode", label: "OpenCode" },
-  { key: "agent:pi", label: "pi" },
-  { key: "agent:grok", label: "Grok" },
-];
+const AGENT_OPTIONS = AGENT_LAUNCH_OPTIONS.map((agent) => ({
+  key: `agent:${agent.convexType}`,
+  agentType: agent.convexType,
+  label: agent.label,
+}));
 
 const AGENT_COLORS: Record<string, string> = {
   "agent:codex": "text-blue-400",
@@ -181,7 +186,8 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
   { label: "Calls", path: "/calls", icon: "phone", keywords: "huddle call transcript recording meeting summary voice", feature: "calls" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
-  { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault code" },
+  { label: "Code", path: "/repo", icon: "code", keywords: "repositories repository github git source commits branches pull requests history browse code" },
+  { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault local" },
   { label: "Triggers", path: "/triggers", icon: "clock", keywords: "schedules cron automation recurring followup reminders" },
   { label: "Capabilities", path: "/capabilities", icon: "grid", keywords: "skills mcp plugins drift machines library apps connect" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
@@ -196,7 +202,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth", secondary: true },
   { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private", secondary: true },
   { label: "Devices", path: "/settings/devices", icon: "cpu", keywords: "machines daemons keys cli hosts", secondary: true },
-  { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "github slack webhooks connect", secondary: true },
+  { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "slack github linear google gmail notion connect oauth apps webhooks issues sync", secondary: true },
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
   { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
   { label: "Sounds", path: "/settings/sounds", icon: "settings", keywords: "audio volume mute chime walkie", secondary: true },
@@ -228,6 +234,14 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "pane.next", label: "Focus next pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
   { action: "inbox.toggleFlatView", label: "Cycle inbox view", icon: Rows3, keywords: "grouped time label flat layout" },
   { action: "inbox.toggleTriageBar", label: () => (isTriageBarCompact(useInboxStore.getState().clientState.ui) ? "Show triage bar" : "Hide triage bar"), icon: PanelBottom, keywords: "triage bar defer stash kill verbs footer show hide" },
+  { action: "ui.undo", label: "Undo", icon: RefreshCw, keywords: "restore revert last action" },
+  { action: "ui.redo", label: "Redo", icon: RefreshCw, keywords: "repeat undone action" },
+  { action: "tab.new", label: "New tab", icon: Plus, keywords: "tab create" },
+  { action: "tab.close", label: "Close tab", icon: Square, keywords: "tab dismiss" },
+  { action: "tab.next", label: "Next tab", icon: ArrowDown, keywords: "tab switch navigate" },
+  { action: "tab.prev", label: "Previous tab", icon: ArrowUp, keywords: "tab switch navigate" },
+  { action: "pane.prev", label: "Focus previous pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
+  { action: "sidebar.toggleComments", label: "Toggle comments rail", icon: MessageSquare, keywords: "discussion thread comments" },
   { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
 ];
 
@@ -258,6 +272,8 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg>;
     case "session":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>;
+    case "code":
+      return <FolderGit2 className={className} />;
     case "folder":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>;
     case "message":
@@ -306,10 +322,14 @@ export function ActionSubmenu({
   enteredViaRoot,
   teamMembers,
   currentUser,
+  initialSearch = "",
+  projects: workspaceProjects = [],
 }: {
   mode: ActionMode;
+  initialSearch?: string;
+  projects?: any[];
   targets: any[];
-  targetType: "task" | "doc" | "plan" | "session";
+  targetType: PaletteTargetType;
   onClose: () => void;
   onBack: () => void;
   // True when the user drilled in from the root palette (Cmd+K → action row).
@@ -319,7 +339,7 @@ export function ActionSubmenu({
   teamMembers?: any[];
   currentUser?: any;
 }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(mode === "rename" ? targets[0]?.title || "" : initialSearch);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -373,14 +393,15 @@ export function ActionSubmenu({
   );
 
   useWatchEffect(() => {
-    setSearch("");
+    setSearch(mode === "rename" ? targets[0]?.title || "" : initialSearch);
     setHighlightIndex(0);
     setAgentStep("pick");
     setSelectedAgentKey(null);
     setAgentMessage(DEFAULT_AGENT_RUN_MESSAGE);
     setRenameId(null);
-    setTimeout(() => inputRef.current?.focus(), 0);
-  }, [mode]);
+    const timer = setTimeout(() => { inputRef.current?.focus(); if (mode === "rename") inputRef.current?.select(); }, 0);
+    return () => clearTimeout(timer);
+  }, [mode, initialSearch]);
 
   useWatchEffect(() => {
     if (mode === "agent_run" && agentStep === "message") {
@@ -491,6 +512,15 @@ export function ActionSubmenu({
       return matched;
     }
 
+    if (mode === "rename" || mode === "deadline") {
+      return search.trim() ? [{ key: search.trim(), label: mode === "rename" ? `Rename to “${search.trim()}”` : `Set target date to ${search.trim()}`, icon: Pencil }] : [];
+    }
+    if (mode === "trigger_cancel" || mode === "trigger_delete") return [{ key: "confirm", label: mode === "trigger_delete" ? "Confirm delete trigger" : "Confirm cancel trigger", icon: Trash2 }];
+    if (mode === "project_status") return ["active", "planning", "paused", "done"].filter(key => key.includes(q)).map(key => ({ key, label: key[0].toUpperCase() + key.slice(1), active: target?.status === key, icon: CircleDot }));
+    if (mode === "project") {
+      const rows = workspaceProjects;
+      return [{ key: "", label: "No project" }, ...rows.filter(row => !target?.workspace || row.workspace === target.workspace).map(row => ({ key: row._id, label: row.title || row.short_id || "Untitled", active: target?.project_id === row._id }))].filter(row => row.label.toLowerCase().includes(q));
+    }
     if (mode === "status") {
       return statusEntityOptions(taskStatuses)
         .filter((o) => o.label.toLowerCase().includes(q))
@@ -540,10 +570,12 @@ export function ActionSubmenu({
           image: memberAvatarUrl(m),
         };
       });
-      return members.filter((o) => o.label.toLowerCase().includes(q));
+      return [{ key: "", label: "Unassign", type: "user" as const, image: undefined }, ...members].filter((o) => o.label.toLowerCase().includes(q));
     }
-    if (mode === "agent_run") {
+    if (mode === "agent_run" || mode === "agent_switch" || mode === "agent_fork") {
+      const currentAgentType = (target as InboxSession | undefined)?.agent_type;
       return AGENT_OPTIONS
+        .filter((o) => mode !== "agent_switch" || o.agentType !== (currentAgentType || "claude_code"))
         .filter((o) => o.label.toLowerCase().includes(q))
         .map((a) => ({ ...a, type: "agent" as const, image: undefined }));
     }
@@ -642,7 +674,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -699,11 +731,57 @@ export function ActionSubmenu({
 
     if (!target) return;
     const count = targets.length;
+    const store = useInboxStore.getState();
+    if (mode === "rename" || mode === "deadline" || mode === "project" || mode === "project_status" || mode === "trigger_cancel" || mode === "trigger_delete") {
+      if (mode === "trigger_delete") store.deleteTrigger(target._id);
+      else if (mode === "trigger_cancel") store.triggerAction(target._id, "cancel");
+      else {
+        let fields: Record<string, any>;
+        if (mode === "deadline") {
+          const date = /^\d{4}-\d{2}-\d{2}$/.test(search.trim()) ? new Date(`${search.trim()}T12:00:00`) : null;
+          const localDate = date && !Number.isNaN(date.getTime()) ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}` : null;
+          if (!date || localDate !== search.trim()) { toast.error("Enter a date as YYYY-MM-DD"); return; }
+          fields = { target_date: date.getTime() };
+        } else fields = mode === "rename" ? { title: search.trim() } : mode === "project" ? { project_id: item.key } : { status: item.key };
+        for (const row of targets) {
+          if (targetType === "session") store.renameSession(row._id, fields.title);
+          else if (targetType === "task") store.updateTask(row.short_id, fields);
+          else if (targetType === "doc") store.updateDoc(row._id, fields);
+          else if (targetType === "plan") store.updatePlan(row.short_id || row._id, fields);
+          else if (targetType === "project") store.updateProject(row._id, fields);
+        }
+      }
+      onClose();
+      return;
+    }
 
     // Agent-run picks an agent, then advances to the message step (not a fire).
     if (mode === "agent_run") {
       setSelectedAgentKey(item.key);
       setAgentStep("message");
+      return;
+    }
+
+    if (mode === "agent_switch") {
+      void switchSessionAgent(target as InboxSession, item.agentType as ConvexAgentType)
+        .then(() => toast.success(`Switch to ${item.label} requested`))
+        .catch((error) => { captureException(error); toast.error(error instanceof Error ? error.message : "Failed to switch agent"); });
+      onClose();
+      return;
+    }
+
+    if (mode === "agent_fork") {
+      try {
+        const fork = forkSessionAsAgent(target as InboxSession, item.agentType as ConvexAgentType);
+        void fork.ready.catch((error) => {
+          captureException(error);
+          toast.error(error instanceof Error ? error.message : "Failed to fork session");
+        });
+        onClose();
+      } catch (error) {
+        captureException(error);
+        toast.error(error instanceof Error ? error.message : "Failed to fork session");
+      }
       return;
     }
 
@@ -808,15 +886,12 @@ export function ActionSubmenu({
         applyTaskUpdate({ priority: item.key });
         toast.success(`${label} priority \u2192 ${item.label}`);
       } else if (mode === "labels") {
-        const newLabels = item.active
-          ? currentLabels.filter((l: string) => l !== item.key)
-          : [...currentLabels, item.key];
-        applyTaskUpdate({ labels: newLabels });
+        for (const task of targets as TaskItem[]) updateTask(task.short_id, { labels: item.active ? (task.labels || []).filter(l => l !== item.key) : [...new Set([...(task.labels || []), item.key])] });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       } else if (mode === "assign") {
         applyTaskUpdate({ assignee: item.key });
         const member = (teamMembers || []).find((m: any) => m._id === item.key);
-        toast.success(`Assigned to ${memberDisplayName(member, "user")}`);
+        toast.success(item.key ? `Assigned to ${memberDisplayName(member, "user")}` : "Unassigned");
       } else if (mode === "parent") {
         let failed = 0;
         for (const t of targets as TaskItem[]) {
@@ -833,20 +908,16 @@ export function ActionSubmenu({
         toast.success(`Plan \u2192 ${item.label}`);
       }
     } else {
-      const doc = target as DocItem;
       if (mode === "type") {
-        updateDoc(doc._id, { doc_type: item.key });
+        for (const row of targets) updateDoc(row._id, { doc_type: item.key });
         toast.success(`Type \u2192 ${item.label}`);
       } else if (mode === "labels") {
-        const newLabels = item.active
-          ? currentLabels.filter((l: string) => l !== item.key)
-          : [...currentLabels, item.key];
-        updateDoc(doc._id, { labels: newLabels });
+        for (const row of targets) updateDoc(row._id, { labels: item.active ? (row.labels || []).filter((l: string) => l !== item.key) : [...new Set([...(row.labels || []), item.key])] });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router, search, taskStatuses, pathname, renameId]);
+  }, [items, target, targets, targetType, mode, onClose, updateTask, updatePlan, updateDoc, teamMembers, search, taskStatuses, pathname, renameId]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
@@ -877,6 +948,7 @@ export function ActionSubmenu({
   }, [selectedAgentKey, agentMessage, targets, assignToAgent, onClose]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
     // Esc from a deep view escapes to GLOBAL (closes the palette), never just
     // one level — climbing back up is ↑ past the top / Backspace-on-empty,
     // and only exists when the user came down from the root palette.
@@ -888,7 +960,7 @@ export function ActionSubmenu({
       if (renameId) backOutOfRename(); else onClose();
       return;
     }
-    if (e.key === "Backspace" && search === "") {
+    if ((e.key === "Backspace" || e.key === "ArrowLeft") && search === "") {
       e.preventDefault();
       if (renameId) backOutOfRename();
       else if (enteredViaRoot) onBack();
@@ -914,27 +986,9 @@ export function ActionSubmenu({
       selectItem(highlightIndex);
       return;
     }
-    // Bare keys only past this point — modifier combos (e.g. browser tab
-    // switching) must pass through untouched.
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    // Rows with a dedicated quick key ("Remove label" → 0) match it directly;
-    // digits pick among the numbered rows only.
-    const quickIndex = items.findIndex((it: any) => it.quickKey === e.key);
-    if (quickIndex >= 0) {
-      e.preventDefault();
-      selectItem(quickIndex);
-      return;
-    }
-    // Digits address the nth NUMBERED row, skipping quick-key rows, so a
-    // leading "Remove label" (0) doesn't shift the labels off 1..N.
-    const num = parseInt(e.key);
-    if (num >= 1) {
-      const numbered = items.filter((it: any) => !it.quickKey);
-      if (num <= numbered.length) {
-        e.preventDefault();
-        selectItem(items.indexOf(numbered[num - 1]));
-      }
-    }
+    const quickPick = paletteDigitIndex(e.nativeEvent, items.length);
+    if (quickPick >= 0) { e.preventDefault(); selectItem(quickPick); return; }
+
   }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search, renameId]);
 
   useWatchEffect(() => {
@@ -945,12 +999,20 @@ export function ActionSubmenu({
   }, [highlightIndex]);
 
   const modeLabel =
+    mode === "rename" ? "Enter a new name…" :
+    mode === "deadline" ? "Target date (YYYY-MM-DD)…" :
+    mode === "project" ? "Move to project…" :
+    mode === "project_status" ? "Change project status…" :
+    mode === "trigger_delete" ? "Delete trigger" :
+    mode === "trigger_cancel" ? "Cancel trigger" :
     mode === "status" ? "Change status..." :
     mode === "priority" ? "Set priority..." :
     mode === "labels" ? "Toggle label..." :
     mode === "assign" ? "Assign to person..." :
     mode === "type" ? "Change document type..." :
     mode === "agent_run" ? "Start agent run — pick an agent..." :
+    mode === "agent_switch" ? "Switch agent..." :
+    mode === "agent_fork" ? "Fork session as…" :
     mode === "bucket" ? "Label session — type to filter or create..." :
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
@@ -1035,12 +1097,6 @@ export function ActionSubmenu({
   }
 
   const numberedCount = items.filter((it: any) => !it.quickKey).length;
-  // Badge per row: the dedicated quick key, or this row's position among the
-  // NUMBERED rows — mirrors the keydown handler exactly, so the hint can't lie.
-  let badgeNum = 0;
-  const rowBadges = items.map((it: any) =>
-    it.quickKey ? it.quickKey : ++badgeNum <= 9 ? String(badgeNum) : null
-  );
 
   return (
     <>
@@ -1048,16 +1104,18 @@ export function ActionSubmenu({
         {enteredViaRoot && (
           <button
             onClick={onBack}
-            title="Back to actions"
+            title="Back to actions" aria-label="Back to actions"
             className="text-xs px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
           >
-            &uarr;
+            <KeyCap size="xs">←</KeyCap>
           </button>
         )}
         <Search className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
         <input
           ref={inputRef}
           value={search}
+          aria-label={modeLabel}
+          type={mode === "deadline" ? "date" : "text"}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={modeLabel}
@@ -1078,7 +1136,7 @@ export function ActionSubmenu({
               className={itemClass(i)}
             >
               {item.type === "agent" ? (
-                <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
+                <AgentTypeIcon agentType={item.agentType} className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
               ) : mode === "assign" ? (
                 <AvatarImg
                   src={item.image}
@@ -1111,8 +1169,8 @@ export function ActionSubmenu({
                 <span className="text-[10px] tabular-nums text-sol-text-dim/70 flex-shrink-0">{item.count}</span>
               )}
               {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
-              {rowBadges[i] && <KeyCap size="xs">{rowBadges[i]}</KeyCap>}
-              {item.type === "agent" && (
+              {i < 9 && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">{i + 1}</KeyCap></span>}
+              {item.type === "agent" && mode === "agent_run" && (
                 <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
               )}
             </button>
@@ -1141,7 +1199,7 @@ export function ActionSubmenu({
         )}
         {numberedCount > 0 && (
           <span className="flex items-center gap-1">
-            <KeyCap size="xs">1-{Math.min(numberedCount, 9)}</KeyCap>
+            <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">1-{Math.min(items.length, 9)}</KeyCap>
             quick pick
           </span>
         )}
@@ -1248,6 +1306,7 @@ function matchEntities(
 // (above), the palette now re-renders only on its OWN state, not on session churn.
 function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
+  const [actionSearch, setActionSearch] = useState("");
   const [actionMode, setActionMode] = useState<ActionMode | null>(null);
   // Whether the submenu was reached by drilling down from the root palette
   // (vs deep-linked open, e.g. Ctrl+Shift+M straight into label mode).
@@ -1255,7 +1314,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  const { open: paletteOpen, targets, targetType, initialMode, initialQuery: paletteInitialQuery, pick } = useInboxStore((s) => s.palette);
+  const { open: paletteOpen, targets: initialTargets, targetType: initialTargetType, initialMode, initialQuery: paletteInitialQuery, pick } = useInboxStore((s) => s.palette);
+  const [drilled, setDrilled] = useState<{ type: PaletteTargetType; row: any; query: string } | null>(null);
+  const targets = useMemo(() => drilled ? [drilled.row] : initialTargets, [drilled, initialTargets]);
+  const targetType = drilled?.type ?? initialTargetType;
+  const paletteRef = useRef<HTMLDivElement>(null);
   // Pick mode (lib/palettePick.ts): the palette is an entity chooser for a
   // caller. Only the allowed entity groups render, selection reports back
   // through pick.onPick instead of navigating, and the caller's extra rows
@@ -1268,7 +1331,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // at choose time — needsQuery extras read it from the search box.
   const [pickChosen, setPickChosen] = useState<{ target: PalettePickTarget; query: string } | null>(null);
   const closePalette = useInboxStore((s) => s.closePalette);
-  const togglePalette = useInboxStore((s) => s.togglePalette);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
 
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -1554,6 +1616,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return memberName(members.find((m) => String(m._id) === String(userId)));
   }, []);
 
+  const projectRows = useWorkspaceCollection<any>("projects");
+  const projectMatches = projectRows.filter(row => !query || `${row.title} ${row.short_id || ""}`.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
     for (const c of recentSessions) {
@@ -1569,65 +1633,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       .map(([path]) => path);
   }, [recentSessions]);
 
-  // Global Cmd+K toggle — context-aware
-  const storeOpenPalette = useInboxStore((s) => s.openPalette);
-  useShortcutAction('palette.toggle', useCallback(() => {
-    if (standalone) return;
-    const state = useInboxStore.getState();
-    if (state.palette.open) {
-      state.closePalette();
-      return;
-    }
-    const taskMatch = pathname?.match(/^\/tasks\/([^/]+)$/);
-    if (taskMatch) {
-      const id = taskMatch[1];
-      const task = state.tasks[id] || Object.values(state.tasks).find((t: any) => t._id === id || t.short_id === id);
-      if (task) {
-        storeOpenPalette({ targets: [task], targetType: 'task' });
-        return;
-      }
-    }
-    const docMatch = pathname?.match(/^\/docs\/([^/]+)$/);
-    if (docMatch) {
-      const id = docMatch[1];
-      const doc = state.docDetails[id] || state.docs[id];
-      if (doc) {
-        storeOpenPalette({ targets: [doc], targetType: 'doc' });
-        return;
-      }
-    }
-    const planMatch = pathname?.match(/^\/plans\/([^/]+)$/);
-    if (planMatch) {
-      storeOpenPalette({ targets: [{ _id: planMatch[1], short_id: planMatch[1] }], targetType: 'plan' });
-      return;
-    }
-    // On conversation pages, target the current session
-    const convMatch = pathname?.match(/^\/conversation\/([^/]+)/);
-    if (convMatch) {
-      const id = convMatch[1];
-      const session = state.sessions[id];
-      if (session) {
-        storeOpenPalette({ targets: [session], targetType: 'session' });
-        return;
-      }
-    }
-    // On inbox with a selected session, target it
-    if (isInboxRoute(pathname)) {
-      const currentId = state.currentSessionId;
-      const session = currentId ? state.sessions[currentId] : null;
-      if (session) {
-        storeOpenPalette({ targets: [session], targetType: 'session' });
-        return;
-      }
-    }
-    // On list pages, return false so GenericListView can handle with focused item
-    if (pathname === '/tasks' || pathname === '/docs') return false;
-    togglePalette();
-  }, [standalone, togglePalette, storeOpenPalette, pathname]));
-
   // Reset state when palette opens
   useWatchEffect(() => {
     if (open) {
+      setActionSearch("");
+      setDrilled(null);
       setQuery(paletteInitialQuery || "");
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
       setEnteredViaRoot(false);
@@ -1820,11 +1830,32 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "bucket", "model", "parent"].includes(actionKey)) {
+    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
+      setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
       return;
     }
+
+    const state = useInboxStore.getState();
+    if (!targetType) return;
+    const path = paletteObjectPath(targetType, target);
+    const viewCommand = targetType === "session" ? getPaletteSessionCommands(target._id).find(command => command.key === actionKey) : undefined;
+    if (viewCommand) { closePalette(); viewCommand.run(); return; }
+    if (actionKey === "open") {
+      if (targetType === "session") navigateToSession(target);
+      else navigate(path);
+      return;
+    }
+    if (actionKey === "newtab") { window.open(path, "_blank"); closePalette(); return; }
+    if (actionKey === "copylink") { void copyToClipboard(`${shareOrigin()}${path}`).then(() => toast.success("Link copied")); closePalette(); return; }
+    if (actionKey === "forward") { openForwardToChat({ url: `${shareOrigin()}${path}`, label: targetType }); return; }
+    if (actionKey.startsWith("create_")) { closePalette(); openCreateModal(actionKey.slice(7) as "task" | "plan" | "doc", targetType === "project" ? { project_id: target._id } : { plan_id: target._id, project_id: target.project_id }); return; }
+    if (actionKey === "clear_deadline") { state.updateProject(target._id, { target_date: null }); closePalette(); return; }
+    if (actionKey === "trigger_duplicate") { navigate(`/triggers?task=${target._id}&duplicate=1`); return; }
+    if (actionKey === "trigger_prompt") { void copyToClipboard(target.prompt || "").then(() => toast.success("Prompt copied")); closePalette(); return; }
+    if (actionKey === "trigger_edit") { navigate(`/triggers?task=${target._id}&edit=1`); return; }
+    if (actionKey.startsWith("trigger_")) { state.triggerAction(target._id, actionKey.slice(8) as "pause" | "resume" | "runNow" | "reactivate"); closePalette(); return; }
 
     if (actionKey === "remove_parent" && targetType === "task") {
       for (const t of targets as TaskItem[]) {
@@ -1843,7 +1874,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         copyToClipboard(target.short_id || target._id);
         toast.success(`Copied ${target.short_id || target._id}`);
       } else {
-        copyToClipboard(target._id);
+        copyToClipboard(target.short_id || target._id);
         toast.success("Copied ID");
       }
       closePalette();
@@ -1869,7 +1900,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
 
     if (actionKey === "archive" && targetType === "doc") {
-      undoableArchiveDoc(target._id);
+      for (const doc of targets) undoableArchiveDoc(doc._id);
       router.push("/docs");
       closePalette();
       return;
@@ -1878,7 +1909,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // Session actions
     if (targetType === "session") {
       const session = target as InboxSession;
-      if (actionKey === "session_pin") {
+      if (actionKey === "session_restore") { state.restoreSession(session._id); closePalette(); }
+      else if (actionKey === "session_parent") navigate(`/conversation/${session.parent_conversation_id}`);
+      else if (actionKey === "session_branch") { void copyToClipboard(session.git_branch || "").then(() => toast.success("Branch copied")); closePalette(); }
+      else if (actionKey === "session_files") navigate(filesHref({ localPath: session.project_path || session.git_root }));
+      else if (actionKey === "session_pin") {
         useInboxStore.getState().pinSession(session._id);
         toast.success(session.is_pinned ? "Unpinned" : "Pinned");
         closePalette();
@@ -1903,23 +1938,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       } else if (actionKey === "session_dormant") {
         undoableDormantSession(session._id);
         closePalette();
-      } else if (actionKey === "session_copy") {
-        copyToClipboard(session._id);
-        toast.success("Copied session ID");
-        closePalette();
-      } else if (actionKey === "session_copylink") {
-        copyToClipboard(`${shareOrigin()}/conversation/${session._id}`).then(() => toast.success("Link copied!"));
-        closePalette();
-      } else if (actionKey === "session_rename") {
-        // Navigate to the session and let them rename inline
-        navigate(`/conversation/${session._id}`);
-      } else if (actionKey === "session_newtab") {
-        window.open(`/conversation/${session._id}`, "_blank");
-        closePalette();
+
       }
       return;
     }
-  }, [targets, targetType, closePalette, updateTask, pinDoc, router, navigate, killWithNotice]);
+  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
@@ -1937,77 +1960,19 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return `${targets.length} ${targetType}s selected`;
   }, [targets, target, targetType, hasTargets]);
 
-  // Rows with a real global binding reference it by registry action \u2014 the hint
-  // is derived (MenuKeyCaps), never typed by hand. Rows without one show none.
-  type ContextActionRow = {
-    key: string;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    shortcutAction?: ShortcutAction;
-  };
+  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn), ...(targetType === "session" && target ? getPaletteSessionCommands(target._id) : [])];
 
-  const taskActions = useMemo((): ContextActionRow[] => [
-    { key: "status", label: "Change status...", icon: CircleDot },
-    { key: "priority", label: "Set priority...", icon: ArrowUp },
-    { key: "labels", label: "Add labels...", icon: Tag },
-    { key: "assign", label: "Assign to...", icon: User },
-    { key: "parent", label: "Set parent...", icon: CornerDownRight },
-    ...(targets.some((t: any) => t?.parent_id) ? [{ key: "remove_parent", label: "Remove parent", icon: CornerDownRight }] : []),
-    { key: "agent_run", label: "Start agent run...", icon: Bot },
-    { key: "copy", label: "Copy task ID", icon: Copy },
-    { key: "drop", label: "Drop task", icon: Trash2 },
-  ], [targets]);
-
-  const docActions = useMemo((): ContextActionRow[] => {
-    const isPinned = target?.pinned;
-    return [
-      { key: "type", label: "Change type...", icon: FileText },
-      { key: "pin", label: isPinned ? "Unpin document" : "Pin document", icon: Pin },
-      { key: "labels", label: "Add labels...", icon: Tag },
-      { key: "copy", label: "Copy document ID", icon: Copy },
-      { key: "archive", label: "Archive document", icon: Archive },
-    ];
-  }, [target?.pinned]);
-
-  const planActions = useMemo((): ContextActionRow[] => [
-    { key: "plan_status", label: "Change status...", icon: CircleDot },
-    { key: "copy", label: "Copy plan ID", icon: Copy },
-  ], []);
-
-  const sessionActions = useMemo((): ContextActionRow[] => {
-    if (targetType !== "session" || !target) return [];
-    const s = target as InboxSession;
-    // Inbox convention: author_name is stamped only for teammates' sessions, so
-    // its absence means this is the user's own session. Favorite is an owner-only
-    // marking (matches the conv.favorite gate in ConversationView), so hide it on
-    // teammates' sessions surfaced via recents/search.
-    const isOwnSession = !(s as any).author_name && (!s.user_id || !currentUser || s.user_id === (currentUser as any)._id);
-    return [
-      { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcutAction: "session.pin" },
-      ...(isOwnSession
-        ? [{ key: "session_favorite", label: s.is_favorite ? "Remove from favorites" : "Add to favorites", icon: Star, shortcutAction: "conv.favorite" } as ContextActionRow]
-        : []),
-      { key: "bucket", label: "Label session...", icon: Tag, shortcutAction: "session.moveToBucket" },
-      ...(canControlModel(s.agent_type, (s.message_count ?? 0) === 0)
-        ? [{ key: "model", label: "Change model & effort...", icon: Cpu } as ContextActionRow]
-        : []),
-      { key: "session_stash", label: "Stash session", icon: Archive, shortcutAction: "session.stash" },
-      { key: "session_stash_hide", label: "Stash and hide session", icon: EyeOff, shortcutAction: "session.stashHide" },
-      { key: "session_kill", label: "Kill session", icon: Square, shortcutAction: "session.kill" },
-      { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
-      { key: "session_dormant", label: "Dormant — a machine wakes it", icon: Moon, shortcutAction: "session.dormantAdvance" },
-      { key: "session_rename", label: "Rename session", icon: Pencil, shortcutAction: "session.rename" },
-      { key: "session_copy", label: "Copy session ID", icon: Copy },
-      { key: "session_copylink", label: "Copy link", icon: LinkIcon, shortcutAction: "conv.copyLink" },
-      { key: "session_newtab", label: "Open in new tab", icon: ExternalLink },
-    ];
-  }, [targetType, target, currentUser]);
-
-  const actions = targetType === "task" ? taskActions
-    : targetType === "doc" ? docActions
-    : targetType === "plan" ? planActions
-    : targetType === "session" ? sessionActions
-    : [];
+  const rootTaskStatuses = useTeamTaskStatusList(target?.team_id);
+  const nestedMatches = query.trim().length < 2 ? [] : actions.flatMap(action => {
+    const options = action.key === "agent_switch" || action.key === "agent_fork" || action.key === "agent_run" ? AGENT_OPTIONS
+      : action.key === "status" ? statusEntityOptions(rootTaskStatuses)
+      : action.key === "priority" ? PRIORITY_OPTIONS
+      : action.key === "type" ? DOC_TYPE_OPTIONS
+      : action.key === "plan_status" ? PLAN_STATUS_OPTIONS
+      : action.key === "model" ? AGENT_MODEL_CONFIG[modelAgentKey(target?.agent_type)]?.models ?? []
+      : [];
+    return options.filter(option => action.key !== "agent_switch" || option.key !== `agent:${target?.agent_type || "claude_code"}`).filter(option => `${action.label} ${option.label}`.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().split(/\s+/).every(word => `${action.label} ${option.label}`.toLowerCase().includes(word))).map(option => ({ action, option }));
+  }).slice(0, 8);
 
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
@@ -2035,7 +2000,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // next open), so without it the overlay would stick.
   if (open && actionMode && (hasTargets || TARGETLESS_MODES.has(actionMode))) {
     const paletteContent = (
-      <div className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+      <div ref={paletteRef}
+      className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col">
         {contextLabel && !TARGETLESS_MODES.has(actionMode) && (
           <div className="px-4 pt-3 pb-0">
             <div className="text-xs font-mono text-sol-text-dim truncate">{contextLabel}</div>
@@ -2043,6 +2009,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
         <ActionSubmenu
           mode={actionMode}
+          initialSearch={actionSearch}
+          projects={projectRows}
           targets={targets}
           targetType={targetType ?? "session"}
           onClose={closePalette}
@@ -2057,7 +2025,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (standalone) return paletteContent;
 
     return (
-      <div className="fixed inset-0 z-[9999]">
+      <div role="dialog" aria-modal="true" aria-label="Command menu" className="fixed inset-0 z-[9999]">
         <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={closePalette} />
         <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
           {paletteContent}
@@ -2110,7 +2078,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-violet" />
       );
     const confirmContent = (
-      <div className="w-[580px] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+      <div className="w-[580px] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col">
         <div className="px-4 pt-3">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
         </div>
@@ -2161,7 +2129,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (standalone) return confirmContent;
     if (!open) return null;
     return (
-      <div className="fixed inset-0 z-[9999]">
+      <div role="dialog" aria-modal="true" aria-label="Command menu" className="fixed inset-0 z-[9999]">
         <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={closePalette} />
         <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
           {confirmContent}
@@ -2173,7 +2141,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Root mode: navigation + context actions
   const paletteContent = (
     <CommandPrimitive
-      className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
+      ref={paletteRef}
+      className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
         if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__") || value.startsWith("__pick__")) return 1;
@@ -2183,6 +2152,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       }}
       loop
     >
+      {drilled && <div className="flex items-center gap-2 px-4 pt-3 text-xs text-sol-text-dim"><button aria-label="Back to search" className="flex items-center gap-1 hover:text-sol-text" onClick={() => { setQuery(drilled.query); setDrilled(null); }}><KeyCap size="xs">←</KeyCap> Search</button><span aria-hidden>›</span><span className="truncate">{contextLabel}</span></div>}
       {pick && (
         <div className="px-4 pt-3 pb-0">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
@@ -2199,6 +2169,29 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
           autoFocus
           onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            const rows = Array.from(paletteRef.current?.querySelectorAll<HTMLElement>('[cmdk-item]:not([aria-disabled="true"])') ?? []).filter(row => row.offsetParent !== null);
+            const index = paletteDigitIndex(e.nativeEvent, rows.length);
+            if (index >= 0) { e.preventDefault(); rows[index].click(); return; }
+            if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && !picking) {
+              const key = e.code.replace("Key", "").toLowerCase();
+              const action = actions.find(action => action.hotkey === key);
+              if (action) { e.preventDefault(); handleRootAction(action.key); return; }
+            }
+            if ((e.key === "Backspace" || e.key === "ArrowLeft") && !query && drilled) { e.preventDefault(); setQuery(drilled.query); setDrilled(null); return; }
+            if ((e.key === "ArrowRight" || e.key === "Tab") && !e.shiftKey && !picking) {
+              const selected = rows.find(row => row.getAttribute("aria-selected") === "true");
+              const type = selected?.dataset.paletteType as PaletteTargetType | undefined;
+              const id = selected?.dataset.paletteId;
+              if (type && id) {
+                e.preventDefault();
+                const store = useInboxStore.getState();
+                const collection = { session: store.sessions, task: store.tasks, doc: store.docs, plan: store.plans, project: store.projects, trigger: store.agentTasks }[type] as Record<string, any>;
+                const row = collection?.[id] || (type === "session" ? recentSessions.find(row => row._id === id) : undefined) || { _id: id, title: selected?.dataset.paletteTitle, short_id: selected?.dataset.paletteShortId };
+                setDrilled({ type, row, query }); setQuery(""); return;
+              }
+              if (selected?.dataset.paletteAction) { e.preventDefault(); selected.click(); return; }
+            }
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               openFullSearch();
@@ -2239,6 +2232,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
+        {!picking && query.trim() && <RepositoryPaletteItems query={query} navigate={navigate} itemClass={itemClass} groupClass={groupClass} />}
+
+        {!picking && nestedMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Go to action" className={groupClass}>
+            {nestedMatches.map(({ action, option }) => (
+              <CommandPrimitive.Item key={`nested-${action.key}-${option.key}`} value={`__entity__ ${action.label} ${option.label}`} data-palette-action={action.key} className={itemClass} onSelect={() => { setEnteredViaRoot(true); setActionSearch(option.label); setActionMode(action.key as ActionMode); }}>
+                <action.icon className="w-4 h-4 shrink-0" /><span className="truncate text-sol-text-dim">{action.label.replace(/[…]|\.\.\./g, "")}</span><span aria-hidden>›</span><span className="flex-1 truncate">{option.label}</span><KeyCap size="xs">→</KeyCap>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
         {hasTargets && !picking && (
           <CommandPrimitive.Group
             heading={contextLabel}
@@ -2249,13 +2254,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               return (
                 <CommandPrimitive.Item
                   key={`action-${action.key}`}
+                  data-palette-action={action.key}
                   value={`action ${action.label}|||${action.key}`}
                   onSelect={() => handleRootAction(action.key)}
                   className={itemClass}
                 >
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate flex-1">{action.label}</span>
-                  {action.shortcutAction && <MenuKeyCaps action={action.shortcutAction} />}
+                  {action.hotkey && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap><KeyCap size="xs">{action.hotkey.toUpperCase()}</KeyCap></span>}
                 </CommandPrimitive.Item>
               );
             })}
@@ -2267,6 +2273,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             {recentVisitRows.map((row) => (
               <CommandPrimitive.Item
                 key={`rv-${row.key}`}
+                data-palette-type={["session", "task", "doc", "plan", "project", "trigger"].includes(row.objectType) ? row.objectType : undefined} data-palette-id={row.sessionId || row.entity?._id} data-palette-title={row.title}
                 value={`recently visited ${row.title}|||${row.key}`}
                 onSelect={() => handleRecentVisitSelect(row)}
                 className={itemClass}
@@ -2380,6 +2387,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             {(query ? favorites! : favorites!.slice(0, 5)).map((fav: any) => (
               <CommandPrimitive.Item
                 key={`fav-${fav._id}`}
+                data-palette-type="session" data-palette-id={fav._id} data-palette-title={fav.title} data-palette-short-id={fav.short_id}
                 value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
                 onSelect={() => chooseSession(fav)}
                 className={itemClass}
@@ -2428,6 +2436,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               return (
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
+                data-palette-type="session" data-palette-id={conv._id} data-palette-title={conv.title} data-palette-short-id={conv.short_id}
                 value={`__recent__ ${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}|||${conv._id}`}
                 onSelect={() => chooseSession(conv)}
                 className={`${itemClass} group`}
@@ -2546,6 +2555,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               return (
                 <CommandPrimitive.Item
                   key={`task-${t._id}`}
+                data-palette-type="task" data-palette-id={t._id} data-palette-title={t.title} data-palette-short-id={t.short_id}
                   value={`__entity__ ${t.title} ${t.short_id}|||${t._id}`}
                   onSelect={() => chooseEntity("task", t, `/tasks/${t._id}`)}
                   className={itemClass}
@@ -2566,6 +2576,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             {docMatches.map((d: any) => (
               <CommandPrimitive.Item
                 key={`doc-${d._id}`}
+                data-palette-type="doc" data-palette-id={d._id} data-palette-title={d.title} data-palette-short-id={d.short_id}
                 value={`__entity__ ${d.title} ${d.doc_type || ""}|||${d._id}`}
                 onSelect={() => chooseEntity("doc", d, `/docs/${d._id}`)}
                 className={itemClass}
@@ -2589,6 +2600,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               return (
                 <CommandPrimitive.Item
                   key={`plan-${p._id}`}
+                data-palette-type="plan" data-palette-id={p._id} data-palette-title={p.title} data-palette-short-id={p.short_id}
                   value={`__entity__ ${p.title} ${p.short_id}|||${p._id}`}
                   onSelect={() => chooseEntity("plan", p, `/plans/${p.short_id || p._id}`)}
                   className={itemClass}
@@ -2604,11 +2616,22 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
+        {!picking && projectMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Projects" className={groupClass}>
+            {projectMatches.map(project => (
+              <CommandPrimitive.Item key={`project-${project._id}`} value={`__entity__ ${project.title}|||${project._id}`} data-palette-type="project" data-palette-id={project._id} data-palette-title={project.title} onSelect={() => navigate(`/projects/${project._id}`)} className={itemClass}>
+                <Folder className="w-4 h-4 shrink-0 text-sol-blue" /><span className="truncate flex-1">{project.title}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
         {!picking && triggerMatches.length > 0 && (
           <CommandPrimitive.Group heading="Triggers" className={groupClass}>
             {triggerMatches.map((t: any) => (
               <CommandPrimitive.Item
                 key={`trigger-${t._id}`}
+                data-palette-type="trigger" data-palette-id={t._id} data-palette-title={t.title} data-palette-short-id={t.short_id}
                 value={`__entity__ ${t.title} ${t.short_id || ""}|||${t._id}`}
                 onSelect={() => navigate(`/triggers/${t._id}`)}
                 className={itemClass}
@@ -2923,6 +2946,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             {searchRows.map((result: any) => (
               <CommandPrimitive.Item
                 key={`search-${result.conversationId}`}
+                data-palette-type="session" data-palette-id={result.conversationId} data-palette-title={result.title}
                 value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
                 onSelect={() => chooseSession(
                   {
@@ -3075,6 +3099,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <KeyCap size="xs">&#9166;</KeyCap>
             open
           </span>
+          {!picking && <span className="flex items-center gap-1"><KeyCap size="xs">→</KeyCap> actions</span>}
+          <span className="flex items-center gap-1"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">1–9</KeyCap> pick</span>
+          {drilled && <span className="flex items-center gap-1"><KeyCap size="xs">←</KeyCap> back</span>}
           {query.trim().length >= 2 && (
             <span className="flex items-center gap-1">
               <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
@@ -3098,7 +3125,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999]">
+    <div role="dialog" aria-modal="true" aria-label="Command menu" className="fixed inset-0 z-[9999]">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
         onClick={closePalette}

@@ -17,10 +17,22 @@ describe("PaneStreamFilter", () => {
     expect(run(f, "a\x1b[cb\x1b[>0qc\x1b[6nd\x1b[0ce\x1b[>cf\x1b[5ng")).toBe("abcdefg");
   });
 
-  it("keeps DECRQM and OSC colour queries (nobody else answers them)", () => {
+  it("keeps DECRQM and explicit color changes", () => {
     const f = new PaneStreamFilter({ syncFrames: false });
-    const s = "\x1b[?2026$p\x1b]11;?\x07";
+    const s = "\x1b[?2026$p\x1b]11;#ffffff\x07\x1b]4;1;?\x07";
     expect(run(f, s)).toBe(s);
+  });
+
+  it("drops duplicate default-color queries with either terminator at every chunk boundary", () => {
+    for (const code of [10, 11]) {
+      for (const end of ["\x07", "\x1b\\"]) {
+        const query = `\x1b]${code};?${end}`;
+        for (let at = 1; at < query.length; at++) {
+          const f = new PaneStreamFilter({ syncFrames: true });
+          expect(run(f, `before${query.slice(0, at)}`, `${query.slice(at)}after`)).toBe("beforeafter");
+        }
+      }
+    }
   });
 
   it("brackets a cursor hide…show frame in synchronized output", () => {

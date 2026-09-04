@@ -34,6 +34,8 @@ import { memberDisplayName } from "../lib/liveEntities";
 import { useShortcutAction, useShortcutContext } from "../shortcuts";
 import { useNowWhen } from "./useCoarseNow";
 import { usePagePresence } from "./usePagePresence";
+import { useDesktopWindowRole } from "./useDesktopWindowRole";
+import { focusExistingHuddle, huddleInOtherWindow } from "../lib/calls/huddleWindow";
 
 export function useWalkieStatus(): WalkieStatus {
   return useSyncExternalStore(subscribeWalkie, getWalkieStatus, getWalkieStatus);
@@ -97,6 +99,7 @@ export function callsAvailableNow(): boolean {
  * listen. Push-to-talk asks a stricter one, below.
  */
 export function walkieJoinReason(roomKey: string | undefined): string | null {
+  if (huddleInOtherWindow()) return null;
   if (!roomKey) return "This burst has no room to join";
   // Calls off for this team, or the deployment has no LiveKit behind it. The
   // engine's own "not ready" only knows whether it has a Convex client, so
@@ -127,6 +130,7 @@ export function walkieJoinReason(roomKey: string | undefined): string | null {
  * conversation.
  */
 export function walkieBlockedReason(roomKey: string | undefined): string | null {
+  if (huddleInOtherWindow()) return null;
   if (!roomKey) return "There is nobody to talk to here yet";
   const engine = walkieJoinReason(roomKey);
   if (engine) return engine;
@@ -312,6 +316,7 @@ export function usePushToTalk(
   // as a string, so `useSyncExternalStore` compares it by value and a face
   // whose room nobody is talking into holds still through every push.
   useWalkieKeySig(roomKey);
+  useDesktopWindowRole();
   const status = getWalkieStatus();
   // The engine wakes this hook when the WALKIE moves, but the answer below also
   // depends on where the call plane is — and a mute the person toggled in the
@@ -338,7 +343,8 @@ export function usePushToTalk(
     void endBurst();
   }, [roomKey]);
 
-  const press = useCallback(() => {
+  const press = useCallback(async () => {
+    if (huddleInOtherWindow() && await focusExistingHuddle()) return;
     if (getWalkieStatus().sending || walkieBlockedReason(roomKey)) return;
     const channelId = resolveChannelId();
     if (!channelId || !roomKey) return;

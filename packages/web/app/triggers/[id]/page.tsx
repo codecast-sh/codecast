@@ -35,7 +35,7 @@ import {
   fmtClock,
   fmtDuration,
   taskStateLabel,
-  TRIGGER_EVENT_LABELS,
+  triggerEventLabel,
 } from "../../../components/triggerCadence";
 import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "../../../components/triggerTasks";
 import {
@@ -231,10 +231,10 @@ export default function TriggerDetailPage() {
   const brief = t.display_summary?.trim();
   const title = taskDisplayTitle(t);
   const totalRuns = Math.max(t.run_count ?? 0, runs?.length ?? 0);
+  // triggerEventLabel reads a raw webhook filter as well as a derived name, so
+  // an old trigger armed on "pull_request" still reads as words.
   const eventLabel =
-    t.schedule_type === "event" && t.event_filter
-      ? TRIGGER_EVENT_LABELS[t.event_filter.event_type] ?? t.event_filter.event_type
-      : null;
+    t.schedule_type === "event" && t.event_filter ? triggerEventLabel(t.event_filter) : null;
   const projectName = t.project_path?.split("/").filter(Boolean).pop();
 
   const outcome = t.last_run_failed

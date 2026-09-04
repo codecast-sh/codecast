@@ -16,7 +16,7 @@ const config: Config = {
     // was half-built for exactly this reason (`sm:flex-none` never existed, so
     // its two buttons stayed flex-1 at desktop width and squeezed to 49px).
     "./hooks/**/*.{js,ts,jsx,tsx}",
-    "./lib/**/*.{js,ts}",
+    "./lib/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
   	extend: {

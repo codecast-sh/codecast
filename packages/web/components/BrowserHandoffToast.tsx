@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { MonitorDown, X } from "lucide-react";
 import { isConvexId } from "../lib/entityLinks";
 import { conversationIdFromPath } from "../lib/desktop";
-import { SessionHoverContent } from "./EntityIdPill";
+import { SessionHoverContent } from "./SessionHoverContent";
 import { useInboxStore } from "../store/inboxStore";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";

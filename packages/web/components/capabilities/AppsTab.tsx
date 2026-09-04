@@ -1,25 +1,16 @@
 "use client";
 
-import { useState, type ComponentType } from "react";
-import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import {
-  GitPullRequest,
-  Loader2,
-  Mail,
-  ListChecks,
-  MessagesSquare,
-  NotebookText,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
   type AppConnectionStatus,
   type AppDescriptor,
-  type AppId,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { githubAppInstallUrl, type GithubInstallUser } from "../../lib/githubAppInstall";
+import { type GithubInstallUser } from "../../lib/githubAppInstall";
+import { APP_LOOK, useAppConnection } from "../../lib/integrations";
 import { InlineSpinner, SurfaceError } from "./EmptyStates";
 
 /**
@@ -36,13 +27,6 @@ import { InlineSpinner, SurfaceError } from "./EmptyStates";
 
 // Per-app rendering identity. Web-only on purpose — the shared descriptor
 // stays free of render concerns.
-const APP_LOOK: Record<AppId, { icon: ComponentType<{ className?: string }>; accent: string }> = {
-  slack: { icon: MessagesSquare, accent: "var(--sol-magenta)" },
-  github: { icon: GitPullRequest, accent: "var(--sol-violet)" },
-  gmail: { icon: Mail, accent: "var(--sol-red)" },
-  linear: { icon: ListChecks, accent: "var(--sol-blue)" },
-  notion: { icon: NotebookText, accent: "var(--sol-yellow)" },
-};
 
 const connectedDate = (at: number) =>
   new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -71,93 +55,12 @@ function AppCard({
   const comingSoon = descriptor.connectKind === "coming-soon";
   const connected = connection?.status === "connected" ? connection : null;
 
-  const getSlackUrl = useAction(api.slack.getInstallUrl);
-  const getGoogleUrl = useAction(api.googleOAuth.getConnectUrl);
-  const disconnectGoogle = useAction(api.googleOAuth.disconnect);
-  const getConnectorUrl = useAction(api.oauthConnectors.getConnectUrl);
-  const disconnectConnector = useAction(api.oauthConnectors.disconnect);
-  const deleteGithubInstallation = useMutation(api.githubApp.deleteInstallation);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const connect = async () => {
-    setError(null);
-    if (descriptor.connectKind === "oauth-popup") {
-      setBusy(true);
-      try {
-        if (descriptor.id === "gmail") {
-          // Google: the connector's own authorize flow. Readonly scope only on
-          // first connect; the send grant is a later, separate ask.
-          const res = await getGoogleUrl({});
-          if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
-          else setError(res?.error ?? "Couldn't start the Google connection");
-        } else if (descriptor.id === "linear" || descriptor.id === "notion") {
-          // The generic connector: one flow, provider in the signed state.
-          const res = await getConnectorUrl({ provider: descriptor.id });
-          if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
-          else setError(res?.error ?? `Couldn't start the ${descriptor.name} connection`);
-        } else {
-          // Slack: the existing "Add to Slack" flow (slack.ts getInstallUrl).
-          // The popup lands back on /anchor authenticated, completing the install.
-          const res = await getSlackUrl({ scope_type: "team" });
-          if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
-          else setError(res?.error ?? "Couldn't start the Slack connection");
-        }
-      } catch (e: any) {
-        setError(e?.message ?? `Couldn't reach ${descriptor.name}`);
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    // GitHub: the existing App install flow. The shared helper resolves the
-    // SAME workspace the connected-state query reads (active_team_id ?? team_id)
-    // — minting from a different team would install into one workspace while
-    // the card reports another. A caller with no team has nothing to bind to.
-    const url = me ? githubAppInstallUrl(me) : null;
-    if (!url) {
-      setError("Join or create a team first — the GitHub App binds to a team");
-      return;
-    }
-    window.open(url, "_blank", "noopener");
-  };
-
+  const { connect, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, me);
   const disconnect = async () => {
     if (!connected?.disconnect_id) return;
     if (!confirm(`Disconnect ${descriptor.name}? Agents lose access it granted.`)) return;
-    if (descriptor.id === "linear" || descriptor.id === "notion") {
-      setBusy(true);
-      try {
-        await disconnectConnector({ installation_id: connected.disconnect_id });
-      } catch (e: any) {
-        setError(e?.message ?? `Couldn't disconnect ${descriptor.name}`);
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    if (descriptor.id === "gmail") {
-      setBusy(true);
-      try {
-        await disconnectGoogle({ installation_id: connected.disconnect_id });
-      } catch (e: any) {
-        setError(e?.message ?? "Couldn't disconnect Google");
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    setError(null);
-    setBusy(true);
-    try {
-      await deleteGithubInstallation({ installation_id: connected.disconnect_id as any });
-    } catch (e: any) {
-      setError(e?.message ?? "Couldn't disconnect");
-    } finally {
-      setBusy(false);
-    }
+    await revoke();
   };
-
   return (
     <div
       className={`rounded-lg border border-sol-border bg-sol-card p-4 flex flex-col gap-2.5 ${

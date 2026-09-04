@@ -14,7 +14,7 @@
 // Cross-component state is in inboxStore's ephemeral review fields; the store
 // choreography is in lib/reviewActions.
 
-import React, { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { lazy, memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
@@ -27,7 +27,8 @@ import { altChordDirection } from "../shortcuts";
 import { focusComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
-import { RightCommentRail } from "./comments/RightCommentRail";
+
+const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // Comment-rail sizing (px). When the empty left margin is at least MIN, float the
@@ -534,7 +535,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       {/* Teammate comments for this message, mirrored to the RIGHT of the text:
           floating in the margin when it fits, else a shrink-the-text column. */}
       {rightActive && (
-        <RightCommentRail conversationId={conversationId} messageId={messageId} mode={rightMode} />
+        <Suspense fallback={null}>
+          <RightCommentRail conversationId={conversationId} messageId={messageId} mode={rightMode} />
+        </Suspense>
       )}
     </div>
   );
@@ -644,7 +647,7 @@ function CommentEditor({
   // hands ownership over while this textarea is still mounted; a late blur must
   // not then shut the editor that just opened.
   // `refocus`: hand focus back to the region only on an explicit close (Esc,
-  // ⌘↵, the footer buttons). A blur-driven close means focus already went where
+  // Enter, the footer buttons). A blur-driven close means focus already went where
   // the user pointed it — the composer via ⌃M, another card — and yanking it
   // back would undo that gesture.
   const close = useCallback((refocus: boolean) => {
@@ -700,7 +703,8 @@ function CommentEditor({
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            // Enter saves like every other composer; Shift+Enter breaks the line.
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               save(true);
             } else if (onStep && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -719,13 +723,15 @@ function CommentEditor({
           onBlur={() => save(false)}
         />
         <div className="cc-comment-editor-footer">
+          {/* Closing keeps the quote either way. On a fresh quote say so — "Cancel"
+              read as cancelling the quote itself; on a saved note it discards the edit. */}
           <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => cancel(true)}>
-            Cancel
+            {comment.body ? "Cancel" : "Skip note"}
             <KeyCap size="xs">Esc</KeyCap>
           </button>
           <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => save(true)}>
             Save
-            <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
+            <KeyCap size="xs">↵</KeyCap>
           </button>
         </div>
       </div>
