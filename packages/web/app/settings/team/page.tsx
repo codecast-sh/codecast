@@ -1,6 +1,7 @@
+import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useMutation, useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AvatarImg } from "../../../lib/avatarCache";
@@ -33,24 +34,14 @@ export default function TeamPage() {
   // instead of blanking it for the getCurrentUser round trip.
   const { user } = useCurrentUser();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const effectiveTeamId = activeTeamId || user?.team_id;
-  const team = useQuery(
-    api.teams.getTeam,
-    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
-  );
-  const teamContext = useQuery(
-    api.teams.getActiveTeamContext,
-    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
-  );
+  const effectiveTeamId = activeTeamId;
+  const team = useInboxStore((s) => s.teams.find((t) => t?._id === effectiveTeamId));
   const removeMember = useMutation(api.teams.removeMember);
   const renameTeam = useMutation(api.teams.renameTeam);
   const setMemberRole = useMutation(api.teams.setMemberRole);
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
   const updateTeamIcon = useMutation(api.teams.updateTeamIcon);
-  const teamMembers = useQuery(
-    api.teams.getTeamMembers,
-    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
-  );
+  const { data: teamMembers } = useSettingsData("teamMembers");
 
   const [teamName, setTeamName] = useState("");
   const [isEditingTeamName, setIsEditingTeamName] = useState(false);
@@ -176,7 +167,7 @@ export default function TeamPage() {
     return { status: "offline", text: getRelativeTime(timestamp) };
   };
 
-  const isAdmin = teamContext?.role === "admin";
+  const isAdmin = team?.role === "admin";
   const goTo = (path: string) => {
     useInboxStore.getState().closeSettingsModal();
     router.push(path);

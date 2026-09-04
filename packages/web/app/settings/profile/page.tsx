@@ -1,4 +1,6 @@
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, type ReactNode } from "react";
+import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useQuery, useMutation } from "convex/react";
 import { toast } from "sonner";
 import {
@@ -17,14 +19,12 @@ import {
   SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
 
-import { useMountEffect } from "../../../hooks/useMountEffect";
-import { useWatchEffect } from "../../../hooks/useWatchEffect";
 export default function ProfilePage() {
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   if (!user) return null;
   return (
     <SettingsPanel>
-      <ProfileSection user={user} />
+      <ProfileSection key={user._id} user={user} />
       <AppearanceSection />
       <InterfaceSection />
       <DesktopSection />
@@ -42,22 +42,10 @@ export default function ProfilePage() {
 function ProfileSection({ user }: { user: any }) {
   const updateProfile = useMutation(api.users.updateProfile);
   const [form, setForm] = useState({
-    name: "", bio: "", title: "", status: "available", timezone: "",
+    name: user.name ?? "", bio: user.bio ?? "", title: user.title ?? "",
+    status: user.status ?? "available", timezone: user.timezone ?? "",
   });
   const [isSaving, setIsSaving] = useState(false);
-
-  // Initialize from the loaded user, and re-initialize only if the identity
-  // itself changes — not on every query refresh, which would clobber typing.
-  useWatchEffect(() => {
-    setForm({
-      name: user.name ?? "",
-      bio: user.bio ?? "",
-      title: user.title ?? "",
-      status: user.status ?? "available",
-      timezone: user.timezone ?? "",
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user._id]);
 
   const set = (key: keyof typeof form) => (value: string) => setForm((f) => ({ ...f, [key]: value }));
   const dirty =

@@ -1,7 +1,8 @@
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, Suspense } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Check, Circle, Github, ListChecks, Mail, TriangleAlert } from "lucide-react";
 import { AppLoader } from "../../../components/AppLoader";
@@ -19,7 +20,7 @@ const GITHUB_FEATURES = [
 ];
 
 function AccountsContent() {
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const unlinkGitHub = useMutation(api.users.unlinkGitHub);
   const deleteAccount = useMutation(api.users.deleteAccount);
   const signOut = useCodecastSignOut();
