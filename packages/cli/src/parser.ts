@@ -483,6 +483,7 @@ export function parseCodexLines(content: string): CodexMessage[] {
 
 interface CodexSessionEntry {
   timestamp: string;
+  isMeta?: boolean;
   type: "session_meta" | "response_item" | "event_msg" | "turn_context";
   payload: {
     model?: string;
@@ -697,7 +698,7 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       state.model = currentModel;
       continue;
     }
-    if (entry.type !== "response_item") continue;
+    if (entry.type !== "response_item" || entry.isMeta) continue;
 
     const payload = entry.payload;
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();

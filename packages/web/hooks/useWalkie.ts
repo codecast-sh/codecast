@@ -21,6 +21,7 @@ import {
   subscribeWalkie,
   subscribeWalkieLevel,
   walkieBlockedFor,
+  walkieCallState,
   walkieHoldsRoom,
   walkieJoinedRoom,
   warmMic,
@@ -36,6 +37,7 @@ import { useNowWhen } from "./useCoarseNow";
 import { usePagePresence } from "./usePagePresence";
 import { useDesktopWindowRole } from "./useDesktopWindowRole";
 import { focusExistingHuddle, huddleInOtherWindow } from "../lib/calls/huddleWindow";
+import { isNotificationLeader, voiceHostElsewhere } from "../lib/desktop";
 
 export function useWalkieStatus(): WalkieStatus {
   return useSyncExternalStore(subscribeWalkie, getWalkieStatus, getWalkieStatus);
@@ -71,9 +73,13 @@ subscribeWalkie(() => {
   //
   // A toast rather than something drawn into the mic: by the time a burst fails
   // the hand is off the key and the eye has moved on.
+  //
+  // A remote reads the host's status, so the host's failure reaches every
+  // window through the mirror; only the one that sounds says it, or a person
+  // with three windows open reads the same sentence three times.
   if (s.error !== reportedError) {
     reportedError = s.error;
-    if (s.error) toast.error(s.error);
+    if (s.error && (!voiceHostElsewhere() || isNotificationLeader())) toast.error(s.error);
   }
 });
 
@@ -99,7 +105,9 @@ export function callsAvailableNow(): boolean {
  * listen. Push-to-talk asks a stricter one, below.
  */
 export function walkieJoinReason(roomKey: string | undefined): string | null {
-  if (huddleInOtherWindow()) return null;
+  // With a voice host the answer is the host's, read off the mirror below; a
+  // huddle "in another window" is then the ordinary state of every call.
+  if (!voiceHostElsewhere() && huddleInOtherWindow()) return null;
   if (!roomKey) return "This burst has no room to join";
   // Calls off for this team, or the deployment has no LiveKit behind it. The
   // engine's own "not ready" only knows whether it has a Convex client, so
@@ -130,7 +138,7 @@ export function walkieJoinReason(roomKey: string | undefined): string | null {
  * conversation.
  */
 export function walkieBlockedReason(roomKey: string | undefined): string | null {
-  if (huddleInOtherWindow()) return null;
+  if (!voiceHostElsewhere() && huddleInOtherWindow()) return null;
   if (!roomKey) return "There is nobody to talk to here yet";
   const engine = walkieJoinReason(roomKey);
   if (engine) return engine;
@@ -138,7 +146,7 @@ export function walkieBlockedReason(roomKey: string | undefined): string | null 
   // Not when the open mic is the walkie's own doing — that is a burst in
   // flight, and the surface holding it must not disable itself mid-hold.
   if (status.sending?.roomKey === roomKey) return null;
-  const call = useInboxStore.getState().call;
+  const call = walkieCallState();
   if (
     call.roomKey === roomKey &&
     !call.muted &&
@@ -287,7 +295,15 @@ export function walkieKeySig(s: WalkieStatus, roomKey: string | undefined): stri
  *  Exported for its own render test — it IS the subscription, so mounting it is
  *  the honest way to count what a bar of faces costs. */
 export function useWalkieKeySig(roomKey: string | undefined): string {
-  const read = useCallback(() => walkieKeySig(getWalkieStatus(), roomKey), [roomKey]);
+  // Plus the call facts a key's words read for THIS room. In a browser they
+  // arrive through the store subscription beside this one; from a voice host
+  // they arrive on the same wire as the status, so the key has to wake for
+  // them here — a mute the host applied is a different sentence on the key.
+  const read = useCallback(() => {
+    const call = walkieCallState();
+    const here = call.roomKey === roomKey ? `${call.phase}:${call.muted ? 1 : 0}:${call.micDenied ? 1 : 0}` : "";
+    return `${walkieKeySig(getWalkieStatus(), roomKey)}|${here}`;
+  }, [roomKey]);
   return useSyncExternalStore(subscribeWalkie, read, read);
 }
 
@@ -344,7 +360,10 @@ export function usePushToTalk(
   }, [roomKey]);
 
   const press = useCallback(async () => {
-    if (huddleInOtherWindow() && await focusExistingHuddle()) return;
+    // With a voice host the press is sent there, and the host — which knows
+    // whether it is already talking in this room — decides; raising a window
+    // is not what a talk key does.
+    if (!voiceHostElsewhere() && huddleInOtherWindow() && await focusExistingHuddle()) return;
     if (getWalkieStatus().sending || walkieBlockedReason(roomKey)) return;
     const channelId = resolveChannelId();
     if (!channelId || !roomKey) return;
@@ -366,8 +385,8 @@ export function usePushToTalk(
   // tense, that somebody was hearing it.
   // Read rather than subscribed: the useTrackedStore above already subscribes
   // to exactly these fields, so this render is the one triggered by them
-  // changing.
-  const call = useInboxStore.getState().call;
+  // changing — and from a voice host they ride the walkie subscription.
+  const call = walkieCallState();
   const opened = holding && !!status.sending?.openAt;
   const dropped = opened && walkieBurstDropped(status.sending, call);
   return {

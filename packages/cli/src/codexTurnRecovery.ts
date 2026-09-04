@@ -1,16 +1,26 @@
-import type { ApprovalPolicy, ThreadResumeResponse, Turn } from "./codexAppServer.js";
+import type { ApprovalPolicy, SandboxMode, ThreadResumeParams, ThreadResumeResponse, Turn } from "./codexAppServer.js";
 
 export type PersistedCodexThread = {
   threadId: string;
   updatedAt: number;
   cwd?: string;
   approvalPolicy?: ApprovalPolicy;
+  sandbox?: SandboxMode;
   activeTurnId?: string;
   recoveryAttempts?: number;
 };
 
 export const CODEX_RECOVERY_PROMPT = "Codecast restarted while your previous turn was still running. Continue the user's existing task from the saved conversation and current workspace. First check the results of any commands that may already have run; do not repeat completed actions. Respect any pending permission or user decision. Continue until the requested work is complete or you need the user's input.";
 export const MAX_CODEX_RECOVERY_ATTEMPTS = 3;
+
+export function codexResumeParams(record: PersistedCodexThread, approvalPolicy: ApprovalPolicy): ThreadResumeParams {
+  return {
+    threadId: record.threadId,
+    ...(record.cwd ? { cwd: record.cwd } : {}),
+    approvalPolicy,
+    ...(record.sandbox ? { sandbox: record.sandbox } : {}),
+  };
+}
 
 export function codexRecoveryAction(record: PersistedCodexThread, thread: ThreadResumeResponse["thread"]): "none" | "settled" | "active" | "continue" | "exhausted" {
   if (!record.activeTurnId) return "none";

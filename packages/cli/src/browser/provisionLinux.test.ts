@@ -45,6 +45,11 @@ describe("baseProvisionScript", () => {
   });
 });
 
+test("Linux provisioning ships the current CLI build entry, not stale index.js", () => {
+  const source = fs.readFileSync(new URL("./provisionLinux.ts", import.meta.url), "utf8");
+  expect(source).toContain('indexJs: path.join(cliRoot, "dist", "main.js")');
+});
+
 describe("idle watchdog and the daemon's activity stamp", () => {
   const script = baseProvisionScript(20);
   test("a fresh stamp keeps the box awake; a stale one lets it sleep", () => {

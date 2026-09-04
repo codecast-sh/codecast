@@ -5,8 +5,8 @@
  * One function, `prepareCloudHost`, is shared by every way a session can land
  * on the box — `cast spawn --cloud`, `cast fork --cloud`, `--subagent --cloud`
  * and the web's "run in the cloud" (which a local daemon serves through
- * `cast cloud start`). Nothing here touches Convex: the transfer is SSH and
- * rsync, the same transport `cast remote move` uses. Placement (the Convex
+ * `cast cloud start`). Nothing here touches Convex: the transfer uses the
+ * same SSH transport as `cast remote move`. Placement (the Convex
  * side) is `cloud.placeConversation`, called by the entry points after this.
  *
  * The worktree is acquired by the HOST's own `cast ws acquire`, from the same
@@ -15,7 +15,7 @@
  * distinct worktrees and non-colliding ports because the host allocates them.
  */
 
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import {
   ensureUp,
@@ -25,14 +25,13 @@ import {
   type CloudHost,
 } from "../browser/cloudHost.js";
 import {
-  copyGitignoredFiles,
-  ensureRemoteRepo,
-  gitEnv,
-  gitSshUrl,
   shq,
   ssh,
+  sshBase,
   type RemoteHost,
 } from "../remote/session-move.js";
+import { cloudCopyFiles, stageCloudInputs, refreshRemoteCheckout } from "./transfer.js";
+export { refreshRemoteCheckout } from "./transfer.js";
 
 export interface PreparedHost {
   cloud: CloudHost;
@@ -41,6 +40,7 @@ export interface PreparedHost {
   deviceId: string;
   /** The repo's main checkout on the box; worktrees hang under it. */
   repoPath: string;
+  localGitRoot: string;
 }
 
 export interface RemoteWorkspace {
@@ -80,67 +80,8 @@ export async function learnHostDeviceId(cloud: CloudHost, host: RemoteHost): Pro
   return deviceId;
 }
 
-/** The branch origin/HEAD points at locally, or "main". */
-function defaultBranch(localGitRoot: string): string {
-  try {
-    const ref = execFileSync("git", ["-C", localGitRoot, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
-      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return ref.replace(/^origin\//, "") || "main";
-  } catch {
-    return "main";
-  }
-}
-
 /**
- * Make the host's checkout exist and sit on origin/<default branch>.
- *
- * Missing → bundle clone over scp with origin repaired to the real URL
- * (ensureRemoteRepo). Present → fetch on the host; when the host cannot reach
- * origin (no git key there yet), push the laptop's origin/<branch> to the
- * host's remote-tracking ref over SSH instead, which needs nothing but the
- * host key we already hold. Then check the branch out at that tip.
- *
- * A dirty checkout is never reset: `cast remote move` lands moved sessions
- * at the same path, and a hard reset there would erase their uncommitted
- * work. Worktrees then branch from the current HEAD, and the caller is told.
- */
-export function refreshRemoteCheckout(
-  host: RemoteHost,
-  localGitRoot: string,
-  repoPath: string,
-  onProgress: Progress = () => {},
-): { branch: string; head: string; reset: boolean } {
-  ensureRemoteRepo(host, localGitRoot, repoPath);
-  const branch = defaultBranch(localGitRoot);
-  let fetched = false;
-  try {
-    ssh(host, `cd ${shq(repoPath)} && git fetch -q origin ${shq(branch)}`, 300_000);
-    fetched = true;
-  } catch {
-    onProgress(`host cannot reach origin — sending origin/${branch} from here`);
-    execFileSync(
-      "git",
-      ["-C", localGitRoot, "push", "-q", "--force", gitSshUrl(host, repoPath),
-       `refs/remotes/origin/${branch}:refs/remotes/origin/${branch}`],
-      { env: gitEnv(host), stdio: "pipe" },
-    );
-  }
-  const dirty = ssh(host, `cd ${shq(repoPath)} && git status --porcelain | wc -l`).trim() !== "0";
-  if (dirty) {
-    onProgress(`${repoPath} has uncommitted changes — left as is; worktrees branch from its current HEAD`);
-  } else {
-    ssh(host, `cd ${shq(repoPath)} && git checkout -q -B ${shq(branch)} ${shq(`origin/${branch}`)}`);
-  }
-  const head = ssh(host, `cd ${shq(repoPath)} && git rev-parse HEAD`).trim();
-  onProgress(`checkout at ${head.slice(0, 8)}${fetched ? "" : " (via laptop)"}${dirty ? "" : ` on ${branch}`}`);
-  return { branch, head, reset: !dirty };
-}
-
-/**
- * Everything a session needs before it can be placed on the host. Idempotent
- * and cheap on a warm host: the wake is a no-op, the fetch is incremental and
- * the file copy is rsync.
+ * Everything a session needs before it can be placed on the host.
  */
 export async function prepareCloudHost(opts: {
   hostArg?: string;
@@ -148,6 +89,7 @@ export async function prepareCloudHost(opts: {
   onProgress?: Progress;
 }): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
+  cloudCopyFiles(opts.localGitRoot);
   const cloud = resolveCloudHost(opts.hostArg);
   const up = await ensureUp(cloud, log);
   const host = toRemoteHost(up);
@@ -157,33 +99,22 @@ export async function prepareCloudHost(opts: {
   }
   const repoPath = remoteRepoPath(host, opts.localGitRoot);
   refreshRemoteCheckout(host, opts.localGitRoot, repoPath, log);
-  copyGitignoredFiles(host, opts.localGitRoot, repoPath);
-  return { cloud: { ...up, deviceId }, host, deviceId, repoPath };
+  return { cloud: { ...up, deviceId }, host, deviceId, repoPath, localGitRoot: opts.localGitRoot };
 }
 
 /**
  * Acquire a worktree on the host with ITS `cast ws acquire --json`. Install
  * runs there (minutes on a cold node_modules), so the timeout is generous.
  */
-export function acquireRemoteWorkspace(host: RemoteHost, repoPath: string, name: string): RemoteWorkspace {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)) {
-    throw new Error(`worktree name ${JSON.stringify(name)} — use letters, digits, dot, dash, underscore`);
+export function acquireRemoteWorkspace(host: RemoteHost, repoPath: string, name: string, localGitRoot: string): RemoteWorkspace {
+  const inputRoot = stageCloudInputs(host, localGitRoot, repoPath, name);
+  const result = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+      `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; export CODECAST_CLOUD_WORKSPACE=1; cd ${shq(repoPath)} && cast ws acquire ${shq(name)} --input-root ${shq(inputRoot)} --skip-pool --json`,
+  ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });
+  if (result.error || result.status !== 0) {
+    throw new Error(`cast ws acquire ${name} failed on the host (${result.signal ?? `exit ${result.status}`}); workspace retained for inspection`);
   }
-  let out: string;
-  try {
-    // A non-login SSH shell has neither ~/.bun/bin nor ~/.local/bin on PATH,
-    // and the manifest's install command (`bun install`) needs them.
-    out = ssh(
-      host,
-      `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; cd ${shq(repoPath)} && cast ws acquire ${shq(name)} --json`,
-      15 * 60_000,
-    );
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    const tail = String(e.stderr ?? e.stdout ?? e.message ?? "").trim().split("\n").slice(-4).join(" | ");
-    throw new Error(`cast ws acquire ${name} failed on the host: ${tail}`);
-  }
-  return parseAcquireOutput(name, out);
+  return parseAcquireOutput(name, result.stdout);
 }
 
 /**
@@ -192,13 +123,26 @@ export function acquireRemoteWorkspace(host: RemoteHost, repoPath: string, name:
  * like JSON is the answer. A broken contract is an error, not a workspace.
  */
 export function parseAcquireOutput(name: string, out: string): RemoteWorkspace {
-  const line = out.trim().split("\n").reverse().find((l) => l.startsWith("{"));
-  if (!line) throw new Error(`cast ws acquire ${name} printed no JSON on the host:\n${out.slice(-400)}`);
-  const ws = JSON.parse(line) as RemoteWorkspace & { state: string; contract?: { ok: boolean; failures: unknown[] } | null };
-  if (ws.contract && !ws.contract.ok) {
-    throw new Error(`workspace ${name} on the host is broken: ${JSON.stringify(ws.contract.failures)}`);
+  const line = out.trim().split("\n").reverse().find((l) => l.trimStart().startsWith("{"));
+  if (!line) throw new Error(`cast ws acquire ${name} printed no JSON on the host`);
+  let ws;
+  try {
+    ws = JSON.parse(line);
+  } catch {
+    throw new Error(`cast ws acquire ${name} printed invalid JSON on the host`);
   }
-  return { name: ws.name, path: ws.path, branch: ws.branch, ports: ws.ports ?? {}, created: ws.created };
+  if (ws.name !== name) throw new Error(`cast ws acquire ${name} returned a different workspace`);
+  if (ws.state !== "ready" || ws.contract?.ok !== true || !Array.isArray(ws.contract.failures) || ws.contract.failures.length > 0) {
+    throw new Error(`workspace ${name} on the host is broken: ready state and a successful contract are required`);
+  }
+  if (typeof ws.path !== "string" || !ws.path.startsWith("/") || ws.path === "/"
+    || /[\x00-\x1f\x7f\\]/.test(ws.path) || path.posix.normalize(ws.path) !== ws.path
+    || typeof ws.branch !== "string" || !ws.branch.trim() || /[\x00-\x20\x7f]/.test(ws.branch)
+    || typeof ws.created !== "boolean" || !ws.ports || typeof ws.ports !== "object" || Array.isArray(ws.ports)
+    || Object.values(ws.ports).some((port) => typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)) {
+    throw new Error(`cast ws acquire ${name} returned invalid workspace fields`);
+  }
+  return { name: ws.name, path: ws.path, branch: ws.branch, ports: ws.ports, created: ws.created };
 }
 
 /** A worktree name nobody has to think about: cloud-<6 hex>. */

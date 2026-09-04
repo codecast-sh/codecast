@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
@@ -1055,20 +1056,7 @@ function showWelcome(): void {
 }
 
 function getDaemonPid(): number | null {
-  if (!fs.existsSync(PID_FILE)) {
-    return getLaunchdDaemonPid();
-  }
-  const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-  if (isNaN(pid)) {
-    return getLaunchdDaemonPid();
-  }
-  try {
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    fs.unlinkSync(PID_FILE);
-    return getLaunchdDaemonPid();
-  }
+  return readDaemonPid(PID_FILE, getLaunchdDaemonPid);
 }
 
 function isDaemonRunning(): boolean {
@@ -1101,13 +1089,7 @@ function getMacLaunchdDaemonStatus(): { configured: boolean; state: string | nul
 
 function getLaunchdDaemonPid(): number | null {
   const status = getMacLaunchdDaemonStatus();
-  if (!status?.pid || Number.isNaN(status.pid)) return null;
-  try {
-    process.kill(status.pid, 0);
-    return status.pid;
-  } catch {
-    return null;
-  }
+  return status?.pid ? probeDaemonPid(status.pid) : null;
 }
 
 function kickstartManagedDaemon(): boolean {
@@ -1142,7 +1124,7 @@ function ensureDaemonRunning(): void {
           if (daemonBuildUnchanged(readRunningBuildId(), DAEMON_BUILD_ID)) return;
           const pid = getDaemonPid();
           if (pid) {
-            try { process.kill(pid, "SIGTERM"); } catch {}
+            try { process.kill(pid, "SIGTERM"); } catch { return; }
             try { fs.unlinkSync(PID_FILE); } catch {}
             startDaemonQuiet();
           }
@@ -10881,7 +10863,7 @@ program
           const name = freshWorktreeName();
           if (!options.json) console.log(`  acquiring worktree ${name} on ${cloud.prepared.cloud.id}`);
           try {
-            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
             worktreeName = ws.name;
             cloudPlacement = {
               cloud_device_id: cloud.prepared.deviceId,
@@ -11188,7 +11170,7 @@ program
         say(`acquiring worktree ${name} on ${cloud.prepared.cloud.id} (install runs there)`);
         let ws: import("./cloud/prepare.js").RemoteWorkspace;
         try {
-          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
         } catch (err) {
           console.error(`Spawn failed for "${promptGist(prompt)}": ${err instanceof Error ? err.message : String(err)}`);
           process.exit(1);

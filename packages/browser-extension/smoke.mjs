@@ -15,7 +15,7 @@
  *      background create into a named tab group, the group title animating
  *      while a command runs, the border overlay around the driven page, and
  *      a screenshot that does not show it;
- *   4. the product path — `cast browser target real` and then the plain
+ *   4. the product path — the paired-extension default and then the plain
  *      verbs (open, snapshot, click, shot, tabs, stop) on the engine driver,
  *      with the CLI's own state isolated from the machine's. Asserts the tab
  *      landed in a group named for the session, a second tab from
@@ -579,7 +579,7 @@ function cliEnv(engineBinary) {
 }
 
 /**
- * The product path: real mode made sticky with `target real`, then the plain
+ * The product path: the paired-extension default after a host restart, then plain
  * verbs on the engine driver, nothing else on the line. What the raw client
  * proved above must now hold when the CLI is the client: the pinned tab the
  * CLI pre-creates lands in a group named for the session and the daemon
@@ -601,17 +601,29 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
       return { tabs: tabs.length, active: t.active, title: g?.title ?? null, color: g?.color ?? null, members, groupIds, urls: tabs.map((x) => x.url) };
     })`);
 
-  const target = await cli(["browser", "target", "real"]);
-  check("cli: target real", target.code === 0 && /real Chrome/.test(target.all), target.all.slice(0, 300));
+  const bridgeFile = path.join(castDir, "browser", "bridge.json");
+  const previousBridge = JSON.parse(fs.readFileSync(bridgeFile, "utf-8"));
+  process.kill(previousBridge.hostPid, "SIGTERM");
+  const stoppedDeadline = Date.now() + 5000;
+  let bridgeStopped = false;
+  while (Date.now() < stoppedDeadline) {
+    bridgeStopped = await fetch(`http://127.0.0.1:${bridgePort}/healthz`)
+      .then(() => false, () => true);
+    if (bridgeStopped) break;
+    await sleep(100);
+  }
+  check("cli: paired bridge host stopped before a fresh session's first verb", bridgeStopped);
   const shown = await cli(["browser", "target"]);
-  check("cli: target is sticky", shown.code === 0 && /target:\s*\S*real/.test(shown.all), shown.all.slice(0, 300));
+  check("cli: paired Chrome remains the default with the host down", shown.code === 0 && /target:\s*\S*real/.test(shown.all) && /paired.*reconnect/.test(shown.all), shown.all.slice(0, 300));
 
   const open = await cli(["browser", "open", url]);
   check(
-    "cli: open drives the real Chrome through the engine",
+    "cli: default open restarts the host and drives Chrome through the extension",
     open.code === 0 && /Cast Bridge Smoke/.test(open.all) && /real Chrome, via the extension/.test(open.all),
     open.all.slice(0, 400),
   );
+  const restartedBridge = JSON.parse(fs.readFileSync(bridgeFile, "utf-8"));
+  check("cli: restarted bridge has a new host and a connected extension", restartedBridge.hostPid !== previousBridge.hostPid && restartedBridge.extensionConnected === true);
 
   // The engine daemon and every CLI call are up now; none of them may carry
   // the bridge token on its command line (it reaches the engine through the
@@ -819,9 +831,9 @@ async function main() {
     statuses.map((s) => s.slice(0, 120)).join(" | ").slice(0, 300),
   );
 
-  // 6. The MVP verbs, all through --real.
-  const open = await cast(["browser", "open", "--real", pageUrl]);
-  check("open", open.code === 0 && /Cast Bridge Smoke/.test(open.all), open.all.slice(0, 300));
+  // 6. The MVP verbs, starting through the paired-extension default.
+  const open = await cast(["browser", "open", pageUrl]);
+  check("built-in driver: default open uses the paired Chrome extension", open.code === 0 && /Cast Bridge Smoke/.test(open.all), open.all.slice(0, 300));
 
   const snap = await cast(["browser", "snapshot", "--real"]);
   check(
@@ -908,7 +920,7 @@ async function main() {
 
   await engine(ab, ["--cdp", cdpUrl, "close"]);
 
-  // 9. The product path: the CLI on the engine driver, in sticky real mode.
+  // 9. The product path: the CLI on the engine driver, defaulting to the paired extension.
   await cliRealMode(ab, ext, cdpPort, pageUrl, token, bridgePort);
   await ext.close();
 }

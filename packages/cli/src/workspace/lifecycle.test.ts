@@ -10,12 +10,16 @@ import {
   releaseWorkspace,
   validateWorkspace,
 } from "./lifecycle.js";
-import { readState } from "./contract.js";
+import { readState, setState, writeState } from "./contract.js";
 
 let repoRoot: string;
+let codecastDir: string | undefined;
+const extraRepos: string[] = [];
 
 beforeEach(() => {
   repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ws-lifecycle-"));
+  codecastDir = process.env.CODECAST_DIR;
+  process.env.CODECAST_DIR = path.join(repoRoot, "host-state");
   // Init a git repo with one commit so worktrees work.
   execSync("git init -q -b main", { cwd: repoRoot });
   execSync("git config user.email t@t.t && git config user.name t", { cwd: repoRoot });
@@ -31,12 +35,174 @@ afterEach(() => {
     /* ignore */
   }
   fs.rmSync(repoRoot, { recursive: true, force: true });
+  for (const repo of extraRepos.splice(0)) fs.rmSync(repo, { recursive: true, force: true });
+  if (codecastDir === undefined) delete process.env.CODECAST_DIR;
+  else process.env.CODECAST_DIR = codecastDir;
+});
+
+describe("workspace port reservations", () => {
+  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+
+  function manifest(root = repoRoot, portName = "web") {
+    fs.mkdirSync(path.join(root, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".codecast/workspace.toml"), `
+[ports.${portName}]
+base = 41000
+range = 100
+
+[ports.api]
+base = 41001
+range = 100
+`);
+  }
+
+  async function acquireInProcess(root: string, name: string) {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { acquireWorkspace } from ${JSON.stringify(path.join(import.meta.dir, "lifecycle.ts"))};
+      const result = await acquireWorkspace(${JSON.stringify(root)}, ${JSON.stringify(name)}, ${JSON.stringify(opts)});
+      console.log(JSON.stringify(result));
+    `], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(stdout.length).toBeGreaterThan(0);
+    return JSON.parse(stdout) as Awaited<ReturnType<typeof acquireWorkspace>>;
+  }
+
+  test("three concurrent acquires reserve distinct ports before any listener, then release and reuse", async () => {
+    manifest();
+    const results = await Promise.all(["one", "two", "three"].map((name) => acquireWorkspace(repoRoot, name, opts)));
+    expect(results.flatMap(({ workspace }) => workspace.contract?.checks.filter((check) => !check.ok) ?? [])).toEqual([]);
+    const ports = results.flatMap(({ workspace }) => Object.values(workspace.ports));
+    expect(new Set(ports).size).toBe(6);
+    expect(results.map(({ workspace }) => workspace.resourceIndex).sort()).toEqual([0, 1, 2]);
+    const first = results.find(({ workspace }) => workspace.resourceIndex === 0)!.workspace;
+    const attached = await acquireWorkspace(repoRoot, first.name, { ...opts, resourceIndex: 8 });
+    expect(attached.created).toBe(false);
+    expect(attached.workspace.ports).toEqual(first.ports);
+    expect(attached.workspace.resourceIndex).toBe(first.resourceIndex);
+    const fourth = await acquireWorkspace(repoRoot, "four", opts);
+    expect(fourth.workspace.resourceIndex).toBe(3);
+    await releaseWorkspace(repoRoot, first.name);
+    const replacement = await acquireWorkspace(repoRoot, "replacement", opts);
+    expect(replacement.workspace.ports).toEqual(first.ports);
+    expect(replacement.workspace.resourceIndex).toBe(0);
+  }, 15000);
+
+  test("three separate processes reserve ports durably across repositories and port names", async () => {
+    manifest();
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "ws-ports-other-"));
+    extraRepos.push(other);
+    execSync(`git clone -q ${JSON.stringify(repoRoot)} ${JSON.stringify(other)}`);
+    manifest(other, "frontend");
+    const results = await Promise.all([
+      acquireInProcess(repoRoot, "one"),
+      acquireInProcess(repoRoot, "two"),
+      acquireInProcess(other, "three"),
+    ]);
+    expect(new Set(results.flatMap(({ workspace }) => Object.values(workspace.ports))).size).toBe(6);
+    const fourth = await acquireInProcess(other, "four");
+    expect(fourth.workspace.resourceIndex).toBe(3);
+    const attached = await acquireInProcess(repoRoot, "one");
+    expect(attached.created).toBe(false);
+    expect(attached.workspace.ports).toEqual(results[0]!.workspace.ports);
+    await releaseWorkspace(repoRoot, "one");
+    const reused = await acquireInProcess(other, "reused");
+    expect(reused.workspace.resourceIndex).toBe(results[0]!.workspace.resourceIndex);
+  }, 15000);
+
+  test("respects pre-existing and broken workspace states and retains their resource index", async () => {
+    manifest();
+    const original = (await acquireWorkspace(repoRoot, "original", { ...opts, resourceIndex: 4 })).workspace;
+    fs.rmSync(path.join(process.env.CODECAST_DIR!, "workspace-ports"), { recursive: true, force: true });
+    setState(repoRoot, "original", "broken");
+    const next = await acquireWorkspace(repoRoot, "next", { ...opts, resourceIndex: 4 });
+    expect(next.workspace.resourceIndex).toBe(5);
+    const repaired = await acquireWorkspace(repoRoot, "original", opts);
+    expect(repaired.workspace.resourceIndex).toBe(4);
+    expect(repaired.workspace.ports).toEqual(original.ports);
+  });
+
+  test("release removes the final reservation and reacquiring the same name reuses its ports", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "one", opts);
+    await releaseWorkspace(repoRoot, "one");
+    const index = path.join(process.env.CODECAST_DIR!, "workspace-ports", "repositories.json");
+    expect(JSON.parse(fs.readFileSync(index, "utf8"))).toEqual([]);
+    const reused = await acquireWorkspace(repoRoot, "one", opts);
+    expect(reused.created).toBe(true);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+  });
+
+  test("pool claim transfers the reservation and release makes the ports reusable", async () => {
+    manifest();
+    const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+    await maintainPool(repoRoot, 1);
+    expect(await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 50 })).not.toBeNull();
+    const pooled = readState(repoRoot, "pool-0")!;
+    const claimed = await acquireWorkspace(repoRoot, "claimed", { ...opts, skipPool: false });
+    expect(claimed.workspace.ports).toEqual(pooled.ports);
+    expect(readState(repoRoot, "pool-0")).toBeNull();
+    const next = await acquireWorkspace(repoRoot, "next", opts);
+    expect(next.workspace.resourceIndex).toBe(1);
+    await releaseWorkspace(repoRoot, "claimed");
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(pooled.ports);
+  }, 20000);
+
+  test("ignores nonlocal workspace states when reserving local ports", async () => {
+    manifest();
+    await acquireWorkspace(repoRoot, "remote-record", opts);
+    const state = readState(repoRoot, "remote-record")!;
+    writeState(repoRoot, { ...state, manifest: { ...state.manifest, backend: "e2b" } });
+    const local = await acquireWorkspace(repoRoot, "local", opts);
+    expect(local.workspace.resourceIndex).toBe(0);
+  });
+
+  test("prunes reservations when a registered repository disappears", async () => {
+    manifest();
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "ws-ports-stale-"));
+    extraRepos.push(other);
+    execSync(`git clone -q ${JSON.stringify(repoRoot)} ${JSON.stringify(other)}`);
+    manifest(other);
+    const first = await acquireWorkspace(other, "gone", opts);
+    fs.rmSync(other, { recursive: true, force: true });
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+  });
 });
 
 describe("acquireWorkspace — minimal repo (no manifest, no package.json)", () => {
+  test("cloud setup and heal keep a private dependency cache", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), `
+[setup]
+install = ["printf '%s|%s' \\\"$BUN_INSTALL_GLOBAL_STORE\\\" \\\"$BUN_INSTALL_CACHE_DIR\\\" > dependency-env"]
+`);
+    const previous = process.env.CODECAST_CLOUD_WORKSPACE;
+    try {
+      process.env.CODECAST_CLOUD_WORKSPACE = "1";
+      const { workspace } = await acquireWorkspace(repoRoot, "cloud-private", { skipPool: true });
+      delete process.env.CODECAST_CLOUD_WORKSPACE;
+      const expected = `0|${path.join(repoRoot, ".codecast/workspaces/cloud-private/bun-cache")}`;
+      expect(fs.readFileSync(path.join(workspace.path, "dependency-env"), "utf8")).toBe(expected);
+      fs.unlinkSync(path.join(workspace.path, "dependency-env"));
+      await healWorkspace(repoRoot, "cloud-private");
+      expect(fs.readFileSync(path.join(workspace.path, "dependency-env"), "utf8")).toBe(expected);
+      await releaseWorkspace(repoRoot, "cloud-private");
+      expect(fs.existsSync(path.dirname(workspace.env.BUN_INSTALL_CACHE_DIR!))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CODECAST_CLOUD_WORKSPACE;
+      else process.env.CODECAST_CLOUD_WORKSPACE = previous;
+    }
+  });
+
   test("creates worktree, no install needed, persists ready state", async () => {
     const r = await acquireWorkspace(repoRoot, "feat-1");
     expect(r.created).toBe(true);
+    expect(r.workspace.contract?.checks.filter((check) => !check.ok)).toEqual([]);
     expect(r.workspace.state).toBe("ready");
     expect(r.workspace.branch).toBe("codecast/feat-1");
     expect(fs.existsSync(r.workspace.path)).toBe(true);

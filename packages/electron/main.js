@@ -58,6 +58,7 @@ const {
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
+  isCallSize,
   normalizeCallWindowSize,
 } = require("./callWindowPolicy");
 const {
@@ -657,30 +658,63 @@ function createPeopleWindow() {
   return win;
 }
 
+// With a voice host the buddy list is a SHAPE of that window (the wall), and
+// asking for it is a standing arrangement the host takes up. On a shell whose
+// host has not declared itself — an older web build, or the first second
+// after boot — the people window is still a window of its own.
 ipcMain.handle("open-people-window", () => {
+  if (hasVoiceHost()) {
+    wallFocusPending = true;
+    setWallWanted(true);
+    if (callWindowSize === "wall") revealCallWindow(callWindow, "wall");
+    return;
+  }
   createPeopleWindow();
 });
 
-// The pin. Only the people window may float above other apps — any other
+ipcMain.handle("close-people-window", () => {
+  setWallWanted(false);
+  if (peopleWindow && !peopleWindow.isDestroyed()) peopleWindow.close();
+});
+
+// The pin. Only the buddy list may float above other apps — the people window
+// of its own, or the voice window while the wall is its shape. Any other
 // renderer asking is answered with what it actually is (false), never granted.
 ipcMain.handle("set-always-on-top", (e, on) => {
   const win = BrowserWindow.fromWebContents(e.sender);
-  if (!win || win.isDestroyed() || win !== peopleWindow) return false;
+  if (!win || win.isDestroyed()) return false;
   const pinned = on === true;
-  win.setAlwaysOnTop(pinned);
-  updatePeopleState({ alwaysOnTop: pinned });
-  return pinned;
+  if (win === peopleWindow) {
+    win.setAlwaysOnTop(pinned);
+    updatePeopleState({ alwaysOnTop: pinned });
+    return pinned;
+  }
+  if (win === callWindow) {
+    updatePeopleState({ alwaysOnTop: pinned });
+    // Only the wall wears the pin. Every other shape's float is its own.
+    if (callWindowSize === "wall") {
+      win.setAlwaysOnTop(pinned, "floating");
+      win.setVisibleOnAllWorkspaces(pinned, { visibleOnFullScreen: true });
+    }
+    return pinned;
+  }
+  return false;
 });
 
 ipcMain.handle("get-always-on-top", (e) => {
   const win = BrowserWindow.fromWebContents(e.sender);
-  return !!win && !win.isDestroyed() && win.isAlwaysOnTop();
+  if (!win || win.isDestroyed()) return false;
+  // The voice window floats in most of its shapes for reasons of their own;
+  // the pin is the wall's, and the wall's alone.
+  if (win === callWindow) return wallPinned();
+  return win.isAlwaysOnTop();
 });
 
 // ---------------------------------------------------------------------------
-// The call window: a huddle in a window of its own (route /call-panel), in
-// four sizes — the stage, a row of face circles, one speaker circle, or that
-// circle shrunk to the size of a menu bar icon.
+// ---------------------------------------------------------------------------
+// The voice window: ONE persistent see-through window (route /call-panel) that
+// holds everything with a microphone or a face in it — the walkie's ear and
+// its strip, the idle team as circles, and the call in all four of its sizes.
 //
 // A REAL window. The founder's screenshot was a call stage living in a Chrome
 // popup: no app chrome, the OS treating it as a browser, and a microphone
@@ -688,80 +722,98 @@ ipcMain.handle("get-always-on-top", (e) => {
 // makes that outcome impossible, and the web side refuses to fall back to
 // window.open for a call at all.
 //
-// Singleton, because the product allows ONE huddle at a time (calls.joinRoom
-// enforces it server-side): opening the panel onto another room moves the
-// window that exists rather than making a second.
+// ── Why it is ONE window, and why it never goes away ──────────────────────
+// Media is per renderer: the LiveKit room and the microphone publication are
+// module singletons in the renderer that joined. Moving a call to another
+// window therefore means joining the room again from a fresh renderer, and
+// LiveKit evicts the old participant when the new one lands — an audible drop
+// and a visual jump. That drop used to happen at the walkie's biggest moment:
+// a burst opened its room in the main window, and the burst becoming a call
+// opened THIS window, which joined and evicted it.
 //
-// ── Why it is born see-through, whatever size it is in ────────────────────
+// So the window that holds the microphone is always this one. It is created at
+// boot, hidden, and it hosts the walkie's ear from then on: a teammate's burst
+// is heard here, this person's burst is spoken here, and the call that grows
+// out of either is a RESIZE of this window. Every other window is a remote —
+// it sends press, join and hang-up as commands (`voice-command`) and draws the
+// state this window mirrors back (`voice-mirror`).
+//
+// Hang-up hides it. Quitting the app is the only thing that destroys it.
+//
+// ── Why it is born see-through, whatever shape it is in ───────────────────
 // `transparent` and `frame` are BrowserWindow CONSTRUCTION options; Electron
-// has no runtime switch for either. The circle sizes need both, so the window
-// is born with both and the STAGE paints its own card inside the glass. That
-// is the whole reason there is one window here and not two: a call changing
-// shape must never be a call changing windows, because changing windows means
-// re-joining the room, and a person switching from the stage to a circle is
-// not asking for their audio to be re-established.
+// has no runtime switch for either. The circle shapes need both, so the window
+// is born with both and the STAGE paints its own card inside the glass.
 //
 // It also means this window has no title bar and no traffic lights. The stage's
-// own header row is the drag surface, and its own button closes the window.
+// own header row is the drag surface, and its own button hides the window.
 //
-// ── The handoff, main window ⇄ this one ───────────────────────────────────
-// The shell does not move the call; it only opens and closes the window. The
-// call moves because whichever window is showing /call-panel JOINS the room,
-// and LiveKit signs every window of one person with the same identity — so the
-// new window's join evicts the old window's participant, in that order. This
-// end of it therefore has exactly one job on the way out: tell the main window
-// the room is coming back.
+// ── The shapes ────────────────────────────────────────────────────────────
+// Decided by the renderer from what is happening (callWindowPolicy.js lists
+// them): the four call sizes the person chooses, plus `walkie` for the strip,
+// `faces` for the idle team, and `idle` for nothing at all. The shell applies
+// each as a placement, a size and a kind of window, and shows or hides the
+// window to match — the renderer never has to know how.
 //
-// That message is sent on 'close', NOT on 'closed'. The panel is still
-// connected at that moment, so the main window's rejoin is what evicts it, and
-// the audio never has a hole in it. Waiting for the window to be destroyed
-// would open a real gap for no reason.
-//
-// ── What a see-through size needs from the shell ──────────────────────────
-// Three things an ordinary window never asks for, all runtime-settable, all
-// applied only in the circle sizes:
+// ── What a see-through shape needs from the shell ─────────────────────────
+// Three things an ordinary window never asks for, all runtime-settable:
 //
 //   ignore mouse events  The window is a rectangle, the product is a few
 //                        circles. It ignores the mouse so a click lands in
 //                        whatever is underneath, and the renderer — the only
 //                        side that knows where the circles are — turns that off
-//                        while the pointer is over one.
-//   content size         It is sized to its circles, which changes with the
-//                        size, the tier and who is in the room.
+//                        while the pointer is over one. The strip is the
+//                        exception: it is exactly its card, so it takes every
+//                        click.
+//   content size         It is sized to its circles or its card, which changes
+//                        with the shape and who is in the room.
 //   drag                 Held on a circle, the window follows the cursor. Not a
 //                        `-webkit-app-region: drag` region: over one of those
 //                        the window manager takes the mouse events, so the
 //                        renderer would never learn the pointer had left and
 //                        the window would stay stuck taking clicks that belong
-//                        to the application underneath. (The STAGE does use a
-//                        drag region, because it is not click-through, so
-//                        nothing is fighting for those events there.)
+//                        to the application underneath. (The STAGE and the
+//                        strip do use a drag region, because they are not
+//                        click-through, so nothing is fighting for those
+//                        events there.)
 // ---------------------------------------------------------------------------
 
 const CALL_PANEL_PATH = "/call-panel";
 const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380 };
-// What a circle size is born as: about one speaker circle plus the room its
+// What a circle shape is born as: about one speaker circle plus the room its
 // ring needs. The renderer reports the true size a frame later
 // (set-call-window-content-size); this only keeps the first frame from being a
 // full-screen sheet of invisible glass.
 const CALL_CIRCLES_SIZE = { width: 112, height: 112 };
+// What the strip is born as: the width it was designed at inside the app, and
+// a height the renderer corrects on its first measure.
+const CALL_WALKIE_SIZE = { width: 420, height: 140 };
+// The strip's home corner: one rem in and five rem up from the bottom-right of
+// the work area, which is where it has always sat inside the app.
+const CALL_WALKIE_CORNER = { right: 16, bottom: 80 };
 
 let callWindow = null;
 let callPlaceTimer = null;
-// What the panel says it is hosting: { room, mic, camera, scribe }. This IS the
-// handback payload — the main window has to arrive in the state the person was
-// already in, or closing the panel mutes them mid-sentence.
+// What the renderer says it is hosting: { room, mic, camera, scribe }. `room`
+// is what tells every other window the call lives here.
 let callWindowState = null;
-// The panel declared the call OVER (its hang-up button). Closing then hands
-// nothing back. Silence means the opposite: a window closed without a hang-up
-// is a call still going, so the safe reading is to hand it back.
+// The renderer declared itself the voice host (a web build that knows this
+// window is persistent and takes joins as commands). Until it has, the window
+// is driven the older way: a room in its URL, and a hang-up that destroys it.
+let callWindowHost = false;
+// The renderer declared the call OVER (its hang-up button). Only an older
+// renderer's close reads this; a host's hang-up is a hide.
 let callWindowEnded = false;
-// Which of the three sizes the window is in. Remembered per machine, so the
-// next popout comes back the shape the person left it.
-let callWindowSize = "panel";
+// Which shape the window is in right now. The CALL shape the person last
+// chose is remembered per machine (settings), so the next huddle comes back
+// the shape they left it; the walkie, faces and idle shapes are never
+// remembered — they are decided by what is happening.
+let callWindowSize = "idle";
+// The last state the host mirrored to the other windows, replayed to a window
+// that opens later so it does not start from a blank.
+let lastVoiceMirror = null;
 // The app is going away. Every window gets `close` during a quit, including
-// this one, and a handback then would raise the main window on the way out and
-// ask it to join a room the process is about to stop existing for.
+// this one, and hiding it then would keep the process alive.
 let appIsQuitting = false;
 app.on("before-quit", () => {
   appIsQuitting = true;
@@ -775,35 +827,53 @@ function loadCallPanelState() {
   return saved && typeof saved === "object" ? saved : {};
 }
 
-// The stage's bounds and the circles' position are remembered SEPARATELY. They
-// are the same window, but they are not the same place: the stage is a card you
-// put in the middle of the screen and the circles are a strip you tuck in a
-// corner, and saving one over the other would drag each to where the other was
-// last left.
+// The stage's bounds, the circles' position and the strip's position are
+// remembered SEPARATELY. They are the same window, but they are not the same
+// place: the stage is a card you put in the middle of the screen, the circles
+// are a row you tuck in a corner and the strip is a card in the bottom-right,
+// and saving one over another would drag each to where the other was last
+// left.
 function saveCallPanelBounds(win) {
   if (!win || win.isDestroyed() || win.isMinimized()) return;
-  if (callWindowPlacementKey(callWindowSize) !== "bounds") return;
-  updateSettings({ callPanelWindow: { ...loadCallPanelState(), bounds: win.getBounds() } });
+  const key = callWindowPlacementKey(callWindowSize);
+  if (key === "bounds") {
+    updateSettings({ callPanelWindow: { ...loadCallPanelState(), bounds: win.getBounds() } });
+  } else if (key === "wall") {
+    // The people window's own slot, so a wall that used to be a window of its
+    // own comes back exactly where the person kept it.
+    updatePeopleState({ bounds: win.getBounds() });
+  }
 }
 
-function saveCallCirclesPosition(win) {
+function saveCallCornerPosition(win) {
   if (!win || win.isDestroyed() || win.isMinimized()) return;
-  if (callWindowPlacementKey(callWindowSize) !== "circles") return;
+  const key = callWindowPlacementKey(callWindowSize);
+  if (key !== "circles" && key !== "walkie") return;
   const [x, y] = win.getPosition();
-  updateSettings({ callPanelWindow: { ...loadCallPanelState(), circles: { x, y } } });
+  updateSettings({ callPanelWindow: { ...loadCallPanelState(), [key]: { x, y } } });
 }
 
 function rememberCallWindowPlace(win) {
   saveCallPanelBounds(win);
-  saveCallCirclesPosition(win);
+  saveCallCornerPosition(win);
 }
 
+/** The call shape the person last left a huddle in. Always one of the call's
+ *  own sizes: the walkie and idle shapes are never written, and a name that
+ *  is not a call size lands on the stage. */
 function savedCallWindowSize() {
-  return normalizeCallWindowSize(loadCallPanelState().size);
+  const size = normalizeCallWindowSize(loadCallPanelState().size);
+  return isCallSize(size) ? size : "panel";
+}
+
+function rememberCallSize(size) {
+  if (!isCallSize(size)) return;
+  updateSettings({ callPanelWindow: { ...loadCallPanelState(), size } });
 }
 
 function callPanelUrl(roomKey, opts) {
-  const q = new URLSearchParams({ room: String(roomKey) });
+  const q = new URLSearchParams();
+  if (roomKey) q.set("room", String(roomKey));
   if (opts && opts.mic) q.set("mic", "1");
   if (opts && opts.camera) q.set("cam", "1");
   if (opts && opts.scribe) q.set("scribe", "1");
@@ -811,8 +881,9 @@ function callPanelUrl(roomKey, opts) {
   if (opts && opts.ring) q.set("ring", "1");
   // The size the window is opening in, so the renderer's first paint is the
   // right shape rather than a stage that snaps to circles a frame later.
-  if (callWindowSize !== "panel") q.set("size", callWindowSize);
-  return `${currentBaseUrl}${CALL_PANEL_PATH}?${q.toString()}`;
+  if (roomKey && isCallSize(callWindowSize) && callWindowSize !== "panel") q.set("size", callWindowSize);
+  const query = q.toString();
+  return `${currentBaseUrl}${CALL_PANEL_PATH}${query ? `?${query}` : ""}`;
 }
 
 // Where the circles sit the first time: the top-right of the work area, out of
@@ -822,14 +893,23 @@ function defaultCirclesPosition(width) {
   return { x: Math.round(area.x + area.width - width - 28), y: Math.round(area.y + 28) };
 }
 
-function circlesPosition(size) {
-  const saved = loadCallPanelState().circles;
-  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number") {
-    return defaultCirclesPosition(size.width);
-  }
-  // A display that is gone (an unplugged monitor) would otherwise put the
-  // window somewhere nobody can see, and in the circle sizes it has no title
-  // bar and no taskbar entry to recover it from.
+// Where the strip sits the first time: the bottom-right corner, where the
+// in-app strip has always been.
+function defaultWalkiePosition(size) {
+  const area = screen.getPrimaryDisplay().workArea;
+  return {
+    x: Math.round(area.x + area.width - size.width - CALL_WALKIE_CORNER.right),
+    y: Math.round(area.y + area.height - size.height - CALL_WALKIE_CORNER.bottom),
+  };
+}
+
+// A remembered corner, made safe for the display it is about to be used on.
+// A display that is gone (an unplugged monitor) would otherwise put the window
+// somewhere nobody can see, and in the see-through shapes it has no title bar
+// and no taskbar entry to recover it from.
+function cornerPosition(key, size, fallback) {
+  const saved = loadCallPanelState()[key];
+  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number") return fallback;
   const area = screen.getDisplayMatching({ x: saved.x, y: saved.y, ...size }).workArea;
   return {
     x: Math.min(Math.max(Math.round(saved.x), area.x), area.x + area.width - size.width),
@@ -837,18 +917,37 @@ function circlesPosition(size) {
   };
 }
 
+function circlesPosition(size) {
+  return cornerPosition("circles", size, defaultCirclesPosition(size.width));
+}
+
+function walkiePosition(size) {
+  return cornerPosition("walkie", size, defaultWalkiePosition(size));
+}
+
 /**
- * Put the window into a size: where it sits, how big it is, and what kind of
+ * Put the window into a shape: where it sits, how big it is, and what kind of
  * window it is while it is there.
  *
  * The kind comes from `callWindowChrome` rather than from an `if` here, because
  * the three flags have to move together — an always-on-top window that still
  * takes every click is a pane floating over somebody's work, and a
  * click-through window that is NOT on top is a window you cannot reach at all.
+ *
+ * Visibility follows the shape. `idle` hides; every other shape reveals the
+ * window if it was hidden — the stage with focus when a call opens, the
+ * see-through shapes without it (a glance kept beside the work must not steal
+ * the keyboard).
  */
-function applyCallWindowSize(win, size) {
+function applyCallWindowSize(win, size, { reveal = true } = {}) {
   if (!win || win.isDestroyed()) return;
-  const chrome = callWindowChrome(size);
+  const chrome = callWindowChrome(size, { pinned: wallPinned() });
+  if (size === "idle") {
+    stopCallWindowDrag();
+    win.setIgnoreMouseEvents(true, { forward: true });
+    if (win.isVisible()) win.hide();
+    return;
+  }
   // Resizable FIRST and restored last: Electron refuses setBounds/setSize on a
   // window that is not resizable, so the moves below happen while the flag is
   // up whatever the size asks for.
@@ -863,6 +962,16 @@ function applyCallWindowSize(win, size) {
         height: CALL_PANEL_SIZE.height,
       },
     );
+  } else if (size === "wall") {
+    const bounds = clampToVisibleDisplay(loadPeopleState().bounds, PEOPLE_SIZE);
+    win.setMinimumSize(PEOPLE_SIZE.minWidth, PEOPLE_SIZE.minHeight);
+    win.setBounds(bounds || defaultWallBounds());
+  } else if (size === "walkie") {
+    win.setMinimumSize(1, 1);
+    win.setContentSize(CALL_WALKIE_SIZE.width, CALL_WALKIE_SIZE.height);
+    const [width, height] = win.getSize();
+    const pos = walkiePosition({ width, height });
+    win.setPosition(pos.x, pos.y);
   } else {
     // No minimum, or a 520px floor would stop the window ever being the size of
     // one 96px circle.
@@ -882,9 +991,20 @@ function applyCallWindowSize(win, size) {
   // left a circle and could never learn that it came back.
   win.setIgnoreMouseEvents(chrome.clickThrough, { forward: true });
   if (!chrome.clickThrough) stopCallWindowDrag();
-  // The idle faces overlay yields to the call's circles and returns when the
-  // call grows back to the stage — the two share one spot on screen.
-  syncFacesOverlayYield();
+  if (reveal && !win.isVisible()) revealCallWindow(win, size);
+}
+
+// The stage takes focus: it is a place you are about to talk in. Every other
+// shape is a glance you keep beside your work, and one that stole the keyboard
+// every time it appeared would be worse than no circle at all.
+function revealCallWindow(win, size) {
+  if (size === "panel" || (size === "wall" && wallFocusPending)) {
+    wallFocusPending = false;
+    win.show();
+    win.focus();
+  } else {
+    win.showInactive();
+  }
 }
 
 function defaultPanelBounds() {
@@ -895,43 +1015,46 @@ function defaultPanelBounds() {
   };
 }
 
-function createCallWindow(roomKey, opts) {
-  if (!roomKey || typeof roomKey !== "string") return null;
-  callWindowEnded = false;
-  if (callWindow && !callWindow.isDestroyed()) {
-    // Already open. On a DIFFERENT room, point it at the new one — one call at
-    // a time means one panel, and the person asked for this room.
-    if (!callWindowState || callWindowState.room !== roomKey) {
-      callWindow.loadURL(callPanelUrl(roomKey, opts));
-    }
-    // An asked-for size reshapes the window that exists, the same way the
-    // renderer's own size buttons do.
-    if (opts && opts.size) {
-      const next = normalizeCallWindowSize(opts.size);
-      if (next !== callWindowSize) {
-        rememberCallWindowPlace(callWindow);
-        callWindowSize = next;
-        updateSettings({ callPanelWindow: { ...loadCallPanelState(), size: next } });
-        applyCallWindowSize(callWindow, next);
-      }
-    }
-    // showInactive in the circle sizes: they are a glance you keep beside your
-    // work, and one that stole the keyboard every time it appeared would be
-    // worse than no circle at all.
-    if (callWindowSize === "panel") {
-      callWindow.show();
-      callWindow.focus();
-    } else {
-      callWindow.showInactive();
-    }
-    return callWindow;
+/**
+ * Change the window's shape from the shell's side — a request from a renderer
+ * (its own size buttons, or an opener asking for circles) or from the shell's
+ * own bookkeeping. Remembers the place the shape being LEFT was in, writes the
+ * call size down if it is one, and applies the new shape.
+ */
+function setCallWindowShape(win, size, opts) {
+  const next = normalizeCallWindowSize(size);
+  if (next === callWindowSize) {
+    // Same shape, but a hidden window asked to show itself again.
+    if (opts && opts.reveal && next !== "idle" && !win.isVisible()) revealCallWindow(win, next);
+    return next;
   }
-  // The size the person last left it in — unless the opener asked for one
-  // (the walkie card's "Float over your work" wants circles, not a stage).
-  // Read before the URL is built, because the renderer is told which shape it
-  // is opening in.
-  callWindowSize = opts && opts.size ? normalizeCallWindowSize(opts.size) : savedCallWindowSize();
-  if (opts && opts.size) updateSettings({ callPanelWindow: { ...loadCallPanelState(), size: callWindowSize } });
+  rememberCallWindowPlace(win);
+  callWindowSize = next;
+  rememberCallSize(next);
+  applyCallWindowSize(win, next, opts);
+  broadcastWindowRole();
+  return next;
+}
+
+/**
+ * The window, made if it does not exist. `roomKey` and `opts` are the older
+ * way in — a room in the URL that the renderer takes over on load — and are
+ * only used when the window has to be BUILT here. The persistent window is
+ * built at boot with no room, and rooms reach it as commands afterwards.
+ */
+function ensureCallWindow(roomKey, opts) {
+  if (callWindow && !callWindow.isDestroyed()) return callWindow;
+  callWindowEnded = false;
+  callWindowHost = false;
+  // The shape the window is born in. A room in hand opens the call in the
+  // size the person last left it (or the one the opener asked for); no room
+  // is the idle host, hidden until something happens.
+  callWindowSize = roomKey
+    ? opts && opts.size
+      ? normalizeCallWindowSize(opts.size)
+      : savedCallWindowSize()
+    : "idle";
+  if (roomKey) rememberCallSize(callWindowSize);
   const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
   const zoom = getAutoZoomFactor();
   const win = new BrowserWindow({
@@ -940,10 +1063,11 @@ function createCallWindow(roomKey, opts) {
     ...(bounds || {}),
     minWidth: CALL_PANEL_SIZE.minWidth,
     minHeight: CALL_PANEL_SIZE.minHeight,
-    // No chrome, in any size. The circle sizes need a see-through frameless
-    // window and neither option can be changed after construction, so the stage
-    // is a card the renderer paints inside the same glass: rounded corners of
-    // its own, its header row as the drag surface, its own close button.
+    // No chrome, in any shape. The circle shapes need a see-through frameless
+    // window and neither option can be changed after construction, so the
+    // stage is a card the renderer paints inside the same glass: rounded
+    // corners of its own, its header row as the drag surface, its own close
+    // button.
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -951,13 +1075,16 @@ function createCallWindow(roomKey, opts) {
     // card it is a visible seam, and around a circle it is a grey box floating
     // over somebody's work.
     hasShadow: false,
+    // No taskbar entry: in its small shapes it has no title bar to recover it
+    // from, and the elsewhere pill in the app is what brings it back.
+    skipTaskbar: true,
     webPreferences: {
       ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--call-panel-window"],
-      // It holds the call. Throttling this window would throttle the media —
-      // and in the circle sizes it is usually behind another window, since
-      // being behind other windows is what those sizes are for.
+      // It holds the microphone. Throttling this window would throttle the
+      // media — and it is usually hidden or behind another window, since
+      // being out of the way is what its small shapes are for.
       backgroundThrottling: false,
       // Face tracking needs the Shape Detection API's FaceDetector, and
       // Chromium does not expose it by default any more — measured on Chrome
@@ -976,19 +1103,20 @@ function createCallWindow(roomKey, opts) {
     show: false,
   });
   callWindow = win;
-  callWindowState = {
-    room: roomKey,
-    mic: !!(opts && opts.mic),
-    camera: !!(opts && opts.camera),
-    scribe: !!(opts && opts.scribe),
-  };
+  callWindowState = roomKey
+    ? {
+        room: roomKey,
+        mic: !!(opts && opts.mic),
+        camera: !!(opts && opts.camera),
+        scribe: !!(opts && opts.scribe),
+      }
+    : null;
 
-  applyCallWindowSize(win, callWindowSize);
+  applyCallWindowSize(win, callWindowSize, { reveal: false });
   win.loadURL(callPanelUrl(roomKey, opts));
   win.once("ready-to-show", () => {
-    if (win.isDestroyed()) return;
-    if (callWindowSize === "panel") win.show();
-    else win.showInactive();
+    if (win.isDestroyed() || callWindowSize === "idle") return;
+    revealCallWindow(win, callWindowSize);
   });
   win.webContents.on("did-finish-load", () => {
     if (win.isDestroyed()) return;
@@ -1005,8 +1133,8 @@ function createCallWindow(roomKey, opts) {
 
   // Debounced: a drag moves this window at the cursor's rate, and writing the
   // settings file on every one of those would be sixty disk writes a second.
-  // Both savers run and each ignores the sizes it does not own, so the size the
-  // window is actually in is the one that gets written.
+  // Each saver ignores the shapes it does not own, so the shape the window is
+  // actually in is the one that gets written.
   const remember = () => {
     clearTimeout(callPlaceTimer);
     callPlaceTimer = setTimeout(() => rememberCallWindowPlace(win), 400);
@@ -1017,60 +1145,86 @@ function createCallWindow(roomKey, opts) {
     clearTimeout(callPlaceTimer);
     stopCallWindowDrag();
     rememberCallWindowPlace(win);
-    // A live huddle is a window of its own. Closing it hides, like the
-    // palette — the microphone stays, the main window does not grow a card
-    // trapped in its edges. Hang-up and quit actually destroy it.
+    // The window is the walkie's ear and the call's home: closing it HIDES,
+    // like the palette. Quitting is what destroys it — and, for an older
+    // renderer that never declared itself the host, its own hang-up.
     if (
       shouldHideCallWindow({
         ended: callWindowEnded,
         quitting: appIsQuitting,
+        host: callWindowHost,
       })
     ) {
       e.preventDefault();
+      // Closing the wall is putting the buddy list away, the way closing the
+      // people window was: the host goes idle and the next ask brings it back.
+      if (callWindowSize === "wall") setWallWanted(false);
       win.hide();
-      syncFacesOverlayYield();
       broadcastWindowRole();
       return;
     }
-    handBackCall({ ended: callWindowEnded });
   });
   win.on("closed", () => {
     if (callWindow === win) {
       callWindow = null;
       callWindowState = null;
       callWindowEnded = false;
+      callWindowHost = false;
+      lastVoiceMirror = null;
     }
-    // The call is gone; the idle faces overlay it displaced comes back.
-    syncFacesOverlayYield();
     broadcastWindowRole();
   });
   broadcastWindowRole();
   return win;
 }
 
-// Tell the main window the call is coming back. Sent while the leaving window
-// is still connected, so the main window's join is what ends its participation
-// and the two never both let go at once.
-//
-// `ended` is the leaving window's own account of why it closed, and it is the
-// only thing that stops a handback other than the app quitting: with one call
-// window there is nowhere else for a live call to be.
-function handBackCall({ ended } = {}) {
-  const state = callWindowState;
-  const hand = shouldHandBackCall({
-    ended: !!ended,
-    quitting: appIsQuitting,
-    room: (state && state.room) || null,
-  });
-  if (!hand) return;
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send("call-panel-handback", {
-    room: state.room,
-    mic: !!state.mic,
-    camera: !!state.camera,
-    scribe: !!state.scribe,
-  });
-  mainWindow.show();
+/**
+ * Open the window onto a room.
+ *
+ * A HOST renderer takes the room as a command — the window is already up,
+ * already holds the walkie's ear and possibly a burst in this very room, and
+ * loading a URL into it would tear all of that down. Anything else (the window
+ * being built right now, or an older renderer) gets the room in its URL, which
+ * both kinds of renderer understand.
+ */
+function openCallWindow(roomKey, opts) {
+  if (!roomKey || typeof roomKey !== "string") return null;
+  const o = opts && typeof opts === "object" ? opts : {};
+  const existed = !!callWindow && !callWindow.isDestroyed();
+  const win = ensureCallWindow(existed ? null : roomKey, o);
+  if (!win) return null;
+  callWindowEnded = false;
+  if (existed) {
+    if (callWindowHost) {
+      win.webContents.send("call-panel-open", {
+        room: roomKey,
+        mic: !!o.mic,
+        camera: !!o.camera,
+        scribe: !!o.scribe,
+        ring: !!o.ring,
+        size: o.size ? normalizeCallWindowSize(o.size) : null,
+      });
+    } else if (!callWindowState || callWindowState.room !== roomKey) {
+      // Already open, older renderer, on a DIFFERENT room: point it at the new
+      // one — one call at a time means one window, and the person asked for
+      // this room.
+      win.loadURL(callPanelUrl(roomKey, o));
+    }
+    // An asked-for size reshapes the window that exists, the same way the
+    // renderer's own size buttons do. A host reshapes itself off the command
+    // above once it has the room, so the window is not moved under it here.
+    if (!callWindowHost) {
+      if (o.size) setCallWindowShape(win, o.size);
+      else if (!isCallSize(callWindowSize)) setCallWindowShape(win, savedCallWindowSize());
+      if (!win.isVisible()) revealCallWindow(win, callWindowSize);
+    }
+  }
+  return win;
+}
+
+/** The voice window, built at boot: hidden, no room, waiting to hear. */
+function createVoiceWindow() {
+  return ensureCallWindow(null, {});
 }
 
 // Only the call window may drive its own size, click-through and drag, and only
@@ -1080,8 +1234,14 @@ function senderIsCallWindow(e) {
   return win && !win.isDestroyed() && win === callWindow ? win : null;
 }
 
-// ── The see-through switches, shared by the floating circle windows ────────
-//
+function callWindowHostsRoom() {
+  return !!callWindow && !callWindow.isDestroyed() && !!(callWindowState && callWindowState.room);
+}
+
+function hasVoiceHost() {
+  return !!callWindow && !callWindow.isDestroyed() && callWindowHost;
+}
+
 // Two windows draw circles over the person's work: the minimized call and the
 // idle faces overlay. Both need the same three runtime switches — lift
 // click-through while the pointer is over a circle, stay the size of their
@@ -1091,6 +1251,7 @@ function senderIsCallWindow(e) {
 function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   const mayInteract = opts.mayInteract || (() => true);
   const mayResize = opts.mayResize || (() => true);
+  const anchor = opts.anchor || (() => "center");
   const getWindow = opts.getWindow;
   let dragTimer = null;
   const stopDrag = () => {
@@ -1144,11 +1305,16 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     // Position wins over size when the display is smaller than the row: the
     // left edge stays reachable and the far side overflows, same rule as
     // clampCorner on the web side.
+    //
+    // The strip is the other way round: it is tucked into the bottom-right
+    // corner, so it grows up and to the left, and that corner stays put.
     const [x, y] = win.getPosition();
-    const cx = x - Math.trunc((w - curW) / 2);
-    const area = screen.getDisplayMatching({ x: cx, y, width: w, height: h }).workArea;
+    const corner = anchor() === "bottom-right";
+    const cx = corner ? x + (curW - w) : x - Math.trunc((w - curW) / 2);
+    const cy = corner ? y + (curH - h) : y;
+    const area = screen.getDisplayMatching({ x: cx, y: cy, width: w, height: h }).workArea;
     const nx = Math.max(area.x, Math.min(cx, area.x + area.width - w));
-    const ny = Math.max(area.y, Math.min(y, area.y + area.height - h));
+    const ny = Math.max(area.y, Math.min(cy, area.y + area.height - h));
     if (nx !== x || ny !== y) win.setPosition(nx, ny);
   });
 
@@ -1185,18 +1351,22 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
 }
 
 const { stopDrag: stopCallWindowDrag } = registerSeeThroughIpc("call-window", senderIsCallWindow, {
-  // Only the click-through sizes have anything to lift or drag; the stage
-  // drags by its own header row and takes every click by construction.
-  mayInteract: () => callWindowChrome(callWindowSize).clickThrough,
-  // Resizing is refused in the panel size, where the person's own bounds are
+  // Only the click-through shapes have anything to lift or drag; the stage
+  // and the strip drag by their own header rows and take every click by
+  // construction.
+  mayInteract: () => callWindowChrome(callWindowSize, { pinned: wallPinned() }).clickThrough,
+  // Resizing is refused in the panel shape, where the person's own bounds are
   // the answer and a renderer resizing the window under them would be the
   // window fighting the hand on its edge.
-  mayResize: () => callWindowSize !== "panel",
+  mayResize: () => callWindowSize !== "panel" && callWindowSize !== "wall" && callWindowSize !== "idle",
+  // The strip grows and shrinks from its bottom-right corner, which is the
+  // corner it is tucked into; the circles keep their centre.
+  anchor: () => (callWindowSize === "walkie" ? "bottom-right" : "center"),
   getWindow: () => callWindow,
 });
 
 ipcMain.handle("open-call-panel", (_e, roomKey, opts) => {
-  createCallWindow(roomKey, opts && typeof opts === "object" ? opts : {});
+  openCallWindow(roomKey, opts && typeof opts === "object" ? opts : {});
 });
 
 // Only the panel may close the panel, and only it can say whether the call
@@ -1212,7 +1382,7 @@ ipcMain.handle("close-call-panel", (e, opts) => {
 // Any window may raise the huddle: the elsewhere pill, a second huddle
 // click. The call already lives here; this only makes the window visible.
 ipcMain.handle("show-call-panel", () => {
-  if (!callWindow || callWindow.isDestroyed()) {
+  if (!callWindowHostsRoom()) {
     const owner = appWindows().find((win) => windowStates.get(win.webContents.id)?.inCall);
     if (!owner) return false;
     if (owner.isMinimized()) owner.restore();
@@ -1220,68 +1390,100 @@ ipcMain.handle("show-call-panel", () => {
     owner.focus();
     return true;
   }
-  if (callWindowSize === "panel") {
-    callWindow.show();
-    callWindow.focus();
-  } else {
-    callWindow.showInactive();
+  // A host decides its own shape: told, it stops hiding the call and asks for
+  // the call's shape itself. An older renderer is moved by the shell.
+  if (callWindowHost) {
+    callWindow.webContents.send("call-panel-show");
+    if (isCallSize(callWindowSize)) revealCallWindow(callWindow, callWindowSize);
+    return true;
   }
+  // A hidden window in a shape that shows nothing has nothing to raise; the
+  // call's own shape does.
+  if (!isCallSize(callWindowSize)) setCallWindowShape(callWindow, savedCallWindowSize(), { reveal: true });
+  else revealCallWindow(callWindow, callWindowSize);
   return true;
 });
 
 ipcMain.on("report-call-panel-state", (e, state) => {
   if (!senderIsCallWindow(e)) return;
   if (!state || typeof state !== "object") return;
+  const before = callWindowHostsRoom();
   callWindowState = {
     room: typeof state.room === "string" ? state.room : null,
     mic: state.mic === true,
     camera: state.camera === true,
     scribe: state.scribe === true,
   };
+  // Every other window reads "the call lives there" off this; a room arriving
+  // or leaving is a change of role for all of them.
+  if (before !== callWindowHostsRoom()) broadcastWindowRole();
 });
 
-// The size change. The window keeps its media across it — that is the whole
-// point of one window with three sizes — so this only moves and reshapes it.
+// The renderer says it is the voice host: it holds the walkie's ear, takes
+// rooms as commands, and treats a hang-up as going idle rather than as the
+// window going away. Every other window learns through the role broadcast
+// that a host exists, and starts sending its gestures here.
+ipcMain.on("voice-host-ready", (e) => {
+  if (!senderIsCallWindow(e)) return;
+  if (callWindowHost) return;
+  callWindowHost = true;
+  broadcastWindowRole();
+});
+
+// The shape change. The window keeps its media across it — that is the whole
+// point of one window with many shapes — so this only moves and reshapes it.
 ipcMain.handle("set-call-window-size", (e, size) => {
   const win = senderIsCallWindow(e);
   if (!win) return null;
-  const next = normalizeCallWindowSize(size);
-  if (next === callWindowSize) return next;
-  // Remember where the size being LEFT was, before the window moves.
-  rememberCallWindowPlace(win);
-  callWindowSize = next;
-  updateSettings({ callPanelWindow: { ...loadCallPanelState(), size: next } });
-  applyCallWindowSize(win, next);
-  return next;
+  return setCallWindowShape(win, size, { reveal: true });
 });
 
 ipcMain.handle("get-call-window-size", (e) => (senderIsCallWindow(e) ? callWindowSize : null));
 
-// ---------------------------------------------------------------------------
-// The faces overlay: the team as circles floating over the work (route
-// /faces), when there is no call. Born see-through, frameless, always on top
-// and click-through, exactly like the call window's circle sizes — the same
-// spot on screen doing the same job, with photos where the call puts video.
-//
-// ONE FLOATING THING AT ONE SPOT. The overlay shares the call circles' saved
-// position (callPanelWindow.circles): dragging either one moves where both
-// live, so a call starting reads as the photos turning into video rather than
-// a second thing appearing. And while the call window is in a circle size the
-// overlay YIELDS — hidden, not closed — and returns when the call ends or
-// grows back to the stage.
-//
-// Open state persists: an overlay somebody keeps over their work comes back on
-// the next launch. Hiding for a call never touches that flag.
-// ---------------------------------------------------------------------------
+// The two facts a host needs to decide its own shape: what it is in now, and
+// which call shape the person last chose — the one a call should open in.
+ipcMain.handle("get-voice-window-state", (e) =>
+  senderIsCallWindow(e) ? { size: callWindowSize, callSize: savedCallWindowSize() } : null,
+);
 
-const FACES_PATH = "/faces";
-// What the overlay is born as; the renderer reports the true size a frame
-// later, same as the call circles. This only keeps the first frame from being
-// a full-screen sheet of invisible glass.
-const FACES_SEED_SIZE = { width: 112, height: 112 };
+// ── Remotes ────────────────────────────────────────────────────────────────
+//
+// Every other window is a remote for the host: a press on a talk key, a join,
+// an answered ring or a hang-up is a command sent here and delivered to the
+// host, which holds the only microphone. The answer says whether a host took
+// it, so a renderer on a shell (or a moment) without one can act locally
+// instead of doing nothing.
+ipcMain.handle("voice-command", (_e, cmd, args) => {
+  if (!hasVoiceHost()) return false;
+  if (typeof cmd !== "string" || !cmd) return false;
+  callWindow.webContents.send("voice-command", { cmd, args: Array.isArray(args) ? args : [] });
+  return true;
+});
 
-let facesWindow = null;
-let facesPlaceTimer = null;
+// The host mirrors its walkie and call facts to every other window, so a talk
+// key in the main window lights for a burst the host is speaking. Relayed
+// through here because the host cannot address the other windows itself; the
+// latest one is replayed to a window that opens later.
+ipcMain.on("voice-mirror", (e, payload) => {
+  if (!senderIsCallWindow(e)) return;
+  if (!payload || typeof payload !== "object") return;
+  lastVoiceMirror = payload;
+  for (const win of appWindows()) {
+    if (win === callWindow || win.webContents.isDestroyed()) continue;
+    win.webContents.send("voice-mirror", payload);
+  }
+});
+
+// ── The idle faces ─────────────────────────────────────────────────────────
+//
+// The team as photo circles floating over the work when there is no call —
+// a shape of the voice window, at the call circles' own spot, so a call
+// starting reads as the photos turning into video rather than a second thing
+// appearing. Opening is a declaration — "keep the team over my work" — so it
+// persists across launches; closing is its withdrawal. Any app window may ask:
+// the entry button lives in the people window, and the overlay's own chrome
+// is what closes it. The host reads the flag off its role and takes the shape
+// itself.
 
 function facesOverlayWanted() {
   const saved = loadFullSettings().facesWindow;
@@ -1293,151 +1495,62 @@ function setFacesOverlayWanted(open) {
   updateSettings({
     facesWindow: { ...(saved && typeof saved === "object" ? saved : {}), open: open === true },
   });
-}
-
-// While the call is minimized to circles the overlay stands down — two rows of
-// floating circles at once is the collision the shared spot exists to avoid.
-// The call window in the STAGE is an ordinary window somewhere else on screen,
-// so the overlay stays.
-function callCirclesShowing() {
-  return (
-    !!callWindow &&
-    !callWindow.isDestroyed() &&
-    callWindow.isVisible() &&
-    callWindowChrome(callWindowSize).clickThrough
-  );
-}
-
-function syncFacesOverlayYield() {
-  if (!facesWindow || facesWindow.isDestroyed()) return;
-  if (callCirclesShowing()) {
-    if (facesWindow.isVisible()) {
-      // A hidden window keeps its runtime switches, and the renderer — which
-      // is what normally puts them back — sees no mouse while hidden. A drag
-      // or a lifted click-through that survived the yield would come back as
-      // a window eating clicks over glass, so both are reset on the way down.
-      facesSeeThrough.stopDrag();
-      facesWindow.setIgnoreMouseEvents(true, { forward: true });
-      facesWindow.hide();
-    }
-  } else if (!facesWindow.isVisible()) {
-    // showInactive, always: the overlay is a glance you keep beside your work,
-    // and one that stole the keyboard when a call ended would be worse than
-    // none at all.
-    facesWindow.showInactive();
-  }
-}
-
-function createFacesWindow() {
-  if (facesWindow && !facesWindow.isDestroyed()) {
-    syncFacesOverlayYield();
-    return facesWindow;
-  }
-  const zoom = getAutoZoomFactor();
-  const win = new BrowserWindow({
-    ...FACES_SEED_SIZE,
-    // Born see-through, same reason as the call window: `transparent` and
-    // `frame` are construction options, and everything this window ever shows
-    // is circles on glass.
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: false,
-    resizable: false,
-    // No taskbar entry: it has no title bar to recover it from, and closing it
-    // is the entry button's job, not the window manager's.
-    skipTaskbar: true,
-    webPreferences: {
-      ...preloadPrefs(),
-      zoomFactor: zoom,
-      additionalArguments: [`--zoom-factor=${zoom}`, "--faces-window"],
-      // Presence must keep moving while the overlay sits unfocused over other
-      // apps — which is the only way it is ever used.
-      backgroundThrottling: false,
-      // Same flag as the call window, for the same reason: the overlay centres
-      // photo circles on faces with the Shape Detection API where available.
-      enableBlinkFeatures: "FaceDetector",
-    },
-    icon: path.join(__dirname, "assets", "icon.png"),
-    show: false,
-  });
-  facesWindow = win;
-  const pos = circlesPosition(FACES_SEED_SIZE);
-  win.setPosition(pos.x, pos.y);
-  win.setAlwaysOnTop(true, "floating");
-  // Follow the person between desktops and stay visible over a full-screen
-  // app — where a glance at the team is most needed and least reachable.
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  // `forward: true` keeps the renderer receiving mouse MOVES while it ignores
-  // clicks — without it the window would go deaf the moment the pointer left a
-  // circle and could never learn that it came back.
-  win.setIgnoreMouseEvents(true, { forward: true });
-  win.loadURL(`${currentBaseUrl}${FACES_PATH}`);
-  win.once("ready-to-show", () => {
-    if (win.isDestroyed()) return;
-    syncFacesOverlayYield();
-  });
-  win.webContents.on("did-finish-load", () => {
-    if (win.isDestroyed()) return;
-    win.webContents.setZoomFactor(getAutoZoomFactor());
-    win.webContents.executeJavaScript(
-      "document.documentElement.classList.add('electron-desktop')"
-    );
-  });
-  // Same rule as every window: new-window links open in the default browser.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
-    return { action: "deny" };
-  });
-  // Its moves write the SHARED circles slot, debounced like every saver here.
-  const saveFacesPlace = () => {
-    if (win.isDestroyed() || win.isMinimized()) return;
-    const [x, y] = win.getPosition();
-    updateSettings({ callPanelWindow: { ...loadCallPanelState(), circles: { x, y } } });
-  };
-  win.on("move", () => {
-    clearTimeout(facesPlaceTimer);
-    facesPlaceTimer = setTimeout(saveFacesPlace, 400);
-  });
-  win.on("close", () => {
-    // Flush, not drop: a drag that ended within the debounce window is the
-    // person's last word on where the circles live.
-    clearTimeout(facesPlaceTimer);
-    saveFacesPlace();
-  });
-  win.on("closed", () => {
-    clearTimeout(facesPlaceTimer);
-    if (facesWindow === win) facesWindow = null;
-    broadcastWindowRole();
-  });
+  // The faces and the wall are two sizes of one glance at the team: asking for
+  // one is putting the other away.
+  if (open === true) updatePeopleState({ open: false });
   broadcastWindowRole();
-  return win;
 }
 
-function senderIsFacesWindow(e) {
-  const win = BrowserWindow.fromWebContents(e.sender);
-  return win && !win.isDestroyed() && win === facesWindow ? win : null;
+// ── The wall ───────────────────────────────────────────────────────────────
+//
+// The buddy list, as a shape of the voice window: the same card the people
+// window drew, in the same remembered rectangle, with the same pin — and the
+// same microphone as the strip and the call, which is the point. Wanted is a
+// standing arrangement like the faces', persisted across launches.
+
+function wallWanted() {
+  return loadPeopleState().open === true;
 }
 
-const facesSeeThrough = registerSeeThroughIpc("faces-window", senderIsFacesWindow, {
-  getWindow: () => facesWindow,
-});
+function wallPinned() {
+  return loadPeopleState().alwaysOnTop === true;
+}
 
-// Opening is a declaration — "keep the team over my work" — so it persists;
-// closing is its withdrawal. Any app window may ask: the entry button lives in
-// the people window, and the overlay's own chrome is what closes it.
+function setWallWanted(open) {
+  updatePeopleState({ open: open === true });
+  if (open === true) {
+    const saved = loadFullSettings().facesWindow;
+    updateSettings({ facesWindow: { ...(saved && typeof saved === "object" ? saved : {}), open: false } });
+  }
+  broadcastWindowRole();
+}
+
+// The person asked for the wall: it should come up WITH focus, the way the
+// people window did. A wall that returns on its own (a call ending) does not.
+let wallFocusPending = false;
+
+// Where the wall sits the first time: the right edge of the work area, clear
+// of the menu bar — beside the work, where a buddy list lives.
+function defaultWallBounds() {
+  const area = screen.getPrimaryDisplay().workArea;
+  return {
+    x: Math.round(area.x + area.width - PEOPLE_SIZE.width - 28),
+    y: Math.round(area.y + 28),
+    width: PEOPLE_SIZE.width,
+    height: PEOPLE_SIZE.height,
+  };
+}
+
 ipcMain.handle("open-faces-window", () => {
   setFacesOverlayWanted(true);
-  createFacesWindow();
+  createVoiceWindow();
 });
 
 ipcMain.handle("close-faces-window", () => {
   setFacesOverlayWanted(false);
-  if (facesWindow && !facesWindow.isDestroyed()) facesWindow.close();
 });
 
-ipcMain.handle("get-faces-window-open", () => !!facesWindow && !facesWindow.isDestroyed());
-
+ipcMain.handle("get-faces-window-open", () => facesOverlayWanted());
 // ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
 // would otherwise fire its own banner and sound for the same event. Main is
@@ -1508,21 +1621,26 @@ function broadcastWindowRole() {
     // that IS it renders the panel, the others stand down from the pumps and
     // surfaces it owns.
     const hasPeople = !!peopleWindow && !peopleWindow.isDestroyed();
-    // Whether the call has a window of its own. The call lives THERE, so no
-    // other window draws a dock for it — whichever of its three sizes it is in.
-    const hasCallPanel = !!callWindow && !callWindow.isDestroyed();
-    // Whether the faces overlay exists (it may be yielding to a call). The
-    // people window's toggle reads this, so a close from the overlay's own
-    // chrome — or from another window — is reflected everywhere.
-    const hasFaces = !!facesWindow && !facesWindow.isDestroyed();
+    // Whether the call lives in the voice window right now — whichever shape
+    // it is in. No other window draws a dock for it then; they show the
+    // elsewhere pill.
+    const hasCallPanel = callWindowHostsRoom();
+    // Whether a voice host exists at all: a persistent window holding the
+    // walkie's ear that takes joins and presses as commands. Every other
+    // window sends its gestures there instead of opening a microphone of its
+    // own — and on a shell without one, they keep doing what they always did.
+    const voiceWindow = hasVoiceHost();
+    // Whether the person wants the idle team floating over their work, or
+    // the buddy list as a wall. The host takes its idle shape off these; the
+    // toggles that ask for them draw them.
+    const facesOverlay = facesOverlayWanted();
+    const peopleWall = wallWanted();
     for (const win of appWindows()) {
       // A window can be past its render frame's disposal and not yet report
       // isDestroyed(), and sending into that gap throws "Render frame was
       // disposed before WebFrameMain could be accessed". The broadcast is
       // deferred by a tick precisely because windows churn, so the gap is not
-      // rare — and the call panel, which is created and closed once per call,
-      // walks through it far more often than the windows this code was
-      // written for. Observed in a from-source run.
+      // rare. Observed in a from-source run.
       if (win.webContents.isDestroyed()) continue;
       win.webContents.send("window-role", {
         leader: !!leader && leader.id === win.id,
@@ -1530,21 +1648,9 @@ function broadcastWindowRole() {
         anyInCall,
         peopleWindow: hasPeople,
         callPanel: hasCallPanel,
-        facesOverlay: hasFaces,
-      });
-    }
-    // The overlay runs the same web app but is never the app's voice: not
-    // electable, not a banner target (it ignores clicks), and the web side
-    // defaults to leader until told otherwise — so it is told, every time,
-    // outside the election.
-    if (hasFaces && !facesWindow.webContents.isDestroyed()) {
-      facesWindow.webContents.send("window-role", {
-        leader: false,
-        appFocused,
-        anyInCall,
-        peopleWindow: hasPeople,
-        callPanel: hasCallPanel,
-        facesOverlay: true,
+        voiceWindow,
+        facesOverlay,
+        peopleWall,
       });
     }
   }, 30);
@@ -1558,6 +1664,11 @@ app.on("browser-window-blur", () => broadcastWindowRole());
 
 ipcMain.on("report-window-state", (e, state) => {
   if (!state || typeof state !== "object") return;
+  // A window reporting for the first time has not seen the host's mirror yet;
+  // without this its talk keys would start blank until the host next moved.
+  if (!windowStates.has(e.sender.id) && lastVoiceMirror && !(callWindow && e.sender === callWindow.webContents)) {
+    e.sender.send("voice-mirror", lastVoiceMirror);
+  }
   windowStates.set(e.sender.id, {
     active: typeof state.active === "string" ? state.active : null,
     open: Array.isArray(state.open)
@@ -1989,7 +2100,7 @@ ipcMain.on("call-ring-answer", (e, inviteId, roomKey) => {
   // takeover stands down: the ACCEPT is what takes the seat here, and a
   // takeover racing it would join a room this person has not been admitted to
   // yet and leave the invite ringing.
-  const call = createCallWindow(roomKey, { mic: true, ring: true });
+  const call = openCallWindow(roomKey, { mic: true, ring: true });
   if (!call || call.webContents.isDestroyed()) return;
   const accept = () => {
     if (!call.isDestroyed() && !call.webContents.isDestroyed()) {
@@ -2080,9 +2191,16 @@ function toggleEnvironment() {
   if (peopleWindow && !peopleWindow.isDestroyed()) {
     peopleWindow.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
   }
-  // Same rule for the faces overlay.
-  if (facesWindow && !facesWindow.isDestroyed()) {
-    facesWindow.loadURL(`${currentBaseUrl}${FACES_PATH}`);
+  // Same rule for the voice window. A reload drops the host declaration: the
+  // page coming up on the other origin declares itself again.
+  if (callWindow && !callWindow.isDestroyed()) {
+    callWindowHost = false;
+    callWindowState = null;
+    lastVoiceMirror = null;
+    callWindowSize = "idle";
+    applyCallWindowSize(callWindow, "idle");
+    callWindow.loadURL(callPanelUrl(null, {}));
+    broadcastWindowRole();
   }
 }
 
@@ -2846,8 +2964,9 @@ app.whenReady().then(() => {
   createTray();
   buildAppMenu();
   createPaletteWindow();
-  // An overlay somebody kept over their work comes back where they left it.
-  if (facesOverlayWanted()) createFacesWindow();
+  // The voice window: hidden, no room, listening. Built now so a teammate's
+  // burst has a renderer to land in before anybody presses anything.
+  createVoiceWindow();
   if (app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
       { label: "New Session", click: () => openFullSessionInMain() },

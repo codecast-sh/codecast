@@ -467,8 +467,8 @@ async function firstDivergentPreview(
 ): Promise<string | undefined> {
   const rows = await ctx.db
     .query("messages")
-    .withIndex("by_conversation_timestamp", (q: any) =>
-      q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "user").gt("timestamp", afterTs)
     )
     .order("asc")
     .take(40);
@@ -498,12 +498,16 @@ async function computeOriginDivergentPreviews(
     originLineId: Id<"conversations"> | undefined,
   ) => {
     if (!originLineId) return;
+    const seen = new Set<string>();
     for (const fork of forks) {
       const uuid = fork.parent_message_uuid;
-      if (!uuid || out[uuid]) continue;
+      if (!uuid || seen.has(uuid) || out[uuid]) continue;
+      seen.add(uuid);
       const fp = await ctx.db
         .query("messages")
-        .withIndex("by_message_uuid", (q: any) => q.eq("message_uuid", uuid))
+        .withIndex("by_conversation_uuid", (q: any) =>
+          q.eq("conversation_id", originLineId).eq("message_uuid", uuid)
+        )
         .first();
       if (!fp) continue;
       const preview = await firstDivergentPreview(ctx, originLineId, fp.timestamp);
@@ -717,13 +721,12 @@ async function findChildConversations(
     .take(CHILDREN_LIMIT);
 
   const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
-  // Each preview costs a separate messages query. Convex budgets ~4k system
-  // operations per function; a session with thousands of spawned children blew
-  // straight through it ("too many system operations" timeouts). Cap the N+1 —
-  // allChildren is newest-first, so the newest children keep their previews.
-  const PREVIEW_LIMIT = 300;
+  const PREVIEW_LIMIT = 24;
   const firstMessagePreviews = new Map<string, string>();
-  for (const child of subagentChildren.slice(0, PREVIEW_LIMIT)) {
+  const previewChildren = subagentChildren
+    .filter((child: any) => !child.parent_message_uuid)
+    .slice(0, PREVIEW_LIMIT);
+  await Promise.all(previewChildren.map(async (child: any) => {
     const firstMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
@@ -733,7 +736,7 @@ async function findChildConversations(
       const cleaned = content.replace(/<[^>]+>/g, "").trim();
       firstMessagePreviews.set(child._id as string, cleaned.slice(0, 150));
     }
-  }
+  }));
 
   const children = allChildren
     .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
@@ -749,10 +752,8 @@ async function findChildConversations(
       .filter((c: any) => c.parent_message_uuid)
       .map((c: any) => [c.parent_message_uuid as string, c._id as string])
   );
-  for (const msg of messages) {
-    if (msg.message_uuid && childByParentUuid.has(msg.message_uuid)) {
-      map[msg.message_uuid] = childByParentUuid.get(msg.message_uuid)!;
-    }
+  for (const [uuid, childId] of childByParentUuid) {
+    map[uuid] = childId;
   }
 
   // Build agent name -> child conversation ID map from stored subagent_description
@@ -793,15 +794,14 @@ async function findChildConversations(
     }
 
     const matchedChildIds = new Set([...Object.values(map), ...Object.values(agentNameMap)]);
-    if (matchedChildIds.size < subagentChildren.length) {
-      // Bounded newest-first scan, NOT .collect(): collecting a 7k-message
-      // transcript here was the other half of the operation-budget timeout.
-      // Recent messages hold the spawns most likely to still need matching.
+    if (unmappedChildren.some((child: any) => !matchedChildIds.has(child._id))) {
       const allParentMessages = await ctx.db
         .query("messages")
-        .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId))
+        .withIndex("by_conversation_role_timestamp", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("role", "assistant")
+        )
         .order("desc")
-        .take(2000);
+        .take(200);
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {

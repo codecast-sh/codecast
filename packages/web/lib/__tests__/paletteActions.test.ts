@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { paletteActions, paletteDigitIndex, paletteObjectPath, type PaletteTargetType } from "../paletteActions";
+import { paletteActions, paletteActionForKey, paletteDigitIndex, paletteObjectPath, type PaletteTargetType } from "../paletteActions";
 import { resolvePaletteTarget } from "../paletteTarget";
 
 const session = { _id: "session-1", user_id: "me", agent_type: "claude_code", message_count: 3, title: "Example" };
@@ -66,8 +66,62 @@ describe("command menu action coverage", () => {
       expect(new Set(letters).size).toBe(letters.length);
     }
   });
+  test("registered commands do not get a second menu shortcut", () => {
+    for (const type of ["session", "task", "doc", "plan", "project", "trigger"] as const) {
+      for (const action of paletteActions(type, [session], "me", true)) {
+        if (action.shortcutAction) expect(action.hotkey).toBeUndefined();
+      }
+    }
+    const copyLink = paletteActions("session", [session], "me").find(action => action.key === "copylink");
+    expect(copyLink?.shortcutAction).toBe("conv.copyLink");
+  });
   test("sharing is omitted when chat is disabled", () => {
     expect(paletteActions("task", [{ _id: "t" }], "me", false).map(a => a.key)).not.toContain("forward");
+  });
+});
+
+describe("command menu keyboard reuse", () => {
+  const actions = paletteActions("session", [session], "me");
+  const event = (overrides: Record<string, unknown> = {}) => ({
+    key: "Backspace", code: "Backspace", ctrlKey: true, metaKey: false,
+    altKey: false, shiftKey: false, target: { tagName: "INPUT", value: "" },
+    ...overrides,
+  }) as unknown as KeyboardEvent;
+
+  test("lifecycle commands use the registered backspace family", () => {
+    expect(paletteActionForKey(event(), actions)?.key).toBe("session_stash");
+    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_kill");
+    expect(paletteActionForKey(event({ altKey: true }), actions)?.key).toBe("session_stash_hide");
+    expect(paletteActionForKey(event({ ctrlKey: false, shiftKey: true }), actions)?.key).toBe("session_defer");
+    expect(paletteActionForKey(event({ ctrlKey: false, altKey: true, shiftKey: true }), actions)?.key).toBe("session_dormant");
+  });
+
+  test("backspace chords edit a nonempty search instead of acting on a session", () => {
+    for (const modifiers of [{}, { shiftKey: true }, { altKey: true }, { ctrlKey: false, shiftKey: true }, { ctrlKey: false, altKey: true, shiftKey: true }]) {
+      expect(paletteActionForKey(event({ ...modifiers, target: { tagName: "INPUT", value: "find a session" } }), actions)).toBeUndefined();
+    }
+  });
+
+  test("duplicate Alt-letter commands no longer run", () => {
+    for (const letter of ["s", "b", "d", "z", "k", "r", "p", "v", "l", "c"]) {
+      expect(paletteActionForKey(event({ key: letter, code: `Key${letter.toUpperCase()}`, ctrlKey: false, altKey: true }), actions)).toBeUndefined();
+    }
+  });
+
+  test("new menu commands keep their own accelerators", () => {
+    expect(paletteActionForKey(event({ key: "å", code: "KeyA", ctrlKey: false, altKey: true }), actions)?.key).toBe("agent_switch");
+  });
+
+  test("rename and label keep their registered chords while searching", () => {
+    const target = { tagName: "INPUT", value: "rename" };
+    expect(paletteActionForKey(event({ key: "E", code: "KeyE", shiftKey: true, target }), actions)?.key).toBe("rename");
+    expect(paletteActionForKey(event({ key: "l", code: "KeyL", target }), actions)?.key).toBe("bucket");
+  });
+
+  test("plain letters, composition and already handled keys remain untouched", () => {
+    expect(paletteActionForKey(event({ key: "s", code: "KeyS", ctrlKey: false }), paletteActions("task", [{ _id: "task" }], "me"))).toBeUndefined();
+    expect(paletteActionForKey(event({ isComposing: true }), actions)).toBeUndefined();
+    expect(paletteActionForKey(event({ defaultPrevented: true }), actions)).toBeUndefined();
   });
 });
 

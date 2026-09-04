@@ -39,7 +39,8 @@ import {
 } from "./contract.js";
 import { buildHookEnv, runHook } from "./hooks.js";
 import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
-import { resolveManifest } from "./resolver.js";
+import { withPortReservations } from "./portReservations.js";
+import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { runSetup } from "./setup.js";
 import type {
   AcquireOptions,
@@ -74,7 +75,12 @@ export async function acquireWorkspace(
   name: string,
   opts: AcquireOptions = {},
 ): Promise<AcquireResult> {
-  const manifest = resolveManifest(repoRoot);
+  const previous = readState(repoRoot, name);
+  const savedInputRoot = previous?.env.CODECAST_WORKSPACE_INPUT_ROOT;
+  const inputRoot = savedInputRoot ?? (opts.inputRoot ? fs.realpathSync(opts.inputRoot) : undefined);
+  const manifest = savedInputRoot ? previous!.manifest : resolveManifest(repoRoot, inputRoot);
+  const cloudWorkspace = process.env.CODECAST_CLOUD_WORKSPACE === "1" || previous?.env.CODECAST_CLOUD_WORKSPACE === "1";
+  if (cloudWorkspace) manifest.backend = "local";
 
   // Dispatch to non-local backend if the manifest selected one.
   if (manifest.backend && manifest.backend !== "local") {
@@ -91,52 +97,57 @@ export async function acquireWorkspace(
 
   const branch = opts.branch ?? `${BRANCH_PREFIX}${name}`;
 
-  // Attach path: existing state, ready, contract passes → return as-is.
-  const existing = readState(repoRoot, name);
-  if (existing && existing.state === "ready") {
-    const ws = stateToWorkspace(existing);
-    const contract = await validateContract(ws);
-    if (contract.ok) {
-      ws.contract = contract;
-      return { workspace: ws, created: false };
+  const prepared = await withPortReservations(repoRoot, async (reservations) => {
+    const existing = readState(repoRoot, name);
+    if (existing && existing.state === "ready") {
+      const ws = stateToWorkspace(existing);
+      const contract = await validateContract(ws);
+      if (contract.ok) {
+        ws.contract = contract;
+        return { result: { workspace: ws, created: false } };
+      }
     }
-    // Existing but broken → fall through to heal path.
-  }
 
-  // Warm-pool fast path. Skipped when:
-  //   - pool is empty / not initialized (claimFromPool returns null)
-  //   - opts.skipPool=true (e.g., from the pool's own pre-warm loop)
-  //   - opts.branch overrides the default (custom branch semantics may not
-  //     match pool slot conventions; safer to fall through)
-  //
-  // We intentionally do not pre-init the pool here — callers control sizing.
-  if (!opts.skipPool && !opts.branch && !existing) {
-    const { claimFromPool } = await import("./pool/manager.js");
-    const claimed = await claimFromPool(repoRoot, name);
-    if (claimed) {
-      return { workspace: claimed.workspace, created: true };
+    if (!opts.skipPool && !opts.branch && !existing && !inputRoot) {
+      const { claimFromPool } = await import("./pool/manager.js");
+      const claimed = await claimFromPool(repoRoot, name);
+      if (claimed) {
+        return { result: { workspace: claimed.workspace, created: true } };
+      }
     }
-  }
 
-  // Allocate ports. If a previous attempt picked an index, prefer it for
-  // stability across re-runs; else start at 0.
-  const portAlloc = await allocatePorts(manifest, {
-    startIndex: opts.resourceIndex ?? existing?.resourceIndex ?? 0,
+    const root = fs.realpathSync(repoRoot);
+    const reservedPorts = new Set(reservations
+      .filter((reservation) => reservation.repoRoot !== root || reservation.workspace.name !== name)
+      .flatMap((reservation) => Object.values(reservation.workspace.ports)));
+    const portAlloc = await allocatePorts(manifest, {
+      startIndex: opts.resourceIndex ?? existing?.resourceIndex ?? 0,
+      reservedPorts,
+    });
+    const initialEnv = buildWorkspaceEnv(manifest, portAlloc.ports);
+    if (inputRoot) initialEnv.CODECAST_WORKSPACE_INPUT_ROOT = inputRoot;
+    if (cloudWorkspace) {
+      Object.assign(initialEnv, {
+        CODECAST_CLOUD_WORKSPACE: "1",
+        BUN_INSTALL_GLOBAL_STORE: "0",
+        BUN_INSTALL_CACHE_DIR: path.join(repoRoot, ".codecast", "workspaces", name, "bun-cache"),
+      });
+    }
+    writeState(repoRoot, {
+      name,
+      path: path.join(repoRoot, WORKTREES_DIR, name),
+      branch,
+      resourceIndex: portAlloc.resourceIndex,
+      state: "creating",
+      manifest,
+      ports: portAlloc.ports,
+      env: initialEnv,
+      updatedAt: new Date().toISOString(),
+    });
+    return { existing, portAlloc, initialEnv };
   });
-
-  // Pre-write "creating" state so observers see in-progress work.
-  const initialEnv = buildWorkspaceEnv(manifest, portAlloc.ports);
-  writeState(repoRoot, {
-    name,
-    path: path.join(repoRoot, WORKTREES_DIR, name),
-    branch,
-    resourceIndex: portAlloc.resourceIndex,
-    state: "creating",
-    manifest,
-    ports: portAlloc.ports,
-    env: initialEnv,
-    updatedAt: new Date().toISOString(),
-  });
+  if (prepared.result) return prepared.result;
+  const { existing, portAlloc, initialEnv } = prepared;
 
   try {
     // Hook context shared across before/after-create.
@@ -146,7 +157,7 @@ export async function acquireWorkspace(
       branch,
       resourceIndex: portAlloc.resourceIndex,
       ports: portAlloc.ports,
-      extraEnv: manifest.env,
+      extraEnv: initialEnv,
       hooksRoot: repoRoot,
     };
 
@@ -155,10 +166,11 @@ export async function acquireWorkspace(
     }
 
     // Create git worktree (or attach to existing branch if already present).
+    const freshWorktree = !fs.existsSync(ctxBase.worktreePath);
     const worktreePath = createGitWorktree(repoRoot, name, branch);
 
     // Copy gitignored files from main worktree.
-    copyFiles(manifest, repoRoot, worktreePath, { log: () => {} });
+    copyWorkspaceFiles(manifest, repoRoot, worktreePath, inputRoot, freshWorktree);
 
     // Run setup commands.
     if (!opts.skipSetup) {
@@ -186,7 +198,7 @@ export async function acquireWorkspace(
     if (!opts.skipHooks) {
       // Augment hook ctx with chrome's CDP port if present.
       const hookCtx = chrome
-        ? { ...ctxBase, extraEnv: { ...manifest.env, CDP_PORT: String(chrome.cdpPort) } }
+        ? { ...ctxBase, extraEnv: { ...initialEnv, CDP_PORT: String(chrome.cdpPort) } }
         : ctxBase;
       await runHook("after-create", hookCtx);
     }
@@ -264,7 +276,11 @@ export async function releaseWorkspace(repoRoot: string, name: string): Promise<
     }
   }
 
-  deleteState(repoRoot, name);
+  if (!state.manifest.backend || state.manifest.backend === "local") {
+    await withPortReservations(repoRoot, async () => deleteState(repoRoot, name));
+  } else {
+    deleteState(repoRoot, name);
+  }
 }
 
 /**
@@ -297,9 +313,9 @@ export async function healWorkspace(repoRoot: string, name: string): Promise<Wor
   }
   setState(repoRoot, name, "creating");
   // Re-copy gitignored files (idempotent) then re-run setup.
-  copyFiles(state.manifest, repoRoot, state.path, { log: () => {} });
+  copyWorkspaceFiles(state.manifest, repoRoot, state.path, state.env.CODECAST_WORKSPACE_INPUT_ROOT);
   await runSetup(state.manifest, state.path, {
-    env: buildWorkspaceEnv(state.manifest, state.ports),
+    env: state.env,
     stream: null,
   });
 
@@ -341,6 +357,23 @@ export function listWorkspaces(repoRoot: string): Workspace[] {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+function copyWorkspaceFiles(
+  manifest: WorkspaceManifest,
+  repoRoot: string,
+  worktreePath: string,
+  inputRoot?: string,
+  freshWorktree = false,
+): void {
+  copyFiles(manifest, inputRoot ?? repoRoot, worktreePath, { log: () => {} });
+  if (!inputRoot) return;
+  const source = path.join(inputRoot, MANIFEST_REL_PATH);
+  const dest = path.join(worktreePath, MANIFEST_REL_PATH);
+  if (fs.existsSync(source) && (freshWorktree || !fs.existsSync(dest))) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(source, dest);
+  }
+}
 
 function workspaceToState(ws: Workspace): PersistedWorkspaceState {
   return {
