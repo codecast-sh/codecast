@@ -5,12 +5,11 @@ import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
 import { hasTmux, tmuxExecSync } from "./tmux.js";
 import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
-import { decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import type { Config } from "./config/types.js";
+import { readAuthConfig } from "./config/readAuthConfig.js";
 import { resolveClaudeInstall, stableClaudeBinary } from "./stableClaudeBinary.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
-const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const INBOX_DIR = path.join(CONFIG_DIR, "inbox");
 const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
@@ -20,25 +19,12 @@ const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
 function readConfig(): Config | null {
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
-      if (config.auth_token && isEncryptedToken(config.auth_token)) {
-        try {
-          config.auth_token = decryptToken(config.auth_token);
-        } catch (err) {
-          if (err instanceof TokenDecryptError) {
-            log(`auth token unreadable on this machine — run 'cast auth' to re-encrypt`);
-            return null;
-          }
-          throw err;
-        }
-      }
-      return config;
-    }
+    return readAuthConfig(CONFIG_DIR, {
+      onUnreadable: () => log(`auth token unreadable on this machine — run 'cast auth' to re-encrypt`),
+    });
   } catch {
     return null;
   }
-  return null;
 }
 
 function ensureInboxDir(): void {

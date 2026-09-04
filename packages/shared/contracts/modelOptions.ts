@@ -33,16 +33,17 @@ export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your config.toml model" },
-  { key: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "Latest frontier coding model", cliAlias: "gpt-5.6-sol" },
-  { key: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "Balanced model for everyday work", cliAlias: "gpt-5.6-terra" },
-  { key: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "Fast, affordable coding model", cliAlias: "gpt-5.6-luna" },
-  { key: "gpt-5.5", label: "GPT-5.5", hint: "Frontier model for complex work", cliAlias: "gpt-5.5" },
+  { key: "gpt-6-astra", label: "GPT-6 Astra", hint: "Most capable for complex, demanding work", cliAlias: "gpt-6-astra" },
+  { key: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "Reliable agentic workhorse for everyday tasks", cliAlias: "gpt-5.6-sol" },
+  { key: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "Balanced agentic coding for everyday work", cliAlias: "gpt-5.6-terra" },
+  { key: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "Fast and affordable agentic coding", cliAlias: "gpt-5.6-luna" },
+  { key: "gpt-5.5", label: "GPT-5.5", hint: "Proven previous-generation coding and general work", cliAlias: "gpt-5.5" },
   { key: "gpt-5.4", label: "GPT-5.4", hint: "Strong model for everyday coding", cliAlias: "gpt-5.4" },
   { key: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "Small, fast, cost-efficient", cliAlias: "gpt-5.4-mini" },
   { key: "gpt-5.3-codex-spark", label: "Codex Spark", hint: "Ultra-fast coding model", cliAlias: "gpt-5.3-codex-spark" },
 ];
 
-export const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type CodexEffortLevel = (typeof CODEX_EFFORT_LEVELS)[number];
 
 // OpenCode addresses models as `provider/model` (its `-m` launch flag and the
@@ -189,7 +190,8 @@ const FEATURED_MODEL_FAMILIES: { match: RegExp }[] = [
  * version [4], below "claude-sonnet-4-5" ([4,5]). */
 function versionScore(id: string): number[] {
   const tail = id.split("/").pop() ?? id;
-  return (tail.match(/\d+/g) ?? []).filter((t) => t.length < 8).map(Number);
+  const tokens: string[] = tail.match(/\d+/g) ?? [];
+  return tokens.filter((t) => t.length < 8).map(Number);
 }
 
 function compareVersionDesc(a: number[], b: number[]): number {

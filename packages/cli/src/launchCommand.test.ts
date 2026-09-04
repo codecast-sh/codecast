@@ -3,7 +3,7 @@
 // exact pre-refactor behavior with an oracle that mirrors the OLD inline code, run
 // over a matrix of clients/configs, plus targeted per-client assertions.
 import { test, expect, describe } from "bun:test";
-import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, findModelOption, type AgentClientId } from "@codecast/shared/contracts";
 import {
   buildLaunchArgs,
   buildPrintArgs,
@@ -137,6 +137,19 @@ describe("buildLaunchArgs matches the oracle across a matrix", () => {
 });
 
 describe("buildLaunchArgs — targeted per-client behavior", () => {
+  test.each(["max", "ultra"])("codex: launches the Astra picker selection with %s effort", (effort) => {
+    const model = findModelOption("codex", "gpt-6-astra");
+    const { binaryArgs } = buildLaunchArgs({
+      agentType: "codex",
+      configuredArgs: "",
+      permFlags: null,
+      defaultFlags: null,
+      modelAlias: model?.cliAlias,
+      requestedEffort: effort,
+    });
+    expect(binaryArgs).toEqual(["-m", "gpt-6-astra", "-c", `model_reasoning_effort=${effort}`]);
+  });
+
   test("codex: configured args THEN perm flags THEN model/effort", () => {
     const { binaryArgs, notifyCodexBypass } = buildLaunchArgs({
       agentType: "codex",

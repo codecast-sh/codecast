@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { commitModelChange, modelSwitchMessages } from "./modelSwitch";
+import { commitModelChange, effortGlyph, modelSwitchMessages } from "./modelSwitch";
 
 // A live-session model/effort switch is an ordinary message send: the agent's
 // own `/model <alias>` / `/effort <level>` commands ride the composer's
@@ -8,6 +8,12 @@ import { commitModelChange, modelSwitchMessages } from "./modelSwitch";
 // watcher — delivery, retry, revive-on-dead-session and failure honesty are
 // all inherited from the message rail.
 const CONV = "conv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+describe("effortGlyph", () => {
+  it("keeps the highest Codex effort visible on the session badge", () => {
+    expect(effortGlyph("ultra")).toBe("◈");
+  });
+});
 
 describe("modelSwitchMessages", () => {
   it("maps a claude selection onto the in-session slash commands", () => {
@@ -86,5 +92,38 @@ describe("commitModelChange on a live session", () => {
     expect((useInboxStore.getState().sessions[CONV] as any).model).toBe("claude-fable-5");
     expect(sent).toEqual([]);
     expect(notes).toHaveLength(1);
+  });
+});
+
+describe("model changes for other agents", () => {
+  const convId = "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const original = useInboxStore.getState().convCommand;
+  afterEach(() => useInboxStore.setState({ convCommand: original }));
+
+  it.each(["codex", "opencode", "pi", "grok"])("uses the session switch command for live %s", async agentType => {
+    const commands: unknown[] = [];
+    useInboxStore.setState({
+      sessions: { [convId]: { _id: convId, model: "old", effort: "high", message_count: 4 } } as any,
+      conversations: {},
+      pendingMessages: {},
+      convCommand: (async (...args: unknown[]) => { commands.push(args); }) as any,
+    });
+    await commitModelChange({ conversationId: convId, agentType, current: { model: "old" }, sel: { model: "default" }, blank: false, notify: () => {} });
+    expect(commands).toEqual([[convId, "switchSessionAgent", { model: "default" }]]);
+    expect(useInboxStore.getState().sessions[convId].model).toBeUndefined();
+    expect(useInboxStore.getState().pendingMessages[convId]).toBeUndefined();
+    expect(modelSwitchMessages(agentType, { model: "default", effort: "high" })).toEqual([]);
+  });
+
+  it("restores the previous choice if the switch is rejected", async () => {
+    useInboxStore.setState({
+      sessions: { [convId]: { _id: convId, model: "gpt-5.6-sol", effort: "high" } } as any,
+      conversations: {},
+      convCommand: (async () => { throw new Error("Switch rejected"); }) as any,
+    });
+    const notes: string[] = [];
+    await commitModelChange({ conversationId: convId, agentType: "codex", current: { model: "gpt-5.6-sol", effort: "high" }, sel: { model: "gpt-6-astra" }, blank: false, notify: message => notes.push(message) });
+    expect(useInboxStore.getState().sessions[convId].model).toBe("gpt-5.6-sol");
+    expect(notes).toEqual(["Switch rejected"]);
   });
 });
