@@ -169,6 +169,18 @@ const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
 
+// Browsing a repository
+const RepoIndex = lazy(() => import("@/app/repo/page"));
+const RepoHome = lazy(() => import("@/app/repo/[owner]/[name]/page"));
+const RepoTree = lazy(() => import("@/app/repo/[owner]/[name]/tree/[ref]/page"));
+const RepoBlob = lazy(() => import("@/app/repo/[owner]/[name]/blob/[ref]/page"));
+const RepoCommits = lazy(() => import("@/app/repo/[owner]/[name]/commits/[ref]/page"));
+const RepoCompare = lazy(() => import("@/app/repo/[owner]/[name]/compare/[range]/page"));
+const RepoBranches = lazy(() => import("@/app/repo/[owner]/[name]/branches/page"));
+const RepoTags = lazy(() => import("@/app/repo/[owner]/[name]/tags/page"));
+const RepoPulls = lazy(() => import("@/app/repo/[owner]/[name]/pulls/page"));
+const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
+
 // Code review
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
@@ -199,7 +211,7 @@ const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
-const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
+const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
 /**
@@ -303,9 +315,42 @@ export const ROUTES: RouteEntry[] = [
   { path: "share/doc/:token", component: cast(ShareDoc), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/plan/:token", component: cast(SharePlan), layout: "share", guestOk: true, guestKind: "public" },
 
+  // -- Browsing a repository. The tree and blob pages carry the file path in the
+  //    query string (`?path=`), not the route, so every path here is a fixed set
+  //    of segments and the tab shell can render all four in place. --
+  { path: "repo", component: cast(RepoIndex), layout: "dashboardShell", tab: "/repo", fullWidth: true },
+  { path: "repo/:owner/:name", component: cast(RepoHome), layout: "codeReview", tab: "/repo/:owner/:name", fullWidth: true },
+  { path: "repo/:owner/:name/tree/:ref", component: cast(RepoTree), layout: "codeReview", tab: "/repo/:owner/:name/tree/:ref", fullWidth: true },
+  { path: "repo/:owner/:name/blob/:ref", component: cast(RepoBlob), layout: "codeReview", tab: "/repo/:owner/:name/blob/:ref", fullWidth: true },
+  { path: "repo/:owner/:name/commits/:ref", component: cast(RepoCommits), layout: "codeReview", tab: "/repo/:owner/:name/commits/:ref", fullWidth: true },
+  { path: "repo/:owner/:name/compare/:range", component: cast(RepoCompare), layout: "codeReview", tab: "/repo/:owner/:name/compare/:range", fullWidth: true },
+  { path: "repo/:owner/:name/branches", component: cast(RepoBranches), layout: "codeReview", tab: "/repo/:owner/:name/branches", fullWidth: true },
+  { path: "repo/:owner/:name/tags", component: cast(RepoTags), layout: "codeReview", tab: "/repo/:owner/:name/tags", fullWidth: true },
+  { path: "repo/:owner/:name/pulls", component: cast(RepoPulls), layout: "codeReview", tab: "/repo/:owner/:name/pulls", fullWidth: true },
+  { path: "repo/:owner/:name/search", component: cast(RepoSearch), layout: "codeReview", tab: "/repo/:owner/:name/search", fullWidth: true },
+
+  // -- The standalone family: the same page components with no shell around
+  //    them. Layout "standalone" and guest-public, because a public repository
+  //    must be readable by somebody who has never signed in; NO `tab`, because
+  //    a page that is its own window can never be a tab (lib/tabRoutes excludes
+  //    the whole /r prefix, which is what the guest-public rule below checks).
+  //    No `fullWidth` either: that flag names a DashboardLayout behaviour, and
+  //    these routes never render DashboardLayout. --
+  { path: "r/:owner/:name", component: cast(RepoHome), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/tree/:ref", component: cast(RepoTree), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/blob/:ref", component: cast(RepoBlob), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/commits/:ref", component: cast(RepoCommits), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/compare/:range", component: cast(RepoCompare), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/branches", component: cast(RepoBranches), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/tags", component: cast(RepoTags), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/pulls", component: cast(RepoPulls), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/search", component: cast(RepoSearch), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:repo/commit/:sha", component: cast(CommitView), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:repo/pull/:number", component: cast(PrView), layout: "standalone", guestOk: true, guestKind: "public" },
+
   // -- Code review --
-  { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", fullWidth: true },
-  { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", fullWidth: true },
+  { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", tab: "/commit/:owner/:repo/:sha", fullWidth: true },
+  { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number", fullWidth: true },
   { path: "review/:id", component: cast(ReviewView), layout: "codeReview" },
   { path: "review/batch", component: cast(ReviewBatch), layout: "codeReview" },
 
@@ -351,7 +396,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/team/create", component: cast(SettingsTeamCreate), layout: "settings" },
   { path: "settings/team/join", component: cast(SettingsTeamJoin), layout: "settings" },
   { path: "settings/notifications", component: cast(SettingsNotifications), layout: "settings" },
-  { path: "settings/integrations/github-app", component: cast(SettingsIntegrationsGithub), layout: "settings" },
+  { path: "settings/integrations", component: cast(SettingsIntegrations), layout: "settings" },
+  { path: "settings/integrations/github-app", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/desktop", component: cast(SettingsDesktop), layout: "settings" },
 
   // -- Public profiles (anonymous, guest-viewable, at the ROOT: /<handle>) --

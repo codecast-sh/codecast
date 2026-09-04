@@ -148,10 +148,10 @@ export function cropTransform(box: CropBox, diameter: number, mirror = false): s
 // ── Who the speaker circle shows ──────────────────────────────────────────
 
 /** The face speaker mode is currently showing, and when it started showing it. */
-export type SpeakerPick = { id: string | null; since: number };
+export type SpeakerPick = { id: string | null; since: number; candidate?: string; candidateSince?: number };
 
 /** How long a new voice must hold the floor before the circle swaps to it. */
-export const SPEAKER_HOLD_MS = 1500;
+export const SPEAKER_HOLD_MS = 500;
 
 /**
  * Decide whose face the single circle shows.
@@ -172,10 +172,12 @@ export function pickSpeaker(
   holdMs = SPEAKER_HOLD_MS,
 ): SpeakerPick {
   const candidate = active.length > 0 ? active[0] : null;
-  if (candidate === null) return prev;
-  if (candidate === prev.id) return prev;
+  if (candidate === null || candidate === prev.id) {
+    return prev.candidate ? { id: prev.id, since: prev.since } : prev;
+  }
   if (prev.id === null) return { id: candidate, since: now };
-  return now - prev.since >= holdMs ? { id: candidate, since: now } : prev;
+  if (candidate !== prev.candidate) return { ...prev, candidate, candidateSince: now };
+  return now - (prev.candidateSince ?? now) >= holdMs ? { id: candidate, since: now } : prev;
 }
 
 // ── Who gets a circle ─────────────────────────────────────────────────────
@@ -239,19 +241,8 @@ export function facePeople(roster: RosterRow[], tiles: TileRow[], selfId: string
   return out;
 }
 
-/**
- * Which of them the window actually shows.
- *
- * The other people, not you. The floating faces exist so you can see who you
- * are talking to while you work in something else; your own face floating over
- * your own screen is a mirror you did not ask for, and in speaker mode it would
- * take the circle every time you spoke. Your mic and camera are still yours to
- * control — they live on the hover chrome, which is where controls belong.
- *
- * Alone in the room, you get the circle: an empty window would read as broken,
- * and seeing yourself is the honest picture of a call nobody has joined yet.
- */
-export function facesToShow(people: FacePerson[]): FacePerson[] {
+export function facesToShow(people: FacePerson[], mode: FacesMode = "everyone"): FacePerson[] {
+  if (mode === "everyone") return people;
   const others = people.filter((p) => !p.isLocal);
   return others.length > 0 ? others : people;
 }
@@ -338,6 +329,7 @@ export function chromeWidth(buttons: number): number {
   return CHROME_BUTTON_W * buttons + 4 * (buttons - 1) + 3 * 2;
 }
 export const CHROME_WIDTH = chromeWidth(4);
+export const CALL_CHROME_WIDTH = chromeWidth(5);
 export const CHROME_HEIGHT = CHROME_BUTTON + 3 * 2;
 /** Two lines: the name and its activity, and the gesture under them. The
  *  call circles' single name line sits in the same band. */
@@ -398,7 +390,7 @@ export function facesWindowSize(
   // Always as wide as the chrome: a window that widens on hover slides its
   // circles out from under the pointer (the overlay's flicker). Transparent
   // glass either side of a lone circle costs nothing.
-  const width = Math.max(circles, CHROME_WIDTH);
+  const width = Math.max(circles, CALL_CHROME_WIDTH);
   return {
     width: Math.round(width + FACES_PADDING * 2),
     height: Math.round(d + (opts?.hovered ? HOVER_ROWS : 0) + FACES_PADDING * 2),

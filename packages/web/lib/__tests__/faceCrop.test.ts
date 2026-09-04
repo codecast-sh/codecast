@@ -13,7 +13,7 @@ import {
   naturalTier,
   pickSpeaker,
   tierForWidth,
-  CHROME_WIDTH,
+  CALL_CHROME_WIDTH,
   HOVER_ROWS,
   FACE_GAP,
   FACES_PADDING,
@@ -181,14 +181,12 @@ describe("pickSpeaker", () => {
     expect(pickSpeaker(prev, [], T + 9000)).toBe(prev);
   });
 
-  it("refuses a swap while the current face is still fresh", () => {
+  it("waits for sustained speech even after a long silence", () => {
     const prev = { id: "riley", since: T };
-    expect(pickSpeaker(prev, ["jordan"], T + 800)).toBe(prev);
-  });
-
-  it("swaps once the new voice has held the floor", () => {
-    const prev = { id: "riley", since: T };
-    expect(pickSpeaker(prev, ["jordan"], T + 1500)).toEqual({ id: "jordan", since: T + 1500 });
+    const pending = pickSpeaker(prev, ["jordan"], T + 9000);
+    expect(pending.id).toBe("riley");
+    expect(pickSpeaker(pending, ["jordan"], T + 9499).id).toBe("riley");
+    expect(pickSpeaker(pending, ["jordan"], T + 9500)).toEqual({ id: "jordan", since: T + 9500 });
   });
 
   it("does not restart the clock on the face already showing", () => {
@@ -196,15 +194,16 @@ describe("pickSpeaker", () => {
     expect(pickSpeaker(prev, ["riley"], T + 4000)).toBe(prev);
   });
 
-  it("cannot be flapped by two people trading interjections", () => {
-    // Riley speaks; Jordan cuts in for under the hold, twice. The circle must
-    // still be on Riley — otherwise the frame swaps on every "mhm".
+  it("resets an interrupted candidate without clearing the current face", () => {
     let pick = pickSpeaker({ id: null, since: 0 }, ["riley"], T);
     pick = pickSpeaker(pick, ["jordan"], T + 400);
-    pick = pickSpeaker(pick, ["riley"], T + 700);
+    pick = pickSpeaker(pick, [], T + 700);
     pick = pickSpeaker(pick, ["jordan"], T + 1100);
     expect(pick.id).toBe("riley");
+    expect(pick.candidateSince).toBe(T + 1100);
+    expect(pickSpeaker(pick, ["jordan"], T + 1600).id).toBe("jordan");
   });
+
 });
 
 describe("facePeople", () => {
@@ -237,8 +236,12 @@ describe("facesToShow", () => {
   const me = { id: "riley", name: "Riley", isLocal: true, muted: false, hasVideo: true };
   const them = { id: "jordan", name: "Jordan", isLocal: false, muted: false, hasVideo: true };
 
-  it("shows the other people, not you", () => {
-    expect(facesToShow([me, them]).map((p) => p.id)).toEqual(["jordan"]);
+  it("includes your own face in All", () => {
+    expect(facesToShow([me, them], "everyone").map((p) => p.id)).toEqual(["riley", "jordan"]);
+  });
+
+  it("keeps the talker view on teammates", () => {
+    expect(facesToShow([me, them], "speaker").map((p) => p.id)).toEqual(["jordan"]);
   });
 
   it("shows you when nobody else is here yet", () => {
@@ -299,11 +302,11 @@ describe("facesWindowSize", () => {
     // No chrome row waiting under the faces. The WIDTH holds the chrome at
     // rest so nothing slides on hover; the extra glass is click-through.
     expect(facesWindowSize("speaker", 1)).toEqual({
-      width: Math.max(TIER_DIAMETER.speaker, CHROME_WIDTH) + FACES_PADDING * 2,
+      width: Math.max(TIER_DIAMETER.speaker, CALL_CHROME_WIDTH) + FACES_PADDING * 2,
       height: TIER_DIAMETER.speaker + FACES_PADDING * 2,
     });
     expect(facesWindowSize("everyone", 3)).toEqual({
-      width: Math.max(3 * TIER_DIAMETER.row + 2 * FACE_GAP, CHROME_WIDTH) + FACES_PADDING * 2,
+      width: Math.max(3 * TIER_DIAMETER.row + 2 * FACE_GAP, CALL_CHROME_WIDTH) + FACES_PADDING * 2,
       height: TIER_DIAMETER.row + FACES_PADDING * 2,
     });
   });
@@ -313,8 +316,8 @@ describe("facesWindowSize", () => {
   });
 
   it("grows by a circle and a gap per person in everyone mode, once past the chrome", () => {
-    const five = facesWindowSize("everyone", 5);
-    const six = facesWindowSize("everyone", 6);
+    const five = facesWindowSize("everyone", 6);
+    const six = facesWindowSize("everyone", 7);
     expect(six.width - five.width).toBe(TIER_DIAMETER.row + FACE_GAP);
     expect(six.height).toBe(five.height);
   });
@@ -337,7 +340,7 @@ describe("facesWindowSize", () => {
     expect(hovered.height - idle.height).toBe(HOVER_ROWS);
     // The chrome carries words now, so it is wider than three 64px faces:
     // the window widens to hold it, and never past what it needs.
-    expect(hovered.width).toBe(Math.max(idle.width, CHROME_WIDTH + FACES_PADDING * 2));
+    expect(hovered.width).toBe(Math.max(idle.width, CALL_CHROME_WIDTH + FACES_PADDING * 2));
   });
 
   it("is always as wide as the chrome, so nothing slides on hover", () => {
@@ -346,8 +349,8 @@ describe("facesWindowSize", () => {
     // width is the chrome's at rest too; the extra glass is click-through.
     const idle = facesWindowSize("speaker", 1);
     const hovered = facesWindowSize("speaker", 1, { hovered: true });
-    expect(idle.width).toBe(CHROME_WIDTH + FACES_PADDING * 2);
-    expect(hovered.width).toBe(CHROME_WIDTH + FACES_PADDING * 2);
+    expect(idle.width).toBe(CALL_CHROME_WIDTH + FACES_PADDING * 2);
+    expect(hovered.width).toBe(CALL_CHROME_WIDTH + FACES_PADDING * 2);
     expect(hovered.height).toBe(TIER_DIAMETER.speaker + HOVER_ROWS + FACES_PADDING * 2);
   });
 

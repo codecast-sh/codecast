@@ -1,4 +1,4 @@
-import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext } from "react";
+import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -9,17 +9,15 @@ import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { withApplyingViewHistory, sameFilterExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
-import { useMutation, useConvexAuth } from "convex/react";
+import { useMutation } from "convex/react";
+import { useAuthGate } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
-import { CommandPalette } from "./CommandPalette";
-import { ComposeView } from "./ComposeView";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
-import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
@@ -39,6 +37,9 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
+import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
+import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
+import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { SyncStatusChip } from "./SyncStatusChip";
@@ -46,8 +47,6 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
-import { SettingsModal } from "./settings/SettingsModal";
-import { PeopleWallModal } from "./people/PeopleWallModal";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
@@ -62,18 +61,10 @@ import { useSyncCore } from "../hooks/useSyncCore";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { useChatToasts } from "../hooks/useChatToasts";
-import { useCallSync } from "../hooks/useCallSync";
-import { useRecorderSync } from "../hooks/useRecorder";
-import { useWalkieSync } from "../hooks/useWalkieSync";
-import { useCallRing } from "../hooks/useCallRing";
-import { CallDock } from "./calls/CallDock";
-import { RecordingPill } from "./calls/RecordingPill";
-import { ElsewhereCallPill } from "./calls/ElsewhereCallPill";
-import { leaveCall } from "../lib/calls/callManager";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
-import { isInboxSessionView, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxSessionView, pageOwnsRailHighlight, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
@@ -87,6 +78,35 @@ import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 import { GlobalCloseGuardDialog } from "./CloseGuardDialog";
+import { useLocalAuth } from "../lib/localAuth";
+
+const ComposeView = lazy(() =>
+  import("./ComposeView").then((module) => ({ default: module.ComposeView })),
+);
+const CommandPalette = lazy(() =>
+  import("./CommandPalette").then((module) => ({ default: module.CommandPalette })),
+);
+const SettingsModal = lazy(() =>
+  import("./settings/SettingsModal").then((module) => ({ default: module.SettingsModal })),
+);
+const PeopleWallModal = lazy(() =>
+  import("./people/PeopleWallModal").then((module) => ({ default: module.PeopleWallModal })),
+);
+const TeamAvatarBar = lazy(() =>
+  import("./TeamAvatarBar").then((module) => ({ default: module.TeamAvatarBar })),
+);
+const CallSyncEffects = lazy(() =>
+  import("./calls/CallSyncEffects").then((module) => ({ default: module.CallSyncEffects })),
+);
+const CallDock = lazy(() =>
+  import("./calls/CallDock").then((module) => ({ default: module.CallDock })),
+);
+const RecordingPill = lazy(() =>
+  import("./calls/RecordingPill").then((module) => ({ default: module.RecordingPill })),
+);
+const ElsewhereCallPill = lazy(() =>
+  import("./calls/ElsewhereCallPill").then((module) => ({ default: module.ElsewhereCallPill })),
+);
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -182,7 +202,7 @@ const noop = () => {};
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
-  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
+  const authGate = useAuthGate(useLocalAuth);
   // Hold the boot loader until the IDB hydration pass lands (clientStateInitialized
   // flips true even when the cache is empty or unreadable, so this can't hang).
   // Without it, React's first frame races loadCache(): the shell mounts on an
@@ -191,12 +211,12 @@ export function DashboardLayout(props: DashboardLayoutProps) {
   // #boot-shell in index.html, so the user sees one continuous loader → content.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const isSettledGuest = props.allowUnhydratedGuest &&
-    !isAuthenticated && !isAuthLoading;
+    authGate === "guest";
   if (isNested) return <>{props.children}</>;
   // A settled anonymous share viewer intentionally has no principal store, so
   // `clientStateInitialized` will remain false forever. Let only that explicit
   // route reach DashboardLayoutInner's read-only guest branch.
-  if (!hydrated && !isSettledGuest) return <AppLoader />;
+  if (!hydrated && !isSettledGuest) return <AppLoader deferIndicator />;
   return (
     <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
@@ -237,6 +257,14 @@ function HostFeeders() {
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.
   useSyncAnchors();
+  // The team's git activity: the team feed reads it, and so does any page that
+  // wants recent events without opening a scope of its own.
+  useSyncTeamExternalEvents();
+  // Imported Linear/GitHub containers. Small, workspace-wide and read by the
+  // integrations panel and any project surface that shows where its tasks
+  // came from — one subscription rather than one per opened card.
+  useSyncIssueSyncSources();
+  useSyncSettings();
   return null;
 }
 
@@ -253,18 +281,10 @@ function DashboardSyncEffects() {
   const isSyncHost = useIsSyncHost();
   useChatToasts();
   useChatTitleBadge();
-  // Huddles: config/ring/occupancy sync + the incoming-ring pipeline, both
-  // app-wide for the same reason as chat toasts — a ring must reach someone
-  // who is NOT looking at the team strip.
-  useCallSync();
-  useCallRing();
-  // Push-to-talk's receiving half: a teammate's live burst has to reach someone
-  // whose DM is closed, which is exactly why this is not on the chat page.
-  useWalkieSync();
-  // The recorder's Convex client. The record button and the pill live on
-  // different pages, so neither of them can be what binds the engine.
-  useRecorderSync();
-  return isSyncHost ? <HostFeeders /> : null;
+  return <>
+    <Suspense fallback={null}><CallSyncEffects /></Suspense>
+    {isSyncHost ? <HostFeeders /> : null}
+  </>;
 }
 
 // Unread mentions in the browser tab title.
@@ -310,8 +330,7 @@ function useDetachedWindowTitle(path: string) {
 }
 
 function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
-  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
-  const isGuest = !isAuthenticated && !isAuthLoading;
+  const isGuest = useAuthGate(useLocalAuth) === "guest";
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   // Stable handles: an inline lambda here re-rendered the (235-hook) Sidebar on
   // every layout render.
@@ -349,6 +368,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.comments,
     s => s.compose.open,
     s => s.compose.nonce,
+    s => s.palette.open,
+    s => s.peopleWallOpen,
+    s => s.settingsModalSection,
     s => s.tabs.length,
     s => s.activeTabId,
     s => s.tabs.find(t => t.id === s.activeTabId)?.path,
@@ -443,6 +465,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
   const isOnCrosstalkPage = pathname === "/crosstalk";
+  // Browsing a repository: the index, its history, its source and its blame all
+  // own the whole canvas.
+  const isOnRepoPage = pathname === "/repo" || (pathname?.startsWith("/repo/") ?? false);
   // Settings is a modal-like surface, not a working surface — selecting a session
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
@@ -450,7 +475,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -554,6 +579,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
       if (selectSessionRailUserClosed(store)) return;
+      // A page that publishes the rail pointer itself already wrote it in
+      // this commit; carrying the inbox's conversation over would erase it.
+      if (pageOwnsRailHighlight(pathname)) return;
       const current = store.currentSessionId;
       if (current) {
         store.openSidePanel(current);
@@ -570,6 +598,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (prevActiveTabRef.current !== s.activeTabId) return;
     const store = useInboxStore.getState();
     if (selectSessionRailUserClosed(store)) return;
+    if (pageOwnsRailHighlight(pathname)) return;
     const wasConvPage = prev.includes("/conversation/");
     const isNowConvPage = pathname?.includes("/conversation/");
     if (wasConvPage && !isNowConvPage) {
@@ -1057,7 +1086,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <TeamSwitcher />
             </ErrorBoundary>
             <ErrorBoundary name="TeamAvatarBar" level="inline">
-              <TeamAvatarBar />
+              <Suspense fallback={null}><TeamAvatarBar /></Suspense>
             </ErrorBoundary>
           </div>
 
@@ -1246,16 +1275,18 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
 
       <ErrorBoundary name="SettingsModal" level="panel">
-        <SettingsModal />
+        <Suspense fallback={null}><SettingsModal /></Suspense>
       </ErrorBoundary>
 
       {/* The wall of faces, over the main window. Mounted here rather than on a
           route because it is a gesture, not a place: you open it, hold somebody,
           and it goes away. It renders nothing and subscribes to nothing while
           shut. */}
-      <ErrorBoundary name="PeopleWallModal" level="panel">
-        <PeopleWallModal />
-      </ErrorBoundary>
+      {s.peopleWallOpen && (
+        <ErrorBoundary name="PeopleWallModal" level="panel">
+          <Suspense fallback={null}><PeopleWallModal /></Suspense>
+        </ErrorBoundary>
+      )}
 
       {/* Mobile sidebar overlay */}
       {isMobileSidebarOpen && (
@@ -1289,9 +1320,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </div>
         </>
       )}
-      <ErrorBoundary name="CommandPalette" level="inline">
-        <CommandPalette />
-      </ErrorBoundary>
+      {s.palette.open && (
+        <ErrorBoundary name="CommandPalette" level="inline">
+          <Suspense fallback={null}><CommandPalette /></Suspense>
+        </ErrorBoundary>
+      )}
       <ErrorBoundary name="TriageNux" level="inline">
         <TriageNuxGate />
       </ErrorBoundary>
@@ -1313,7 +1346,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               </button>
               <button
                 onClick={() => {
-                  void leaveCall();
+                  void import("../lib/calls/callManager").then((module) => module.leaveCall());
                   retry();
                 }}
                 className="text-sol-text-muted hover:text-sol-red hover:underline"
@@ -1323,7 +1356,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </div>
           )}
         >
-          <CallDock />
+          <Suspense fallback={null}><CallDock /></Suspense>
         </ErrorBoundary>
       </div>
       {/* The huddle the people window (or a detached tab) is hosting. The dock
@@ -1332,11 +1365,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           running at all — and the first thing that invites is starting a second
           one. It sits where the dock would, and says only where to look. */}
       <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
-        <ElsewhereCallPill />
+        <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
       </div>
       {/* A recording in progress, wherever the person has wandered to. It
           portals to the body and renders nothing unless one is running. */}
-      <RecordingPill />
+      <Suspense fallback={null}><RecordingPill /></Suspense>
       <GlobalCloseGuardDialog />
       {s.compose.open && (
         <div
@@ -1347,7 +1380,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           onClick={() => (composeCloseGuardRef.current ?? s.closeCompose)()}
         >
           <div onClick={(e) => e.stopPropagation()}>
-            <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} closeGuardRef={composeCloseGuardRef} />
+            <Suspense fallback={null}>
+              <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} closeGuardRef={composeCloseGuardRef} />
+            </Suspense>
           </div>
         </div>
       )}

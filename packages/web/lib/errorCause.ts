@@ -63,3 +63,42 @@ export function describeError(error: unknown): string {
     .map((link, i) => `${i === 0 ? "" : "caused by: "}${link.message}\n${link.stack || ""}`)
     .join("\n\n");
 }
+
+/**
+ * A server error as a person should read it.
+ *
+ * A Convex action failure arrives wrapped several layers deep: the function
+ * name, a request id, "Server Error", "Uncaught Error" twice, then the real
+ * message, then the server's own stack. Printing all of that into a page turns
+ * a surface into a log. This keeps the sentence that says what went wrong, and
+ * unwraps a trailing JSON body to its `message` when there is one.
+ */
+export function serverErrorText(error: unknown): string {
+  const raw = errorSummary(error).trim();
+
+  // Drop the envelope: [CONVEX A(fn)] [Request ID: x] Server Error, and the
+  // "Uncaught Error:" chain the runtime prepends however many times.
+  let text = raw
+    .replace(/^\[CONVEX[^\]]*\]\s*/i, "")
+    .replace(/^\[Request ID:[^\]]*\]\s*/i, "")
+    .replace(/^Server Error\s*/i, "")
+    .replace(/^(?:Uncaught\s+Error:\s*)+/i, "")
+    .trim();
+
+  // Cut the server's own stack, which starts at the first frame marker.
+  text = text.split(/\s+at\s+\S+\s*\(/)[0].replace(/\s*Called by client\s*$/, "").trim();
+
+  // A GitHub or Convex body is JSON; its `message` is the part worth showing.
+  const body = text.match(/\{[\s\S]*\}$/);
+  if (body) {
+    try {
+      const parsed = JSON.parse(body[0]);
+      if (typeof parsed?.message === "string") {
+        text = `${text.slice(0, body.index).trim()} ${parsed.message}`.trim();
+      }
+    } catch {
+      // Not JSON after all; the text as trimmed is still better than the raw.
+    }
+  }
+  return text || raw;
+}

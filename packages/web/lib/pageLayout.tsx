@@ -15,6 +15,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/conversation\//,
   /^\/commit\//,
   /^\/pr\//,
+  // Browsing a repository: history, source and blame all own their canvas.
+  /^\/repo(\/|$)/,
   /^\/inbox(\/|$)/,
   // The decision queue deletes layout by construction: one card, full width.
   /^\/questions(\/|$)/,

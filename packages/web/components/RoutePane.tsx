@@ -11,7 +11,7 @@
 import { Suspense, useMemo } from "react";
 import { lazyPage } from "../lib/tabLazyPages";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
-import { TabParamsCtx } from "../lib/tabParams";
+import { TabParamsCtx, parseTabLocation } from "../lib/tabParams";
 
 const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
 const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
@@ -51,6 +51,21 @@ const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions
 // The Threads inbox: every conversation the viewer is in, one page.
 const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
 const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
+// Code review pages open in the shell like any other detail view.
+const PrView = lazyPage("@/app/pr/[owner]/[repo]/[number]/page", () => import("@/app/pr/[owner]/[repo]/[number]/page"));
+const CommitView = lazyPage("@/app/commit/[owner]/[repo]/[sha]/page", () => import("@/app/commit/[owner]/[repo]/[sha]/page"));
+// Browsing a repository. The file path a tree or blob is showing rides in the
+// query string (`?path=`), so every route here is a fixed set of segments.
+const RepoIndex = lazyPage("@/app/repo/page", () => import("@/app/repo/page"));
+const RepoHome = lazyPage("@/app/repo/[owner]/[name]/page", () => import("@/app/repo/[owner]/[name]/page"));
+const RepoCommits = lazyPage("@/app/repo/[owner]/[name]/commits/[ref]/page", () => import("@/app/repo/[owner]/[name]/commits/[ref]/page"));
+const RepoCompare = lazyPage("@/app/repo/[owner]/[name]/compare/[range]/page", () => import("@/app/repo/[owner]/[name]/compare/[range]/page"));
+const RepoBranches = lazyPage("@/app/repo/[owner]/[name]/branches/page", () => import("@/app/repo/[owner]/[name]/branches/page"));
+const RepoTags = lazyPage("@/app/repo/[owner]/[name]/tags/page", () => import("@/app/repo/[owner]/[name]/tags/page"));
+const RepoPulls = lazyPage("@/app/repo/[owner]/[name]/pulls/page", () => import("@/app/repo/[owner]/[name]/pulls/page"));
+const RepoSearch = lazyPage("@/app/repo/[owner]/[name]/search/page", () => import("@/app/repo/[owner]/[name]/search/page"));
+const RepoTree = lazyPage("@/app/repo/[owner]/[name]/tree/[ref]/page", () => import("@/app/repo/[owner]/[name]/tree/[ref]/page"));
+const RepoBlob = lazyPage("@/app/repo/[owner]/[name]/blob/[ref]/page", () => import("@/app/repo/[owner]/[name]/blob/[ref]/page"));
 
 type RouteEntry = {
   pattern: RegExp;
@@ -77,6 +92,17 @@ const ROUTES: RouteEntry[] = [
   // reconciles beside the project's list instead of navigating away from it.
   { pattern: /^\/projects\/([^/]+)\/([^/]+)$/, paramNames: ["id", "taskId"], component: ProjectDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
+  { pattern: /^\/pr\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "number"], component: PrView },
+  { pattern: /^\/commit\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "sha"], component: CommitView },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/tree\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoTree },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/blob\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoBlob },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/commits\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoCommits },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/compare\/([^/]+)$/, paramNames: ["owner", "name", "range"], component: RepoCompare },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/branches$/, paramNames: ["owner", "name"], component: RepoBranches },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/tags$/, paramNames: ["owner", "name"], component: RepoTags },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/pulls$/, paramNames: ["owner", "name"], component: RepoPulls },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/search$/, paramNames: ["owner", "name"], component: RepoSearch },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "name"], component: RepoHome },
   // Same component as the bare route, so opening a channel reconciles in place
   // instead of remounting the whole surface and losing the scroll position.
   { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },
@@ -102,6 +128,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
+  { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/files$/, paramNames: [], component: Vault },
   { pattern: /^\/vault$/, paramNames: [], component: Vault }, // permanent pre-rename alias for /files
@@ -146,12 +173,10 @@ export function RoutePane({
 }) {
   const matched = useMemo(() => matchRoute(path), [path]);
   const ctxValue = useMemo(() => {
-    const [pathAndHash, queryString] = path.split("?");
     return {
       tabId,
-      pathname: pathAndHash.split("#")[0],
+      ...parseTabLocation(path),
       params: matched?.params ?? {},
-      searchParams: new URLSearchParams(queryString ?? ""),
       isActive,
       navigate,
     };

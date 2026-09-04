@@ -32,3 +32,42 @@ export function lazyPage(key: string, loader: () => Promise<{ default: Component
 export function warmTabRoutes(): void {
   for (const load of lazyLoaders.values()) void load().catch(() => {});
 }
+
+export interface TabRouteWarmupScheduler {
+  isHidden: () => boolean;
+  onVisibilityChange: (listener: () => void) => () => void;
+  setTimer: (listener: () => void, delayMs: number) => () => void;
+}
+
+const browserScheduler: TabRouteWarmupScheduler = {
+  isHidden: () => document.visibilityState === "hidden",
+  onVisibilityChange(listener) {
+    document.addEventListener("visibilitychange", listener);
+    return () => document.removeEventListener("visibilitychange", listener);
+  },
+  setTimer(listener, delayMs) {
+    const id = window.setTimeout(listener, delayMs);
+    return () => window.clearTimeout(id);
+  },
+};
+
+export function scheduleTabRouteWarmup(
+  scheduler: TabRouteWarmupScheduler = browserScheduler,
+): void {
+  let warmed = false;
+  let cancelVisibility = () => {};
+  let cancelTimer = () => {};
+  const warm = () => {
+    if (warmed) return;
+    warmed = true;
+    cancelVisibility();
+    cancelTimer();
+    warmTabRoutes();
+  };
+  const onVisibilityChange = () => {
+    if (scheduler.isHidden()) warm();
+  };
+  cancelVisibility = scheduler.onVisibilityChange(onVisibilityChange);
+  cancelTimer = scheduler.setTimer(warm, 60_000);
+  if (scheduler.isHidden()) warm();
+}

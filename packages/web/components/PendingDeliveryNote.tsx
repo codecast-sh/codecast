@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { useDaemonHealth, isDegradedDaemonHealth } from "../hooks/useDaemonHealth";
+import { useDaemonHealth, blocksDelivery } from "../hooks/useDaemonHealth";
 import { describeDaemonHealth } from "../lib/daemonHealthCopy";
 import { withDaemonHealth, type PendingBannerState } from "../lib/pendingBanner";
 import { copyToClipboard } from "../lib/utils";
@@ -29,7 +29,7 @@ export function PendingDeliveryNote({
   );
   const health = useDaemonHealth(ownerDeviceId);
   const [copied, setCopied] = useState(false);
-  const resolved = withDaemonHealth(state, { daemonDegraded: isDegradedDaemonHealth(health), restartInFlight });
+  const resolved = withDaemonHealth(state, { daemonDegraded: blocksDelivery(health), restartInFlight });
   if (resolved !== "daemon") return <>{children}</>;
   const copy = describeDaemonHealth(health);
   if (!copy) return <>{children}</>;

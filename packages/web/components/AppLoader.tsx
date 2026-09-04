@@ -21,10 +21,12 @@ export function AppLoader({
   className,
   size = 44,
   label,
+  deferIndicator = false,
 }: {
   className?: string;
   size?: number;
   label?: string;
+  deferIndicator?: boolean;
 }) {
   return (
     <div
@@ -35,8 +37,10 @@ export function AppLoader({
       role="status"
       aria-label={label ?? "Loading"}
     >
-      <LogoMark size={size} monochrome className="opacity-45" />
-      <div className="app-loader-bar" />
+      <div className={cn("flex flex-col items-center gap-5", deferIndicator && "app-loader-indicator-delayed")}>
+        <LogoMark size={size} monochrome className="opacity-45" />
+        <div className="app-loader-bar" />
+      </div>
       {label && <div className="text-sm text-sol-text-dim">{label}</div>}
     </div>
   );

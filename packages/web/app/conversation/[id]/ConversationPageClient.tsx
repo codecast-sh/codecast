@@ -1,4 +1,5 @@
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
+import { useAuthGate } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
@@ -15,6 +16,7 @@ import { useInboxStore, isConvexId } from "../../../store/inboxStore";
 import { isForeignSession } from "../../../lib/liveEntities";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
 import { setShareTokenScope } from "../../../lib/shareTokenScope";
+import { useLocalAuth } from "../../../lib/localAuth";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -215,8 +217,8 @@ export default function ConversationPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
-  const treatAsAuthed = isAuthenticated;
+  const authGate = useAuthGate(useLocalAuth);
+  const treatAsAuthed = authGate === "children";
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const prefill = searchParams.get(PREFILL_PARAM) || undefined;
@@ -272,7 +274,7 @@ export default function ConversationPage() {
     return <ConversationLoadingSkeleton id={id} />;
   }
   if (effective.access_level === "denied") {
-    if (!isAuthLoading && !treatAsAuthed) {
+    if (authGate === "guest") {
       const returnTo = `/conversation/${id}${window.location.search}${window.location.hash}`;
       router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
       return <ConversationLoadingSkeleton id={id} />;
@@ -288,7 +290,7 @@ export default function ConversationPage() {
   // Wait for auth to settle before committing to a render path: while loading,
   // resolveConversation may have answered with the anonymous identity, and we
   // don't want to flash the guest view at a signed-in owner (or vice versa).
-  if (isAuthLoading) return <ConversationLoadingSkeleton id={id} />;
+  if (authGate === "loading") return <ConversationLoadingSkeleton id={id} />;
 
   // Unauthenticated visitor on a shared link: the inbox is behind AuthGuard
   // (it would bounce them to the marketing root), so render read-only in place.

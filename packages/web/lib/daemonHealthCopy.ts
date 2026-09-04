@@ -2,7 +2,7 @@
 // per-message delivery note so both surfaces tell the same story. `label` is
 // the short chip text; `detail` is a full sentence for a tooltip or a bubble
 // note; `command` is what the user can run (click to copy).
-import { formatDuration, type DaemonHealth } from "../hooks/useDaemonHealth";
+import { formatDuration, OVERLOADED_FREEZE_MS, OVERLOADED_HOUR_MS, type DaemonHealth } from "../hooks/useDaemonHealth";
 
 export interface DaemonHealthCopy {
   colorVar: string;
@@ -48,13 +48,34 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
         detail: `The CLI daemon restarted ${secs(health.sinceMs)} ago and is recovering sessions and watchers. Deliveries and echoes catch up once it settles.`,
         command: "cast status",
       };
-    case "overloaded":
+    case "overloaded": {
+      // The minute wins the first sentence whenever it fired, because a live
+      // freeze is what makes a message late right now and the note on a stuck
+      // message renders only in that case. The hour total and the top cause
+      // follow it, and stand alone when the minute is quiet: a machine that
+      // freezes hard every few minutes reads as fine in any one minute, and the
+      // top cause is the only part of it a person can act on.
+      const worst = health.maxMs ? `, worst freeze ${secs(health.maxMs)}` : "";
+      const cause = health.topCause ? ` Top cause: ${health.topCause}.` : "";
+      const live = health.freezeMs >= OVERLOADED_FREEZE_MS;
+      const hour =
+        health.hourMs !== undefined
+          ? ` Frozen ${secs(health.hourMs)} in the last hour${worst}.${cause}`
+          : "";
+      const detail = live
+        ? `The CLI daemon was frozen for ${secs(health.freezeMs)} of the last minute (the machine is busy). Deliveries and echoes are delayed, not lost.${hour}`
+        // The hour on its own is a record, not a live symptom, so it does not
+        // promise that anything is late right now. blocksDelivery draws the
+        // same line: this tier colours the header chip, it does not tell a
+        // message waiting to send to blame the daemon.
+        : `The CLI daemon's event loop was frozen ${secs(health.hourMs ?? 0)} in the last hour${worst}.${cause} Deliveries and echoes on this machine run late whenever it blocks.`;
       return {
         colorVar: "--sol-orange",
         label: `daemon under load`,
-        detail: `The CLI daemon was frozen for ${secs(health.freezeMs)} of the last minute (the machine is busy). Deliveries and echoes are delayed, not lost.`,
+        detail,
         command: "cast status",
       };
+    }
     case "sync_stalled": {
       const stalled = formatDuration(health.stalledMs);
       // Prefer the honest message count; fall back to logical ops for older
@@ -75,4 +96,31 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
     default:
       return null;
   }
+}
+
+// One machine's freeze line for the devices page. The wording is its own: a
+// compact line under a device row, where the chip above writes full sentences.
+// What the two share is the rule for showing nothing (a machine that is not
+// beating, or an hour total of zero) and the SLO bar that turns the number
+// orange, so editing this does not change what the chip says.
+// Null when the machine has reported no freeze, and
+// null for a machine that is not beating: a laptop shut a week ago would
+// otherwise keep showing the last number its daemon wrote, as would a machine
+// downgraded to a daemon that no longer reports the field. `online` is required
+// so every surface that shows this has to answer that question.
+export function describeDeviceFreeze(row: {
+  loop_freeze_1h_ms?: number | null;
+  loop_freeze_max_ms?: number | null;
+  loop_freeze_top?: string | null;
+  online: boolean;
+}): { text: string; colorVar: string } | null {
+  if (!row.online) return null;
+  const hourMs = row.loop_freeze_1h_ms ?? 0;
+  if (hourMs <= 0) return null;
+  const worst = row.loop_freeze_max_ms ? `, worst ${secs(row.loop_freeze_max_ms)}` : "";
+  const cause = row.loop_freeze_top ? ` · ${row.loop_freeze_top}` : "";
+  return {
+    text: `frozen ${secs(hourMs)}/h${worst}${cause}`,
+    colorVar: hourMs >= OVERLOADED_HOUR_MS ? "--sol-orange" : "--sol-text-dim",
+  };
 }

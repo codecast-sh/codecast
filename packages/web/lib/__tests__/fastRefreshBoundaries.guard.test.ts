@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { codeLines, walkSources } from "./sourceWalk";
 
 // FAST REFRESH BOUNDARY GUARD.
 //
@@ -19,6 +20,14 @@ import { join, relative } from "node:path";
 //
 // ALLOWED is a ratchet of the offenders that predate this rule. Fix one and its
 // entry must go; a new offender fails here. Do not widen the list for new code.
+//
+// The second guard is the other way to lose a boundary: calling a component as
+// a plain function (`const el = Inner(props, ref)`) instead of rendering it.
+// Its hooks then run on the CALLER's fiber, and Fast Refresh signs the caller,
+// whose own hook list never changes, so an edit that adds a hook to the callee
+// keeps the fiber and crashes on the shifted slot ("Should have a queue",
+// ConversationView 2026-09-03). Render it as an element; if the point was to
+// time or size its output, measure inside its body.
 
 const ROOT = join(import.meta.dir, "..", "..");
 const DIRS = ["app", "components"];
@@ -41,7 +50,6 @@ const ALLOWED = new Set<string>([
   "components/DiffView.tsx",
   "components/DynamicRunView.tsx",
   "components/EdgePeek.tsx",
-  "components/EntityIdPill.tsx",
   "components/FormattedSummary.tsx",
   "components/GlobalSearch.tsx",
   "components/HtmlSnippet.tsx",
@@ -72,7 +80,6 @@ const ALLOWED = new Set<string>([
   // by design). Its two importers re-execute on edit, and that is the point —
   // it keeps those exports out of ConversationView.
   "components/messageMarkdown.tsx",
-  "components/tools/MarkdownRenderer.tsx",
   "components/ui/badge.tsx",
   "components/ui/button.tsx",
   "components/ui/context-menu.tsx",
@@ -83,12 +90,20 @@ const ALLOWED = new Set<string>([
   "components/vault/useVaultLinkCtx.tsx",
 ]);
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "__tests__") continue;
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.tsx$/.test(name) && !/\.test\.tsx$/.test(name)) out.push(full);
+const walk = (dir: string) => walkSources(dir).filter((f) => f.endsWith(".tsx"));
+
+// `Inner(props, ref)` / `Inner(props)`: a PascalCase identifier invoked with
+// `props` as its first argument. Declarations (`function Inner(props`) carry
+// the `function` keyword and are skipped; annotations (`props:`) never match.
+const PLAIN_COMPONENT_CALL = /(?:^|[^\w$.])([A-Z][\w$]*)\(\s*props\s*[,)]/;
+
+/** Lines that invoke a component as a plain function instead of rendering it. */
+export function plainComponentCalls(source: string): string[] {
+  const out: string[] = [];
+  for (const { line, n } of codeLines(source)) {
+    if (/\bfunction\s+[A-Z]/.test(line)) continue;
+    const m = PLAIN_COMPONENT_CALL.exec(line);
+    if (m) out.push(`${n}: ${m[1]}(props…)`);
   }
   return out;
 }
@@ -137,8 +152,27 @@ describe("component modules export only components (Fast Refresh boundaries)", (
     expect(fresh, `Move these out to lib/ or hooks/ (see header):\n${msg}`).toEqual([]);
   });
 
+  test("shared markdown and entity renderers remain Fast Refresh boundaries", () => {
+    for (const file of [
+      "components/tools/MarkdownRenderer.tsx",
+      "components/tools/MarkdownImages.tsx",
+      "components/EntityIdPill.tsx",
+      "components/EntityObjectCard.tsx",
+    ]) {
+      expect(nonComponentExports(readFileSync(join(ROOT, file), "utf8")), file).toEqual([]);
+    }
+  });
+
   test("the allowlist only names files that still offend (ratchet)", () => {
     const stale = [...ALLOWED].filter((f) => !offenders.has(f));
     expect(stale, "These files are clean now — remove them from ALLOWED").toEqual([]);
+  });
+
+  test("no component invokes another component as a plain function", () => {
+    const calls = files
+      .map((f) => [relative(ROOT, f), plainComponentCalls(readFileSync(f, "utf8"))] as const)
+      .filter(([, bad]) => bad.length);
+    const msg = calls.map(([f, bad]) => `  ${f}: ${bad.join(", ")}`).join("\n");
+    expect(calls, `Render these as elements instead of calling them (see header):\n${msg}`).toEqual([]);
   });
 });

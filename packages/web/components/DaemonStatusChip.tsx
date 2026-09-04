@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
-import { useDaemonHealth, isDegradedDaemonHealth } from "../hooks/useDaemonHealth";
+import { useDaemonHealth, blocksDelivery } from "../hooks/useDaemonHealth";
 import { useSyncDevices } from "../hooks/useSyncDevices";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { useAppOffline } from "../hooks/useAppOffline";
@@ -105,7 +105,10 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   // row, useDaemonHealth has fallen back to the fleet verdict, which must not
   // be pinned on this session's machine.
   if (!mounted || appOffline || !remoteName) return null;
-  if (!isDegradedDaemonHealth(health)) return null;
+  // blocksDelivery, not merely degraded: this chip sits on ONE session and says
+  // its messages are running late, so it may only fire on a live symptom. An
+  // hour total past the SLO belongs on the header chip and the devices page.
+  if (!blocksDelivery(health)) return null;
   // A remote host sleeps when idle and wakes on demand, so a quiet or stale
   // heartbeat is its normal parked state, not a fault (the fleet verdict
   // excludes remotes for the same reason). Only trouble on a RUNNING remote —

@@ -45,10 +45,12 @@ describe("parseTriggerCadence", () => {
     expect(parseTriggerCadence('"x" --on pr_opened')).toBe("on PR opened");
     expect(parseTriggerCadence('"x" --on pr_merged')).toBe("on PR merged");
     expect(parseTriggerCadence('"x" --on push')).toBe("on push");
+    expect(parseTriggerCadence('"x" --on issue_opened')).toBe("on issue opened");
+    expect(parseTriggerCadence('"x" --on issue_commented')).toBe("on issue comment");
   });
 
   test("unknown event falls back to a de-underscored label", () => {
-    expect(parseTriggerCadence('"x" --on issue_opened')).toBe("on issue opened");
+    expect(parseTriggerCadence('"x" --on release_published')).toBe("on release published");
   });
 
   test("no timing flag means it runs now", () => {

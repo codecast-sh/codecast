@@ -45,9 +45,12 @@
   position: absolute;
   left: 0;
   top: 0;
+  pointer-events: none;
 }
 .faces-row--speaker .face-slot:has(.face--shown) {
   position: relative;
+  pointer-events: auto;
+  z-index: 1;
 }
 
 /* The circle's square, and the frame the name hangs below. The circle clips its
@@ -84,6 +87,13 @@
     0 0 0 3px var(--sol-cyan),
     0 0 14px color-mix(in srgb, var(--sol-cyan) 40%, transparent);
   transition: opacity 220ms ease, box-shadow 120ms ease;
+}
+
+.face-slot[data-local="true"] .face {
+  box-shadow:
+    0 0 0 calc(var(--level, 0) * 5px) var(--sol-orange),
+    0 0 calc(var(--level, 0) * 18px) color-mix(in srgb, var(--sol-orange) 50%, transparent);
+  transition: opacity 220ms ease, box-shadow 75ms ease;
 }
 
 /* The video is laid out as a plain square and moved entirely by transform —
@@ -248,6 +258,21 @@
 }
 .faces-btn--on {
   color: var(--sol-cyan);
+}
+.faces-mic {
+  position: relative;
+}
+.faces-mic-level {
+  position: absolute;
+  bottom: 2px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--sol-orange);
+  transform-origin: left;
+  transform: scaleX(var(--level, 0));
+  transition: transform 75ms ease;
 }
 .faces-btn--alert {
   color: var(--sol-red);

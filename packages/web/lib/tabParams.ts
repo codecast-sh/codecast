@@ -1,5 +1,10 @@
 import { createContext, useContext } from "react";
 
+export function parseTabLocation(path: string) {
+  const url = new URL(path, "https://codecast.local");
+  return { pathname: url.pathname, searchParams: url.searchParams, hash: url.hash };
+}
+
 // Tab params context: overrides next/navigation hooks when inside a tab. Lives
 // here, not in components/TabContent.tsx, so the router compat layer
 // (src/compat/next-navigation.ts) never imports a component module — that
@@ -13,6 +18,7 @@ export const TabParamsCtx = createContext<{
   pathname: string;
   params: Record<string, string>;
   searchParams: URLSearchParams;
+  hash?: string;
   // Whether this is the currently-visible tab. Background tabs stay mounted
   // (display:none) so their scroll/state survive — a pane uses this to freeze
   // itself on its own route/params instead of following global view state.

@@ -8,6 +8,8 @@ import { execSync } from "node:child_process";
 import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
+import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
+import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
 
 /**
  * Build identity for drivers (window.__CODECAST_BUILD). Railway exposes the
@@ -37,6 +39,10 @@ export default defineConfig(({ mode }) => ({
     react(),
     // Lets an edit to a store action hot-swap instead of reloading the whole app.
     storeHmrPlugin(),
+    // Restarts the server when node_modules/.vite is deleted underneath it
+    // (vendor-platform.sh, manual cache purges); without this every dep not
+    // yet served answers 504 until someone restarts by hand.
+    depsCacheGuardPlugin(),
     // Inlines the browser → desktop hand-off gate into <head> so a page bound
     // for the desktop app never boots, and re-injects the boot chunk's
     // modulepreload hints on a normal load.
@@ -66,7 +72,8 @@ export default defineConfig(({ mode }) => ({
       injectRegister: null, // registered manually from src/boot.tsx after first paint
       manifest: false, // offline shell only; not an installable PWA
       workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+        globPatterns: APP_SHELL_GLOB_PATTERNS,
+        globIgnores: APP_SHELL_GLOB_IGNORES,
         // Several chunks (ConversationView, tiptap, highlight) exceed
         // workbox's 2 MiB default, which would silently drop them from the
         // precache and break offline boot.

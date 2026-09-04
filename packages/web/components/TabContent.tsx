@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
-import { tabNeedsUrlRestore } from "../lib/pathLabel";
+import { conversationTabPath, tabNeedsUrlRestore } from "../lib/pathLabel";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { tabStageLayout } from "../lib/stage";
 import { RoutePane } from "./RoutePane";
@@ -136,8 +136,8 @@ export function TabContent() {
   let renderTabs = tabs;
   if (navBoot.url && activeTabId) {
     const active = tabs.find((t: AppTab) => t.id === activeTabId);
-    if (active && active.path !== navBoot.url) {
-      const url = navBoot.url;
+    const url = conversationTabPath(navBoot.url);
+    if (active && active.path !== url) {
       renderTabs = tabs.map((t: AppTab) =>
         t.id === activeTabId ? { ...t, path: url } : t
       );
@@ -145,7 +145,7 @@ export function TabContent() {
   }
   useEffect(() => {
     if (!navBoot.url) return;
-    const url = navBoot.url;
+    const url = conversationTabPath(navBoot.url);
     navBoot.url = null;
     const store = useInboxStore.getState();
     if (!store.activeTabId) return;

@@ -31,6 +31,18 @@ export type MachineCandidate = {
 };
 
 /**
+ * A machine that boots itself when work arrives: the cloud Linux class, an EC2
+ * box whose idle state is "stopped". A remote Mac cannot stop (so "offline"
+ * means gone) and a laptop can only be opened by a human. One rule, read by the
+ * device chips (which hold a full Device) and by the store roster (which holds
+ * a MachineCandidate), so "run in the cloud" can never offer a machine the
+ * mover would refuse.
+ */
+export function wakesOnUse(d: { is_remote?: boolean; platform?: string }): boolean {
+  return d.is_remote === true && /linux/i.test(d.platform ?? "");
+}
+
+/**
  * Deterministic tiebreak. device_id is a stable machine fingerprint, so the same
  * candidate set always yields the same answer — the property `last_seen` lacked.
  */
