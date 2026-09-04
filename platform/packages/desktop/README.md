@@ -22,6 +22,8 @@ runtime to test.
 | `src/updaterNet.js` | redirect following GET, feed fetch, resumable download with inactivity timeouts and abort | `updaterNet.js`, byte identical |
 | `src/updaterLogic.js` | version compare, feed file per channel, feed parse, download decision, the kill switch, the swap script | pure parts of main.js |
 | `src/notarize.js` | `createNotarizeHook`: electron-builder afterSign hook taking identities from env | `notarize.js` |
+| `src/webCache.js` | the offline copy of the site: manifest check, verified download, atomic swap, request planning, the protocol handler | new |
+| `templates/vite-release-manifest.js` | Vite plugin that publishes `release.json`, the manifest the copy reads (`@platform/desktop/vite`) | new |
 | `templates/electron-builder.js` | electron-builder config as a function of the product values | `package.json` "build" |
 | `templates/entitlements.mac.plist` | hardened runtime entitlements (JIT, mic, camera) | same file |
 | `templates/NOTARIZATION.md` | the env var list and the one time setup | new |
@@ -91,6 +93,13 @@ Required: `productName`, `appId` (reverse DNS), `protocol` (deep link scheme),
 | `update.minVersion` | async function returning the fleet floor, the kill switch | none |
 | `update.initialDelayMs`, `update.intervalMs` | first check after launch, then every | 8 s, 1 h |
 | `extraPermissions` | added to the baseline grant table | `[]` |
+| `web.cache` | keep a full local copy of the site and serve the app host from it (below) | `false` |
+| `web.manifestPath`, `web.seedDir`, `web.passthrough` | where the site publishes its manifest; a packaged copy for the first launch; path prefixes the server owns | `/release.json`, none, `[]` |
+| `web.startupTimeoutMs`, `web.checkIntervalMs` | how long a launch waits for the manifest check; how often to re-check | 6 s, 15 min |
+| `extraProtocols` | `{scheme, name, claimOnFirstRun, menuLabel}` schemes beyond the app's own (a mail app: `mailto`) | `[]` |
+| `hooks.onReady` | called with the API once the shell is up | none |
+| `downloadUrls` | `(url) => boolean`: pages the app opens that are downloads, saved in-app | none |
+| `window.rememberBounds` | size and position persist in settings.json | `true` |
 | `about.copyright`, `about.website` | About panel and Help website entry | product name, prod URL |
 
 Validation errors throw `DesktopConfigError` at `createDesktopApp` time, before
@@ -173,6 +182,51 @@ https JSON endpoint works.
 that loads later (`update-status` keeps only the latest), and the web gates on
 each bridge method being present. `BRIDGE_METHODS` lists the full surface so a
 consumer can diff an older shell against it.
+
+## The offline copy of the site
+
+With `web.cache: true` the shell loads the site over https as before, but
+never straight from the network: it keeps one complete copy of the site under
+`userData/web-cache/<release>/` and answers every request for the app host
+from it. The origin is unchanged, so storage, cookies, sign-in, and the
+backend's origin allowlist see the same `https://` identity as the browser.
+
+**The manifest.** The site publishes `release.json`: a release id that is a
+hash over every file's path and content, and each file with its sha256. The
+Vite plugin writes it after the build:
+
+```js
+import { releaseManifest } from "@platform/desktop/vite";
+export default defineConfig({ plugins: [react(), releaseManifest()] });
+```
+
+**Refresh.** At launch, the shell fetches the manifest (no-store) and compares
+its id with the copy's. A different id downloads every file into a staging
+directory, verifies each hash, and swaps the pointer in one rename; a bad
+hash or a failed file discards the stage and keeps the current copy. The
+launch waits at most `web.startupTimeoutMs` for that first check, so an
+online start paints the current release and an offline one paints the copy
+at once. It re-checks every `web.checkIntervalMs` and on wake from sleep;
+when a newer release lands while a page is up, the page hears
+`onWebUpdate({ release, from })` on the bridge and reloads when it wants to.
+
+**Serving.** GET and HEAD for the app host: a file in the copy is served with
+its mime type; a navigation that misses gets `index.html` (the same SPA
+fallback the site's server does); anything under `web.passthrough` and every
+other request goes to the network untouched (`net.fetch` with
+`bypassCustomProtocolHandlers`). The copy's own downloads bypass the
+interceptor the same way. With no copy at all and no network, a navigation
+gets a small "needs a connection" page instead of a blank window.
+
+**The seed.** `web.seedDir` names a copy of the site packaged with the app
+(electron-builder `extraResources`, its `release.json` written by
+`writeManifest` or the plugin), used when nothing has been downloaded yet,
+so even the first launch works offline. The seed's id is computed the same
+way as the site's, so a seed of the deployed build is "fresh" on the first
+check.
+
+The local dev URL is never cached: its files change under the app and Vite
+serves them.
 
 ## Notarization
 

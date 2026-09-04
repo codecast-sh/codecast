@@ -94,3 +94,18 @@ test("injected shortcut settings win", () => {
   expect(cfg.shortcuts.settings).toBe(settings);
   expect(() => resolveDesktopConfig({ ...base(), shortcuts: { settings: { mergeShortcuts: 1 } } })).toThrow(/mergeShortcuts/);
 });
+
+test("app defined ipc and menu items resolve, and bad shapes fail", () => {
+  const cfg = resolveDesktopConfig({
+    ...base(),
+    ipc: { handlers: { permissions: () => 1 }, events: ["permissions-changed"] },
+    menu: { appItems: [{ label: "Mac Setup…", action: () => {} }, { type: "separator" }] },
+  });
+  expect(Object.keys(cfg.ipc.handlers)).toEqual(["permissions"]);
+  expect(cfg.ipc.events).toEqual(["permissions-changed"]);
+  expect(cfg.menu.appItems).toHaveLength(2);
+  expect(resolveDesktopConfig(base()).ipc).toEqual({ handlers: {}, events: [] });
+  expect(() => resolveDesktopConfig({ ...base(), ipc: { handlers: { "bad name": () => {} } } })).toThrow(/word characters/);
+  expect(() => resolveDesktopConfig({ ...base(), ipc: { handlers: { x: 1 } } })).toThrow(/function/);
+  expect(() => resolveDesktopConfig({ ...base(), menu: { appItems: [{ label: "x" }] } })).toThrow(/appItems/);
+});

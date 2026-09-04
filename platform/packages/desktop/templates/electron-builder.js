@@ -10,6 +10,8 @@
 //     microphoneUsage: "Codecast uses the microphone for team huddles.",
 //     cameraUsage: "Codecast uses the camera for team huddles.",
 //     files: ["main.js", "assets/icon.png", "assets/trayTemplate.png", "assets/trayTemplate@2x.png"],
+//     extraProtocols: [{ scheme: "mailto", name: "Email address" }],   // a mail app
+//     extraResources: [{ from: "web", to: "web" }],                     // offline copy seed
 //   });
 //
 // and run `electron-builder -m --config electron-builder.config.js`.
@@ -48,9 +50,17 @@ function electronBuilderConfig(opts) {
     targets = ["dmg", "zip"],
     arch = "arm64",
     extraMac = {},
+    // Schemes beyond the app's own, e.g. [{ scheme: "mailto", name: "Email address" }]
+    // — what makes a mail app eligible as the system's default mail client.
+    extraProtocols = [],
+    // Copied into Contents/Resources untouched: the site seed for the offline
+    // copy ({ from: "web", to: "web" }), native helpers, …
+    extraResources = [],
+    // Extra Info.plist keys (NSUserNotificationAlertStyle, usage strings, …).
+    extendInfo: extraInfo = {},
   } = opts;
 
-  const extendInfo = {};
+  const extendInfo = { ...extraInfo };
   if (microphoneUsage) extendInfo.NSMicrophoneUsageDescription = microphoneUsage;
   if (cameraUsage) extendInfo.NSCameraUsageDescription = cameraUsage;
 
@@ -65,6 +75,7 @@ function electronBuilderConfig(opts) {
       "node_modules/@platform/desktop/package.json",
     ],
     directories: { buildResources },
+    ...(extraResources.length ? { extraResources } : {}),
     afterSign: createNotarizeHook(),
     mac: {
       target: targets,
@@ -84,7 +95,10 @@ function electronBuilderConfig(opts) {
       title: productName,
       artifactName: `${productName}-\${version}-${arch}.\${ext}`,
     },
-    protocols: [{ name: productName, schemes: [protocol] }],
+    protocols: [
+      { name: productName, schemes: [protocol] },
+      ...extraProtocols.map((p) => ({ name: p.name || p.scheme, schemes: [p.scheme], role: p.role || "Editor" })),
+    ],
     // The generic provider publishes <channel>-mac.yml + the zip/dmg. The
     // updater reads `${publishUrl}/latest-mac.yml` (or `<channel>-mac.yml`).
     publish: { provider: "generic", url: publishUrl },

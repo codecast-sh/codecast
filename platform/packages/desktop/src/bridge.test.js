@@ -79,3 +79,18 @@ test("window role keeps the latest push for late subscribers; palette listeners 
   ipc.emit("palette-show");
   expect(shows).toBe(1);
 });
+
+test("call and subscribe use the app: prefix and unsubscribe cleanly", async () => {
+  const ipc = fakeIpc();
+  const bridge = createBridge({ ipcRenderer: ipc, argv: [] });
+  expect(await bridge.call("permissions", 1, 2)).toBe("app:permissions");
+  expect(ipc.calls.at(-1)).toEqual(["invoke", "app:permissions", 1, 2]);
+  const got = [];
+  const off = bridge.subscribe("permissions-changed", (p) => got.push(p));
+  ipc.emit("app:permissions-changed", { fda: "granted" });
+  off();
+  ipc.emit("app:permissions-changed", { fda: "off" });
+  expect(got).toEqual([{ fda: "granted" }]);
+  expect(BRIDGE_METHODS).toContain("call");
+  expect(BRIDGE_METHODS).toContain("subscribe");
+});

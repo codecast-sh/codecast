@@ -27,10 +27,6 @@ import {
   isDetachedTabWindow,
   onCallPanelHandback,
 } from "../lib/desktop";
-import { takeOverCall } from "../lib/calls/callManager";
-import { suppressAutoPopOut } from "../lib/calls/popOutCall";
-import { showBrowserHandoffToast } from "./BrowserHandoffToast";
-import { installMeetingOfferListener } from "../lib/calls/meetingOffers";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
@@ -181,7 +177,9 @@ export function DesktopProvider() {
     installWindowRoleTracker();
     // The shell offers to record a meeting it noticed starting. It picked this
     // window; the answer, and the microphone, are ours.
-    installMeetingOfferListener();
+    void import("../lib/calls/meetingOffers").then(({ installMeetingOfferListener }) => {
+      installMeetingOfferListener();
+    });
 
     // The call panel closing hands its huddle back here.
     //
@@ -192,10 +190,14 @@ export function DesktopProvider() {
     // over. The panel is STILL CONNECTED as this arrives (the shell sends it on
     // the window's close, not after), so this join is what ends the panel's
     // participation, in that order, and the audio has no hole in it.
-    onCallPanelHandback((payload) => {
+    onCallPanelHandback(async (payload) => {
       if (!payload?.room) return;
       // Closing the panel is a request to keep the call HERE. Without this
       // the auto-pop would reopen the panel on the same room forever.
+      const [{ suppressAutoPopOut }, { takeOverCall }] = await Promise.all([
+        import("../lib/calls/popOutCall"),
+        import("../lib/calls/callManager"),
+      ]);
       suppressAutoPopOut(payload.room);
       void takeOverCall({
         roomKey: payload.room,
@@ -242,7 +244,9 @@ export function DesktopProvider() {
         if (auto && !shouldApplyAutoDeepLink()) {
           const convId = conversationIdFromPath(path);
           if (!convId || useInboxStore.getState().currentSessionId !== convId) {
-            showBrowserHandoffToast(path, goTo);
+            void import("./BrowserHandoffToast").then(({ showBrowserHandoffToast }) => {
+              showBrowserHandoffToast(path, goTo);
+            });
           }
           continue;
         }

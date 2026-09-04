@@ -39,6 +39,8 @@ export interface DesktopConfigInput {
   window?: {
     width?: number; height?: number; minWidth?: number; minHeight?: number;
     backgroundColor?: string; trafficLightPosition?: { x: number; y: number };
+    /** Persist size and position in settings.json. Default true. */
+    rememberBounds?: boolean;
   };
   menu?: {
     navItems?: MenuItemSpec[];
@@ -47,6 +49,8 @@ export interface DesktopConfigInput {
     /** Label for the New Session entries; null removes them. Default "New Session". */
     newSessionLabel?: string | null;
     dockItems?: MenuItemSpec[];
+    /** The app's own entries in the application menu. */
+    appItems?: Array<{ label: string; action: (api: DesktopAppApi) => void } | { type: "separator" }>;
   };
   /** Floating palette window. Absent = no palette. */
   palette?: { path: string; width?: number; height?: number } | null;
@@ -73,6 +77,29 @@ export interface DesktopConfigInput {
   };
   extraPermissions?: string[];
   about?: { copyright?: string; website?: string };
+  /** The offline copy of the site: served from userData, refreshed from `manifestPath` whenever online. */
+  web?: {
+    cache?: boolean;
+    /** Where the site publishes its release manifest (the `@platform/desktop/vite` plugin writes it). Default "/release.json". */
+    manifestPath?: string;
+    /** A copy of the site packaged with the app (electron-builder `extraResources`), used before the first download. */
+    seedDir?: string | null;
+    /** Path prefixes the app's server owns (`/api/`): always fetched, never served from the copy. */
+    passthrough?: string[];
+    checkIntervalMs?: number;
+    /** How long a launch waits for the manifest check before painting the copy it has. Default 6000. */
+    startupTimeoutMs?: number;
+  };
+  /** URL schemes beyond `protocol` (a mail app: mailto). Listed in the bundle; claimable as the OS default. */
+  extraProtocols?: Array<{ scheme: string; name?: string; claimOnFirstRun?: boolean; menuLabel?: string }>;
+  /** App defined IPC: handlers a renderer reaches with bridge.call(name, …), events main pushes with api.emit(name, payload). */
+  ipc?: { handlers?: Record<string, (...args: any[]) => any>; events?: string[] };
+  hooks?: {
+    /** Runs once the shell is up (windows, menus, cache, updater), with the API; `firstRun` on a profile's first launch. */
+    onReady?: (api: DesktopAppApi, info: { firstRun: boolean }) => void;
+  };
+  /** URLs the page opens that are downloads, not pages: saved by the shell instead of opened in the browser. */
+  downloadUrls?: (url: string) => boolean;
 }
 
 export interface DesktopConfig {
@@ -84,7 +111,11 @@ export interface DesktopConfig {
   bridgeGlobal: string;
   events: { navigate: string; newSession: string; htmlClass: string };
   assets: { icon: string | null; tray: string | null };
-  window: Required<NonNullable<DesktopConfigInput["window"]>>;
+  window: Required<NonNullable<DesktopConfigInput["window"]>> & { rememberBounds: boolean };
+  web: { cache: boolean; manifestPath: string; seedDir: string | null; passthrough: string[]; checkIntervalMs: number; startupTimeoutMs: number };
+  extraProtocols: Array<{ scheme: string; name: string; claimOnFirstRun: boolean; menuLabel: string | null }>;
+  hooks: { onReady: ((api: DesktopAppApi, info: { firstRun: boolean }) => void) | null };
+  downloadUrls: ((url: string) => boolean) | null;
   menu: { navItems: MenuItemSpec[]; helpLinks: HelpLinkSpec[]; settingsPath: string | null; newSessionLabel: string | null; dockItems: MenuItemSpec[] };
   palette: { path: string; width: number; height: number } | null;
   shortcuts: { defaults: Record<string, string>; settings: ShortcutSettings; actions: Record<string, (api: DesktopAppApi) => void> };
@@ -110,7 +141,19 @@ export interface DesktopAppApi {
   showCompose(): void;
   openFullSessionInMain(): void;
   toggleEnvironment(): void;
+  /** Check the site manifest now; resolves the refresh result (null when the copy is off). */
+  refreshWeb(): Promise<WebRefreshResult | null>;
+  webRelease(): WebRelease | null;
+  /** Ask the OS to make this app the handler for one of `extraProtocols`; true when it is afterwards. */
+  claimDefaultClient(scheme: string): boolean;
+  /** Push one of `ipc.events` to every window. */
+  emit(name: string, payload?: unknown): void;
+  /** A window on the shell's preload for the app's own page (a file or a URL). Returns the BrowserWindow. */
+  openWindow(opts: { file?: string; url?: string; width?: number; height?: number; minWidth?: number; minHeight?: number; resizable?: boolean; titleBarStyle?: string; backgroundColor?: string; parent?: unknown; args?: string[] }): unknown;
 }
+
+export type WebRelease = { release: string; dir: string };
+export type WebRefreshResult = { status: "fresh" | "updated" | "offline" | "error"; release: string | null; from?: string | null; error?: string };
 
 /** Main process entry. Call once at the top of main.js; `electron` defaults to require("electron"). */
 export function createDesktopApp(config: DesktopConfigInput, electron?: unknown): DesktopAppApi;
@@ -133,6 +176,12 @@ export interface DesktopBridge {
   onUpdateStatus(cb: (status: UpdateStatus) => void): void;
   restartForUpdate(): Promise<void>;
   checkForUpdate(opts?: { manual?: boolean }): Promise<void>;
+  /** The offline copy moved to a newer release than this page loaded from; reload when convenient. */
+  onWebUpdate(cb: (info: { release: string; from: string | null }) => void): void;
+  getWebRelease(): Promise<WebRelease | null>;
+  refreshWeb(): Promise<WebRefreshResult | null>;
+  setAsDefaultClient(scheme: string): Promise<boolean>;
+  isDefaultClient(scheme: string): Promise<boolean>;
   showNotification(title: string, body: string, data?: NotifyNativeData): Promise<{ shown: boolean; reason?: string }>;
   reportWindowState(state: DesktopWindowState): void;
   onWindowRole(cb: (role: DesktopWindowRole) => void): void;
@@ -155,6 +204,10 @@ export interface DesktopBridge {
   detachTab(path: string): Promise<void>;
   attachTab(path: string): Promise<void>;
   onAdoptTab(cb: (path: string) => void): void;
+  /** App defined IPC: invoke `ipc.handlers[name]` in main. */
+  call(name: string, ...args: any[]): Promise<any>;
+  /** Subscribe to an event main pushes with api.emit; returns the unsubscribe. */
+  subscribe(name: string, cb: (payload: any) => void): () => void;
   platform: string;
 }
 
@@ -221,6 +274,28 @@ export const updaterNet: {
     onProgress?: (percent: number) => void; signal?: AbortSignal;
     attempts?: number; inactivityMs?: number; retryDelayMs?: number;
   }): Promise<string>;
+};
+
+// ── Offline copy of the site ───────────────────────────────────────────────
+export interface WebCache {
+  init(): WebRelease | null;
+  current(): WebRelease | null;
+  refresh(opts?: { signal?: AbortSignal }): Promise<WebRefreshResult>;
+  resolve(pathname: string): string | null;
+  indexFile(): string | null;
+  dir: string;
+  origin: string;
+}
+export function createWebCache(opts: {
+  dir: string; origin: string; manifestPath?: string; seedDir?: string | null;
+  fetchImpl?: typeof fetch; concurrency?: number; log?: (line: string) => void;
+}): WebCache;
+export const webCache: {
+  createWebCache: typeof createWebCache;
+  parseManifest(text: string): { release: string; commit: string | null; files: Record<string, string | null> };
+  planRequest(o: { method: string; url: string; appHosts: Set<string>; cache: WebCache; passthrough?: string[]; headers?: Record<string, string> }):
+    { kind: "file"; file: string } | { kind: "network"; fallback: "offline-page" | null };
+  releaseIdFor(files: Record<string, string | null>): string;
 };
 
 export const updaterLogic: {
