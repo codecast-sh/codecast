@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
-import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { codexResumeParams, recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
@@ -1524,6 +1524,7 @@ function sendAgentStatus(
   // brings it back.
   opts?: { hibernatedAt?: number | null },
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const isTransition = prevStatus !== status;
   // The throttle drops redundant "working" re-sends. A write carrying a park
@@ -4629,7 +4630,7 @@ async function executeRemoteCommand(
           log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
-            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy, sandbox: codexSkipApprovals ? "danger-full-access" : "workspace-write", persist: true });
             // This device now owns and runs the session — claim it and clear any
             // stale "clone it first" error a different device may have left.
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
@@ -5485,6 +5486,7 @@ async function executeRemoteCommand(
               cwd,
               persist: true,
               approvalPolicy,
+              sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
             });
             if (forked.thread.path && fs.existsSync(forked.thread.path)) {
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
@@ -11882,6 +11884,7 @@ function reconcileStatusFromPane(
   conversationId: string,
   syncService: SyncService,
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   // The claude-chrome classifier below cannot read GLYPHLESS_PROMPT_CLIENTS
   // panes — worse than "unknown" for grok, whose ❯ composer stays visible for
   // the whole turn while its busy chrome (header spinner, "Esc:cancel",
@@ -13525,30 +13528,67 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
 }
 
-// Drains the composer with blind C-a/C-k cycles before a paste.
+// Text the composer shows after its last ❯/› glyph: the prompt line plus the
+// wrapped/continuation lines under it, up to the box rule or a blank line.
+// null when no glyph is visible (glyphless client or mid-redraw).
+export function tmuxComposerText(pane: string): string | null {
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return null;
+  const lines = pane.slice(glyphAt + 1).split("\n");
+  const body = [lines[0]];
+  for (const line of lines.slice(1)) {
+    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+// Drains the composer before a paste.
 //
-// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
-// single C-u does not reliably empty the buffer when stale text is present
+// One cycle is C-a (start of line), C-k (kill to end of line), BSpace (join
+// onto the line above). Why not a single C-u: in Claude Code 2.1.x's input box
+// a single C-u does not reliably empty the buffer when stale text is present
 // (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
 // the paste and the trailing Enter submits both as one message — the
-// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
-// (start of line) + C-k (kill to end) drains reliably; three cycles handles
-// multi-line drafts. See daemon.inject-clear.test.ts.
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Why BSpace:
+// C-a/C-k only ever empties the CURRENT line, so a multi-line draft (a pasted
+// <session-message> block, a stale multi-paragraph prompt) kept every line
+// above the cursor no matter how many cycles ran, the Enter gate saw foreign
+// text forever, and the message sat pending for hours (msg ns7c8zkm,
+// 2026-09-04, 294 failed drains). BSpace on the emptied line removes the
+// newline and pulls the cursor onto the line above, so each cycle retires one
+// line; on an empty composer all three keys are no-ops.
+//
+// Three blind cycles cover the common short draft. Past that the drain
+// captures the pane every three cycles and keeps going only while text is
+// still visible at the prompt, so a long draft drains fully without a fixed
+// guess at its line count. See daemon.inject-enter-gate.test.ts.
 //
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
+export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
 ): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    await exec(["send-keys", "-t", target, "C-a"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    await exec(["send-keys", "-t", target, "C-k"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
+  const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let cycle = 1; cycle <= DRAIN_MAX_CYCLES; cycle++) {
+    for (const key of ["C-a", "C-k", "BSpace"]) {
+      await exec(["send-keys", "-t", target, key]);
+      await pause(20);
+    }
+    if (cycle % 3 !== 0) continue;
+    let pane: string;
+    try {
+      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    } catch {
+      break; // capture problems are diagnosed by the Enter gate
+    }
+    const text = tmuxComposerText(pane);
+    if (text === null || !text.trim()) break;
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await pause(50);
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -14902,7 +14942,7 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy; sandbox?: PersistedCodexThread["sandbox"] };
 type PersistedAppServerThreadRecord = PersistedCodexThread;
 type AppServerStreamingPartial = { itemId: string; content: string };
 type AppServerPartialMessage = AppServerStreamingPartial;
@@ -14927,6 +14967,17 @@ let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
 const appServerRecoveryRetryAt = new Map<string, number>();
 const appServerRecoveringThreads = new Set<string>();
 let appServerShuttingDown = false;
+
+export function isSupersededAppServerSession(
+  sessionId: string,
+  conversationId = conversationCacheRef?.[sessionId],
+  live: ReadonlyMap<string, string> = appServerConversations,
+  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+): boolean {
+  if (!conversationId) return false;
+  const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
+  return !!threadId && threadId !== sessionId;
+}
 
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
   const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
@@ -15356,11 +15407,12 @@ function registerAppServerConversation(
     updatedAt?: number;
     persist?: boolean;
     approvalPolicy?: ApprovalPolicy;
+    sandbox?: PersistedCodexThread["sandbox"];
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
@@ -15368,7 +15420,7 @@ function registerAppServerConversation(
   const previous = persistedAppServerThreads.get(conversationId);
   persistedAppServerThreads.set(conversationId, {
     ...(previous?.threadId === threadId ? previous : {}),
-    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
+    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15394,6 +15446,7 @@ function markAppServerConversationResumable(
     updatedAt,
     cwd: liveEntry?.cwd,
     approvalPolicy: liveEntry?.approvalPolicy,
+    sandbox: liveEntry?.sandbox,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15428,18 +15481,16 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
         if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
       const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
-      const response = await server.threadResume({
-        threadId: record.threadId,
-        ...(record.cwd ? { cwd: record.cwd } : {}),
-        approvalPolicy: policy,
-      });
+      const response = await server.threadResume(codexResumeParams(record, policy));
       if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
         persist: false,
         approvalPolicy: policy,
+        sandbox: record.sandbox,
       });
+      log(`[codex-app-server] resumed thread ${record.threadId.slice(0, 8)} sandbox=${record.sandbox ?? "default"} approvalPolicy=${policy}`);
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
       appServerRecoveringThreads.add(record.threadId);
@@ -15505,6 +15556,7 @@ function loadPersistedAppServerThreadRegistrations(): void {
         updatedAt,
         cwd: record.cwd,
         approvalPolicy: record.approvalPolicy,
+        sandbox: record.sandbox,
         activeTurnId: record.activeTurnId,
         recoveryAttempts: record.recoveryAttempts,
       });
@@ -15876,7 +15928,7 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
-  if (!syncServiceRef) return;
+  if (!syncServiceRef || isSupersededAppServerSession(sessionId)) return;
   managedHeartbeatSessions.add(sessionId);
   ensureHeartbeatFlushLoop();
 }
@@ -15953,7 +16005,7 @@ async function runHeartbeatFlush(): Promise<void> {
   // (a module-level `let` would re-widen to `SyncService | null` after each).
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -15989,7 +16041,7 @@ async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -17096,6 +17148,7 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
 export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -17198,6 +17251,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
 }
 
 async function heartbeatHealthCheck(sessionId: string): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
@@ -20474,7 +20528,8 @@ export function shouldSelfHeal(
   monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  return Math.min(staleMs, monoStaleMs) > thresholdMs;
+  const recoveryThreshold = sawSuspend(staleMs, monoStaleMs) ? Math.min(thresholdMs, 90_000) : thresholdMs;
+  return Math.min(staleMs, monoStaleMs) > recoveryThreshold;
 }
 
 function selfHealIfTimersStalled(source: string): void {
@@ -23793,6 +23848,7 @@ async function main(): Promise<void> {
         threadId,
         cwd: entry.cwd,
         approvalPolicy: entry.approvalPolicy,
+        sandbox: entry.sandbox,
         updatedAt: Date.now(),
         activeTurnId: turnId,
         recoveryAttempts: appServerRecoveringThreads.has(threadId) ? previous?.recoveryAttempts : 0,
@@ -23992,8 +24048,8 @@ async function main(): Promise<void> {
             registry.register(new CodexAppServerRuntimeDriver({
               io: {
                 client: codexAppServerInstance,
-                registerThread({ conversationId, threadId, cwd, approvalPolicy }) {
-                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy });
+                registerThread({ conversationId, threadId, cwd, approvalPolicy, sandbox }) {
+                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy, sandbox, persist: true });
                 },
                 async inspectThread(threadId) {
                   if (!codexAppServerInstance?.running) return "unknown";

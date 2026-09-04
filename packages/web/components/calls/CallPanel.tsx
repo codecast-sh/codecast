@@ -15,10 +15,13 @@ import {
   facesModeForSize,
   getCallWindowSize,
   isCallPanelWindow,
+  isCallWindowSize,
+  isVoiceHost,
   reportCallPanelState,
   setCallWindowSize,
   type CallWindowSize,
 } from "../../lib/desktop";
+import { VoiceHostPanel } from "./VoiceHostPanel";
 
 /**
  * The call, in a window of its own — in whichever of its four shapes.
@@ -83,13 +86,23 @@ export function CallPanel() {
     [],
   );
   const roomKey = params.get("room");
+  // A shell that keeps this window alive between calls makes it the voice
+  // host: the walkie's ear, the strip, the idle faces and the call, in one
+  // window whose shape follows what is happening (VoiceHostPanel). Everything
+  // below is the older shell's per-call window, kept until every desktop has
+  // updated.
+  if (isVoiceHost()) return <VoiceHostPanel urlRoom={roomKey} params={params} />;
+  return <LegacyCallPanel roomKey={roomKey} params={params} />;
+}
+
+function LegacyCallPanel({ roomKey, params }: { roomKey: string | null; params: URLSearchParams }) {
 
   // The size the shell opened this window in — it remembers the last one per
   // machine, and seeds it into the URL so the FIRST paint is already the right
   // shape rather than a stage that snaps to circles a frame later.
   const [size, setSize] = useState<CallWindowSize>(() => {
     const seeded = params.get("size");
-    return seeded === "circles" || seeded === "speaker" || seeded === "tiny" ? seeded : "panel";
+    return isCallWindowSize(seeded) ? seeded : "panel";
   });
 
   const s = useTrackedStore([
@@ -119,7 +132,7 @@ export function CallPanel() {
   // if the window was already open on another room and only its URL changed.
   useMountEffect(() => {
     void getCallWindowSize().then((actual) => {
-      if (actual) setSize(actual);
+      if (isCallWindowSize(actual)) setSize(actual);
     });
   });
 
@@ -137,7 +150,7 @@ export function CallPanel() {
    */
   const applySize = useCallback((next: CallWindowSize) => {
     void setCallWindowSize(next).then((landed) => {
-      if (landed) return setSize(landed);
+      if (isCallWindowSize(landed)) return setSize(landed);
       toast("The desktop app needs an update for the small call sizes");
     });
   }, []);

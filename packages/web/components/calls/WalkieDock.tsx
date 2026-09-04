@@ -36,7 +36,7 @@
 // stylesheet (components/__tests__/walkieStrip.test.tsx). WalkieBanner is the
 // half that knows where those props come from.
 import { useCallback, useSyncExternalStore, type ReactNode, type RefCallback } from "react";
-import { BellOff, MessageSquare, MicOff, PictureInPicture2, Square, X } from "lucide-react";
+import { BellOff, Maximize2, MessageSquare, MicOff, PictureInPicture2, Square, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -50,7 +50,7 @@ import { CircleFace } from "./FaceCircle";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { useMicLevelVar } from "../../hooks/useMicLevelVar";
 import { popOutCall } from "../../lib/calls/popOutCall";
-import { canPopOutCall } from "../../lib/desktop";
+import { canPopOutCall, type CallWindowSize } from "../../lib/desktop";
 import { endBurst, endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
 import { getJoinAnnouncement, joinTitle, subscribeJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import {
@@ -96,7 +96,14 @@ const emptyTiles = () => EMPTY_TILES;
  *  when a voice arrives and a name is a slower way to answer "who". */
 const FACE = 56;
 
-export function WalkieBanner() {
+export function WalkieBanner({
+  onShape,
+}: {
+  /** Inside the voice host: the strip is a shape of the window that already
+   *  holds the call, so "float the faces" and "open the call" are this same
+   *  window changing shape — never a pop-out into another one. */
+  onShape?: (size: CallWindowSize) => void;
+} = {}) {
   const status = useWalkieStatus();
   const router = useRouter();
   const incoming = status.incoming;
@@ -236,7 +243,14 @@ export function WalkieBanner() {
       onStop={() => void endBurst()}
       // THE CALL, AS CIRCLES OVER THE WORK: the founder's picture of a voice
       // call. Only where the shell can make a see-through window.
-      onFloat={canPopOutCall() ? () => void popOutCall({ size: "speaker" }) : undefined}
+      onFloat={
+        onShape
+          ? () => onShape("speaker")
+          : canPopOutCall()
+            ? () => void popOutCall({ size: "speaker" })
+            : undefined
+      }
+      onOpen={onShape ? () => onShape("panel") : undefined}
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
       onSnooze={snoozeWalkie}
       onOpenDm={() => router.push(`/chat/${target.channelId}`)}
@@ -335,6 +349,8 @@ export function WalkieStripView(props: {
   onStop?: () => void;
   /** Float the call as circles over the work. Absent where the shell cannot. */
   onFloat?: () => void;
+  /** Open the call full size — the stage — in the window it already lives in. */
+  onOpen?: () => void;
   onJoin: () => void;
   onSnooze: () => void;
   onOpenDm: () => void;
@@ -509,6 +525,17 @@ export function WalkieStripView(props: {
             >
               <PictureInPicture2 className="h-4 w-4" />
               Float faces over my work
+            </button>
+          )}
+          {props.onOpen && (
+            <button
+              type="button"
+              className="walkie-strip-float"
+              onClick={props.onOpen}
+              title="Open the call: video, screen share, transcript"
+            >
+              <Maximize2 className="h-4 w-4" />
+              Open the call
             </button>
           )}
         </div>
