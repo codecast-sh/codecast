@@ -395,13 +395,14 @@ describe("POST /vault/op", () => {
 
   test("delete moves the file to the OS trash instead of unlinking it", async () => {
     const home = path.join(base, "home");
-    fs.mkdirSync(path.join(home, ".Trash"), { recursive: true });
+    const trash = path.join(home, process.platform === "darwin" ? ".Trash" : ".local/share/Trash/files");
+    fs.mkdirSync(trash, { recursive: true });
     process.env.HOME = home;
     try {
       const res = await postOp({ op: "delete", path: "notes/one.md" });
       expect(res.status).toBe(200);
       expect(fs.existsSync(path.join(root, "notes/one.md"))).toBe(false);
-      expect(fs.readFileSync(path.join(home, ".Trash", "one.md"), "utf-8")).toBe("one\n");
+      expect(fs.readFileSync(path.join(trash, "one.md"), "utf-8")).toBe("one\n");
       expect((await postOp({ op: "delete", path: "notes/one.md" })).status).toBe(404);
     } finally {
       process.env.HOME = REAL_HOME;

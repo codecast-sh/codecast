@@ -45,7 +45,7 @@ export interface LaunchChromeOptions {
   headless?: boolean;
   /** Override binary path (else auto-detect). */
   binaryPath?: string;
-  /** Max seconds to wait for CDP port to become listening. Default 8. */
+  /** Max seconds to wait for CDP port to become listening. Default 20. */
   readyTimeoutSec?: number;
   /** Extra args appended after the standard set. */
   extraArgs?: string[];
@@ -171,7 +171,7 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
   }
   const pid = child.pid;
 
-  const readyTimeoutMs = (opts.readyTimeoutSec ?? 8) * 1000;
+  const readyTimeoutMs = (opts.readyTimeoutSec ?? 20) * 1000;
   const deadline = Date.now() + readyTimeoutMs;
   // CDP port goes from free → bound when Chrome is ready.
   // We poll isPortFree until it returns false (i.e., Chrome is listening).
@@ -208,7 +208,7 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
     /* ignore */
   }
   throw new ChromeLaunchError(
-    `Chromium CDP port ${opts.cdpPort} did not become listening within ${opts.readyTimeoutSec ?? 8}s`,
+    `Chromium CDP port ${opts.cdpPort} did not become listening within ${opts.readyTimeoutSec ?? 20}s`,
     pid,
   );
 }

@@ -51,8 +51,8 @@ describe("SessionWatcher", () => {
     const watcher = new SessionWatcher(root);
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     const sessionId = "test-session-001";
     const filePath = path.join(projectDir, `${sessionId}.jsonl`);
@@ -82,8 +82,8 @@ describe("SessionWatcher", () => {
     const watcher = new SessionWatcher(root);
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     const eventPromise = waitForSessionEvent(
       watcher,
@@ -106,8 +106,8 @@ describe("SessionWatcher", () => {
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
     watcher.on("session", (e) => events.push(e));
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     fs.writeFileSync(path.join(projectDir, "CLAUDE.md"), "# notes");
     fs.writeFileSync(path.join(projectDir, "config.json"), "{}");
@@ -135,9 +135,9 @@ describe("SessionWatcher", () => {
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
     watcher.on("session", (e) => events.push(e));
-    watcher.start();
+    await watcher.start();
 
-    await new Promise(r => setTimeout(r, 100));
+    await watcher.whenPrimed();
 
     expect(events.length).toBe(2);
     expect(events[0].sessionId).toBe("new-session");
@@ -154,8 +154,8 @@ describe("SessionWatcher", () => {
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
     watcher.on("session", (e) => events.push(e));
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     watcher.stop();
 
@@ -173,11 +173,11 @@ describe("SessionWatcher", () => {
     const watcher = new SessionWatcher(root);
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     await watcher.restart();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.whenPrimed();
 
     const eventPromise = waitForSessionEvent(
       watcher,
@@ -198,8 +198,8 @@ describe("SessionWatcher", () => {
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
     watcher.on("session", (e) => events.push(e));
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     const sessionIds: string[] = [];
     for (let i = 0; i < 5; i++) {
@@ -231,8 +231,8 @@ describe("SessionWatcher", () => {
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
     watcher.on("session", (e) => events.push(e));
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     fs.writeFileSync(path.join(realProj, "real-session.jsonl"), "{}");
     fs.writeFileSync(path.join(harnessProj, "harness-session.jsonl"), "{}");
@@ -275,8 +275,8 @@ describe("SessionWatcher", () => {
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
     watcher.on("session", (e) => events.push(e));
-    watcher.start();
-    await new Promise(r => setTimeout(r, 200));
+    await watcher.start();
+    await watcher.whenPrimed();
 
     const eventPromise = waitForSessionEvent(watcher, (e) => e.sessionId === "agent-a1b2c3");
     fs.writeFileSync(path.join(wfDir, "agent-a1b2c3.jsonl"), '{"role":"user","content":"go"}\n');
@@ -291,15 +291,15 @@ describe("SessionWatcher", () => {
     expect(events.some(e => e.filePath.endsWith("journal.jsonl"))).toBe(false);
   });
 
-  test("does not start twice", () => {
+  test("does not start twice", async () => {
     const root = tmpDir("sw-double-start");
     fs.mkdirSync(root, { recursive: true });
 
     const watcher = new SessionWatcher(root);
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
 
-    watcher.start();
-    watcher.start(); // should be no-op
+    await watcher.start();
+    await watcher.start(); // should be no-op
     watcher.stop();
   });
 

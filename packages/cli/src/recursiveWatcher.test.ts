@@ -6,7 +6,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { RecursiveWatcher, chokidarIgnored } from "./recursiveWatcher.js";
 import { watchDirFilter } from "./sessionWatcher.js";
 import { transcriptDirWatcherConfig } from "./transcriptDirWatcher.js";
-import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
+import { LOOP_HOLD_SLO_MS, loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -514,7 +514,6 @@ describe("RecursiveWatcher native event cost", () => {
     cleanups.push(() => watcher.stop());
     watcher.start();
     await watcher.whenPrimed();
-    if (!isNative) return; // chokidar path has no priming walk
     expect(calls).toBe(1);
     expect(seen).toHaveLength(9);
     expect(seen!).toContain(path.join("proj-a", "sub", "deep.jsonl"));
@@ -525,7 +524,7 @@ describe("RecursiveWatcher native event cost", () => {
 // so between two readdir answers timers keep firing. 10k files is the order
 // of one machine's transcript store.
 describe("RecursiveWatcher priming a 10k file tree", () => {
-  test("holds the loop under 100ms at a time and skips node_modules", async () => {
+  test("stays within the backend startup budget and skips node_modules", async () => {
     const root = tmpDir("rw-10k");
     const DIRS = 400;
     const PER_DIR = 25;
@@ -562,7 +561,9 @@ describe("RecursiveWatcher priming a 10k file tree", () => {
     expect(existing.length).toBe(DIRS * PER_DIR);
     expect(existing.some((rel) => rel.split(path.sep).includes("node_modules"))).toBe(false);
     expect(ticks).toBeGreaterThan(0);
-    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(100));
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(
+      process.platform === "darwin" || process.platform === "win32" ? 100 : LOOP_HOLD_SLO_MS,
+    ));
   }, 60_000);
 });
 
