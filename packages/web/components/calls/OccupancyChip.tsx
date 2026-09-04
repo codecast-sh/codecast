@@ -3,7 +3,7 @@ import { useWalkieStatus } from "../../hooks/useWalkie";
 import { walkieHoldsRoom } from "../../lib/calls/walkie";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { joinCall, startHuddle } from "../../lib/calls/callManager";
+import { joinCall, startHuddle } from "../../lib/calls/actions";
 import { sessionRoomKey } from "@codecast/shared/contracts";
 import { AvatarImg } from "../../lib/avatarCache";
 
@@ -96,16 +96,16 @@ export function OccupancyChip({
     <button
       onClick={(e) => {
         e.stopPropagation();
-        if (!inThisRoom) void joinCall(roomKey, { intent: "deliberate" });
+        void joinCall(roomKey, { intent: "deliberate" });
       }}
       className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-colors ${compact ? "text-[10px] font-medium" : "text-xs"} ${
         inThisRoom
-          ? "cursor-default border-sol-violet/50 bg-sol-violet/20 text-sol-violet"
+          ? "border-sol-violet/50 bg-sol-violet/20 text-sol-violet hover:bg-sol-violet/25"
           : "border-sol-violet/30 bg-sol-violet/10 text-sol-violet hover:bg-sol-violet/20"
       } ${className}`}
       title={
         inThisRoom
-          ? "You're in this huddle"
+          ? "Show the huddle window"
           : `${roster.map((m) => m.user_name).join(", ")} — join the huddle`
       }
     >

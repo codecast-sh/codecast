@@ -2,7 +2,7 @@
 
 import { Lock } from "lucide-react";
 import { Facepile } from "./OccupancyChip";
-import { joinCall, knockRoom } from "../../lib/calls/callManager";
+import { joinCall, knockRoom } from "../../lib/calls/actions";
 import { useLiveRooms, type LiveRoomRow } from "../../hooks/useLiveRooms";
 
 // Live now — the huddles running right now anywhere in your teams, made
@@ -32,7 +32,12 @@ export function LiveRoomAction({
 }) {
   if (row.mine) {
     return (
-      <span className={`shrink-0 text-[11px] text-sol-violet ${className}`}>you're in</span>
+      <button type="button" className={`shrink-0 text-[11px] text-sol-violet ${className}`}
+        title="Show the huddle window"
+        aria-label={`Show ${row.label}`}
+        onClick={(e) => { e.stopPropagation(); void joinCall(row.roomKey, { intent: "deliberate" }); }}>
+        open huddle
+      </button>
     );
   }
   if (row.canJoin) {
@@ -123,33 +128,19 @@ export function LiveNowRail({
               )}
             </>
           );
-          // The room you are sitting in has no gesture left, so it is not a
-          // control. A button whose handler returns immediately is a tab stop
-          // that answers nothing when a keyboard reaches it.
-          if (row.mine) {
-            return (
-              <span
-                key={row.roomKey}
-                className="relative rounded-full p-0.5"
-                title={`${row.label} — you're in`}
-              >
-                {glyph}
-              </span>
-            );
-          }
           return (
             <button
               key={row.roomKey}
               type="button"
               onClick={() => {
-                if (row.canJoin) void joinCall(row.roomKey, { intent: "deliberate" });
+                if (row.mine || row.canJoin) void joinCall(row.roomKey, { intent: "deliberate" });
                 else void knockRoom(row.roomKey);
                 onNavigate?.();
               }}
               className="relative rounded-full p-0.5 transition-colors hover:bg-sol-bg-highlight focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet"
-              aria-label={row.canJoin ? `Join ${row.label}` : `Knock at ${row.label}`}
+              aria-label={row.mine ? `Show ${row.label}` : row.canJoin ? `Join ${row.label}` : `Knock at ${row.label}`}
               title={
-                row.canJoin
+                row.mine ? `${row.label} — show huddle` : row.canJoin
                   ? `${row.label} — join`
                   : `${row.label} — locked, knock to ask in`
               }
@@ -181,12 +172,12 @@ export function LiveNowRail({
         <div
           key={row.roomKey}
           onClick={() => {
-            if (row.mine || !row.canJoin) return;
+            if (!row.mine && !row.canJoin) return;
             void joinCall(row.roomKey, { intent: "deliberate" });
             onNavigate?.();
           }}
           className={`group/room flex items-center gap-2 px-4 py-1 text-[12px] text-sol-text-muted ${
-            row.mine || !row.canJoin ? "" : "cursor-pointer hover:bg-sol-bg-highlight/60 hover:text-sol-text"
+            !row.mine && !row.canJoin ? "" : "cursor-pointer hover:bg-sol-bg-highlight/60 hover:text-sol-text"
           }`}
         >
           <Facepile members={row.members} max={3} size={18} />

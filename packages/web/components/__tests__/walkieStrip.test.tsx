@@ -189,7 +189,7 @@ describe("the face is the first thing the eye lands on", () => {
 
   test("at 56px, from the component and not from the stylesheet", () => {
     expect(source).toContain("const FACE = 56");
-    expect(source).toContain("size={FACE}");
+    expect(render({ rx: true })).toContain("width:56px;height:56px");
   });
 });
 
@@ -434,6 +434,17 @@ describe("my own camera, while I hold the key", () => {
     expect(html).toContain("walkie-strip-myface");
     // My photo stands down while the camera is on.
     expect(html).not.toContain("https://example.test/me.jpg");
+  });
+
+  test("receivers see the incoming camera track", () => {
+    const html = render({ rx: true, theirTile: { ...tile, identity: "riley", isLocal: false } } as any);
+    expect(html).toContain("<video");
+  });
+
+  test("an open listening mic keeps my own preview visible", () => {
+    const html = render({ hotMic: true, rx: true, myFace: { name: "Me" }, myTile: tile } as any);
+    expect(html).toContain("walkie-strip-face-tx");
+    expect(html).toContain("<video");
   });
 
   test("no camera is my photo, exactly as before", () => {

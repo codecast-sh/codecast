@@ -13,21 +13,31 @@
 // this call up?
 
 /**
- * The four shapes the call window takes. One window, because `transparent` and
+ * The shapes the voice window takes. One window, because `transparent` and
  * `frame` are decided when a BrowserWindow is constructed — so the window is
- * born see-through and frameless, and the sizes are what it paints inside that
- * glass, not four windows.
+ * born see-through and frameless, and the shapes are what it paints inside
+ * that glass, not seven windows.
  *
+ * The call's four:
  *   panel     the stage: the huddle full bleed, a card the person can resize.
  *   circles   everybody, as a row of face circles over the work.
  *   speaker   one circle, whoever is talking.
  *   tiny      the same one circle at the size of a menu bar icon — the
  *             smallest thing that is still recognizably a person.
  *
- * The last three are one family: they float, they let the mouse through, and
- * the person cannot drag their edges. Only the stage is an ordinary window.
+ * And the three the walkie and the idle team add, which is what makes a burst
+ * becoming a call a RESIZE of the window that already holds the microphone:
+ *   walkie    the burst strip, tucked in the bottom-right corner of the screen.
+ *   faces     the idle team as photo circles, at the call circles' own spot.
+ *   idle      nothing to show: the window is hidden and waits.
+ *
+ * The circle family (circles, speaker, tiny, faces) floats, lets the mouse
+ * through and cannot be dragged by an edge. The strip floats and takes every
+ * click, because it is exactly the size of its card. Only the stage is an
+ * ordinary window.
  */
-const CALL_WINDOW_SIZES = ["panel", "circles", "speaker", "tiny"];
+const CALL_SIZES = ["panel", "circles", "speaker", "tiny"];
+const CALL_WINDOW_SIZES = [...CALL_SIZES, "walkie", "faces", "idle"];
 
 /**
  * A size name from a renderer, or "panel" if it is anything else.
@@ -41,12 +51,24 @@ function normalizeCallWindowSize(size) {
 }
 
 /**
+ * Is this one of the CALL's sizes — the ones a person chooses for a huddle and
+ * the shell remembers per machine? The walkie and the idle team have shapes of
+ * their own that are decided by what is happening, not chosen, so they are
+ * never written down as "the size the person left the call in".
+ */
+function isCallSize(size) {
+  return CALL_SIZES.includes(size);
+}
+
+/**
  * What kind of window each size is.
  *
- * The three circle sizes are a glance you keep over your work: they float above
+ * The circle sizes are a glance you keep over your work: they float above
  * other apps, follow you between desktops, and let the mouse through
- * everywhere the renderer has not said there is a circle. The panel is an
- * ordinary window you put where you like and resize by its edges.
+ * everywhere the renderer has not said there is a circle. The strip is the
+ * same glance with a card in it — it floats and follows too, but it is sized
+ * to its card and every pixel of it is a control, so it takes the mouse. The
+ * panel is an ordinary window you put where you like and resize by its edges.
  *
  * `resizable` is not only about the person dragging an edge. Electron refuses
  * `setSize`/`setContentSize` on a window that is not resizable, so main.js
@@ -54,25 +76,32 @@ function normalizeCallWindowSize(size) {
  * answers with a flag rather than main.js reading the size in two places.
  */
 function callWindowChrome(size) {
-  const circles = normalizeCallWindowSize(size) !== "panel";
+  const s = normalizeCallWindowSize(size);
+  const floating = s !== "panel";
   return {
-    alwaysOnTop: circles,
-    visibleOnAllWorkspaces: circles,
-    clickThrough: circles,
-    resizable: !circles,
+    alwaysOnTop: floating,
+    visibleOnAllWorkspaces: floating,
+    clickThrough: floating && s !== "walkie",
+    resizable: !floating,
   };
 }
 
 /**
  * Which remembered place a size belongs to.
  *
- * One window, two places. The stage is a card you put in the middle of the
- * screen; the circles are a strip you tuck in a corner. Saving one over the
- * other would drag each size to where the other was last left, so each writer
- * asks this before it writes.
+ * One window, three places. The stage is a card you put in the middle of the
+ * screen; the circles are a row you tuck in a corner; the walkie strip sits in
+ * the bottom-right corner, where it has always sat inside the app. Saving one
+ * over another would drag each size to where the other was last left, so each
+ * writer asks this before it writes. `null` for idle: a hidden window is
+ * nowhere, and there is nothing to remember about it.
  */
 function callWindowPlacementKey(size) {
-  return normalizeCallWindowSize(size) === "panel" ? "bounds" : "circles";
+  const s = normalizeCallWindowSize(size);
+  if (s === "panel") return "bounds";
+  if (s === "walkie") return "walkie";
+  if (s === "idle") return null;
+  return "circles";
 }
 
 /**
@@ -93,15 +122,22 @@ function shouldHandBackCall({ ended, quitting, room }) {
 }
 
 /**
- * Close of the call window with a live huddle: hide, do not destroy.
+ * Close of the call window: hide, do not destroy.
  *
- * Hang-up and quit actually close. Everything else is the palette gesture —
- * the window goes away, the microphone stays, showing the window again is
+ * A window whose renderer declared itself the VOICE HOST is never destroyed
+ * short of the app quitting: it holds the walkie's ear between calls, and a
+ * hang-up in it is the renderer going back to idle, not the window going away.
+ * Destroying it would cost the next burst a renderer boot before anybody
+ * could hear it.
+ *
+ * A renderer that never declared (an older web build in a newer shell) keeps
+ * the older contract: hang-up destroys, everything else is the palette gesture
+ * — the window goes away, the microphone stays, showing the window again is
  * how you get back.
  */
-function shouldHideCallWindow({ ended, quitting }) {
-  if (ended) return false;
+function shouldHideCallWindow({ ended, quitting, host }) {
   if (quitting) return false;
+  if (ended && !host) return false;
   return true;
 }
 
@@ -111,5 +147,7 @@ module.exports = {
   callWindowChrome,
   callWindowPlacementKey,
   normalizeCallWindowSize,
+  isCallSize,
+  CALL_SIZES,
   CALL_WINDOW_SIZES,
 };

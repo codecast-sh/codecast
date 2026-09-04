@@ -80,13 +80,17 @@ export function meterLevel(rms: number): number {
 
 function readLocalLevel(): number {
   if (!meterAnalyser || !meterBytes) return 0;
-  meterAnalyser.getByteTimeDomainData(meterBytes);
+  return readMeterLevel(meterAnalyser, meterBytes);
+}
+
+export function readMeterLevel(analyser: Pick<AnalyserNode, "getByteTimeDomainData">, bytes: Uint8Array<ArrayBuffer>): number {
+  analyser.getByteTimeDomainData(bytes);
   let sum = 0;
-  for (let i = 0; i < meterBytes.length; i++) {
-    const v = (meterBytes[i] - 128) / 128;
+  for (let i = 0; i < bytes.length; i++) {
+    const v = (bytes[i] - 128) / 128;
     sum += v * v;
   }
-  return meterLevel(Math.sqrt(sum / meterBytes.length));
+  return meterLevel(Math.sqrt(sum / bytes.length));
 }
 
 /** Everyone else's voice, straight off LiveKit's own speaker measurements —

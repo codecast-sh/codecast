@@ -288,3 +288,12 @@ test("an opener may ask for a size, and the window is born in it", () => {
   assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
   assert.equal(win.isResizable(), true);
 });
+
+test("showing a huddle finds the regular window hosting it when no panel exists", () => {
+  const rig = loadShell();
+  rig.mainWindow.webContents.once = () => {};
+  rig.handlers.get("report-window-state")({ sender: rig.mainWindow.webContents }, { inCall: true });
+  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.equal(rig.mainWindow.did("show").length, 1);
+  assert.equal(rig.mainWindow.did("focus").length, 1);
+});

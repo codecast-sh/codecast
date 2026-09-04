@@ -35,6 +35,7 @@
 // the person expanded it.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
+import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
 import { joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
@@ -1229,6 +1230,7 @@ export async function joinWalkieLive(
    *  the call" — so a caller that cannot name them still joins the same way. */
   opts: { name?: string | null } = {},
 ): Promise<void> {
+  if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   markWalkieUpgraded(roomKey);
   // SAID BEFORE THE JOIN. The answer to a press has to be immediate, the stamp
   // is a round trip away, and this side already knows what it did.

@@ -40,6 +40,9 @@ import { FaceCircle, FacesChrome } from "./FaceCircle";
 import { useFloatingCircles } from "./useFloatingCircles";
 import "./faces.css";
 
+const EMPTY_TILES: ParticipantTile[] = [];
+const emptyTiles = () => EMPTY_TILES;
+
 /**
  * The call, minimized to the people in it.
  *
@@ -96,13 +99,14 @@ export function CallFaces({
   ]);
   const call = s.call;
   const occupancy: any[] | undefined = call.roomKey ? s.callOccupancy[call.roomKey] : undefined;
-  const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => [] as ParticipantTile[]);
+  const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, emptyTiles);
   const cameras = useMemo(() => tiles.filter((t) => t.kind === "camera"), [tiles]);
   const selfId = s.currentUser?._id ? String(s.currentUser._id) : null;
 
   const faces = useMemo(
-    () => facesToShow(facePeople(occupancy ?? [], cameras, selfId)),
-    [occupancy, cameras, selfId],
+    () => facesToShow(facePeople(occupancy ?? [], cameras, selfId), mode)
+      .map((p) => p.isLocal ? { ...p, muted: call.muted } : p),
+    [occupancy, cameras, selfId, mode, call.muted],
   );
   const cameraOf = useCallback(
     (id: string) => cameras.find((t) => t.identity === id),
@@ -118,7 +122,7 @@ export function CallFaces({
   // changes, so a poll that changes nothing re-renders nothing.
   const [pick, setPick] = useState<SpeakerPick>({ id: null, since: 0 });
   const speakingRef = useRef<string[]>([]);
-  speakingRef.current = call.speaking ?? [];
+  speakingRef.current = (call.speaking ?? []).filter((id: string) => faces.some((f) => f.id === id));
   useMountEffect(() => {
     const t = setInterval(() => setPick((p) => pickSpeaker(p, speakingRef.current, Date.now())), 250);
     return () => clearInterval(t);
@@ -189,9 +193,11 @@ export function CallFaces({
 
       <FacesChrome
         mode={mode}
+        tiny={tier === "mini"}
         muted={call.muted}
         held={held}
         onMode={() => onSetSize(mode === "speaker" ? "circles" : "speaker")}
+        onSize={() => onSetSize(tier === "mini" ? "speaker" : "tiny")}
         onMute={() => void setMuted(!call.muted)}
         onRestore={() => onSetSize("panel")}
         onLeave={leave}
@@ -199,4 +205,3 @@ export function CallFaces({
     </div>
   );
 }
-

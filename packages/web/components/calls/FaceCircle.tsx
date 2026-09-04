@@ -1,4 +1,5 @@
-import { Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
+import { Circle, Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
+import { useMicLevelVar } from "../../hooks/useMicLevelVar";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { AvatarImg } from "../../lib/avatarCache";
 import { firstName } from "./speakers";
@@ -24,22 +25,27 @@ import type { ParticipantTile } from "../../lib/calls/callManager";
  */
 export function FacesChrome({
   mode,
+  tiny,
   muted,
   held,
   onMode,
+  onSize,
   onMute,
   onRestore,
   onLeave,
 }: {
   mode: FacesMode;
+  tiny: boolean;
   muted: boolean;
   /** This window has the call, so leaving hangs up rather than just closing. */
   held: boolean;
   onMode: () => void;
+  onSize: () => void;
   onMute: () => void;
   onRestore: () => void;
   onLeave: () => void;
 }) {
+  const micRef = useMicLevelVar<HTMLButtonElement>(!muted);
   return (
     <div className="faces-chrome" data-chrome-hit>
       {/* Every button says its word. The tooltip carries the long form. */}
@@ -52,14 +58,20 @@ export function FacesChrome({
         {mode === "speaker" ? <Users className="h-4 w-4" /> : <User className="h-4 w-4" />}
         <span className="faces-btn-word">{mode === "speaker" ? "All" : "Talker"}</span>
       </button>
+      <button data-chrome-btn="size" className="faces-btn" onClick={onSize} title={tiny ? "Make the face bigger" : "Shrink to a tiny face"}>
+        <Circle className="h-4 w-4" />
+        <span className="faces-btn-word">{tiny ? "Big" : "Tiny"}</span>
+      </button>
       <button
+        ref={micRef}
         data-chrome-btn="mute"
-        className={`faces-btn${muted ? " faces-btn--alert" : " faces-btn--on"}`}
+        className={`faces-btn faces-mic${muted ? " faces-btn--alert" : " faces-btn--on"}`}
         onClick={onMute}
         title={muted ? "Unmute — they hear you again" : "Mute — they stop hearing you"}
       >
         {muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
         <span className="faces-btn-word">{muted ? "Unmute" : "Mute"}</span>
+        <span className="faces-mic-level" aria-hidden="true" />
       </button>
       <button data-chrome-btn="restore" className="faces-btn" onClick={onRestore} title="Back to the full call window">
         <Maximize2 className="h-4 w-4" />
@@ -109,13 +121,14 @@ export function FaceCircle({
     diameter,
     active: shown,
   });
+  const levelRef = useMicLevelVar<HTMLDivElement>(person.isLocal && !person.muted && shown);
 
   return (
     // The slot is the circle's square and nothing more, so a row of them still
     // measures as circles and gaps. The name hangs out of the bottom of it,
     // which is why the slot exists at all: the circle clips its own contents,
     // and a name under the chin has to escape that clip.
-    <div className="face-slot" style={{ width: diameter, height: diameter }}>
+    <div ref={levelRef} data-local={person.isLocal || undefined} className="face-slot" style={{ width: diameter, height: diameter }}>
       <div
         ref={hostRef}
         data-face-hit

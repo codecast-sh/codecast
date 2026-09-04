@@ -126,6 +126,13 @@ describe("derivePresenceState", () => {
   });
 });
 
+test("the browser-safe presence graph excludes Convex registrations", async () => {
+  const stateSource = await Bun.file(`${import.meta.dir}/presenceState.ts`).text();
+  const policySource = await Bun.file(`${import.meta.dir}/presencePolicy.ts`).text();
+  expect(stateSource).not.toContain('from "./pushRouter"');
+  expect(policySource).not.toMatch(/\.\/functions|_generated\/server|convex\/server/);
+});
+
 describe("bucketTs", () => {
   test("floors into stable buckets", () => {
     const base = Math.floor(NOW / PRESENCE_BUCKET_MS) * PRESENCE_BUCKET_MS;

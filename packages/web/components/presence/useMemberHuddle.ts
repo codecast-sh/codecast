@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import { dmRoomKey } from "@codecast/shared/contracts";
-import { joinCall, knockRoom, startHuddle } from "../../lib/calls/callManager";
+import { joinCall, knockRoom, startHuddle } from "../../lib/calls/actions";
 import type { LiveRoomRow } from "../../hooks/useLiveRooms";
+import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
+import { showCallPanel } from "../../lib/desktop";
+import { huddleInOtherWindow } from "../../lib/calls/huddleWindow";
 
 export interface MemberHuddle {
   /** The word on the control: Join huddle · Huddle · Knock · Knocked. */
@@ -30,6 +33,8 @@ export function useMemberHuddle(
   room: LiveRoomRow | null,
   displayName: string,
 ): MemberHuddle {
+  useDesktopWindowRole();
+  const elsewhere = huddleInOtherWindow();
   const memberId = String(member?._id ?? "");
   const inRoomKey: string | undefined = member?.in_room_key;
   const lockedRoom = !inRoomKey && room?.locked ? room : null;
@@ -37,6 +42,7 @@ export function useMemberHuddle(
   const lockedRoomKey = lockedRoom?.roomKey;
 
   return useMemo(() => {
+    if (elsewhere) return { label: "Open huddle", title: "Show the huddle window", waiting: false, go: () => { void showCallPanel(); } };
     const label = inRoomKey
       ? "Join huddle"
       : !lockedRoomKey
@@ -69,5 +75,5 @@ export function useMemberHuddle(
         });
     };
     return { label, title, waiting: knocked, go };
-  }, [inRoomKey, lockedRoomKey, knocked, displayName, viewerId, memberId]);
+  }, [inRoomKey, lockedRoomKey, knocked, displayName, viewerId, memberId, elsewhere]);
 }

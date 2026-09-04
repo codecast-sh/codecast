@@ -104,7 +104,7 @@ export function PresenceFaces() {
   return (
     <div
       ref={rootRef}
-      className={`dark faces-window presence-faces${hovered || active ? " faces-window--hover" : ""}`}
+      className={`faces-window presence-faces${hovered || active ? " faces-window--hover" : ""}`}
       data-holding={data.sendingRoomKey ? "1" : undefined}
     >
       <div className="presence-row">
@@ -154,74 +154,79 @@ export function PresenceFaces() {
         )}
       </div>
 
-      {/* The slot, in the band the window grows on hover. A CLICKED face puts
+      {/* The card, in the band the window grows on hover. One card says
+          everything the overlay says beyond the faces: a CLICKED face puts
           its three actions here — Talk, Ring, Message — under its name; a
           face merely pointed at shows its name and activity; nothing pointed
-          at shows the one line of instructions. */}
-      {active ? (
-        <div className="presence-desc presence-desc-actions" data-chrome-hit>
-          <span className="presence-desc-row">
-            <span className="presence-desc-name">{memberDisplayName(active.member)}</span>
-          </span>
-          <ActiveFaceActions face={active} data={data} callsEnabled={callsEnabled} onDone={() => setActive(null)} />
-        </div>
-      ) : desc ? (
-        <div className="presence-desc" aria-hidden="true">
-          <span className="presence-desc-row">
-            <span className="presence-desc-name">{desc.name}</span>
-            <span className={`presence-desc-line ${desc.tone}`}>{desc.text}</span>
-          </span>
-          <span className="presence-desc-gesture">CLICK for Talk · Ring · Message</span>
-        </div>
-      ) : (
-        hovered && (
-          <div className="presence-desc presence-desc-legend" aria-hidden="true">
-            <span className="presence-desc-gesture">CLICK a face for Talk · Ring · Message</span>
+          at shows the one line of instructions. The window's own controls
+          are its footer, so hovering opens one thing, not a stack of pills. */}
+      <div
+        className="presence-card"
+        data-chrome-hit
+        data-actions={active ? "1" : undefined}
+        data-refused={!active && desc?.refused ? "1" : undefined}
+      >
+        {active ? (
+          <div className="presence-card-head">
+            <span className="presence-card-name">{memberDisplayName(active.member)}</span>
+            <ActiveFaceActions face={active} data={data} callsEnabled={callsEnabled} onDone={() => setActive(null)} />
           </div>
-        )
-      )}
+        ) : desc ? (
+          <div className="presence-card-head" aria-hidden="true">
+            <span className="presence-card-row">
+              <span className="presence-card-name">{desc.name}</span>
+              <span className={`presence-card-line ${desc.tone}`}>{desc.text}</span>
+            </span>
+            <span className="presence-card-hint">Click for Talk · Ring · Message</span>
+          </div>
+        ) : (
+          <div className="presence-card-head presence-card-legend" aria-hidden="true">
+            <span className="presence-card-hint">Click a face for Talk · Ring · Message</span>
+          </div>
+        )}
 
-      <div className="faces-chrome" data-chrome-hit>
-        <button
-          data-chrome-btn="drag"
-          className="faces-btn presence-grip"
-          title="Drag to move"
-          aria-label="Drag to move the faces"
-          onPointerDown={startDrag}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-        >
-          <GripVertical className="h-4 w-4" />
-          <span className="faces-btn-word">Drag</span>
-        </button>
-        <button
-          data-chrome-btn="everyone"
-          className={`faces-btn${everyone ? " faces-btn--on" : ""}`}
-          onClick={() => setEveryone((v) => !v)}
-          aria-pressed={everyone}
-          title={everyone ? "Showing everyone — click to show only who's around" : "Showing who's around — click to show everyone"}
-        >
-          <Users className="h-4 w-4" />
-          <span className="faces-btn-word">{everyone ? "Here" : "All"}</span>
-        </button>
-        <button
-          data-chrome-btn="people"
-          className="faces-btn"
-          onClick={() => void popOutPeople({ list: true })}
-          title="Open the full people list in a window"
-        >
-          <PanelTop className="h-4 w-4" />
-          <span className="faces-btn-word">List</span>
-        </button>
-        <button
-          data-chrome-btn="close"
-          className="faces-btn faces-btn--alert"
-          onClick={() => void closeFacesWindow()}
-          title="Close the floating faces"
-        >
-          <X className="h-4 w-4" />
-          <span className="faces-btn-word">Close</span>
-        </button>
+        <div className="faces-chrome">
+          <button
+            data-chrome-btn="drag"
+            className="faces-btn presence-grip"
+            title="Drag to move"
+            aria-label="Drag to move the faces"
+            onPointerDown={startDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            <GripVertical className="h-4 w-4" />
+            <span className="faces-btn-word">Drag</span>
+          </button>
+          <button
+            data-chrome-btn="everyone"
+            className={`faces-btn${everyone ? " faces-btn--on" : ""}`}
+            onClick={() => setEveryone((v) => !v)}
+            aria-pressed={everyone}
+            title={everyone ? "Showing everyone — click to show only who's around" : "Showing who's around — click to show everyone"}
+          >
+            <Users className="h-4 w-4" />
+            <span className="faces-btn-word">{everyone ? "Here" : "All"}</span>
+          </button>
+          <button
+            data-chrome-btn="people"
+            className="faces-btn"
+            onClick={() => void popOutPeople({ list: true })}
+            title="Open the full people list in a window"
+          >
+            <PanelTop className="h-4 w-4" />
+            <span className="faces-btn-word">List</span>
+          </button>
+          <button
+            data-chrome-btn="close"
+            className="faces-btn faces-btn--alert"
+            onClick={() => void closeFacesWindow()}
+            title="Close the floating faces"
+          >
+            <X className="h-4 w-4" />
+            <span className="faces-btn-word">Close</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -308,7 +313,10 @@ function OverlaySeat({
   const hostRef = useRef<HTMLSpanElement | null>(null);
   useAvatarFaceCrop({ hostRef, src, active: true, diameter: px });
   return (
-    <span ref={hostRef} className="presence-seat">
+    // `--face` is the seat's diameter for the stylesheet: the badge, its cut
+    // and the paper ring are all drawn as a share of it, so a 72px face and
+    // the bar's 32px one carry the same proportions.
+    <span ref={hostRef} className="presence-seat" style={{ ["--face" as string]: `${px}px` }}>
       {children}
     </span>
   );
