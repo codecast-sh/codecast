@@ -9,7 +9,7 @@
 //
 // No icon stands alone: a button here is a word, and an icon beside it.
 import { Headphones, MessageSquare, Mic, Square } from "lucide-react";
-import { startHuddle } from "../../lib/calls/callManager";
+import { startHuddle } from "../../lib/calls/actions";
 import { talkToggleProps, walkieJoinReason, type PushToTalk } from "../../hooks/useWalkie";
 import "./faceActions.css";
 

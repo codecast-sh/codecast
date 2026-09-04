@@ -31,6 +31,8 @@ import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublish
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import { hasCallPanel, isCallPanelWindow, isElectron } from "../desktop";
 import { shouldYieldCallOnDisconnect } from "./callHandoff";
+import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
+import { readMeterLevel } from "./walkieMeter";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import {
   soundCallJoin,
@@ -203,16 +205,17 @@ function startLevelMeter() {
   const track = pub?.track;
   if (!track || track.kind !== Track.Kind.Audio) return;
   try {
-    const { calculateVolume, cleanup } = createAudioAnalyser(track as any, {
+    const { analyser, cleanup } = createAudioAnalyser(track as any, {
       fftSize: 256,
       smoothingTimeConstant: 0.6,
     });
+    const bytes = new Uint8Array(analyser.fftSize);
     levelCleanup = cleanup;
     levelTimer = setInterval(() => {
       // Muted → analyser reads silence anyway, but skip the work and pin 0 so
       // the meter reads honestly the instant the user mutes.
       const muted = useInboxStore.getState().call.muted;
-      const v = muted ? 0 : Math.min(1, calculateVolume() * 4);
+      const v = muted ? 0 : readMeterLevel(analyser, bytes);
       if (Math.abs(v - micLevel) > 0.02 || (v === 0 && micLevel !== 0)) {
         micLevel = v;
         for (const cb of levelSubscribers) cb();
@@ -413,6 +416,7 @@ async function applyDeliberateJoin(roomKey: string, opts: JoinOpts): Promise<voi
   }
 }
 export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> {
+  if (opts?.intent === "deliberate" && huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   const prior = useInboxStore.getState().call;
   // Already in (or genuinely joining) this room: idempotent. "connecting" only
@@ -653,6 +657,7 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
     await seated;
     if (seatError) throw seatError;
     if (superseded(r)) return;
+    startLevelMeter();
     setCall({ phase: "connected" });
     soundCallJoin();
     startHeartbeat(roomKey);
@@ -1018,6 +1023,7 @@ export async function startHuddle(opts: {
   toUserIds: string[];
   anchorTitle?: string;
 }): Promise<void> {
+  if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: !readJoinPrefs().micOn });
   try {
@@ -1079,6 +1085,7 @@ function reportRingOutcomes(results: RingOutcome[]): void {
 }
 
 export async function acceptInvite(inviteId: string, roomKey: string): Promise<void> {
+  if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   // Local-first: the dock paints "connecting" the instant Join is clicked;
   // the accept round-trip and the media join settle after. Accepting while in
@@ -1198,6 +1205,7 @@ export async function setRoomLock(roomKey: string, locked: boolean): Promise<voi
 // inside admits, their ring arrives and useCallRing answers it for us — a
 // door you knocked on does not ask you to answer it.
 export async function knockRoom(roomKey: string): Promise<void> {
+  if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   const store = useInboxStore.getState();
   store.noteKnock(roomKey);

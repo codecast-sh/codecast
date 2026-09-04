@@ -52,7 +52,7 @@
   transition: color 120ms, background 120ms, border-color 120ms, transform 90ms;
 }
 
-.walkie-key-sm { width: 28px; height: 28px; }
+.walkie-key-sm { width: 24px; height: 24px; }
 .walkie-key-md { width: 40px; height: 40px; }
 .walkie-key-lg { width: 52px; height: 52px; }
 
@@ -84,6 +84,7 @@
   min-height: 13px;
 }
 
+.walkie-key-sm .walkie-key-glyph,
 .walkie-key-wide .walkie-key-glyph { width: 14px; height: 14px; }
 
 /* THE LEVEL RING. A circle around the key that fills clockwise with how loudly

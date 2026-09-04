@@ -2,12 +2,6 @@ import { afterAll, describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LiveRoomRow } from "../../hooks/useLiveRooms";
 
-// ct-44931 polish round 1. The icon rail (the collapsed sidebar) rendered a
-// <button> for every live room including the one you are already sitting in,
-// and that button's handler returned immediately. A keyboard reaching it got a
-// tab stop that answers nothing, and a screen reader announced a control that
-// does not exist. The room you are in is now a plain span.
-
 let ROOMS: LiveRoomRow[] = [];
 const realRooms = { ...await import("../../hooks/useLiveRooms") };
 const realCallManager = { ...await import("../../lib/calls/callManager") };
@@ -80,10 +74,11 @@ describe("LiveNowRail", () => {
     );
   });
 
-  test("the room you are sitting in is not a control", () => {
+  test("the room you are sitting in offers its existing huddle window", () => {
     const html = rail([room({ mine: true })], true);
-    expect(html).not.toContain("<button");
-    expect(html).toContain("you&#x27;re in");
+    expect(html).toContain("<button");
+    expect(html).toContain('aria-label="Show Ann"');
+    expect(html).toContain('title="Ann — show huddle"');
   });
 
   test("the wide row carries no role of its own — the button inside it is the gesture", () => {

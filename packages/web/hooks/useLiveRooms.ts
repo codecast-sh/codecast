@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useTrackedStore, type LiveRoom } from "../store/inboxStore";
 import { describeRoomLive } from "../lib/calls/roomLabels";
-import { setRoomLock } from "../lib/calls/callManager";
+import { setRoomLock } from "../lib/calls/actions";
 import { useNowWhen } from "./useCoarseNow";
 import { CALL_KNOCK_TTL_MS } from "@codecast/shared/contracts";
 

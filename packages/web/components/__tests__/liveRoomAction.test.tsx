@@ -48,10 +48,12 @@ describe("LiveRoomAction", () => {
     expect(action(row({ locked: true, canJoin: false, knocked: true }))).toContain(">knocked<");
   });
 
-  test("the room I am sitting in offers nothing", () => {
+  test("the room I am sitting in offers its existing huddle window", () => {
     const html = action(row({ locked: true, canJoin: true, mine: true }));
-    expect(html).toContain("you&#x27;re in");
-    expect(html).not.toContain("<button");
+    expect(html).toContain("<button");
+    expect(html).toContain("open huddle");
+    expect(html).toContain('aria-label="Show Ann"');
+    expect(html).toContain('title="Show the huddle window"');
   });
 
   test("the lock glyph reports the door honestly, even on a room I may enter", () => {
@@ -86,14 +88,14 @@ describe("Live now is reachable by keyboard, and says what it reaches", () => {
   });
 
   test("every gesture is a real button, so tab reaches it", () => {
-    for (const r of [row(), row({ locked: true, canJoin: false })]) {
+    for (const r of [row(), row({ locked: true, canJoin: false }), row({ mine: true })]) {
       expect(action(r)).toContain("<button");
     }
   });
 
-  test("the states with nothing to do render no control at all", () => {
-    for (const r of [row({ mine: true }), row({ locked: true, canJoin: false, knocked: true })]) {
-      expect(action(r)).not.toContain("<button");
-    }
+  test("a pending knock renders no control until I am in the room", () => {
+    const waiting = row({ locked: true, canJoin: false, knocked: true });
+    expect(action(waiting)).not.toContain("<button");
+    expect(action({ ...waiting, mine: true })).toContain('aria-label="Show Ann"');
   });
 });
