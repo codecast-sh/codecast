@@ -1212,7 +1212,14 @@ ipcMain.handle("close-call-panel", (e, opts) => {
 // Any window may raise the huddle: the elsewhere pill, a second huddle
 // click. The call already lives here; this only makes the window visible.
 ipcMain.handle("show-call-panel", () => {
-  if (!callWindow || callWindow.isDestroyed()) return false;
+  if (!callWindow || callWindow.isDestroyed()) {
+    const owner = appWindows().find((win) => windowStates.get(win.webContents.id)?.inCall);
+    if (!owner) return false;
+    if (owner.isMinimized()) owner.restore();
+    owner.show();
+    owner.focus();
+    return true;
+  }
   if (callWindowSize === "panel") {
     callWindow.show();
     callWindow.focus();
