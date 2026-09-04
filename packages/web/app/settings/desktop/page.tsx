@@ -14,12 +14,10 @@ import {
   onUpdateStatus,
   restartForUpdate,
   checkForUpdate,
-  getDesktopShortcutConfig,
   DESKTOP_SHORTCUTS,
-  type DesktopShortcutConfig,
 } from "../../../lib/desktop";
 import { MeetingDetectSection } from "../../../components/settings/MeetingDetectSection";
-import { AppLoader } from "../../../components/AppLoader";
+import { useDesktopSettings, refreshDesktopSettings } from "../../../hooks/useDesktopSettings";
 import { Button } from "../../../components/ui/button";
 import { KeyCap } from "../../../components/KeyboardShortcutsHelp";
 import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
@@ -183,21 +181,16 @@ function PermissionsSection() {
 }
 
 export default function DesktopSettingsPage() {
-  const [cfg, setCfg] = useState<DesktopShortcutConfig | null>(null);
+  const cfg = useDesktopSettings();
   const [saved, setSaved] = useState<string | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useMountEffect(() => {
-    if (!isElectron()) return;
-    getDesktopShortcutConfig().then(setCfg);
-  });
 
   // "" removes the binding; the default value restores it. Re-fetch the full
   // config afterward so registration conflicts (issues) reflect the new state.
   const updateShortcut = useCallback(async (key: string, accelerator: string) => {
     if (!isElectron()) return;
     await bridge("setShortcut")?.(key, accelerator);
-    setCfg(await getDesktopShortcutConfig());
+    await refreshDesktopSettings();
     setSaved(key);
     if (savedTimer.current) clearTimeout(savedTimer.current);
     savedTimer.current = setTimeout(() => setSaved(null), 1500);
@@ -209,10 +202,6 @@ export default function DesktopSettingsPage() {
         Desktop settings are only available in the Codecast desktop app.
       </div>
     );
-  }
-
-  if (!cfg) {
-    return <AppLoader className="min-h-0 bg-transparent py-10" size={28} />;
   }
 
   return (
@@ -234,7 +223,7 @@ export default function DesktopSettingsPage() {
         icon={Keyboard}
         description="Global shortcuts work from anywhere on your system, even when Codecast is in the background."
       >
-        {DESKTOP_SHORTCUTS.map(({ key, label, description }) => {
+        {cfg && DESKTOP_SHORTCUTS.map(({ key, label, description }) => {
           const value = cfg.shortcuts[key] || "";
           const conflict = !!cfg.issues[key];
           const isDefault = cfg.defaults ? value === cfg.defaults[key] : true;

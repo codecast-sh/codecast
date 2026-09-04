@@ -1,5 +1,7 @@
+import { useSettingsData } from "../../../hooks/useSyncSettings";
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useCallback } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Switch } from "../../../components/ui/switch";
@@ -68,13 +70,9 @@ const DEFAULT_PREFS = {
 };
 
 export default function NotificationsSettingsPage() {
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const updatePrefs = useMutation(api.users.updateNotificationPreferences);
-  const activeTeamId = (user?.active_team_id || user?.team_id) as Id<"teams"> | undefined;
-  const teamMembers = useQuery(
-    api.teams.getTeamMembers,
-    activeTeamId ? { team_id: activeTeamId } : "skip"
-  );
+  const { data: teamMembers } = useSettingsData("teamMembers");
 
   const prefs = user?.notification_preferences;
   const enabled = user?.notifications_enabled ?? false;

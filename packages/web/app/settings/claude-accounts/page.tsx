@@ -1,16 +1,14 @@
+import { useSettingsData } from "../../../hooks/useSyncSettings";
 "use client";
 
 import { copyToClipboard } from "../../../lib/utils";
-// First-class management of Claude Code accounts (the Max/Pro login every
-// claude session on a machine shares). The credential is machine-global, so
-// everything here is per-device and executes daemon-side: profiles are
-// keychain snapshots the daemon reports on its heartbeat (names/emails/tiers
-// only — tokens never leave the machine). Enrolling an account needs ONE
-// /login in a terminal, ever; after it's saved here, switching is instant and
-// browser-free. See convex/accountSwitch.ts + cli/src/ccAccounts.ts.
+// First-class management of Claude Code accounts. Saved logins and setup
+// tokens are device-local and execute daemon-side; secrets never leave the
+// machine. Enrolling an account needs one /login in a terminal, then sessions
+// launch with that account's token whenever one is available.
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   exhaustionBannerCopy,
@@ -27,7 +25,7 @@ import { Switch } from "../../../components/ui/switch";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
 import { Check, Copy, KeyRound, Laptop, Pin, TimerReset, Trash2, Zap } from "lucide-react";
-import { AccountUsageBars } from "../../../components/AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge, UsageRefreshButton } from "../../../components/AccountUsageMeter";
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
@@ -46,13 +44,12 @@ type DeviceAccounts = {
     subscription?: string;
     usage?: CcUsage;
     token?: { stored_at: number; expires_at: number };
+    login_expired_at?: number;
   }>;
   auto_switch: boolean;
   /** Absent on servers that predate the field — treated as on. */
   auto_continue?: boolean;
   auto_switch_state?: { last_action_at?: number; last_action?: string; exhausted_at?: number };
-  /** Per-session accounts (setup-tokens). Absent on older servers — off. */
-  session_tokens?: boolean;
   mint_flow?: {
     status: "pending" | "confirmed" | "rejected";
     profile?: string;
@@ -146,16 +143,8 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
   );
 }
 
-// Per-session accounts: the machine-global keychain login is the DEFAULT; with
-// this on, each new session is pinned to a saved profile's one-year
-// `claude setup-token` instead, so switching the machine's login (by hand or
-// auto-switch on a limit) never moves a running session, and a revived
-// session is pinned to the account it was moved to. Tokens are minted by the
-// daemon — one browser approval per account — and renewed a week before
-// they expire.
-function SessionTokensToggle({ device }: { device: DeviceAccounts }) {
+function SessionTokenStatus({ device }: { device: DeviceAccounts }) {
   const now = useCoarseNow(30_000);
-  const { sessionTokens } = useAccountRecoveryToggles(device);
   const requestMint = useMutation(api.accountSwitch.requestMintToken);
   const [minting, setMinting] = useState(false);
   const online = device.online !== false;
@@ -185,67 +174,56 @@ function SessionTokensToggle({ device }: { device: DeviceAccounts }) {
   return (
     <>
       <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
-        <Pin className={`h-4 w-4 shrink-0 ${sessionTokens.on ? "text-sol-violet" : "text-sol-text-dim"}`} />
+        <Pin className="h-4 w-4 shrink-0 text-sol-violet" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text">Pin each session to its own account</div>
+          <div className="text-xs font-medium text-sol-text">Session account tokens</div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
-            By default every session on this machine shares one login, so switching accounts moves
-            all of them. With this on, codecast mints a one-year Claude Code token for each saved
-            account (one browser approval per account) and launches every new session on the
-            current account&apos;s token. Sessions then keep their account across switches and
-            restarts, and a session revived on another account is pinned there. Identity and
-            usage meters still come from the saved login. Tokens live in a private file on this
-            machine and are renewed a week before they expire.
+            Claude sessions automatically use the current account&apos;s token. When a blocked
+            session switches accounts, codecast restarts only its Claude Code process with the
+            new token; the conversation stays intact and other sessions keep running. Tokens
+            live in a private file on this machine and renew a week before they expire.
           </p>
         </div>
-        <Switch
-          checked={sessionTokens.on}
-          onCheckedChange={sessionTokens.set}
-          disabled={sessionTokens.pending}
-          aria-label="Pin each session to its own account"
-        />
       </div>
-      {sessionTokens.on && (
-        <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pl-[42px] text-[11px] text-sol-text-dim sm:px-5 sm:pl-[46px]">
-          {pending ? (
-            <span className="text-sol-yellow">
-              Minting for {flow?.email ?? flow?.profile ?? "the current login"}. A claude.ai tab is open in your
-              browser: it must be signed in as that account, then approve. The tab stops at the account picker when
-              it is not, and the mint times out after 5 minutes.
-            </span>
-          ) : rejected && !activeHasToken ? (
-            <span className="text-sol-red">Mint failed: {flow?.reason ?? "unknown reason"}</span>
-          ) : activeHasToken ? (
-            <span>
-              {withTokens} of {device.profiles.length} saved account{device.profiles.length === 1 ? "" : "s"} have a
-              token. For another account, sign into it at claude.ai and press Mint: the token files under
-              whichever saved account approved it.
-            </span>
-          ) : (
-            <span>The current login has no token yet.</span>
-          )}
-          {online && !pending && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={minting}
-              onClick={() => mint(rejected)}
-              className="h-6 px-2 text-[11px]"
-            >
-              {minting ? "Starting…" : rejected && !activeHasToken ? "Try again" : activeHasToken ? "Re-mint" : "Mint now"}
-            </Button>
-          )}
-          {pending && online && (
-            <button
-              onClick={() => mint(true)}
-              disabled={minting}
-              className="text-sol-text-dim underline decoration-dotted underline-offset-2 hover:text-sol-text"
-            >
-              browser didn&apos;t open? relaunch
-            </button>
-          )}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pl-[42px] text-[11px] text-sol-text-dim sm:px-5 sm:pl-[46px]">
+        {pending ? (
+          <span className="text-sol-yellow">
+            Minting for {flow?.email ?? flow?.profile ?? "the current login"}. A claude.ai tab is open in your
+            browser: it must be signed in as that account, then approve. The tab stops at the account picker when
+            it is not, and the mint times out after 5 minutes.
+          </span>
+        ) : rejected && !activeHasToken ? (
+          <span className="text-sol-red">Mint failed: {flow?.reason ?? "unknown reason"}</span>
+        ) : activeHasToken ? (
+          <span>
+            {withTokens} of {device.profiles.length} saved account{device.profiles.length === 1 ? "" : "s"} have a
+            token. For another account, sign into it at claude.ai and press Mint: the token files under
+            whichever saved account approved it.
+          </span>
+        ) : (
+          <span>The current login has no token yet.</span>
+        )}
+        {online && !pending && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={minting}
+            onClick={() => mint(rejected)}
+            className="h-6 px-2 text-[11px]"
+          >
+            {minting ? "Starting…" : rejected && !activeHasToken ? "Try again" : activeHasToken ? "Re-mint" : "Mint now"}
+          </Button>
+        )}
+        {pending && online && (
+          <button
+            onClick={() => mint(true)}
+            disabled={minting}
+            className="text-sol-text-dim underline decoration-dotted underline-offset-2 hover:text-sol-text"
+          >
+            browser didn&apos;t open? relaunch
+          </button>
+        )}
+      </div>
     </>
   );
 }
@@ -266,9 +244,9 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text">Auto-switch accounts on usage limits</div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
-            When sessions park on a usage limit, switch this machine to the saved account with the
-            most headroom and continue them — retrying through accounts (and window resets) until
-            everything is unblocked or every account is spent. Subagent workers are left out.
+            When sessions park on a usage limit, choose the saved account with the most headroom,
+            restart those Claude Code processes with its token, and continue them. Other sessions
+            keep running on their own accounts. Subagent workers are left out.
           </p>
         </div>
         <Switch
@@ -370,6 +348,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
             <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green" : "bg-sol-border"}`} />
             {online ? "online" : "offline"}
           </span>
+          {!device.is_remote && <UsageRefreshButton device={device} />}
         </>
       }
     >
@@ -397,6 +376,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     {plan}
                   </span>
                 )}
+                <LoginExpiredBadge profile={p} />
                 {(() => {
                   const badge = tokenBadge(p, now);
                   return badge ? (
@@ -468,7 +448,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       )}
 
       {!device.is_remote && <AutoSwitchToggle device={device} />}
-      {!device.is_remote && <SessionTokensToggle device={device} />}
+      {!device.is_remote && <SessionTokenStatus device={device} />}
 
       {!device.is_remote && online && device.active_email && !activeProfile && (
         <SaveCurrentForm device={device} suggestedName={suggested} />
@@ -483,17 +463,16 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
 }
 
 export default function ClaudeAccountsSettings() {
-  const data = useQuery(api.accountSwitch.listAccountProfiles, {});
+  const { data } = useSettingsData("accountProfiles");
 
   return (
     <SettingsPanel>
       <p className="px-1 text-sm text-sol-text-muted leading-relaxed">
-        Every Claude Code session on a machine shares one login. Each account you log into gets saved
-        as a profile automatically, so you can switch the whole machine instantly — no browser, no
-        re-login. Switching never interrupts
-        running sessions: they keep their account until restarted, while new and resumed sessions use
-        the new one. When sessions are parked on a usage limit, the inbox banner offers
-        "switch &amp; continue" to revive them on the other account.
+        Each Claude account you log into is saved as a profile automatically. New sessions use the
+        current account&apos;s token, while running sessions keep the account they started with. Switching
+        changes the default without interrupting them. When sessions are parked on a usage limit,
+        "switch &amp; continue" restarts only those Claude Code processes with the selected account&apos;s
+        token and resumes the same conversations.
       </p>
 
       {data === undefined && (
