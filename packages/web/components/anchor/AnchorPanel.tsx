@@ -6,17 +6,23 @@
 // state in the store (`anchorPanel`), opened by the header chip, ⌘⇧A, or the
 // palette; the /anchor page remains the full home (settings, Slack, routines).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, Plus, X } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useAnchors, anchorScopeLabel, defaultAnchorKey, deriveAnchorStatus, type AnchorRow } from "../../hooks/useSyncAnchors";
 import { AnchorAvatar, AnchorGlyph, AnchorScopePill } from "./AnchorIdentity";
-import { AnchorConversation, AnchorOnboarding } from "./AnchorConversation";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { TeamIcon } from "../TeamIcon";
+
+const AnchorConversation = lazy(() =>
+  import("./AnchorConversation").then((module) => ({ default: module.AnchorConversation })),
+);
+const AnchorOnboarding = lazy(() =>
+  import("./AnchorConversation").then((module) => ({ default: module.AnchorOnboarding })),
+);
 
 // A pending "create" choice, encoded in anchorPanel.anchorId so the picker
 // and the body agree without a second field.
@@ -100,22 +106,24 @@ export function AnchorPanel() {
         </div>
       </header>
       <div className="flex-1 min-h-0">
-        {current ? (
-          current.conversation_id
-            ? <AnchorConversation conversationId={String(current.conversation_id)} hideHeader />
-            : <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Coming online…</div>
-        ) : key === NEW_USER ? (
-          <AnchorOnboarding scope="user" compact />
-        ) : key.startsWith("new:team:") ? (
-          <AnchorOnboarding
-            scope="team"
-            teamId={key.slice("new:team:".length)}
-            teamName={teams.find((t) => t?._id === key.slice("new:team:".length))?.name ?? null}
-            compact
-          />
-        ) : (
-          <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Loading your anchors…</div>
-        )}
+        <Suspense fallback={<div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Loading your anchor…</div>}>
+          {current ? (
+            current.conversation_id
+              ? <AnchorConversation conversationId={String(current.conversation_id)} hideHeader />
+              : <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Coming online…</div>
+          ) : key === NEW_USER ? (
+            <AnchorOnboarding scope="user" compact />
+          ) : key.startsWith("new:team:") ? (
+            <AnchorOnboarding
+              scope="team"
+              teamId={key.slice("new:team:".length)}
+              teamName={teams.find((t) => t?._id === key.slice("new:team:".length))?.name ?? null}
+              compact
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Loading your anchors…</div>
+          )}
+        </Suspense>
       </div>
     </div>
   );

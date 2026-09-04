@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { ImagePlus } from "lucide-react";
+import { Headphones, ImagePlus } from "lucide-react";
 import { WalkiePttButton } from "../calls/WalkiePtt";
 import { MessageInput } from "../ConversationView";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -153,20 +153,11 @@ export const ChatComposer = memo(function ChatComposer({
             <span
               className="walkie-seat"
             >
-              {/* The SMALL key, deliberately.
-                  It used to be the composer's 40px control, sized as if the
-                  composer were where you talk to people. It is not: the people
-                  wall is, where a face is up to 88px of hit area and holding it
-                  IS the gesture. Beside that, this is a side entrance — the key
-                  you reach for because you are already typing in this DM — and
-                  a 40px orange circle in a row of 14px glyphs claimed the
-                  composer's whole right end for it. Same key, same states, same
-                  chord beside it; one size down, in the row it lives in. */}
               <WalkiePttButton
                 roomKey={walkieRoomKey}
                 resolveChannelId={resolveChannelId}
                 size="sm"
-                label="Talk"
+                icon={Headphones}
                 title="Talk to them — they see your face and hear you; click again to stop"
                 ring={walkieRing ? { toUserIds: walkieRing } : undefined}
               />
