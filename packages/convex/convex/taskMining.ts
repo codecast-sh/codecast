@@ -7,7 +7,7 @@ import { Id, Doc } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
-import { canAccessConversation, canAccessDoc } from "./lib/access";
+import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
@@ -1206,15 +1206,7 @@ export const webGetTaskDetail = query({
           .first();
       }
     }
-    if (!task) return null;
-
-    if (task.user_id !== userId && task.team_id) {
-      const membership = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task!.team_id))
-        .first();
-      if (!membership) return null;
-    }
+    if (!task || !await canAccessTask(ctx, userId, task)) return null;
 
     const comments = await ctx.db
       .query("task_comments")
@@ -1230,7 +1222,7 @@ export const webGetTaskDetail = query({
     if (task.conversation_ids) {
       for (const convId of task.conversation_ids) {
         const conv = await ctx.db.get(convId);
-        if (conv) {
+        if (conv && await canAccessConversation(ctx, userId, conv)) {
           seenConvIds.add(conv._id.toString());
           const isActive = conv.status === "active" && (conv.updated_at > fiveMinutesAgo || liveConvIds.has(conv._id.toString()));
           const entry: any = {
@@ -1246,7 +1238,7 @@ export const webGetTaskDetail = query({
             agent_type: conv.agent_type,
             outcome_type: (conv as any).outcome_type,
             git_branch: (conv as any).git_branch,
-            git_remote_url: await canAccessConversation(ctx, userId, conv) ? conv.git_remote_url : undefined,
+            git_remote_url: conv.git_remote_url,
             // Triage/visibility stamps: the client seeds these snapshots into its
             // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
             // must not seed as an active row (ct-42666).
@@ -1276,7 +1268,7 @@ export const webGetTaskDetail = query({
       .take(100)
       .then((convs: any[]) => convs.filter((c: any) => c.active_task_id === task._id));
     for (const conv of allConvs) {
-      if (seenConvIds.has(conv._id.toString())) continue;
+      if (seenConvIds.has(conv._id.toString()) || !await canAccessConversation(ctx, userId, conv)) continue;
       seenConvIds.add(conv._id.toString());
       const isActive = conv.status === "active" && (conv.updated_at > fiveMinutesAgo || liveConvIds.has(conv._id.toString()));
       const entry: any = {
@@ -1292,7 +1284,7 @@ export const webGetTaskDetail = query({
         agent_type: conv.agent_type,
         outcome_type: (conv as any).outcome_type,
         git_branch: (conv as any).git_branch,
-        git_remote_url: await canAccessConversation(ctx, userId, conv) ? conv.git_remote_url : undefined,
+        git_remote_url: conv.git_remote_url,
         // Triage/visibility stamps: the client seeds these snapshots into its
         // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
         // must not seed as an active row (ct-42666).
@@ -1336,20 +1328,23 @@ export const webGetTaskDetail = query({
         .query("docs")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", task.created_from_conversation))
         .collect();
-      relatedDocs = convDocs
-        .filter((d) => !d.archived_at)
-        .map((d) => ({
+      for (const d of convDocs) {
+        if (d.archived_at || !await canAccessDoc(ctx, userId, d)) continue;
+        relatedDocs.push({
           _id: d._id,
           title: d.title,
           doc_type: d.doc_type,
           source: d.source,
           created_at: d.created_at,
-        }));
+        });
+      }
     }
 
     let insight = null;
     if (task.created_from_insight) {
-      insight = await ctx.db.get(task.created_from_insight);
+      const candidate = await ctx.db.get(task.created_from_insight);
+      const conversation = candidate?.conversation_id ? await ctx.db.get(candidate.conversation_id) : null;
+      if (candidate && conversation && await canAccessConversation(ctx, userId, conversation)) insight = candidate;
     }
 
     // Get creator info
@@ -1421,7 +1416,7 @@ export const webGetTaskDetail = query({
     let plan = null;
     if (task.plan_id) {
       const p = await ctx.db.get(task.plan_id);
-      if (p) plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+      if (p && await canAccessPlan(ctx, userId, p)) plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
     }
 
     return {
