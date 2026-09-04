@@ -44,9 +44,10 @@ describe("processTable", () => {
   });
 
   test("findStaleTmuxServers: every default-socket server except the live one, with tree counts", () => {
-    expect(findStaleTmuxServers(table, 45451)).toEqual([
-      { pid: 90449, command: table.find((p) => p.pid === 90449)!.command, descendants: 5, agents: 2 },
-    ]);
+    const stale = findStaleTmuxServers(table, 45451);
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toMatchObject({ pid: 90449, command: table.find((p) => p.pid === 90449)!.command, agents: 2 });
+    expect([...stale[0].tree].sort((a, b) => a - b)).toEqual([92000, 92001, 92002, 92003, 92004]);
     expect(findStaleTmuxServers(table, 90449).map((s) => s.pid)).toEqual([45451]);
   });
 
