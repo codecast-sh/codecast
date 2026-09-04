@@ -147,6 +147,9 @@ function resolveDesktopConfig(input) {
     fail("web.manifestPath must be an app-relative path");
   }
   if (web.seedDir !== undefined && web.seedDir !== null && typeof web.seedDir !== "string") fail("web.seedDir must be a path");
+  if (web.verify !== undefined && web.verify !== "all" && web.verify !== "assets") {
+    fail(`web.verify must be "all" or "assets"`);
+  }
   const passthrough = Array.isArray(web.passthrough) ? web.passthrough : [];
   for (const p of passthrough) {
     if (typeof p !== "string" || !p.startsWith("/")) fail("web.passthrough entries must be app-relative path prefixes");
@@ -220,6 +223,7 @@ function resolveDesktopConfig(input) {
       cache: web.cache === true,
       manifestPath: web.manifestPath || "/release.json",
       seedDir: web.seedDir || null,
+      verify: web.verify || "all",
       passthrough,
       checkIntervalMs: web.checkIntervalMs ?? 15 * 60 * 1000,
       // How long a launch waits for the manifest check before painting
