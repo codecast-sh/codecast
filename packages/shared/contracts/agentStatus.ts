@@ -45,6 +45,14 @@ export const AGENT_STATUSES = [
   // Turn ended and the agent DECLARED the task delivered (`cast state --status
   // done`). Nothing is stalled; the human reads it at leisure.
   "done",
+  // The daemon parked the pane to keep the live fleet under max_live_sessions.
+  // Nothing crashed and nothing is lost: the transcript is intact and the next
+  // message resumes the session through the normal auto-resume path. Not a
+  // settle verdict (the agent said nothing) and not an active status, so it is
+  // deliberately absent from every other set in this file — trustedAgentStatus
+  // hands it back untouched, which is what lets the work-state classifier tell
+  // a parked session apart from a dead one.
+  "hibernated",
 ] as const;
 
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
