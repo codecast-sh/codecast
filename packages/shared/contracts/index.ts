@@ -60,3 +60,10 @@ export * from "./appDescriptors";
 // order-independent digest every client compares against (sync-convergence C3, C8).
 export * from "./inboxProjection";
 export * from "./appSurfaces";
+// How a pull request is named: one parser for the reference forms people type
+// and one builder for the codecast page link, shared by the CLI, Convex and web.
+export * from "./prRefs";
+// The `--on <event>` vocabulary: which events a trigger can wait for, the
+// filter each name arms, and the labels the web renders. Shared because the
+// CLI and the two web trigger pages each held a copy, and they had drifted.
+export * from "./triggerEvents";
