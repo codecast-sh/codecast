@@ -56,6 +56,9 @@ declare global {
       // gate on them (isPeopleWindow is then undefined, i.e. not one).
       isPeopleWindow?: boolean;
       openPeopleWindow?: () => Promise<void>;
+      // With a voice host the buddy list is the WALL, a shape of that window;
+      // this puts it away. Absent on older builds — gate on it.
+      closePeopleWindow?: () => Promise<void>;
       setAlwaysOnTop?: (on: boolean) => Promise<boolean>;
       getAlwaysOnTop?: () => Promise<boolean>;
       // The call panel (a huddle in a window of its own, at /call-panel). One
@@ -80,6 +83,20 @@ declare global {
       onCallPanelHandback?: (
         cb: (payload: { room: string; mic: boolean; camera: boolean; scribe: boolean }) => void,
       ) => void;
+      // The voice host. The shell keeps ONE persistent see-through window
+      // (this route) that holds the walkie's ear and every call; it hands the
+      // window rooms as commands, relays commands from every other window to
+      // it, and relays its mirror back. All absent on older shells — gate on
+      // them; without them the call panel is the per-call window it used to
+      // be and every other window keeps its own microphone.
+      voiceHostReady?: () => void;
+      onCallPanelOpen?: (cb: (payload: VoiceOpenPayload) => void) => void;
+      onCallPanelShow?: (cb: () => void) => void;
+      voiceCommand?: (cmd: string, args?: unknown[]) => Promise<boolean>;
+      onVoiceCommand?: (cb: (payload: { cmd: string; args: unknown[] }) => void) => void;
+      voiceMirror?: (payload: VoiceMirror) => void;
+      onVoiceMirror?: (cb: (payload: VoiceMirror) => void) => void;
+      getVoiceWindowState?: () => Promise<{ size: VoiceWindowShape; callSize: CallWindowSize } | null>;
       // The call window's four sizes: the stage, a row of face circles, one
       // speaker circle, and that circle at the size of a menu bar icon. ONE window — `transparent` and `frame` are
       // construction-time options, so the window is born see-through and
@@ -92,8 +109,8 @@ declare global {
       // keeps the window the size of its circles, and `setCallWindowDragging`
       // has the shell follow the cursor while a circle is held. Absent on
       // older builds — gate on them.
-      setCallWindowSize?: (size: CallWindowSize) => Promise<CallWindowSize | null>;
-      getCallWindowSize?: () => Promise<CallWindowSize | null>;
+      setCallWindowSize?: (size: VoiceWindowShape) => Promise<VoiceWindowShape | null>;
+      getCallWindowSize?: () => Promise<VoiceWindowShape | null>;
       setCallWindowInteractive?: (on: boolean) => void;
       setCallWindowContentSize?: (size: { width: number; height: number }) => void;
       setCallWindowDragging?: (on: boolean) => void;
@@ -328,10 +345,40 @@ export type DesktopWindowRole = {
   anyInCall: boolean;
   peopleWindow: boolean;
   callPanel: boolean;
-  /** The faces overlay window exists (it may be yielding to a call). The
-   *  people window's toggle draws this, so a close from the overlay's own
-   *  chrome — or from another window — is reflected everywhere. */
+  /** A VOICE HOST exists: the persistent window that holds the walkie's ear
+   *  and every call, and takes presses and joins as commands. Every other
+   *  window sends its gestures there instead of opening a microphone of its
+   *  own. False on an older shell, where each window keeps its own. */
+  voiceWindow: boolean;
+  /** The person wants the idle team floating over their work. The voice host
+   *  takes the faces shape off this; the people window's toggle draws it, so
+   *  a close from the overlay's own chrome — or from another window — is
+   *  reflected everywhere. */
   facesOverlay: boolean;
+  /** The person wants the buddy list up, as the WALL shape of the voice host.
+   *  Exclusive with the faces: they are two sizes of one glance at the team. */
+  peopleWall: boolean;
+};
+
+/** A room handed to the voice host, with the state the person is already in. */
+export type VoiceOpenPayload = {
+  room: string;
+  mic: boolean;
+  camera: boolean;
+  scribe: boolean;
+  /** Opened by an answered ring: the accept follows on its own channel and is
+   *  what joins; a takeover racing it would join a room this person has not
+   *  been admitted to yet. */
+  ring: boolean;
+  size: CallWindowSize | null;
+};
+
+/** What the host mirrors to every other window: the walkie's status as the
+ *  engine holds it, and the call facts a talk key reads beside it. Plain data
+ *  on purpose — it crosses a process boundary. */
+export type VoiceMirror = {
+  walkie: unknown;
+  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean };
 };
 
 export type DesktopDisplaySource = {
@@ -433,9 +480,19 @@ export async function getAlwaysOnTop(): Promise<boolean> {
   return (await bridge("getAlwaysOnTop")?.()) ?? false;
 }
 
-// Whether this window can be pinned at all (an older shell has no pin).
+// Whether this window can be pinned at all (an older shell has no pin). The
+// people window of its own, or the voice host — where the pin is the wall's.
 export function canPin(): boolean {
-  return isPeopleWindow() && typeof window.__CODECAST_ELECTRON__?.setAlwaysOnTop === "function";
+  return (isPeopleWindow() || isVoiceHost()) && typeof window.__CODECAST_ELECTRON__?.setAlwaysOnTop === "function";
+}
+
+/** Put the buddy list away: the wall on a voice host, the people window on an
+ *  older shell. False when this build has no such verb. */
+export async function closePeopleWindow(): Promise<boolean> {
+  const close = bridge("closePeopleWindow");
+  if (!close) return false;
+  await close();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -596,6 +653,25 @@ export function onCallPanelHandback(
 export type CallWindowSize = "panel" | "circles" | "speaker" | "tiny";
 
 /**
+ * Every shape the voice window takes: the call's four sizes, plus the four
+ * the walkie and the team add. A burst becoming a call is this window going
+ * from `walkie` to a call size — a resize of the window that already holds
+ * the microphone, never a second window joining the room.
+ *
+ *   walkie  the burst strip, in the bottom-right corner of the screen
+ *   wall    the buddy list, in the people window's own rectangle
+ *   faces   the idle team as photo circles, at the call circles' spot
+ *   idle    nothing to show: the window is hidden and waits
+ */
+export type VoiceWindowShape = CallWindowSize | "walkie" | "wall" | "faces" | "idle";
+
+export const CALL_WINDOW_SIZES: readonly CallWindowSize[] = ["panel", "circles", "speaker", "tiny"];
+
+export function isCallWindowSize(size: unknown): size is CallWindowSize {
+  return (CALL_WINDOW_SIZES as readonly unknown[]).includes(size);
+}
+
+/**
  * Every size that is not the stage — the ones a person shrinks INTO.
  *
  * Listed here rather than in the surface that draws the buttons, so a size the
@@ -643,15 +719,90 @@ export function canResizeCallWindow(): boolean {
  * Put the window into a size. Returns the size it actually landed on, or null
  * if this build cannot do it — the caller says so rather than pretending.
  */
-export async function setCallWindowSize(size: CallWindowSize): Promise<CallWindowSize | null> {
+export async function setCallWindowSize(size: VoiceWindowShape): Promise<VoiceWindowShape | null> {
   const set = bridge("setCallWindowSize");
   if (!set) return null;
   return (await set(size)) ?? null;
 }
 
 /** Which size the shell has this window in. Null on a build without sizes. */
-export async function getCallWindowSize(): Promise<CallWindowSize | null> {
+export async function getCallWindowSize(): Promise<VoiceWindowShape | null> {
   const get = bridge("getCallWindowSize");
+  if (!get) return null;
+  return (await get()) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// The voice host.
+//
+// On a shell that has one, the call panel window is PERSISTENT: built at boot,
+// hidden, holding the walkie's ear; every burst is heard and spoken there, and
+// every call joins there, so the window that holds the microphone never
+// changes. Every other window is a remote for it. These are the two sides of
+// that arrangement, and every one of them is a no-op on a shell without it.
+// ---------------------------------------------------------------------------
+
+/** This renderer IS the persistent voice host: the call panel window, on a
+ *  shell that keeps it alive and hands it rooms as commands. */
+export function isVoiceHost(): boolean {
+  return isCallPanelWindow() && typeof bridge("voiceHostReady") === "function";
+}
+
+/** A voice host exists — this window, or another. */
+export function hasVoiceHost(): boolean {
+  return isVoiceHost() || windowRole.voiceWindow;
+}
+
+/** A voice host exists and it is not this window: every microphone gesture
+ *  made here is sent there. */
+export function voiceHostElsewhere(): boolean {
+  return !isVoiceHost() && windowRole.voiceWindow;
+}
+
+/** The host says it is up: from here rooms arrive as commands. */
+export function declareVoiceHost(): void {
+  bridge("voiceHostReady")?.();
+}
+
+/** A room for the host to join, as an opener handed it over. */
+export function onCallPanelOpen(cb: (payload: VoiceOpenPayload) => void): void {
+  bridge("onCallPanelOpen")?.(cb);
+}
+
+/** Host: another window asked for the call to be shown — stop hiding it. */
+export function onCallPanelShow(cb: () => void): void {
+  bridge("onCallPanelShow")?.(cb);
+}
+
+/**
+ * Send a microphone gesture to the host. Resolves true when a host took it;
+ * false means there is none (an older shell, or the second before it
+ * declares), and the caller acts locally as it always did.
+ */
+export async function sendVoiceCommand(cmd: string, args: unknown[] = []): Promise<boolean> {
+  const send = bridge("voiceCommand");
+  if (!send) return false;
+  return (await send(cmd, args)) === true;
+}
+
+/** Host: commands from the other windows. */
+export function onVoiceCommand(cb: (payload: { cmd: string; args: unknown[] }) => void): void {
+  bridge("onVoiceCommand")?.(cb);
+}
+
+/** Host: tell every other window what the walkie and the call are doing. */
+export function mirrorVoice(payload: VoiceMirror): void {
+  bridge("voiceMirror")?.(payload);
+}
+
+/** Every other window: the host's mirror. */
+export function onVoiceMirror(cb: (payload: VoiceMirror) => void): void {
+  bridge("onVoiceMirror")?.(cb);
+}
+
+/** Host: the shape the shell has it in, and the call size the person chose. */
+export async function getVoiceWindowState(): Promise<{ size: VoiceWindowShape; callSize: CallWindowSize } | null> {
+  const get = bridge("getVoiceWindowState");
   if (!get) return null;
   return (await get()) ?? null;
 }
@@ -998,9 +1149,14 @@ let windowRole: DesktopWindowRole = {
   anyInCall: false,
   peopleWindow: false,
   callPanel: false,
+  voiceWindow: false,
   facesOverlay: false,
+  peopleWall: false,
 };
-let windowRoleTracked = false;
+// The bridge the tracker installed on. In the app there is exactly one and it
+// never changes; a test that stands a second shell up gets a second install
+// rather than a tracker bound to a bridge nobody is pushing through.
+let windowRoleBridge: unknown = null;
 
 export function getDesktopWindowRole(): DesktopWindowRole {
   return windowRole;
@@ -1027,16 +1183,19 @@ export function subscribeWindowRole(cb: () => void): () => void {
 
 // Subscribe once (DesktopProvider) so the role above tracks the shell.
 export function installWindowRoleTracker(): void {
-  if (windowRoleTracked) return;
-  windowRoleTracked = true;
-  bridge("onWindowRole")?.((role) => {
+  const on = bridge("onWindowRole");
+  if (!on || windowRoleBridge === on) return;
+  windowRoleBridge = on;
+  on((role) => {
     windowRole = {
       leader: role.leader !== false,
       appFocused: !!role.appFocused,
       anyInCall: !!role.anyInCall,
       peopleWindow: !!role.peopleWindow,
       callPanel: !!role.callPanel,
+      voiceWindow: !!role.voiceWindow,
       facesOverlay: !!role.facesOverlay,
+      peopleWall: !!role.peopleWall,
     };
     for (const cb of windowRoleWatchers) cb();
   });

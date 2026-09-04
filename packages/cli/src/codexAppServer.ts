@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
 import { STABLE_ENV_MODE } from "@codecast/shared/contracts";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { withWorktreeConfig } from "./worktreeEnv.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -39,6 +40,7 @@ export interface ThreadResumeParams {
   approvalPolicy?: ApprovalPolicy;
   model?: string;
   baseInstructions?: string;
+  config?: Record<string, unknown>;
 }
 
 export interface ThreadForkParams extends ThreadStartParams {
@@ -259,7 +261,7 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadStart(params: ThreadStartParams): Promise<ThreadStartResponse> {
-    const response = await this.sendRequest("thread/start", params, THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
+    const response = await this.sendRequest("thread/start", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
     this.threadModels.set(response.thread.id, response.model);
     return response;
   }
@@ -274,13 +276,13 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
-    const response = await this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
+    const response = await this.sendRequest("thread/resume", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
     this.threadModels.set(response.thread.id, response.model);
     return response;
   }
 
   async threadFork(params: ThreadForkParams, timeoutMs = THREAD_START_TIMEOUT_MS): Promise<ThreadForkResponse> {
-    const response = await this.sendRequest("thread/fork", params, timeoutMs) as ThreadForkResponse;
+    const response = await this.sendRequest("thread/fork", withWorktreeConfig(params), timeoutMs) as ThreadForkResponse;
     this.threadModels.set(response.thread.id, response.model);
     return response;
   }

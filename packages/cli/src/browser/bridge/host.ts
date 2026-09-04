@@ -75,8 +75,7 @@ export interface BridgeState {
   hostPid?: number;
   startedAt?: number;
   /** Is the extension on the socket right now? Written by the host process,
-   *  true only while it holds a proven extension connection. With a live
-   *  hostPid this is what makes the real Chrome the default (real.ts). */
+   *  true only while it holds a proven extension connection. */
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;

@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import type { AgentStatus } from "@codecast/shared/contracts";
 import {
   clearHibernationPark,
+  flushHibernationStamps,
+  registerManagedStartedSession,
   clearSessionTrackingForKill,
   hibernateSessionNow,
   noteSubagentActivity,
@@ -70,12 +72,13 @@ function fixture(opts: FixtureOpts): Fixture {
   const tmuxOf = (id: string) => (opts.onePane ? "cc-resume-shared" : `cc-resume-${id}`);
   const conversationIds: Record<string, string> = {};
   sessions.forEach((id, i) => {
-    trackSessionPaneForTests(id, tmuxOf(id), opts.facts ? opts.facts(i) : {});
+    trackSessionPaneForTests(id, tmuxOf(id), { status: "idle", ...(opts.facts ? opts.facts(i) : {}) });
     tracked.push(id);
     conversationIds[id] = `conv-${i}`;
   });
   const parked: string[] = [];
   const io: HibernationPassIo = {
+    terminal: async () => ({ stdout: "" }),
     policy: () => ({ maxLive: opts.maxLive ?? 0, idleMs: opts.idleMs ?? 0, maxPerPass: opts.maxPerPass ?? 5 }),
     tmuxSessions: async () => {
       const m = new Map<string, number>();
@@ -87,9 +90,10 @@ function fixture(opts: FixtureOpts): Fixture {
     conversationIds: () => conversationIds,
     askSidecarMtimeMs: async (id) => (opts.sidecarMtimeMs ? opts.sidecarMtimeMs(id) : null),
     transcriptLastRealMs: async (id) => (opts.transcriptLastRealMs ? opts.transcriptLastRealMs(id) : null),
-    lifecycle: async (_conv, id) => (opts.lifecycle ? opts.lifecycle(id) : null),
+    lifecycle: async (_conv, id) => (opts.lifecycle ? opts.lifecycle(id) : lifecycleOf({})),
     canReapPidTree: (id) => (opts.canReapPidTree ? opts.canReapPidTree(id) : true),
     deliveryActive: (id) => (opts.deliveryActive ? opts.deliveryActive(id) : false),
+    inspectTarget: async (id) => ({ session: "$1", pane: "%1", pid: 100, start: "start", stamp: id, conversationStamp: "" }),
     park: async (id) => { parked.push(id); return true; },
     now: () => NOW,
   };
@@ -103,6 +107,7 @@ const lifecycleOf = (over: Partial<ConversationLifecycle>): ConversationLifecycl
   inboxDismissedAt: null,
   inboxPinnedAt: null,
   hideStateKnown: true,
+  hasPendingMessages: false,
   source: "lifecycle",
   ...over,
 });
@@ -155,12 +160,10 @@ describe("runHibernationPass", () => {
     expect(f.parked).toEqual([f.sessions[2]]);
   });
 
-  test("a null lifecycle PROCEEDS — the opposite of the reaper, on purpose", async () => {
-    // Hibernation retires nothing, so an unreachable backend is not a reason to
-    // keep burning a pane. stampedPaneReapEligibility fails closed because a
-    // reap is permanent; this one is undone by the next message.
+  test("an unavailable lifecycle refuses parking", async () => {
     const f = fixture({ count: 3, maxLive: 2, awakeIdleMs: (i) => i * 1000, lifecycle: () => null });
-    expect(await runHibernationPass(f.io)).toBe(1);
+    expect(await runHibernationPass(f.io)).toBe(0);
+    expect(f.parked).toEqual([]);
   });
 
   test("a pane that goes busy at kill time is not counted as parked", async () => {
@@ -197,9 +200,9 @@ describe("cast hibernate", () => {
     expect(f.parked).toEqual([f.sessions[1]]);
   });
 
-  test("a session with no live pane reads as already parked", async () => {
+  test("a session with no known live pane is not reported parked", async () => {
     const f = fixture({ count: 1 });
-    expect(await f.hibernate("nobody-here")).toEqual({ result: "already_parked" });
+    expect(await f.hibernate("nobody-here")).toEqual({ result: "skipped_no-live-pane", error: "not parked: no-live-pane" });
     expect(f.parked).toEqual([]);
   });
 
@@ -216,8 +219,8 @@ describe("cast hibernate", () => {
     const f = fixture({ count: 2 });
     const io = { ...f.io, park: async () => false };
     expect(await hibernateSessionNow(f.sessions[0], undefined, io)).toEqual({
-      result: "skipped_busy",
-      error: "the pane went busy at kill time",
+      result: "skipped_teardown-refused",
+      error: "not parked: teardown-refused",
     });
   });
 });
@@ -423,7 +426,7 @@ describe("wakeStatusAfterPark", () => {
 
 // The park mark is daemon memory, and two things go wrong when it is trusted
 // alone: a restart empties it, and a teardown leaves it behind.
-describe("the park mark and the server stamp", () => {
+describe("the park mark and the server stamp", async () => {
   const writes: Array<{ conversationId: string; status: string; hibernatedAt?: number | null }> = [];
   const sync = {
     updateSessionAgentStatus: async (
@@ -434,7 +437,7 @@ describe("the park mark and the server stamp", () => {
       _tasks?: unknown,
       _presumed?: boolean,
       hibernatedAt?: number | null,
-    ) => { writes.push({ conversationId, status, hibernatedAt }); },
+    ) => { writes.push({ conversationId, status, hibernatedAt }); return true; },
   } as unknown as import("./syncService.js").SyncService;
 
   const track = (id: string, facts: { status?: AgentStatus; parked?: boolean } = {}) => {
@@ -445,43 +448,50 @@ describe("the park mark and the server stamp", () => {
   beforeEach(() => { writes.length = 0; setSyncServiceForTests(sync); });
   afterEach(() => setSyncServiceForTests(null));
 
-  test("a park this daemon made is cleared and logged as a wake", () => {
+  test("a park this daemon made is cleared and logged as a wake", async () => {
     track("mark-parked", { parked: true, status: "hibernated" });
     clearHibernationPark("mark-parked", "conv-parked");
+    await flushHibernationStamps();
     expect(sessionParkStateForTests("mark-parked").parked).toBe(false);
     expect(writes).toEqual([{ conversationId: "conv-parked", status: "connected", hibernatedAt: null }]);
   });
 
-  test("the first wake after boot clears the stamp even with no local mark", () => {
+  test("the first wake after boot clears the stamp even with no local mark", async () => {
     // A restart empties the mark. The stamp on managed_sessions does not go
     // with it, and it is what tells the inbox the session is parked, so the
     // first wake has to clear it whether or not this daemon remembers parking.
     track("mark-unknown", { status: "idle" });
     clearHibernationPark("mark-unknown", "conv-unknown");
+    await flushHibernationStamps();
     expect(writes).toEqual([{ conversationId: "conv-unknown", status: "idle", hibernatedAt: null }]);
   });
 
-  test("later wakes of the same session write nothing", () => {
+  test("later wakes of the same session write nothing", async () => {
     // Every message to a live session funnels through the same call, so the
     // clear must not become a Convex write per delivery.
     track("mark-repeat", { status: "idle" });
     clearHibernationPark("mark-repeat", "conv-repeat");
+    await flushHibernationStamps();
     writes.length = 0;
     clearHibernationPark("mark-repeat", "conv-repeat");
+    await flushHibernationStamps();
     clearHibernationPark("mark-repeat", "conv-repeat");
+    await flushHibernationStamps();
     expect(writes).toEqual([]);
   });
 
-  test("a second park in the same boot is cleared again", () => {
+  test("a second park in the same boot is cleared again", async () => {
     track("mark-again", { status: "idle" });
     clearHibernationPark("mark-again", "conv-again");
+    await flushHibernationStamps();
     writes.length = 0;
     trackSessionPaneForTests("mark-again", `cc-resume-mark-again`, { parked: true, status: "hibernated" });
     clearHibernationPark("mark-again", "conv-again");
+    await flushHibernationStamps();
     expect(writes).toEqual([{ conversationId: "conv-again", status: "connected", hibernatedAt: null }]);
   });
 
-  test("a teardown drops the mark: a killed session is not a parked one", () => {
+  test("a teardown drops the mark: a killed session is not a parked one", async () => {
     // Nothing wakes a killed session, so without this the mark stayed for the
     // life of the daemon and the live versus parked count over-reported.
     track("mark-killed", { parked: true, status: "hibernated" });

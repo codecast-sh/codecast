@@ -183,6 +183,35 @@ describe("allocatePorts (live probe)", () => {
   });
 });
 
+describe("allocatePorts (reservations)", () => {
+  test("skips reserved numbers regardless of their service name", async () => {
+    const allocation = await allocatePorts(sampleManifest(), {
+      reservedPorts: new Set([33001, 33102]),
+    });
+    expect(allocation.resourceIndex).toBe(2);
+    expect(allocation.ports).toEqual({ web: 33200, api: 33201, db: 33202 });
+  });
+
+  test("reservations still apply when TCP probing is disabled", async () => {
+    const allocation = await allocatePorts(sampleManifest(), {
+      noProbe: true,
+      reservedPorts: new Set([33000]),
+    });
+    expect(allocation.resourceIndex).toBe(1);
+    expect(allocation.env.PORT_WEB).toBe("33100");
+  });
+
+  test("reports reserved conflicts when every candidate is claimed", async () => {
+    await expect(allocatePorts(sampleManifest(), {
+      maxIndices: 2,
+      reservedPorts: new Set([33000, 33101]),
+    })).rejects.toMatchObject({
+      name: "PortAllocationError",
+      conflicts: [{ name: "api", port: 33101 }],
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // isPortFree
 // ---------------------------------------------------------------------------

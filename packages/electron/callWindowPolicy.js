@@ -25,19 +25,22 @@
  *   tiny      the same one circle at the size of a menu bar icon — the
  *             smallest thing that is still recognizably a person.
  *
- * And the three the walkie and the idle team add, which is what makes a burst
+ * And the four the walkie and the idle team add, which is what makes a burst
  * becoming a call a RESIZE of the window that already holds the microphone:
  *   walkie    the burst strip, tucked in the bottom-right corner of the screen.
+ *   wall      the buddy list — the team as a wall of faces, with status and
+ *             every way to reach somebody — a card the person resizes, pinned
+ *             above other apps if they say so.
  *   faces     the idle team as photo circles, at the call circles' own spot.
  *   idle      nothing to show: the window is hidden and waits.
  *
  * The circle family (circles, speaker, tiny, faces) floats, lets the mouse
  * through and cannot be dragged by an edge. The strip floats and takes every
- * click, because it is exactly the size of its card. Only the stage is an
- * ordinary window.
+ * click, because it is exactly the size of its card. The stage and the wall
+ * are ordinary windows; the wall alone floats when its pin is set.
  */
 const CALL_SIZES = ["panel", "circles", "speaker", "tiny"];
-const CALL_WINDOW_SIZES = [...CALL_SIZES, "walkie", "faces", "idle"];
+const CALL_WINDOW_SIZES = [...CALL_SIZES, "walkie", "wall", "faces", "idle"];
 
 /**
  * A size name from a renderer, or "panel" if it is anything else.
@@ -75,8 +78,15 @@ function isCallSize(size) {
  * lifts the flag for the call and puts it back — which is also why this
  * answers with a flag rather than main.js reading the size in two places.
  */
-function callWindowChrome(size) {
+function callWindowChrome(size, opts = {}) {
   const s = normalizeCallWindowSize(size);
+  if (s === "wall") {
+    // The buddy list's pin: float above other apps and follow the person
+    // between desktops, or be an ordinary window. Its own choice, remembered
+    // per machine, and never click-through — it is a list you click in.
+    const pinned = opts.pinned === true;
+    return { alwaysOnTop: pinned, visibleOnAllWorkspaces: pinned, clickThrough: false, resizable: true };
+  }
   const floating = s !== "panel";
   return {
     alwaysOnTop: floating,
@@ -89,17 +99,19 @@ function callWindowChrome(size) {
 /**
  * Which remembered place a size belongs to.
  *
- * One window, three places. The stage is a card you put in the middle of the
+ * One window, four places. The stage is a card you put in the middle of the
  * screen; the circles are a row you tuck in a corner; the walkie strip sits in
- * the bottom-right corner, where it has always sat inside the app. Saving one
- * over another would drag each size to where the other was last left, so each
- * writer asks this before it writes. `null` for idle: a hidden window is
- * nowhere, and there is nothing to remember about it.
+ * the bottom-right corner, where it has always sat inside the app; the wall is
+ * the buddy list's own rectangle, remembered where the people window used to
+ * remember it. Saving one over another would drag each size to where the other
+ * was last left, so each writer asks this before it writes. `null` for idle: a
+ * hidden window is nowhere, and there is nothing to remember about it.
  */
 function callWindowPlacementKey(size) {
   const s = normalizeCallWindowSize(size);
   if (s === "panel") return "bounds";
   if (s === "walkie") return "walkie";
+  if (s === "wall") return "wall";
   if (s === "idle") return null;
   return "circles";
 }

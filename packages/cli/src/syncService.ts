@@ -1398,6 +1398,16 @@ export class SyncService {
     return (await this.getConversationOwnerInfo(conversationId))?.ownerDeviceId ?? null;
   }
 
+  async isWorktreeShared(conversationId: string, worktreePath: string): Promise<boolean> {
+    const rows = await this.client.query("cloud:hostSessions" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+    });
+    if (!Array.isArray(rows)) throw new Error("Worktree ownership query returned no roster");
+    return rows.some((row: any) => row.conversation_id !== conversationId &&
+      (row.project_path === worktreePath || row.project_path?.startsWith(worktreePath + "/")));
+  }
+
   /**
    * Owner device of a conversation, with whether that owner is a remote box and
    * online. Lets a local daemon distinguish "another laptop owns this, back off"
@@ -1840,8 +1850,8 @@ export class SyncService {
   // hibernatedAt: a number stamps the park, null clears it, undefined leaves the
   // field alone — so a resume can undo the park in the same write that reports
   // the session is back.
-  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<void> {
-    if (!this.apiToken) return;
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<boolean> {
+    if (!this.apiToken) return false;
     try {
       await this.mutate(
         "managedSessions:updateAgentStatus" as any,
@@ -1858,7 +1868,8 @@ export class SyncService {
           ...(hibernatedAt !== undefined ? { hibernated_at: hibernatedAt } : {}),
         }
       );
-    } catch {}
+      return true;
+    } catch { return false; }
   }
 
   async listManagedSessions(): Promise<Array<{

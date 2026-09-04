@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
-import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { codexResumeParams, recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
@@ -31,6 +31,7 @@ import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
 import { hostForDevice, listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
+import { hasActiveCloudWork } from "./cloud/activity.js";
 import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
@@ -875,6 +876,8 @@ const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
 // in the right working directory even when the repo lives off the convention paths.
 const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
+// sessionId -> repair key (see projectPathRepairKey) the server last confirmed.
+const PROJECT_PATH_REPAIRS_FILE = path.join(CONFIG_DIR, "project-path-repairs.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
 
@@ -1524,7 +1527,10 @@ function sendAgentStatus(
   // brings it back.
   opts?: { hibernatedAt?: number | null },
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   const prevStatus = lastSentAgentStatus.get(sessionId);
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking && prevStatus !== status) parking.cancelled = true;
   const isTransition = prevStatus !== status;
   // The throttle drops redundant "working" re-sends. A write carrying a park
   // stamp is never redundant: dropping it would leave hibernated_at set on a
@@ -1554,7 +1560,10 @@ function sendAgentStatus(
     lastOpenTasksSentAt.set(sessionId, Date.now());
     lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
   }
-  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+  void serializeSessionStatus(sessionId, async () => {
+    if (status === "hibernated" && !hibernatedSessions.has(sessionId)) return false;
+    return syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt);
+  });
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
@@ -3332,6 +3341,7 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -3822,7 +3832,8 @@ export async function killLocalPanesForConversation(
 // account credential. Extracted verbatim from the kill_session command body.
 async function killConversationBackends(
   conversationId: string,
-  sessionIdHint?: string
+  sessionIdHint?: string,
+  retireWorkspace = false,
 ): Promise<{ result?: string; error?: string }> {
   let result: string | undefined;
   let error: string | undefined;
@@ -3832,7 +3843,8 @@ async function killConversationBackends(
   // Released at the end when it is a codecast worktree holding no work
   // (worktreeGc.ts) — killing a session is the one moment a worktree stops
   // being anybody's.
-  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath;
+  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath
+    ?? persistedAppServerThreads.get(conversationId)?.cwd;
 
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
@@ -3846,7 +3858,7 @@ async function killConversationBackends(
       sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
     }
     log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
-    return { result: "killed_app_server" };
+    result = "killed_app_server";
   }
   if (teardown.killedTmux) {
     result = "killed_tmux";
@@ -3946,7 +3958,12 @@ async function killConversationBackends(
   // injected message.
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
-  if (gcCwd) void releaseSessionWorktree(gcCwd, log).catch((err) => log(`[WORKTREE-GC] ${String(err).slice(0, 160)}`));
+  if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree) && !error) {
+    const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
+      ? syncServiceRef.isWorktreeShared(conversationId, p)
+      : Promise.reject(new Error("No session roster")));
+    log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
+  }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
   return { result, error };
@@ -4629,7 +4646,7 @@ async function executeRemoteCommand(
           log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
-            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy, sandbox: codexSkipApprovals ? "danger-full-access" : "workspace-write", persist: true });
             // This device now owns and runs the session — claim it and clear any
             // stale "clone it first" error a different device may have left.
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
@@ -4724,15 +4741,15 @@ async function executeRemoteCommand(
           break;
         }
 
-        const escapeThreadId = appServerConversations.get(conversationId);
-        if (escapeThreadId && codexAppServerInstance?.running) {
+        const escapeThreadId = appServerConversations.get(conversationId) ?? persistedAppServerThreads.get(conversationId)?.threadId;
+        if (escapeThreadId) {
           const activeTurnId = findActiveTurnForThread(escapeThreadId);
           const persisted = persistedAppServerThreads.get(conversationId);
           if (persisted?.activeTurnId) {
             persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
             persistAppServerThreadRegistrations();
           }
-          if (activeTurnId) {
+          if (activeTurnId && codexAppServerInstance?.running) {
             await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
             result = "escape_interrupted";
             log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
@@ -4975,7 +4992,7 @@ async function executeRemoteCommand(
         const sessionIdHint = typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined;
         const killed = pendingAgentSwitches.has(conversationId)
           ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
-          : await killConversationBackends(conversationId, sessionIdHint);
+          : await killConversationBackends(conversationId, sessionIdHint, true);
         result = killed.result;
         error = killed.error;
         break;
@@ -5485,6 +5502,7 @@ async function executeRemoteCommand(
               cwd,
               persist: true,
               approvalPolicy,
+              sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
             });
             if (forked.thread.path && fs.existsSync(forked.thread.path)) {
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
@@ -11882,6 +11900,7 @@ function reconcileStatusFromPane(
   conversationId: string,
   syncService: SyncService,
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   // The claude-chrome classifier below cannot read GLYPHLESS_PROMPT_CLIENTS
   // panes — worse than "unknown" for grok, whose ❯ composer stays visible for
   // the whole turn while its busy chrome (header spinner, "Esc:cancel",
@@ -12914,8 +12933,13 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   const baseTarget = target.split(":")[0];
   const start = Date.now();
   while (tmuxTargetLocks.has(baseTarget)) {
+    const parking = [...hibernationInFlight.values()].find(park => park.done === tmuxTargetLocks.get(baseTarget));
+    if (parking) parking.cancelled = true;
     const elapsed = Date.now() - start;
     if (elapsed >= TMUX_LOCK_WAIT_MS) {
+      if ([...hibernationInFlight.values()].some(park => park.done === tmuxTargetLocks.get(baseTarget))) {
+        throw new Error("Hibernation still owns this tmux target");
+      }
       log(`tmux lock for ${baseTarget} held >${Math.round(elapsed / 1000)}s, forcing release and proceeding`);
       tmuxTargetLocks.delete(baseTarget);
       break;
@@ -13525,30 +13549,67 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
 }
 
-// Drains the composer with blind C-a/C-k cycles before a paste.
+// Text the composer shows after its last ❯/› glyph: the prompt line plus the
+// wrapped/continuation lines under it, up to the box rule or a blank line.
+// null when no glyph is visible (glyphless client or mid-redraw).
+export function tmuxComposerText(pane: string): string | null {
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return null;
+  const lines = pane.slice(glyphAt + 1).split("\n");
+  const body = [lines[0]];
+  for (const line of lines.slice(1)) {
+    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+// Drains the composer before a paste.
 //
-// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
-// single C-u does not reliably empty the buffer when stale text is present
+// One cycle is C-a (start of line), C-k (kill to end of line), BSpace (join
+// onto the line above). Why not a single C-u: in Claude Code 2.1.x's input box
+// a single C-u does not reliably empty the buffer when stale text is present
 // (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
 // the paste and the trailing Enter submits both as one message — the
-// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
-// (start of line) + C-k (kill to end) drains reliably; three cycles handles
-// multi-line drafts. See daemon.inject-clear.test.ts.
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Why BSpace:
+// C-a/C-k only ever empties the CURRENT line, so a multi-line draft (a pasted
+// <session-message> block, a stale multi-paragraph prompt) kept every line
+// above the cursor no matter how many cycles ran, the Enter gate saw foreign
+// text forever, and the message sat pending for hours (msg ns7c8zkm,
+// 2026-09-04, 294 failed drains). BSpace on the emptied line removes the
+// newline and pulls the cursor onto the line above, so each cycle retires one
+// line; on an empty composer all three keys are no-ops.
+//
+// Three blind cycles cover the common short draft. Past that the drain
+// captures the pane every three cycles and keeps going only while text is
+// still visible at the prompt, so a long draft drains fully without a fixed
+// guess at its line count. See daemon.inject-enter-gate.test.ts.
 //
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
+export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
 ): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    await exec(["send-keys", "-t", target, "C-a"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    await exec(["send-keys", "-t", target, "C-k"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
+  const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let cycle = 1; cycle <= DRAIN_MAX_CYCLES; cycle++) {
+    for (const key of ["C-a", "C-k", "BSpace"]) {
+      await exec(["send-keys", "-t", target, key]);
+      await pause(20);
+    }
+    if (cycle % 3 !== 0) continue;
+    let pane: string;
+    try {
+      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    } catch {
+      break; // capture problems are diagnosed by the Enter gate
+    }
+    const text = tmuxComposerText(pane);
+    if (text === null || !text.trim()) break;
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await pause(50);
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -14853,13 +14914,18 @@ const hibernatedSessions = new Set<string>();
 // any session therefore clears the stamp whether or not the daemon remembers
 // parking it, and this set keeps that to one extra write per session per boot
 // instead of one per message delivery.
-const hibernationStampCleared = new Set<string>();
+const hibernationStampCleared = new Map<string, string>();
 // A teardown retires the session, so there is no wake coming to clear the mark
 // and nothing left on the server to clear it from. Local bookkeeping only: no
 // status write, no log line. Without this a killed parked session stayed in the
 // set for the life of the daemon and the live-versus-parked count over-reported.
 function forgetHibernationPark(sessionId: string | undefined): void {
-  if (sessionId) hibernatedSessions.delete(sessionId);
+  if (!sessionId) return;
+  hibernatedSessions.delete(sessionId);
+  hibernationStampCleared.delete(sessionId);
+  pendingHibernationStamps.delete(sessionId);
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking) parking.cancelled = true;
 }
 // When each session last finished a resume. The hibernation policy refuses to
 // park a session somebody just asked for; the reaper has no equivalent because
@@ -14902,7 +14968,7 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy; sandbox?: PersistedCodexThread["sandbox"] };
 type PersistedAppServerThreadRecord = PersistedCodexThread;
 type AppServerStreamingPartial = { itemId: string; content: string };
 type AppServerPartialMessage = AppServerStreamingPartial;
@@ -14927,6 +14993,17 @@ let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
 const appServerRecoveryRetryAt = new Map<string, number>();
 const appServerRecoveringThreads = new Set<string>();
 let appServerShuttingDown = false;
+
+export function isSupersededAppServerSession(
+  sessionId: string,
+  conversationId = conversationCacheRef?.[sessionId],
+  live: ReadonlyMap<string, string> = appServerConversations,
+  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+): boolean {
+  if (!conversationId) return false;
+  const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
+  return !!threadId && threadId !== sessionId;
+}
 
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
   const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
@@ -15356,11 +15433,12 @@ function registerAppServerConversation(
     updatedAt?: number;
     persist?: boolean;
     approvalPolicy?: ApprovalPolicy;
+    sandbox?: PersistedCodexThread["sandbox"];
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
@@ -15368,7 +15446,7 @@ function registerAppServerConversation(
   const previous = persistedAppServerThreads.get(conversationId);
   persistedAppServerThreads.set(conversationId, {
     ...(previous?.threadId === threadId ? previous : {}),
-    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
+    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15394,6 +15472,7 @@ function markAppServerConversationResumable(
     updatedAt,
     cwd: liveEntry?.cwd,
     approvalPolicy: liveEntry?.approvalPolicy,
+    sandbox: liveEntry?.sandbox,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15413,6 +15492,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
     if ((appServerRecoveryRetryAt.get(conversationId) ?? 0) > Date.now()) continue;
     if (appServerConversations.has(conversationId) && (!record.activeTurnId || findActiveTurnForThread(record.threadId))) continue;
     try {
+      let hasPendingMessages = false;
       if (record.activeTurnId) {
         const service = syncServiceRef;
         if (!service) continue;
@@ -15425,23 +15505,23 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
-        if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
+        hasPendingMessages = !!lifecycle.hasPendingMessages;
+        if (hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
       const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
-      const response = await server.threadResume({
-        threadId: record.threadId,
-        ...(record.cwd ? { cwd: record.cwd } : {}),
-        approvalPolicy: policy,
-      });
+      const response = await server.threadResume(codexResumeParams(record, policy));
       if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
         persist: false,
         approvalPolicy: policy,
+        sandbox: record.sandbox,
       });
+      log(`[codex-app-server] resumed thread ${record.threadId.slice(0, 8)} sandbox=${record.sandbox ?? "default"} approvalPolicy=${policy}`);
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
+      if (hasPendingMessages) continue;
       appServerRecoveringThreads.add(record.threadId);
       try {
         const action = await recoverCodexTurn({
@@ -15468,7 +15548,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/thread not found|no rollout found/i.test(message)) {
+      if (isMissingAppServerThreadError(err)) {
         dropped++;
         forgetPersistedAppServerConversation(conversationId);
       } else {
@@ -15505,6 +15585,7 @@ function loadPersistedAppServerThreadRegistrations(): void {
         updatedAt,
         cwd: record.cwd,
         approvalPolicy: record.approvalPolicy,
+        sandbox: record.sandbox,
         activeTurnId: record.activeTurnId,
         recoveryAttempts: record.recoveryAttempts,
       });
@@ -15876,7 +15957,7 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
-  if (!syncServiceRef) return;
+  if (!syncServiceRef || isSupersededAppServerSession(sessionId)) return;
   managedHeartbeatSessions.add(sessionId);
   ensureHeartbeatFlushLoop();
 }
@@ -15948,12 +16029,13 @@ async function flushManagedHeartbeats(): Promise<void> {
   }
 }
 
-async function runHeartbeatFlush(): Promise<void> {
+export async function runHeartbeatFlush(): Promise<void> {
   // Capture once so the non-null narrowing holds across the awaits below
   // (a module-level `let` would re-widen to `SyncService | null` after each).
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  void flushHibernationStamps();
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -15966,17 +16048,17 @@ async function runHeartbeatFlush(): Promise<void> {
 
   // Batched liveness write. logHeartbeatStatus stays per-session (throttled,
   // local-only). Resource metrics are pushed separately by collectResourceSnapshot.
-  const payload = ids.map((sessionId) => {
-    const status = lastSentAgentStatus.get(sessionId);
-    logHeartbeatStatus(sessionId, status);
-    return status
-      ? { session_id: sessionId, agent_status: status, client_ts: now }
-      : { session_id: sessionId };
-  });
-  const batchCount = Math.ceil(payload.length / HEARTBEAT_BATCH_SIZE);
-  for (let i = 0; i < payload.length; i += HEARTBEAT_BATCH_SIZE) {
+  const batchCount = Math.ceil(ids.length / HEARTBEAT_BATCH_SIZE);
+  for (let i = 0; i < ids.length; i += HEARTBEAT_BATCH_SIZE) {
+    const payload = ids.slice(i, i + HEARTBEAT_BATCH_SIZE).map((sessionId) => {
+      const status = lastSentAgentStatus.get(sessionId);
+      logHeartbeatStatus(sessionId, status);
+      return status
+        ? { session_id: sessionId, agent_status: status, client_ts: now }
+        : { session_id: sessionId };
+    });
     try {
-      await sync.heartbeatManagedSessionsBatch(payload.slice(i, i + HEARTBEAT_BATCH_SIZE));
+      await sync.heartbeatManagedSessionsBatch(payload);
     } catch {}
   }
   // One line/tick to confirm the fleet flushes in a handful of transactions
@@ -15989,7 +16071,7 @@ async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -16658,9 +16740,11 @@ async function reapOneTerminal(
   tmux: string,
   convId: string | undefined,
   idleHours: number,
-  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated" } = {},
+  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated"; boundary?: HibernationBoundary } = {},
 ): Promise<boolean> {
-  const hibernating = opts.parkAs === "hibernated";
+  if (opts.parkAs === "hibernated") {
+    return opts.boundary ? parkHibernationTerminal(sessionId, tmux, convId, idleHours, opts.boundary) : false;
+  }
   // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
   // False here means the pane survived, so no caller may count or report a kill.
   try {
@@ -16678,38 +16762,17 @@ async function reapOneTerminal(
   // path decay a frozen "working" into "stopped"/needs-attention. No session_error
   // (this is a tidy reap, not a crash).
   if (convId && syncServiceRef) {
-    if (hibernating) {
-      const now = Date.now();
-      sendAgentStatus(syncServiceRef, convId, sessionId, "hibernated", now, undefined, undefined, { hibernatedAt: now });
-    } else {
-      await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
-    }
+    await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
   }
   // A dismissed or killed conversation's worktree goes with its terminal when
   // it holds no work (worktreeGc.ts); a stash is a park, and keeps it.
   const gcCwd = opts.gcWorktree ? await tmuxPaneCwd(tmux + ":0.0") : undefined;
   await killTmuxSessionAndTree(tmux);
-  if (hibernating) {
-    // Put the session BACK in the heartbeat set, after the pane is gone and
-    // after resumeSessionCache.delete above. Two facts make that safe and
-    // necessary: reapStaleManagedSessions deletes any managed_sessions row that
-    // stops beating for an hour, which would throw away the park stamp and the
-    // status; and heartbeatHealthCheck returns at once for a session with no
-    // resumeSessionCache entry, so it cannot reconstitute the pane we just
-    // killed.
-    hibernatedSessions.add(sessionId);
-    // Straight into the set rather than through ensureManagedSessionHeartbeat,
-    // which is a no-op until the sync service exists: what must survive is the
-    // membership, and the flush loop (started once, never stopped) is already
-    // running by the time anything can be parked.
-    managedHeartbeatSessions.add(sessionId);
-    ensureHeartbeatFlushLoop();
-    reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
-  } else {
-    reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
-  }
+  reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
   if (gcCwd) {
-    const verdict = await releaseSessionWorktree(gcCwd, log).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
+    const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
+      ? syncServiceRef.isWorktreeShared(convId, p)
+      : Promise.reject(new Error("No session roster"))).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
     reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
   }
   return true;
@@ -16773,7 +16836,144 @@ async function reapIdleOrphanTerminals(): Promise<void> {
 // Every dependency goes through an injected io so the test can drive the fleet
 // without a real one. The production io below is the only place that touches
 // tmux, the transcript or Convex.
+export type HibernationTarget = {
+  session: string;
+  pane: string;
+  pid: number;
+  start: string;
+  stamp: string;
+  conversationStamp: string;
+};
+
+type HibernationBoundary = {
+  target: HibernationTarget;
+  terminal(args: string[]): Promise<{ stdout: string }>;
+  revalidate(): Promise<boolean>;
+  unchanged(): boolean;
+};
+
+const hibernationInFlight = new Map<string, { done: Promise<void>; cancelled: boolean }>();
+const HIBERNATION_PANE_FORMAT = "#{session_id}|#{pane_id}|#{pane_pid}|#{session_name}|#{session_attached}|#{@codecast_session_id}|#{@codecast_conversation_id}|#{pane_dead}";
+
+async function inspectHibernationTarget(sessionId: string, tmux: string, conversationId: string): Promise<HibernationTarget | null> {
+  if (!validateTmuxTarget(tmux)) return null;
+  if (findCodexRolloutPath(sessionId)) return null;
+  const { stdout } = await tmuxExec(["list-panes", "-s", "-t", `=${tmux}`, "-F", HIBERNATION_PANE_FORMAT], { timeout: 3000 });
+  if (!tmuxSessionIsSinglePane(stdout)) return null;
+  const [session, pane, rawPid, name, attached, stamp, conversationStamp, dead] = stdout.trim().split("|");
+  if (!/^\$\d+$/.test(session) || !/^%\d+$/.test(pane) || name !== tmux || attached !== "0" || dead !== "0") return null;
+  if (stamp && stamp !== sessionId) return null;
+  if (conversationStamp && conversationStamp !== conversationId) return null;
+  const pid = Number(rawPid);
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return null;
+  const { stdout: identity } = await _execFileAsync("ps", ["-p", String(pid), "-o", "lstart=,uid=,command="], { timeout: 3000 });
+  const match = identity.trim().match(/^(\S+\s+\S+\s+\d+\s+\S+\s+\d+)\s+(\d+)\s+(.+)$/);
+  if (!match || process.getuid?.() !== Number(match[2])) return null;
+  const argvId = argvSessionId(match[3]);
+  if (argvId !== sessionId) return null;
+  const procs = await snapshotProcessTableAsync({ timeout: 3000 });
+  const root = procs.find(p => p.pid === pid);
+  if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return null;
+  if (descendantPids(procs, pid).length > 0) return null;
+  return { session, pane, pid, start: match[1], stamp, conversationStamp };
+}
+
+function hibernationLocalUnchanged(cand: HibernationCandidate, io: HibernationPassIo): boolean {
+  if (hibernationInFlight.get(cand.sessionId)?.cancelled) return false;
+  if (resumeSessionCache.get(cand.sessionId) !== cand.tmux || !managedHeartbeatSessions.has(cand.sessionId)) return false;
+  if (lastSentAgentStatus.get(cand.sessionId) !== cand.status) return false;
+  const cachedConv = io.conversationIds()[cand.sessionId];
+  if (cachedConv && cachedConv !== cand.conversationId) return false;
+  const fresh = {
+    ...cand,
+    sharedPane: [...resumeSessionCache.values()].filter(tmux => tmux === cand.tmux).length !== 1,
+    subagentActiveAgoMs: io.subagentActiveAgoMs(cand.sessionId),
+    resumedAgoMs: io.now() - (lastResumeAt.get(cand.sessionId) ?? -Infinity),
+    messagesInFlight: io.deliveryActive(cand.sessionId, cand.conversationId),
+  };
+  return hibernationBlockReason(fresh) === null;
+}
+
+async function attemptHibernation(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
+  if (hibernationInFlight.has(cand.sessionId) || tmuxTargetLocks.has(cand.tmux)) return "in-flight-messages";
+  let release!: () => void;
+  const reservation = { done: new Promise<void>(resolve => { release = resolve; }), cancelled: false };
+  const lockTargets = [cand.tmux, `=${cand.tmux}`];
+  if (lockTargets.some(target => tmuxTargetLocks.has(target))) return "in-flight-messages";
+  hibernationInFlight.set(cand.sessionId, reservation);
+  for (const target of lockTargets) tmuxTargetLocks.set(target, reservation.done);
+  try {
+    const refusal = await hibernationRefusalReason(cand, io);
+    if (refusal) return refusal;
+    if (!hibernationLocalUnchanged(cand, io)) return "evidence-changed";
+    const target = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
+    if (!target) return "target-unverified";
+    for (const alias of [target.session, target.pane]) {
+      if (tmuxTargetLocks.has(alias)) return "in-flight-messages";
+      tmuxTargetLocks.set(alias, reservation.done);
+      lockTargets.push(alias);
+    }
+    const boundary: HibernationBoundary = {
+      target,
+      terminal: io.terminal,
+      unchanged: () => hibernationLocalUnchanged(cand, io),
+      revalidate: async () => {
+        if (!hibernationLocalUnchanged(cand, io)) return false;
+        if (await hibernationRefusalReason(cand, io)) return false;
+        const attached = await io.tmuxSessions();
+        if (attached.get(cand.tmux) !== 0) return false;
+        const current = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
+        return JSON.stringify(current) === JSON.stringify(target) && hibernationLocalUnchanged(cand, io);
+      },
+    };
+    if (!await boundary.revalidate()) return "evidence-changed";
+    return await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000), boundary)
+      ? null : "teardown-refused";
+  } catch (err) {
+    log(`[HIBERNATE] refused ${cand.sessionId}: ${String(err)}`);
+    return "evidence-unavailable";
+  } finally {
+    hibernationInFlight.delete(cand.sessionId);
+    for (const target of lockTargets) {
+      if (tmuxTargetLocks.get(target) === reservation.done) tmuxTargetLocks.delete(target);
+    }
+    release();
+  }
+}
+
+async function parkHibernationTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean> {
+  const { target } = boundary;
+  const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
+  if (classifyLivePaneFor(detectSessionAgentType(sessionId), pane) !== "idle") return false;
+  if (!await boundary.revalidate() || !boundary.unchanged()) return false;
+  const checks = [
+    `#{==:#{session_id},${target.session}}`, `#{==:#{pane_id},${target.pane}}`,
+    `#{==:#{pane_pid},${target.pid}}`, "#{==:#{session_attached},0}",
+    "#{==:#{session_windows},1}", "#{==:#{window_panes},1}", "#{==:#{pane_dead},0}",
+    `#{==:#{@codecast_session_id},${target.stamp}}`,
+    `#{==:#{@codecast_conversation_id},${target.conversationStamp}}`,
+  ];
+  const condition = checks.reduce((a, b) => `#{&&:${a},${b}}`);
+  const { stdout } = await boundary.terminal(["if-shell", "-F", "-t", target.pane, condition,
+    `kill-pane -t ${target.pane} ; display-message -p parked`, "display-message -p refused"]);
+  if (stdout.trim() !== "parked") return false;
+  const remaining = await boundary.terminal(["list-panes", "-a", "-F", "#{pane_id}"]);
+  if (remaining.stdout.trim().split("\n").includes(target.pane)) return false;
+  if (!boundary.unchanged()) return false;
+  stopCodexPermissionPoller(sessionId);
+  resumeSessionCache.delete(sessionId);
+  hibernatedSessions.add(sessionId);
+  hibernationStampCleared.delete(sessionId);
+  lastSentAgentStatus.set(sessionId, "hibernated");
+  managedHeartbeatSessions.add(sessionId);
+  ensureHeartbeatFlushLoop();
+  if (convId) queueHibernationStamp(sessionId, convId, Date.now());
+  reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  return true;
+}
+
 export type HibernationPassIo = {
+  terminal(args: string[]): Promise<{ stdout: string }>;
   policy(): { maxLive: number; idleMs: number; maxPerPass: number };
   /** tmux session name to the number of clients attached to it. */
   tmuxSessions(): Promise<Map<string, number>>;
@@ -16790,11 +16990,13 @@ export type HibernationPassIo = {
   /** True when work is reaching this session right now. Read again at the kill. */
   deliveryActive(sessionId: string, conversationId: string | undefined): boolean;
   /** True when the pane is gone; false when the kill-time recheck refused it. */
-  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<boolean>;
+  inspectTarget(sessionId: string, tmux: string, conversationId: string): Promise<HibernationTarget | null>;
+  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean>;
   now(): number;
 };
 
 const productionHibernationIo: HibernationPassIo = {
+  terminal: (args) => tmuxExec(args, { timeout: 3000, killSignal: "SIGKILL" }),
   policy: () => ({
     // The cached config, never readConfig: that is a synchronous file read and
     // this runs on the maintenance tick.
@@ -16813,14 +17015,20 @@ const productionHibernationIo: HibernationPassIo = {
     const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}|#{session_attached}"], { timeout: 5000 });
     for (const line of stdout.split("\n")) {
       const [name, count] = line.trim().split("|");
-      if (name) attached.set(name, Number(count) || 0);
+      if (name) attached.set(name, count && /^\d+$/.test(count) ? Number(count) : NaN);
     }
     return attached;
   },
   awakeIdleMs: (sessionId) => getSessionAwakeIdleMs(sessionId),
   subagentActiveAgoMs: (sessionId) => subagentActiveAgoMs(sessionId),
   conversationIds: () => readConversationCache(),
-  askSidecarMtimeMs: (sessionId) => askInputSidecarMtimeMs(sessionId),
+  askSidecarMtimeMs: async (sessionId) => {
+    try { return (await fs.promises.stat(path.join(ASK_INPUT_DIR, `${sessionId}.json`))).mtimeMs; }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  },
   transcriptLastRealMs: async (sessionId) => {
     const file = findReapTranscript(sessionId);
     if (!file) return null;
@@ -16831,7 +17039,7 @@ const productionHibernationIo: HibernationPassIo = {
     }
   },
   lifecycle: async (conversationId, sessionId) =>
-    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId, sessionId).catch(() => null) : null,
+    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId).catch(() => null) : null,
   // Asked FRESH, like every other destructive caller (killConversationBackends,
   // teardownConversationBackends). staleOk answers from the session file index
   // alone, and a Codex subagent whose rollout is younger than that index reads
@@ -16844,9 +17052,11 @@ const productionHibernationIo: HibernationPassIo = {
     resumeInFlight.has(sessionId) ||
     (!!conversationId &&
       (conversationDeliveryActive.has(conversationId) ||
-        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId))),
-  park: (sessionId, tmux, convId, idleHours) =>
-    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated" }),
+        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId) ||
+        [...injectedMessageTs.values()].some((m) => m.conversationId === conversationId && !m.confirmed))),
+  inspectTarget: inspectHibernationTarget,
+  park: (sessionId, tmux, convId, idleHours, boundary) =>
+    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated", boundary }),
   now: () => Date.now(),
 };
 
@@ -16867,8 +17077,7 @@ export function trackSessionPaneForTests(
   if (tmux === null) {
     resumeSessionCache.delete(sessionId);
     managedHeartbeatSessions.delete(sessionId);
-    hibernatedSessions.delete(sessionId);
-    hibernationStampCleared.delete(sessionId);
+    forgetHibernationPark(sessionId);
     lastSentAgentStatus.delete(sessionId);
     lastResumeAt.delete(sessionId);
     return;
@@ -16877,8 +17086,15 @@ export function trackSessionPaneForTests(
   managedHeartbeatSessions.add(sessionId);
   // `parked` stands in for a park this daemon did, which only a real teardown
   // sets: the pass tests stub io.park, so without it nothing local is marked.
-  if (facts.parked) hibernatedSessions.add(sessionId);
-  if (facts.status) lastSentAgentStatus.set(sessionId, facts.status);
+  if (facts.parked) {
+    hibernatedSessions.add(sessionId);
+    hibernationStampCleared.delete(sessionId);
+  }
+  if (facts.status) {
+    const parking = hibernationInFlight.get(sessionId);
+    if (parking && lastSentAgentStatus.get(sessionId) !== facts.status) parking.cancelled = true;
+    lastSentAgentStatus.set(sessionId, facts.status);
+  }
   if (facts.resumedAt !== undefined) lastResumeAt.set(sessionId, facts.resumedAt);
 }
 
@@ -16967,22 +17183,14 @@ async function hibernationRefusalReason(cand: HibernationCandidate, io: Hibernat
     const lastRealMs = await io.transcriptLastRealMs(cand.sessionId);
     if (askUserQuestionStillPending(sidecarMtimeMs, lastRealMs)) return "pending-question";
   }
-  if (cand.conversationId) {
-    const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
-    // A null lifecycle PROCEEDS, the opposite of the reaper's
-    // stampedPaneReapEligibility. The reaper retires a session for good, so it
-    // must refuse to guess; hibernation retires nothing and the next message
-    // brings the session back, so an unreachable backend is not a reason to
-    // keep burning a pane.
-    //
-    // A DEGRADED answer is different from no answer. The legacy fallback route
-    // carries the status and nothing else, so the pin and the pending messages
-    // come back undefined and read exactly like "not pinned, nothing queued".
-    // Refuse instead: a wrong yes here parks a pinned session.
-    if (lifecycle && lifecycle.hideStateKnown === false) return "lifecycle-degraded";
-    if (lifecycle?.inboxPinnedAt) return "pinned";
-    if (lifecycle?.hasPendingMessages) return "pending-messages";
-  }
+  if (!cand.conversationId) return "conversation-unknown";
+  const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
+  if (!lifecycle) return "lifecycle-unknown";
+  if (lifecycle.hideStateKnown !== true || lifecycle.source !== "lifecycle") return "lifecycle-degraded";
+  if (!lifecycle.status || !["active", "completed"].includes(lifecycle.status)) return "lifecycle-unknown";
+  if (lifecycle.inboxPinnedAt === undefined || lifecycle.hasPendingMessages === undefined) return "lifecycle-degraded";
+  if (lifecycle.inboxPinnedAt !== null) return "pinned";
+  if (lifecycle.hasPendingMessages !== false) return "pending-messages";
   // A borrowed process means the pane belongs to a parent. Killing the tree
   // would kill the parent on the child's behalf.
   if (!io.canReapPidTree(cand.sessionId)) return "borrowed-process";
@@ -17009,18 +17217,15 @@ export async function hibernateSessionNow(
   const candidates = await collectHibernationCandidates(io);
   if (candidates === null) return { error: "tmux is not answering, so nothing was parked" };
   const cand = candidates.find((c) => c.sessionId === sessionId);
-  // Nothing live here to park. Not an error the user can act on: the session is
-  // already cold, which is what hibernation produces.
-  if (!cand) return { result: "already_parked" };
-  const refusal = await hibernationRefusalReason(cand, io);
-  if (refusal) return { result: `skipped_${refusal}`, error: `not parked: ${refusal}` };
-  const parked = await io.park(
-    cand.sessionId,
-    cand.tmux,
-    cand.conversationId ?? conversationId,
-    Math.round(cand.awakeIdleMs / 3600000),
-  );
-  return parked ? { result: "hibernated" } : { result: "skipped_busy", error: "the pane went busy at kill time" };
+  if (!cand) return hibernatedSessions.has(sessionId)
+    ? { result: "already_parked" }
+    : { result: "skipped_no-live-pane", error: "not parked: no-live-pane" };
+  if (conversationId && cand.conversationId && conversationId !== cand.conversationId) {
+    return { result: "skipped_conversation-conflict", error: "not parked: conversation-conflict" };
+  }
+  cand.conversationId ??= conversationId;
+  const refusal = await attemptHibernation(cand, io);
+  return refusal ? { result: `skipped_${refusal}`, error: `not parked: ${refusal}` } : { result: "hibernated" };
 }
 
 // `io` overrides only the parts a test needs; everything else stays real, so
@@ -17039,10 +17244,9 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   const { picked, skips } = selectHibernationCandidates(candidates, policy);
   let hibernated = 0;
   for (const cand of picked) {
-    const refusal = await hibernationRefusalReason(cand, io);
-    if (refusal) { skips.push(refusal); continue; }
-    if (await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000))) hibernated++;
-    else skips.push("busy-at-kill");
+    const refusal = await attemptHibernation(cand, io);
+    if (refusal) skips.push(refusal);
+    else hibernated++;
   }
   // File-only, like the reaper's pass line: this fires every ~5 min.
   reaperLog(`hibernation pass: ${candidates.length} live, cap=${policy.maxLive}, hibernated ${hibernated}, skipped: ${summarizeReapSkips(skips)}`, false);
@@ -17096,6 +17300,7 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
 export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -17198,6 +17403,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
 }
 
 async function heartbeatHealthCheck(sessionId: string): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
@@ -17365,14 +17571,6 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 }
 
 export function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
-  // A pane is coming back for a session this daemon parked. autoResumeSession is
-  // the wake most parks end in, but not the only one: the transcript driven pane
-  // adoption and the warm restart scan land here instead, and without this the
-  // session would carry hibernated_at while visibly holding a pane. Gated on the
-  // park mark rather than the boot scoped clear, because this also runs for
-  // sessions that are merely starting, and a status write there would race the
-  // start's own "resuming".
-  if (hibernatedSessions.has(sessionId)) clearHibernationPark(sessionId, conversationId);
   // Track the pane immediately, exactly as a resumed/warm-recovered session is. The periodic
   // health sweep (heartbeatHealthCheck) and the pane-authoritative status reconcile both gate
   // on resumeSessionCache membership. A freshly-started session that was never resumed wasn't
@@ -17381,6 +17579,7 @@ export function registerManagedStartedSession(conversationId: string, sessionId:
   // into the cache, which was the only reason it ever recovered). Set before the syncServiceRef
   // guard: this is local bookkeeping that doesn't depend on the sync client.
   resumeSessionCache.set(sessionId, tmuxSession);
+  clearHibernationPark(sessionId, conversationId);
   if (!syncServiceRef) return;
   setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
   setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId).catch(() => {});
@@ -18037,10 +18236,12 @@ export function resumeReuseCandidates(
 // but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
-export function buildResumeEnvPrefix(agentType: string): string {
-  return agentType === "claude"
+export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
+  const prefix = agentType === "claude"
     ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : AGENT_ENV_SCRUB;
+  const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
+  return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
 
 // The settings-level transcript pin (agentEnv.ts): idempotent, respects an
@@ -18254,6 +18455,11 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       }
     }
   }
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking) {
+    parking.cancelled = true;
+    await parking.done;
+  }
   const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
@@ -18299,25 +18505,75 @@ export function wakeStatusAfterPark(stored: AgentStatus | undefined): AgentStatu
  * which keeps the common case — a message reaching an already live session — at
  * zero extra Convex writes.
  */
+type HibernationStamp = { conversationId?: string; at: number | null };
+const pendingHibernationStamps = new Map<string, HibernationStamp>();
+const hibernationStampWrites = new Map<string, Promise<void>>();
+const sessionStatusWrites = new Map<string, Promise<boolean>>();
+
+function serializeSessionStatus(sessionId: string, write: () => Promise<boolean>): Promise<boolean> {
+  const previous = sessionStatusWrites.get(sessionId);
+  const run = async () => {
+    try { return await write(); }
+    catch (err) { log(`[sendAgentStatus] error: ${String(err)}`); return false; }
+  };
+  const next = previous ? previous.then(run) : run();
+  sessionStatusWrites.set(sessionId, next);
+  void next.finally(() => {
+    if (sessionStatusWrites.get(sessionId) === next) sessionStatusWrites.delete(sessionId);
+  });
+  return next;
+}
+
+function queueHibernationStamp(sessionId: string, conversationId: string | undefined, at: number | null): void {
+  pendingHibernationStamps.set(sessionId, { conversationId, at });
+  void flushHibernationStamp(sessionId);
+}
+
+async function flushHibernationStamp(sessionId: string): Promise<void> {
+  const running = hibernationStampWrites.get(sessionId);
+  if (running) return running;
+  const stamp = pendingHibernationStamps.get(sessionId);
+  if (!stamp || !syncServiceRef) return;
+  const conversationId = stamp.conversationId ?? readConversationCache()[sessionId];
+  if (!conversationId) return;
+  const sync = syncServiceRef;
+  const write = serializeSessionStatus(sessionId, async () => {
+    if (pendingHibernationStamps.get(sessionId) !== stamp) return false;
+    if ((stamp.at !== null) !== hibernatedSessions.has(sessionId)) return false;
+    const status = stamp.at === null ? wakeStatusAfterPark(lastSentAgentStatus.get(sessionId)) : "hibernated";
+    return sync.updateSessionAgentStatus(conversationId, status, Date.now(), undefined, undefined, undefined, stamp.at);
+  }).then(confirmed => {
+    if (confirmed !== true || pendingHibernationStamps.get(sessionId) !== stamp) return;
+    pendingHibernationStamps.delete(sessionId);
+    if (stamp.at === null) {
+      if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
+      hibernationStampCleared.set(sessionId, conversationId);
+    }
+  }).finally(() => {
+    hibernationStampWrites.delete(sessionId);
+    const pending = pendingHibernationStamps.get(sessionId);
+    if (pending && pending !== stamp) void flushHibernationStamp(sessionId);
+  });
+  hibernationStampWrites.set(sessionId, write);
+  return write;
+}
+
+export async function flushHibernationStamps(): Promise<void> {
+  await runBounded([...pendingHibernationStamps.keys()], 4, flushHibernationStamp);
+}
+
 export function clearHibernationPark(sessionId: string, conversationId?: string): void {
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking) parking.cancelled = true;
   const wasParked = hibernatedSessions.delete(sessionId);
-  if (!wasParked && hibernationStampCleared.has(sessionId)) return;
-  // Forgetting the memo costs one extra status write the next time a session
-  // wakes and can never cost a missed clear, so a flat cap is enough to keep a
-  // daemon that runs for weeks from holding every id it ever woke.
-  if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
-  hibernationStampCleared.add(sessionId);
+  lastSentAgentStatus.set(sessionId, wakeStatusAfterPark(lastSentAgentStatus.get(sessionId)));
   const convId = conversationId ?? readConversationCache()[sessionId];
-  if (convId && syncServiceRef) {
-    // Through sendAgentStatus, not straight to the mutation: the map it writes
-    // is what the 30s heartbeat re-asserts, so a wake that skipped it would
-    // clear the stamp on the server and keep sending "hibernated" forever.
-    const status = wakeStatusAfterPark(lastSentAgentStatus.get(sessionId));
-    sendAgentStatus(syncServiceRef, convId, sessionId, status, Date.now(), undefined, undefined, { hibernatedAt: null });
-  }
-  // The log line reports a park ending. A first wake that only clears a stamp
-  // this daemon cannot remember setting is bookkeeping, and saying WOKE for it
-  // would put a park in the log for every session after every restart.
+  if (!wasParked && convId && hibernationStampCleared.get(sessionId) === convId) return;
+  const pending = pendingHibernationStamps.get(sessionId);
+  if (pending?.at === null && (!convId || !pending.conversationId || pending.conversationId === convId)) {
+    pending.conversationId ??= convId;
+    void flushHibernationStamp(sessionId);
+  } else queueHibernationStamp(sessionId, convId, null);
   if (wasParked) reaperLog(`WOKE session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)}`);
 }
 
@@ -18697,7 +18953,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);
     // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -18874,6 +19130,30 @@ const repairInFlight = new Map<string, Promise<boolean>>();
 // regenerate a transcript for them.
 export function clientOwnsSessionStore(agentType: AgentClientId | undefined | null): boolean {
   return agentType != null && agentType !== "claude" && agentType !== "codex";
+}
+
+// Materialization writes a CLAUDE transcript AND binds it to the conversation as
+// its session id, so the conversation's next resume launches claude. That is only
+// ever right for a conversation whose declared agent IS claude (or an unhinted one,
+// which defaults to claude downstream). Codex is excluded even though the daemon
+// can generate a codex JSONL: a codex conversation's live backend is its app-server
+// thread, its history lives in ~/.codex/sessions, and a fabricated claude session is
+// therefore not a recovery but a SECOND agent answering in the same thread. On
+// 2026-09-04 that put opus-5 and gpt-6-astra in one conversation, each briefing the
+// same fleet of seventeen sessions, and minted a duplicate conversation row for the
+// twin. This is the delivery twin of startFreshSessionForDelivery's cross-agent
+// refusal: a message left pending is recoverable, a wrong-agent backend is not.
+export function mayMaterializeClaudeTranscript(agentType: AgentClientId | undefined | null): boolean {
+  return agentType == null || agentType === "claude";
+}
+
+// Does an app-server error prove the thread is GONE? Only "thread not found" and
+// "no rollout found" do. A timeout says nothing: under load turn/start routinely
+// exceeds its deadline while the turn itself runs, so treating that as a dead
+// thread retires a live binding and sends the next delivery down the fallback
+// chain (2026-09-04).
+export function isMissingAppServerThreadError(err: unknown): boolean {
+  return /thread not found|no rollout found/i.test(err instanceof Error ? err.message : String(err));
 }
 
 // The resume paths' twin of clientOwnsSessionStore: may a resume with NO local
@@ -19348,13 +19628,14 @@ async function materializeSession(
         logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
-      // A store-owned client (opencode/pi/cursor) has no Claude-JSONL transcript to
-      // materialize — fabricating one is invalid and, for opencode, the write path
-      // corrupts the shared opencode.db (ct-39174/ct-39178). Delivery falls back to
-      // the started-pane injection / re-resume instead of a materialized session.
+      // Only a claude (or unhinted) conversation may be materialized. A store-owned
+      // client (opencode/pi/cursor) has no Claude-JSONL transcript at all, and for
+      // opencode the write path corrupts the shared opencode.db (ct-39174/ct-39178);
+      // codex has its own live backend and would gain a second agent. Delivery falls
+      // back to the started-pane injection / re-resume instead.
       const matAgentType = fromConvexAgentType(exportData.conversation.agent_type);
-      if (clientOwnsSessionStore(matAgentType)) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: ${matAgentType} owns its session store (no Claude JSONL to materialize)`);
+      if (!mayMaterializeClaudeTranscript(matAgentType)) {
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: conversation is ${matAgentType}, a materialized session would attach a claude backend to it`);
         return null;
       }
 
@@ -19510,8 +19791,12 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
-        removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
-        if (err instanceof Error && /thread not found|no rollout found/i.test(err.message)) {
+        // Retire the binding ONLY when the thread is provably gone. A timed-out or
+        // dropped turn/start leaves a live thread live, and unregistering it there
+        // was what made a codex conversation look backend-less on the next delivery
+        // (2026-09-04); the recovery sweep re-resumes anything genuinely lost.
+        if (isMissingAppServerThreadError(err)) {
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
           forgetPersistedAppServerConversation(conversationId);
         }
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
@@ -19902,11 +20187,65 @@ function isSyncPaused(): boolean {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
 
+// The boot sweep used to send conversations:updateProjectPath for EVERY
+// transcript under ~/.claude/projects on every daemon start — 2250 mutations
+// on this machine, ~3/s for the first minutes after a restart, almost all of
+// them no-ops (the row already had that path). That is exactly the window in
+// which a restarted daemon should be delivering the user's queued messages, and
+// on 2026-09-04 it landed inside a backend brownout where every extra write
+// queued behind the ones that mattered. The server's answer is stable for a
+// given (session, path, git root), so remember what it confirmed and send only
+// what changed: a new transcript, a moved checkout, or a row the earlier boot
+// never reached.
+export function projectPathRepairKey(projectPath: string, gitRoot?: string): string {
+  return `${projectPath}\n${gitRoot ?? ""}`;
+}
+
+// Decide whether a transcript's path still needs to go to the server.
+// `confirmed` is the previous boot's session -> key map; a matching key means
+// the server already holds this exact path and git root for the session.
+export function projectPathRepairNeeded(
+  confirmed: Record<string, string>,
+  sessionId: string,
+  projectPath: string,
+  gitRoot?: string,
+): { key: string; send: boolean } {
+  const key = projectPathRepairKey(projectPath, gitRoot);
+  return { key, send: confirmed[sessionId] !== key };
+}
+
+function readProjectPathRepairs(): Record<string, string> {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PROJECT_PATH_REPAIRS_FILE, "utf-8"));
+    return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistProjectPathRepairs(map: Record<string, string>): void {
+  try {
+    const temp = `${PROJECT_PATH_REPAIRS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(map));
+    fs.renameSync(temp, PROJECT_PATH_REPAIRS_FILE);
+  } catch {}
+}
+
 async function repairProjectPaths(syncService: SyncService): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   if (!fs.existsSync(claudeProjectsDir)) return;
 
   log("Checking for project paths that need repair...");
+  const confirmed = readProjectPathRepairs();
+  // Rebuilt from this boot's transcripts only, so entries for deleted
+  // transcripts fall away instead of accumulating forever.
+  const nextConfirmed: Record<string, string> = {};
+  // Only sessions this daemon has a conversation for can be marked confirmed:
+  // for an unknown session the server answers { updated: false } whether the
+  // row is right or missing, and a row created later must still get swept.
+  const knownConversations = readConversationCache();
+  let skipped = 0;
+  let sent = 0;
 
   const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
@@ -19963,7 +20302,16 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const result = await syncService.updateProjectPath(sessionId, projectPath, await resolveRepoRoot(projectPath));
+        const gitRoot = await resolveRepoRoot(projectPath);
+        const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot);
+        if (!plan.send) {
+          skipped++;
+          nextConfirmed[sessionId] = plan.key;
+          continue;
+        }
+        sent++;
+        const result = await syncService.updateProjectPath(sessionId, projectPath, gitRoot);
+        if (result && knownConversations[sessionId]) nextConfirmed[sessionId] = plan.key;
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -19974,9 +20322,8 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     }
   }
 
-  if (repaired > 0) {
-    log(`Repaired ${repaired} project paths (checked ${checked})`);
-  }
+  persistProjectPathRepairs(nextConfirmed);
+  log(`Project path sweep: checked ${checked}, unchanged ${skipped}, sent ${sent}, repaired ${repaired}`);
 }
 
 async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void> {
@@ -20474,7 +20821,8 @@ export function shouldSelfHeal(
   monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  return Math.min(staleMs, monoStaleMs) > thresholdMs;
+  const recoveryThreshold = sawSuspend(staleMs, monoStaleMs) ? Math.min(thresholdMs, 90_000) : thresholdMs;
+  return Math.min(staleMs, monoStaleMs) > recoveryThreshold;
 }
 
 function selfHealIfTimersStalled(source: string): void {
@@ -20726,7 +21074,7 @@ async function sweepStaleTmuxServers(): Promise<void> {
     const livePid = await liveTmuxServerPid();
     const { kill: stale, selfHosted, refused } = staleTmuxServerKillPlan(procs, livePid, process.getuid?.());
     if (refused) {
-      log(`[TMUX-SWEEP] WARNING: tmux did not answer, so no server can be identified as live — skipping the sweep`);
+      log(`[TMUX-SWEEP] WARNING: ${refused} — skipping the sweep`);
       return;
     }
     for (const server of selfHosted) {
@@ -22344,6 +22692,7 @@ async function main(): Promise<void> {
           if (sessionId) {
             resumeSessionCache.set(sessionId, recoveredTmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
+            clearHibernationPark(sessionId, convId || undefined);
             if (syncServiceRef) {
               syncServiceRef.registerManagedSession(sessionId, process.pid, recoveredTmuxSession, (convId || undefined) as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(sessionId);
@@ -23793,6 +24142,7 @@ async function main(): Promise<void> {
         threadId,
         cwd: entry.cwd,
         approvalPolicy: entry.approvalPolicy,
+        sandbox: entry.sandbox,
         updatedAt: Date.now(),
         activeTurnId: turnId,
         recoveryAttempts: appServerRecoveringThreads.has(threadId) ? previous?.recoveryAttempts : 0,
@@ -23992,8 +24342,8 @@ async function main(): Promise<void> {
             registry.register(new CodexAppServerRuntimeDriver({
               io: {
                 client: codexAppServerInstance,
-                registerThread({ conversationId, threadId, cwd, approvalPolicy }) {
-                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy });
+                registerThread({ conversationId, threadId, cwd, approvalPolicy, sandbox }) {
+                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy, sandbox, persist: true });
                 },
                 async inspectThread(threadId) {
                   if (!codexAppServerInstance?.running) return "unknown";

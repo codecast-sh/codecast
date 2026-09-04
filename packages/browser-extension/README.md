@@ -1,9 +1,9 @@
 # Codecast browser bridge
 
 Drive tabs in your **real** Chrome from `cast browser`: your logins, your
-session, no profile clone. The cloned browser stays the default for
-unattended work. The bridge is for work you want to watch in your own
-browser, and for sites that fight a fresh profile.
+session, no profile clone. Once the extension is paired, your Chrome is the
+default. The agent browser is used before pairing or when explicitly chosen
+with `--clone` or `cast browser target clone`.
 
 ```
 cast CLI ──ws──▶ bridge host (127.0.0.1, token proven both ways) ◀──ws── this extension ──chrome.debugger──▶ your tabs
@@ -70,7 +70,6 @@ manifest and `BRIDGE_EXTENSION_ID`, and delete the private key again.
 ## Use
 
 ```bash
-cast browser target real                       # verbs act on your real Chrome for this session
 cast browser open https://example.com          # opens the session's own tab in your Chrome
 cast browser snapshot -i                       # every verb works as it does against the clone
 cast browser tabs                              # this session's tabs; the rest are yours
@@ -79,11 +78,13 @@ cast browser snapshot --clone                  # --clone overrides a sticky real
 cast browser target                            # prints the current choice
 ```
 
-Once the extension is paired and connected, your Chrome is the default: a
-session's first verb settles on it and stays there, so a session never
-changes browsers midway. `target clone` opts a session out; `target real`
-opts one in when the extension is off. `cast browser target` says which it
-is and why. Real mode is a second engine session, keyed `<session>-real`, on
+Once the extension is paired, your Chrome stays the default even when the
+bridge host or extension disconnects. A command starts the bridge host if
+needed and waits up to eight seconds for the extension to reconnect. If it
+cannot connect, it reports the problem and how to reconnect. `--clone` uses
+the agent browser for one command; `target clone` opts the session out and
+`target real` switches it back. `cast browser target` says which browser is
+selected and why. Real mode is a second engine session, keyed `<session>-real`, on
 the bridge port, so a session can hold a tab in each browser without the two
 colliding. A session that meets a sign-in wall in the agent browser is told
 that your Chrome already holds the login and how to get there.
@@ -230,7 +231,7 @@ with a wrong token. Then four parts:
    background create into a named group, the group title animating while a
    command runs, the border around the driven page, and a screenshot that
    does not show it.
-4. The product path: `cast browser target real`, then the plain verbs (open,
+4. The product path: the paired-extension default, then the plain verbs (open,
    snapshot, click, shot, tabs, stop) on the engine driver, with the CLI's
    state isolated from the machine's. It asserts the tab landed in one group
    named for the session, a second tab from `open --new-tab` joins the same
@@ -249,7 +250,7 @@ playwright caches, or install one with
   forbids it).
 - One extension connection per bridge host: install the extension in one
   Chrome profile. A second connection replaces the first.
-- The clone remains the default target. The bridge never activates unless
-  you pass `--real` or set `cast browser target real`.
+- A paired extension that is disconnected remains the default target;
+  choose `--clone` or `cast browser target clone` to use the agent browser.
 - `setup` opens Chrome by itself on macOS only. Elsewhere, open the printed
   URL by hand.

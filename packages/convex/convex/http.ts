@@ -2910,6 +2910,9 @@ http.route({
         session_id,
         direction,
         target_agent_type,
+        cloud_device_id: body.cloud_device_id,
+        cloud_project_path: body.cloud_project_path,
+        cloud_worktree: body.cloud_worktree,
       });
       return new Response(JSON.stringify(result), {
         status: 200,

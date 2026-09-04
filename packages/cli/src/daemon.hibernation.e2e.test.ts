@@ -20,18 +20,19 @@
 // agent and waits for its prompt, and no harness supplies a conversation. So it
 // drives clearHibernationPark, the one function every resume path funnels
 // through, and a source assertion in daemon.hibernation.test.ts holds
-// autoResumeSession to calling it. The full path was verified by hand against
-// the live daemon (reaper.log WOKE lines on both wake routes).
+// autoResumeSession to calling it.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   clearHibernationPark,
+  flushHibernationStamps,
   runHibernationPass,
   sessionParkStateForTests,
   setSyncServiceForTests,
   trackSessionPaneForTests,
 } from "./daemon.js";
-import { spawnHarness, sweepStaleSessions, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
+import { cleanupShimScript, writeShimScript } from "./test-helpers/fakeClaudeShim.js";
+import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
 import type { SyncService } from "./syncService.js";
 import { hasTmux, tmuxRun } from "./tmux.js";
 
@@ -43,9 +44,7 @@ const TIMEOUT = 120_000;
 const paneAlive = (tmux: string): boolean => tmuxRun(["has-session", "-t", tmux]).status === 0;
 
 // Every agent-status write the daemon made, in order. Enough of a SyncService
-// for the park and the wake: the pass asks for a lifecycle (null proceeds, the
-// documented behaviour of an unreachable backend) and the teardown publishes a
-// status.
+// for the park and the wake.
 type StatusWrite = { conversationId: string; status: string; hibernatedAt?: number | null };
 
 function recordingSyncService(writes: StatusWrite[]): SyncService {
@@ -58,26 +57,31 @@ function recordingSyncService(writes: StatusWrite[]): SyncService {
       _tasks?: unknown,
       _presumed?: boolean,
       hibernatedAt?: number | null,
-    ) => { writes.push({ conversationId, status, hibernatedAt }); },
-    getConversationLifecycle: async () => null,
+    ) => { writes.push({ conversationId, status, hibernatedAt }); return true; },
+    getConversationLifecycle: async () => ({ status: "active", source: "lifecycle", hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false }),
   } as unknown as SyncService;
 }
 
 describe.skipIf(!hasTmux())("hibernation with real panes", () => {
   const harnesses: Harness[] = [];
+  const shims: string[] = [];
   const writes: StatusWrite[] = [];
   const convOf = (sessionId: string) => `conv-${sessionId}`;
 
   beforeAll(async () => {
-    sweepStaleSessions();
     setSyncServiceForTests(recordingSyncService(writes));
-    for (let i = 0; i < FLEET; i++) harnesses.push(spawnHarness());
+    for (let i = 0; i < FLEET; i++) {
+      const sessionId = crypto.randomUUID();
+      const shim = writeShimScript({ sessionId });
+      shims.push(shim);
+      harnesses.push(spawnHarness({ sessionId, tmuxPrefix: `cc-e1-${process.pid}`, command: `exec '${shim}' --session-id ${sessionId}` }));
+    }
     // The teardown re-checks the pane is idle in the instant before the kill,
     // so every pane must have reached its prompt before the pass runs.
     for (const h of harnesses) {
       await waitFor(() => h.paneHasPrompt(), { timeoutMs: 30_000, label: `prompt for ${h.tmuxSession}` });
     }
-    for (const h of harnesses) trackSessionPaneForTests(h.sessionId, h.tmuxSession);
+    for (const h of harnesses) trackSessionPaneForTests(h.sessionId, h.tmuxSession, { status: "idle" });
   }, TIMEOUT);
 
   afterAll(() => {
@@ -86,7 +90,7 @@ describe.skipIf(!hasTmux())("hibernation with real panes", () => {
       trackSessionPaneForTests(h.sessionId, null);
       try { h.tearDown(); } catch {}
     }
-    sweepStaleSessions();
+    for (const shim of shims) cleanupShimScript(shim);
   });
 
   const passIo = (idleOf?: Map<string, number>) => ({
@@ -103,6 +107,7 @@ describe.skipIf(!hasTmux())("hibernation with real panes", () => {
     const expected = harnesses.slice(-EXTRA).reverse();
 
     const hibernated = await runHibernationPass(passIo(idleOf));
+    await flushHibernationStamps();
     expect(hibernated).toBe(EXTRA);
 
     for (const h of expected) {
@@ -138,6 +143,7 @@ describe.skipIf(!hasTmux())("hibernation with real panes", () => {
     expect(sessionParkStateForTests(woken.sessionId).parked).toBe(true);
 
     clearHibernationPark(woken.sessionId, convOf(woken.sessionId));
+    await flushHibernationStamps();
 
     const state = sessionParkStateForTests(woken.sessionId);
     expect(state.parked).toBe(false);
