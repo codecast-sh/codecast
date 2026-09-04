@@ -442,3 +442,27 @@ describe("reading a thread selector", () => {
     expect(parseCommentLocation("packages/cli/src/index.ts")).toEqual({ file: "packages/cli/src/index.ts" });
   });
 });
+
+describe("repository case", () => {
+  test("a repository typed with capitals finds the row stored in canonical form", async () => {
+    const result = await call(resolve, await ctx(), {
+      api_token: TOKEN,
+      repository: "Codecast-SH/Codecast",
+      number: 42,
+    });
+    expect(result.pull_request?.id).toBe("pr_1");
+  });
+
+  test("a reference with capitals resolves the same way", async () => {
+    const result = await call(resolve, await ctx(), {
+      api_token: TOKEN,
+      ref: "https://github.com/Codecast-SH/Codecast/pull/42",
+    });
+    expect(result.pull_request?.id).toBe("pr_1");
+  });
+
+  test("ls narrowed to a repository typed with capitals still lists it", async () => {
+    const result = await call(ls, await ctx(), { api_token: TOKEN, repository: "Codecast-SH/Codecast" });
+    expect(result.pull_requests.map((pr: any) => pr.id)).toContain("pr_1");
+  });
+});

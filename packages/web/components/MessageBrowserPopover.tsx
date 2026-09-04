@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { MessagePromptPreview } from "./MessagePromptPreview";
 import { AvatarImg } from "../lib/avatarCache";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -62,7 +63,7 @@ type CommentEntry = {
 };
 
 function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: NavigatorRow; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
-  const previewWidth = 420;
+  const previewWidth = Math.min(420, window.innerWidth - 16);
   const bridgePad = 20;
   const left = Math.max(8, rect.left - previewWidth - bridgePad);
   const top = Math.max(8, rect.top - 20);
@@ -99,9 +100,7 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
           )}
         </div>
         <div className="px-3 pb-3 overflow-y-auto flex-1 min-h-0">
-          <div className="text-[13px] text-sol-text whitespace-pre-wrap break-words leading-relaxed">
-            {message.display}
-          </div>
+          <MessagePromptPreview content={message.display} images={message.images} variant="preview" textClassName="text-[13px] text-sol-text whitespace-pre-wrap leading-relaxed" />
         </div>
       </div>
     </div>,
@@ -215,7 +214,7 @@ function NavDropdown({
     setHoveredId(id);
     if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    if (!msg.display) return; // nothing to preview (machine row whose parsed body is empty)
+    if (!msg.display && !msg.images?.length) return; // nothing to preview (machine row whose parsed body is empty)
     hoverTimerRef.current = setTimeout(() => {
       setHoveredRect(el.getBoundingClientRect());
       setPreviewMsg(msg);
@@ -242,7 +241,7 @@ function NavDropdown({
 
   if (!mounted || typeof document === "undefined") return null;
 
-  const dropdownWidth = 420;
+  const dropdownWidth = Math.min(420, window.innerWidth - 16);
   const margin = 8;
   const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
   // Top-align the panel to the trigger. The nav button itself sits below the
@@ -256,7 +255,7 @@ function NavDropdown({
     <>
       {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
-        className="fixed z-[9999] bg-sol-bg-alt/99 backdrop-blur-md border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+        className="fixed z-[9999] bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
         style={{ top, left, width: dropdownWidth, maxHeight: "min(600px, 75vh)" }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
@@ -409,11 +408,9 @@ function NavDropdown({
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <div className={`text-[12px] leading-snug line-clamp-2 ${
+                      <MessagePromptPreview content={m.display} images={m.images} textClassName={`text-[12px] leading-snug line-clamp-2 ${
                         isActive || isCurrent ? "text-sol-text" : "text-sol-text-secondary"
-                      } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`}>
-                        {m.display}
-                      </div>
+                      } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`} />
                       <div className="flex items-center gap-1.5 mt-1">
                         <span className="text-[10px] text-sol-text-dim/50 tabular-nums">
                           {formatTimeAgo(m.timestamp)}

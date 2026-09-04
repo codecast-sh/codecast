@@ -309,10 +309,28 @@ async function handle(m) {
   }
 }
 
+/**
+ * chrome.debugger.sendCommand has no timeout of its own: a tab whose renderer
+ * is frozen, throttled in a background window, or discarded by memory saver
+ * simply never answers, and one such tab stalled every client of the bridge
+ * for the host's 20 s attach budget. Every debugger call on the attach path is
+ * bounded, so a tab that cannot answer is reported as such within seconds.
+ */
+const ATTACH_STEP_MS = 5000;
+function bounded(promise, what) {
+  let timer;
+  const clock = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ATTACH_STEP_MS}ms (tab frozen or discarded)`)), ATTACH_STEP_MS);
+  });
+  return Promise.race([promise, clock]).finally(() => clearTimeout(timer));
+}
+
 async function attachTab(tabId) {
   if (!attached.has(tabId)) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (t && t.discarded) throw new Error("this tab was discarded by Chrome's memory saver; activate it once to wake it");
     try {
-      await chrome.debugger.attach({ tabId }, "1.3");
+      await bounded(chrome.debugger.attach({ tabId }, "1.3"), "debugger.attach");
     } catch (err) {
       // Chrome keeps an extension's debugger sessions across service worker
       // lives; our bookkeeping does not. A session this worker's predecessor
@@ -320,19 +338,21 @@ async function attachTab(tabId) {
       // succeeds for our own session alone: another extension's, or open
       // DevTools, leaves an error worth naming.
       if (!/already attached/i.test(String((err && err.message) || err))) throw err;
-      const ours = await chrome.debugger.detach({ tabId }).then(() => true, () => false);
+      const ours = await bounded(chrome.debugger.detach({ tabId }), "debugger.detach").then(() => true, () => false);
       if (!ours) throw new Error(`another debugger holds this tab (DevTools, or another extension); close it there first`);
-      await chrome.debugger.attach({ tabId }, "1.3");
+      await bounded(chrome.debugger.attach({ tabId }, "1.3"), "debugger.attach");
     }
     attached.add(tabId);
     markDriven(tabId, true);
   }
   // Re-enabling is idempotent and cheap; a fresh CLI process may follow a
-  // navigation that reset domain state.
-  for (const domain of ["Page", "DOM", "Runtime", "Accessibility", "Network"]) {
-    await chrome.debugger.sendCommand({ tabId }, domain + ".enable", {}).catch(() => {});
-  }
-  if (!borderScripts.has(tabId)) await installBorder(tabId);
+  // navigation that reset domain state. A tab that answers none of these is
+  // reported rather than waited on.
+  await bounded(
+    Promise.all(["Page", "DOM", "Runtime", "Accessibility", "Network"].map((domain) => chrome.debugger.sendCommand({ tabId }, domain + ".enable", {}).catch(() => {}))),
+    "domain enable",
+  );
+  if (!borderScripts.has(tabId)) await bounded(installBorder(tabId), "overlay install");
 }
 
 async function detachTab(tabId) {
@@ -369,6 +389,7 @@ function describeTab(t) {
     active: !!t.active,
     windowId: t.windowId,
     attached: attached.has(t.id),
+    owned: ownedTabs.has(t.id),
     ...(g ? { group: { title: plainTitle(t.groupId, g), color: g.color } } : {}),
   };
 }

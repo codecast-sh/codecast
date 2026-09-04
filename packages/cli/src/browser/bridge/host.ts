@@ -75,8 +75,7 @@ export interface BridgeState {
   hostPid?: number;
   startedAt?: number;
   /** Is the extension on the socket right now? Written by the host process,
-   *  true only while it holds a proven extension connection. With a live
-   *  hostPid this is what makes the real Chrome the default (real.ts). */
+   *  true only while it holds a proven extension connection. */
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;
@@ -255,6 +254,8 @@ export interface BridgeHostStatus {
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionProtocol?: number;
+  /** The host's own protocol; differs from the extension's while a store update is in review. */
+  protocol?: number;
 }
 
 /** Ask a running host whether the extension is connected. */
@@ -384,7 +385,16 @@ export function startBridgeHost(opts: {
     return r;
   };
 
-  const listTabs = async (): Promise<BridgeTab[]> => (await extCall("tabs.list", {}, 10_000)).tabs as BridgeTab[];
+  // Cast tabs first, the human's after. Engines that connect over CDP take the
+  // first page as their default and attach to it before anything else, and a
+  // human's tab may be frozen or discarded and never answer; a session's own
+  // tab always does. An extension older than the `owned` flag reports a group
+  // only for groups it created, which names the same tabs.
+  const castFirst = (tabs: BridgeTab[]): BridgeTab[] => {
+    const isCast = (t: BridgeTab) => t.owned ?? !!t.group;
+    return [...tabs.filter(isCast), ...tabs.filter((t) => !isCast(t))];
+  };
+  const listTabs = async (): Promise<BridgeTab[]> => castFirst((await extCall("tabs.list", {}, 10_000)).tabs as BridgeTab[]);
 
   // Ids by which a tab is known to CDP clients. Sessions attach by tabId; a
   // tab is released to the human (debugger detached, banner gone) only when

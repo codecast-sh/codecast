@@ -43,6 +43,7 @@ export interface CodexAppServerIo {
     conversationId: string;
     threadId: string;
     cwd: string;
+    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
     approvalPolicy?: "untrusted" | "on-failure" | "on-request" | "never";
   }): void;
   inspectThread(threadId: string): Promise<"alive" | "missing" | "unknown">;
@@ -96,6 +97,7 @@ export class CodexAppServerRuntimeDriver implements RuntimeDriver {
         conversationId: request.target.conversationId,
         threadId,
         cwd: request.target.projectPath,
+        sandbox: request.target.isolation?.sandbox,
         approvalPolicy: request.target.isolation?.approvalPolicy,
       });
       return {

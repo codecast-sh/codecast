@@ -1,0 +1,106 @@
+name: Cut Chrome extension release
+
+# Ships packages/browser-extension to the Chrome Web Store. The store is the
+# only distribution Chrome updates on its own (self-hosted packages are
+# blocked on macOS and Windows outside enterprise policy), so this is what
+# makes every install pick up a fix: bump the manifest version, zip the shipped
+# files without the development key, upload, submit for review, then commit the
+# bump and tag it. Review takes a day to a week; installs update within hours
+# of it passing.
+#
+# Secrets: CWS_CLIENT_ID and CWS_CLIENT_SECRET (an OAuth client on the store
+# owner's Google Cloud project), CWS_REFRESH_TOKEN (minted for that client with
+# the chromewebstore scope), CWS_PUBLISHER_ID and CWS_ITEM_ID (developer
+# dashboard). Rotate the refresh token by minting a new one; nothing else holds it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version moves
+        required: false
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+      publish:
+        description: Submit for review after the upload (off leaves a draft in the dashboard)
+        required: false
+        default: true
+        type: boolean
+      dry_run:
+        description: Build the zip only. Upload nothing, commit nothing.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Build the package
+        if: inputs.dry_run
+        shell: bash
+        run: bun packages/browser-extension/release.mjs --dry-run --bump "${{ inputs.bump }}"
+
+      - name: Build, upload and submit
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: ${{ secrets.CWS_ITEM_ID }}
+        run: |
+          set -euo pipefail
+          publish=""
+          if [[ "${{ inputs.publish }}" == "true" ]]; then publish="--publish"; fi
+          bun packages/browser-extension/release.mjs --bump "${{ inputs.bump }}" --upload $publish
+
+      - name: Keep the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codecast-extension
+          path: packages/browser-extension/dist/*.zip
+          retention-days: 30
+
+      - name: Commit the version bump and tag it
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(jq -r '.version' packages/browser-extension/manifest.json)
+          tag="extension-v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::tag $tag already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/browser-extension/manifest.json
+          git commit -m "chore(extension): bump version to $version"
+          git tag -a "$tag" -m "Codecast extension $version"
+          git push --atomic origin HEAD:main "refs/tags/$tag"
+          {
+            echo "### Extension $version"
+            echo
+            echo "- Submitted to the Chrome Web Store; installs update once review passes."
+            echo "- Tag: \`$tag\`"
+          } >> "$GITHUB_STEP_SUMMARY"

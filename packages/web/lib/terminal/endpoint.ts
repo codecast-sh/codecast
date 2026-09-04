@@ -138,21 +138,35 @@ export async function probeEndpoint(
   timeoutMs: number = PROBE_TIMEOUT_MS,
 ): Promise<TerminalSessionInfo[] | null> {
   lastProbeMiss = null;
+  const deadline = Date.now() + timeoutMs;
   try {
-    const res = await fetch(`${termHttpBase(ep)}/term/sessions`, {
-      headers: { Authorization: `Bearer ${ep.token}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) {
-      lastProbeMiss = "rejected";
-      return null;
+    while (Date.now() < deadline) {
+      const res = await fetch(`${termHttpBase(ep)}/term/sessions`, {
+        headers: { Authorization: `Bearer ${ep.token}` },
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
+      if (res.status === 503) {
+        const body = await res.json();
+        if (body.unavailable === true) {
+          lastProbeMiss = "timeout";
+          await new Promise(resolve => setTimeout(resolve, Math.min(200, Math.max(0, deadline - Date.now()))));
+          continue;
+        }
+      }
+      if (!res.ok) {
+        lastProbeMiss = "rejected";
+        return null;
+      }
+      const body = (await res.json()) as { sessions?: TerminalSessionInfo[]; tmux?: boolean };
+      if (!body.tmux) {
+        lastProbeMiss = "rejected";
+        return null;
+      }
+      lastProbeMiss = null;
+      return body.sessions ?? [];
     }
-    const body = (await res.json()) as { sessions?: TerminalSessionInfo[]; tmux?: boolean };
-    if (!body.tmux) {
-      lastProbeMiss = "rejected";
-      return null;
-    }
-    return body.sessions ?? [];
+    lastProbeMiss = "timeout";
+    return null;
   } catch (e) {
     lastProbeMiss = isTimeoutError(e) ? "timeout" : "rejected";
     return null;

@@ -13,6 +13,7 @@ import type { Id } from "./_generated/dataModel";
 export function inboxVisibilityFields(conv: {
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   inbox_stash_hidden?: boolean | null;
   inbox_killed_at?: number | null;
   inbox_pinned_at?: number | null;
@@ -20,6 +21,7 @@ export function inboxVisibilityFields(conv: {
   return {
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
     inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    inbox_snoozed_until: conv.inbox_snoozed_until ?? null,
     inbox_stash_hidden: conv.inbox_stash_hidden ?? null,
     inbox_killed_at: conv.inbox_killed_at ?? null,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
