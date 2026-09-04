@@ -105,9 +105,27 @@ function isOffline(err) {
   return !!err && (err.name === "AbortError" || err.name === "TypeError" || err.code === "ENOTFOUND" || err.code === "ECONNREFUSED" || err.code === "ECONNRESET" || err.code === "ETIMEDOUT");
 }
 
-function createWebCache({ dir, origin, manifestPath = "/release.json", fetchImpl = globalThis.fetch, seedDir = null, concurrency = 8, log = () => {} }) {
+// Which files must match the manifest's hash byte for byte.
+//
+// "all" is the honest default. "assets" exists because a CDN may legitimately
+// rewrite the HTML it serves — Cloudflare's email address obfuscation turns a
+// mailto: link into a script, so the document on the wire is not the document
+// that was built — and a release that can never verify is a desktop app that
+// silently stops updating. Under "assets" every script, stylesheet and font is
+// still verified, which is where the code lives; the document is trusted to
+// the same degree the TLS connection to the origin is.
+const DOCUMENT_EXT = new Set([".html", ".htm"]);
+const VERIFY_MODES = new Set(["all", "assets"]);
+
+function mustVerify(file, mode) {
+  if (mode !== "assets") return true;
+  return !DOCUMENT_EXT.has(path.extname(file).toLowerCase());
+}
+
+function createWebCache({ dir, origin, manifestPath = "/release.json", fetchImpl = globalThis.fetch, seedDir = null, concurrency = 8, verify = "all", log = () => {} }) {
   if (!dir) throw new Error("webCache: dir is required");
   if (!/^https?:\/\//.test(origin || "")) throw new Error("webCache: origin must be http(s)");
+  if (!VERIFY_MODES.has(verify)) throw new Error(`webCache: verify must be "all" or "assets"`);
   origin = origin.replace(/\/+$/, "");
   const pointer = path.join(dir, "current");
   let release = null;
@@ -236,7 +254,9 @@ function createWebCache({ dir, origin, manifestPath = "/release.json", fetchImpl
         try {
           const res = await fetchOk(`${origin}/${file.split("/").map(encodeURIComponent).join("/")}`, { signal });
           const buf = Buffer.from(await res.arrayBuffer());
-          if (hash && sha256(buf) !== hash) throw new Error(`hash mismatch for ${file}`);
+          if (hash && sha256(buf) !== hash && mustVerify(file, verify)) {
+            throw new Error(`hash mismatch for ${file}`);
+          }
           const dest = path.join(stage, file);
           fs.mkdirSync(path.dirname(dest), { recursive: true });
           fs.writeFileSync(dest, buf);

@@ -96,6 +96,7 @@ Required: `productName`, `appId` (reverse DNS), `protocol` (deep link scheme),
 | `web.cache` | keep a full local copy of the site and serve the app host from it (below) | `false` |
 | `web.manifestPath`, `web.seedDir`, `web.passthrough` | where the site publishes its manifest; a packaged copy for the first launch; path prefixes the server owns | `/release.json`, none, `[]` |
 | `web.startupTimeoutMs`, `web.checkIntervalMs` | how long a launch waits for the manifest check; how often to re-check | 6 s, 15 min |
+| `web.verify` | `all` verifies every downloaded file's hash; `assets` exempts HTML documents, for a CDN that rewrites them | `all` |
 | `extraProtocols` | `{scheme, name, claimOnFirstRun, menuLabel}` schemes beyond the app's own (a mail app: `mailto`) | `[]` |
 | `hooks.onReady` | called with the API once the shell is up | none |
 | `downloadUrls` | `(url) => boolean`: pages the app opens that are downloads, saved in-app | none |
@@ -209,6 +210,15 @@ online start paints the current release and an offline one paints the copy
 at once. It re-checks every `web.checkIntervalMs` and on wake from sleep;
 when a newer release lands while a page is up, the page hears
 `onWebUpdate({ release, from })` on the bridge and reloads when it wants to.
+
+**When the CDN rewrites the HTML.** A hash is computed over what was built,
+and some CDNs do not serve what was built: Cloudflare's email address
+obfuscation rewrites `mailto:` links and injects a decoder script, so
+`index.html` on the wire never matches the manifest and every download is
+rejected — the app keeps working from its copy and silently stops updating.
+Either turn the transform off, or set `web.verify: "assets"`, which keeps the
+hash check on every script, stylesheet and font and trusts the document to the
+same degree as the TLS connection that delivered it.
 
 **Serving.** GET and HEAD for the app host: a file in the copy is served with
 its mime type; a navigation that misses gets `index.html` (the same SPA

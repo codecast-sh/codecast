@@ -98,7 +98,13 @@ function fakeElectron({ packaged = true } = {}) {
       getCursorScreenPoint: () => ({ x: 0, y: 0 }),
       getDisplayNearestPoint: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0 } }),
     },
-    Notification: class { static isSupported() { return false; } },
+    Notification: class {
+      constructor(opts) { this.opts = opts; electron.notifications.push(this); }
+      static isSupported() { return true; }
+      on(ev, fn) { (this.handlers ??= {})[ev] = fn; }
+      show() { this.shown = true; }
+    },
+    notifications: [],
     session: { defaultSession: { setCertificateVerifyProc() {}, setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDisplayMediaRequestHandler() {} } },
     powerMonitor: { getSystemIdleTime: () => 7 },
     desktopCapturer: { getSources: async () => [] },
@@ -184,9 +190,14 @@ test("composes windows, tray, menus, protocol and IPC from config", async () => 
   // Notification routing: a focused window suppresses banners, duplicates collapse.
   main.focusedFlag = true;
   expect(await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "k" } })).toEqual({ shown: false, reason: "focused" });
+  // `force` is the web layer overriding the focus rule for one banner.
+  expect(await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "f", force: true } })).toEqual({ shown: true });
   main.focusedFlag = false;
   expect(await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "k" } })).toEqual({ shown: true });
   expect(await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "k" } })).toEqual({ shown: false, reason: "duplicate" });
+  // Sound is the caller's choice, per banner.
+  await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "s", silent: true } });
+  expect(el.notifications.map((n) => n.opts.silent)).toEqual([false, false, true]);
 
   // Tab windows: only app-relative paths may ride detach.
   await el.handlers.get("detach-tab")({}, "https://evil.example");

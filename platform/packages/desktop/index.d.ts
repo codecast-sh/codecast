@@ -86,6 +86,9 @@ export interface DesktopConfigInput {
     seedDir?: string | null;
     /** Path prefixes the app's server owns (`/api/`): always fetched, never served from the copy. */
     passthrough?: string[];
+    /** Hash policy for a downloaded release. "all" (default) verifies every
+     *  file; "assets" skips HTML documents, for a CDN that rewrites them. */
+    verify?: "all" | "assets";
     checkIntervalMs?: number;
     /** How long a launch waits for the manifest check before painting the copy it has. Default 6000. */
     startupTimeoutMs?: number;
@@ -112,7 +115,7 @@ export interface DesktopConfig {
   events: { navigate: string; newSession: string; htmlClass: string };
   assets: { icon: string | null; tray: string | null };
   window: Required<NonNullable<DesktopConfigInput["window"]>> & { rememberBounds: boolean };
-  web: { cache: boolean; manifestPath: string; seedDir: string | null; passthrough: string[]; checkIntervalMs: number; startupTimeoutMs: number };
+  web: { cache: boolean; manifestPath: string; seedDir: string | null; passthrough: string[]; verify: "all" | "assets"; checkIntervalMs: number; startupTimeoutMs: number };
   extraProtocols: Array<{ scheme: string; name: string; claimOnFirstRun: boolean; menuLabel: string | null }>;
   hooks: { onReady: ((api: DesktopAppApi, info: { firstRun: boolean }) => void) | null };
   downloadUrls: ((url: string) => boolean) | null;
@@ -161,7 +164,13 @@ export function createDesktopApp(config: DesktopConfigInput, electron?: unknown)
 // ── Renderer bridge ────────────────────────────────────────────────────────
 
 export type UpdateStatus = { status: "available" | "downloading" | "ready" | "error" | string; version?: string; percent?: number };
-export type NotifyNativeData = { conversationId?: string; route?: string; key?: string; kind?: string };
+export type NotifyNativeData = {
+  conversationId?: string; route?: string; key?: string; kind?: string;
+  /** Post the banner without a sound. */
+  silent?: boolean;
+  /** Show it even while an app window is focused (the web layer has decided). */
+  force?: boolean;
+};
 export type DesktopWindowState = { active: string | null; open: Array<{ id?: string | null; path: string }>; inCall?: boolean };
 export type DesktopWindowRole = { leader: boolean; appFocused: boolean; anyInCall: boolean };
 export type DesktopDisplaySource = { id: string; name: string; kind: "screen" | "window"; thumbnail: string };
@@ -288,7 +297,7 @@ export interface WebCache {
 }
 export function createWebCache(opts: {
   dir: string; origin: string; manifestPath?: string; seedDir?: string | null;
-  fetchImpl?: typeof fetch; concurrency?: number; log?: (line: string) => void;
+  fetchImpl?: typeof fetch; concurrency?: number; verify?: "all" | "assets"; log?: (line: string) => void;
 }): WebCache;
 export const webCache: {
   createWebCache: typeof createWebCache;

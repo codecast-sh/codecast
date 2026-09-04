@@ -10,7 +10,8 @@ const { buildManifest, writeManifest } = require("../templates/vite-release-mani
 const ORIGIN = "https://whisk.email";
 
 // A site is a map of path → content; the fake fetch serves it and counts.
-function fakeSite(files, { offline = false } = {}) {
+function fakeSite(input, { offline = false } = {}) {
+  const files = { ...input };
   const hashes = {};
   for (const [f, c] of Object.entries(files)) hashes[f] = sha256(Buffer.from(c));
   const manifest = { release: releaseIdFor(hashes), commit: "abc123", files: hashes };
@@ -110,6 +111,28 @@ test("a packaged seed serves a first launch with no network", async () => {
   // The seed's id equals the site's for the same bytes, so going online is a no-op.
   site.offline = false;
   expect((await cache.refresh()).status).toBe("fresh");
+});
+
+test("a CDN that rewrites HTML fails a strict download and passes an assets-only one", async () => {
+  const site = fakeSite(SITE_V1);
+  // What Cloudflare does to a mailto: link — the document on the wire is not
+  // the document that was built.
+  site.files["index.html"] = "<html>v1<!-- rewritten by the CDN --></html>";
+
+  const strict = createWebCache({ dir: tmp(), origin: ORIGIN, fetchImpl: site.fetch });
+  strict.init();
+  expect((await strict.refresh()).error).toContain("hash mismatch for index.html");
+
+  const lenient = createWebCache({ dir: tmp(), origin: ORIGIN, fetchImpl: site.fetch, verify: "assets" });
+  lenient.init();
+  expect((await lenient.refresh()).status).toBe("updated");
+  expect(fs.readFileSync(lenient.resolve("/"), "utf8")).toContain("rewritten by the CDN");
+
+  // Code is still verified byte for byte, whatever the mode.
+  site.files["assets/app-1.js"] = "console.log('tampered')";
+  const js = createWebCache({ dir: tmp(), origin: ORIGIN, fetchImpl: site.fetch, verify: "assets" });
+  js.init();
+  expect((await js.refresh()).error).toContain("hash mismatch for assets/app-1.js");
 });
 
 test("resolve never leaves the release directory", async () => {

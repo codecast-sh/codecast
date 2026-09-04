@@ -71,9 +71,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
 
   let notificationRefs = [];
 
-  function showNativeNotification(title, body, onClick) {
+  function showNativeNotification(title, body, onClick, opts = {}) {
     if (!Notification.isSupported()) return;
-    const notif = new Notification({ title, body, silent: false, urgency: "critical" });
+    const notif = new Notification({ title, body, silent: opts.silent === true, urgency: "critical" });
     if (onClick) notif.on("click", onClick);
     notif.on("close", () => { notificationRefs = notificationRefs.filter(n => n !== notif); });
     notificationRefs.push(notif);
@@ -109,6 +109,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
           origin: BASE_URL,
           manifestPath: cfg.web.manifestPath,
           seedDir: cfg.web.seedDir,
+          verify: cfg.web.verify,
           // Electron's net: the system proxy and certificate store, and the
           // bypass flag the cache sets so its downloads skip the interceptor.
           fetchImpl: (url, opts) => net.fetch(url, opts),
@@ -1229,11 +1230,14 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   // window is focused (the user already sees the bell / toast there).
   ipcMain.handle("show-notification", (_e, payload) => {
     const { title, body, data } = payload || {};
-    if (isAppFocused()) return { shown: false, reason: "focused" };
+    // `force` is the web layer saying it has already decided this one is
+    // worth interrupting for — a VIP, or a person who asked to hear about
+    // mail while the app is open. Duplicate collapse still applies.
+    if (isAppFocused() && data?.force !== true) return { shown: false, reason: "focused" };
     if (!recentBanners.claim(router.RecentKeys.keyFor(payload))) return { shown: false, reason: "duplicate" };
     // `route` is the one click target (chat message, task, doc...); the bare
     // conversationId form predates it and stays as the fallback.
-    showNativeNotification(title, body, () => openNotificationTarget(data));
+    showNativeNotification(title, body, () => openNotificationTarget(data), { silent: data?.silent === true });
     return { shown: true };
   });
 
