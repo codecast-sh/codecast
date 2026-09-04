@@ -6,7 +6,9 @@ import {
   DISPATCH_FIELD_TABLE_MAP,
   DISPATCH_TABLE_MAP,
   HYDRATION_CRITICAL_KEYS,
+  HYDRATION_CRITICAL_READ_KEYS,
   HYDRATION_DEFERRED_KEYS,
+  HYDRATION_MANUAL_KEYS,
   META_STORE_KEYS,
   REGISTRY_SYNC_OPTS,
   WORKSPACE_SCOPED_KEYS,
@@ -102,6 +104,20 @@ describe("client sync registry", () => {
         (HYDRATION_DEFERRED_KEYS as readonly string[]).includes(k)
       );
       expect(overlap).toEqual([]);
+    });
+
+    it("reads only critical and manual keys before first paint", () => {
+      expect([...HYDRATION_MANUAL_KEYS].sort()).toEqual([
+        "lastFocusedConversationId",
+        "liveInboxIdList",
+        "teamInboxIdSnapshot",
+      ].sort());
+      expect(new Set(HYDRATION_CRITICAL_READ_KEYS)).toEqual(
+        new Set([...HYDRATION_CRITICAL_KEYS, ...HYDRATION_MANUAL_KEYS]),
+      );
+      for (const key of HYDRATION_DEFERRED_KEYS) {
+        expect(HYDRATION_CRITICAL_READ_KEYS).not.toContain(key);
+      }
     });
 
     it("buckets + assignments hydrate in the critical pass (label-bar pop-in regression)", () => {
@@ -201,7 +217,7 @@ describe("client sync registry", () => {
     });
 
     it("workspace-scoped tables are declared on the entry", () => {
-      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["docs", "plans", "projects", "tasks"].sort());
+      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["docs", "issueSyncSources", "plans", "projects", "tasks"].sort());
     });
   });
 

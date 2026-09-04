@@ -29,6 +29,21 @@ export function sessionFocusKind(pathname?: string | null, source?: string | nul
 }
 
 /**
+ * Whether the mounted PAGE publishes the "panel" pointer itself. Leaving the
+ * inbox carries the attended conversation into the rail so the highlight
+ * survives the move; that carry-over is a default for pages that say nothing
+ * about the rail. The decision queue (/questions) is not one of them: it
+ * writes the question you are reading into sidePanelSessionId from its own
+ * effect, and that effect commits BEFORE the layout's (children first), so an
+ * unconditional carry-over lands on top of it and the rail lights the inbox's
+ * conversation, or nothing, instead of the question. The layout asks here
+ * before it writes a default.
+ */
+export function pageOwnsRailHighlight(pathname?: string | null): boolean {
+  return pathname === "/questions" || (pathname?.startsWith("/questions/") ?? false);
+}
+
+/**
  * What clicking a session in the global list should do, given which surface is
  * mounted:
  *  - "leave": promote to the stage — navigate to the inbox with the session
