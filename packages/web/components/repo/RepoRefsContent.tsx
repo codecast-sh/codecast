@@ -14,7 +14,10 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
   const [filter, setFilter] = useState("");
   const defaultBranch = branches.data?.default_branch || defaults.data?.default_branch;
   const read = tags ? tagList : branches;
-  const rows = (tags ? tagList.data?.tags ?? [] : branches.data?.branches ?? []).filter((row) => row.name.toLowerCase().includes(filter.toLowerCase()));
+  const rows = (tags
+    ? (tagList.data?.tags ?? []).map((row) => ({ ...row, kind: "tag" as const }))
+    : (branches.data?.branches ?? []).map((row) => ({ ...row, kind: "branch" as const }))
+  ).filter((row) => row.name.toLowerCase().includes(filter.toLowerCase()));
   const Icon = tags ? Tag : GitBranch;
   return <div className="max-w-[1200px] mx-auto">
     <div className="flex items-center gap-3 mb-4">
@@ -37,11 +40,11 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
             {row.author_login && <span>{row.author_login}</span>}
             {!!row.committed_at && <time title={new Date(row.committed_at).toLocaleString()}>{relTimeShort(row.committed_at)}</time>}
           </div>
-          {"open_pr" in row && row.open_pr && <Link className="inline-block mt-2 text-xs text-sol-blue" href={prPageHref(repository, row.open_pr.number, family)}>#{row.open_pr.number} {row.open_pr.title}</Link>}
+          {row.kind === "branch" && row.open_pr && <Link className="inline-block mt-2 text-xs text-sol-blue" href={prPageHref(repository, row.open_pr.number, family)}>#{row.open_pr.number} {row.open_pr.title}</Link>}
         </div>
         <div className="flex flex-col gap-2 text-xs text-right shrink-0">
-          {"ahead_by" in row && row.ahead_by !== undefined && row.behind_by !== undefined && <span title={`Compared with ${defaultBranch}`}>{row.ahead_by} ahead · {row.behind_by} behind</span>}
-          {"ahead_by" in row && (row.ahead_by === undefined || row.behind_by === undefined) && <span className="text-sol-text-dim">Comparison unavailable</span>}
+          {row.kind === "branch" && row.ahead_by !== undefined && row.behind_by !== undefined && <span title={`Compared with ${defaultBranch}`}>{row.ahead_by} ahead · {row.behind_by} behind</span>}
+          {row.kind === "branch" && (row.ahead_by === undefined || row.behind_by === undefined) && <span className="text-sol-text-dim">Comparison unavailable</span>}
           {defaultBranch && (tags || row.name !== defaultBranch) && <Link className="text-sol-blue" href={repoCompareHref(repository, defaultBranch, row.sha, family)}>Compare</Link>}
         </div>
       </div>)}
