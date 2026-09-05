@@ -125,12 +125,12 @@ describe("Codex restart policy preservation", () => {
   // NEGATIVE CONTROL for the old behaviour: a record with no recorded policy
   // must not acquire one. The previous code derived a full-access sandbox from
   // approvalPolicy "never", which widened any thread that was really restricted.
-  test("an unknown prior sandbox stays unspecified rather than guessed", () => {
+  test("an unknown prior sandbox cannot acquire configured full access", () => {
     expect(sandboxResumeParams(undefined)).toEqual({});
     expect(sandboxResumeParams(null)).toEqual({});
     const legacy: PersistedCodexThread = { threadId: "t", updatedAt: 1, cwd: "/p", approvalPolicy: "never" };
     const params = codexResumeParams(legacy, "never");
-    expect(params.sandbox).toBeUndefined();
+    expect(params.sandbox).toBe("read-only");
     expect((params as { config?: unknown }).config).toBeUndefined();
   });
 

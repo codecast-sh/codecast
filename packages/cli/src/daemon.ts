@@ -102,7 +102,6 @@ import {
   threadItemsToMessages,
   type ApprovalPolicy,
   type SandboxPolicy,
-  type SandboxMode,
   type ApprovalRequest,
   type ThreadItem,
 } from "./codexAppServer.js";
@@ -218,7 +217,7 @@ import {
   upgradedLegacyResumeTmuxName,
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, launchBinary } from "./launchCommand.js";
+import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
@@ -934,24 +933,14 @@ export function buildBlankLaunchArgs(
   return [];
 }
 
-/**
- * The sandbox a Codex thread should run under. Codex 0.153+ applies a
- * restrictive managed permission profile to any request that names no sandbox,
- * so "unset" is never safe to send. Deriving it from the approval policy keeps
- * the two from drifting apart, which is what silently stripped live sessions of
- * file and network access on 2026-09-04.
- */
-function sandboxForApprovalPolicy(policy: ApprovalPolicy): SandboxMode {
-  return policy === "never" ? "danger-full-access" : "workspace-write";
-}
-
-function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
-  const flags = getPermissionFlags("codex", config);
-  const codexArgs = getAgentArgs(config, "codex") || "";
-  if (flags?.includes("--dangerously-bypass") || codexArgs.includes("--dangerously-bypass") || flags?.includes("--full-auto") || codexArgs.includes("--full-auto")) {
-    return "never";
-  }
-  return "on-request";
+function resolveCodexPermissionDefaults(config?: Config | null) {
+  const { binaryArgs } = buildLaunchArgs({
+    agentType: "codex",
+    configuredArgs: getAgentArgs(config, "codex") || "",
+    permFlags: getPermissionFlags("codex", config),
+    defaultFlags: null,
+  });
+  return codexPermissionsFromArgs(binaryArgs);
 }
 
 interface ConversationCache {
@@ -4599,14 +4588,14 @@ async function executeRemoteCommand(
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
-        const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
-        const codexApprovalPolicy: ApprovalPolicy = codexSkipApprovals ? "never" : "on-request";
+        const codexPermissions = codexPermissionsFromArgs(binaryArgs);
+        const codexApprovalPolicy = codexPermissions.approvalPolicy;
         const activeCodexAppServer = codexAppServerInstance?.running
           ? codexAppServerInstance
           : null;
         if (agentType === "codex" && activeCodexAppServer) {
           try {
-            const sandbox = sandboxForApprovalPolicy(codexApprovalPolicy);
+            const sandbox = codexPermissions.sandbox;
             const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
             const resp = await startCodexThreadThenRecordStableContext(
               () => activeCodexAppServer.threadStart({
@@ -5481,7 +5470,7 @@ async function executeRemoteCommand(
             const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
             const importBytes = fs.statSync(importPath).size;
             setPosition(importPath, importBytes);
-            const approvalPolicy = resolveCodexApprovalPolicy(config);
+            const { approvalPolicy, sandbox } = resolveCodexPermissionDefaults(config);
             pendingAppServerForkParents.add(importSessionId);
             pendingForkParentId = importSessionId;
             const forkTimeoutMs = threadForkTimeoutMsForBytes(importBytes);
@@ -5499,7 +5488,7 @@ async function executeRemoteCommand(
                 ? { config: { model_reasoning_effort: resumeOptions.effort } }
                 : {}),
               approvalPolicy,
-              sandbox: sandboxForApprovalPolicy(approvalPolicy),
+              sandbox,
             }, forkTimeoutMs);
             const realThreadId = forked.thread.id;
             remapConversationSession(sessionId, realThreadId, conversationId);
@@ -15364,7 +15353,7 @@ function persistAppServerThreadRegistrations(): boolean {
 function policyForPersist(
   threadId: string,
   previous?: PersistedCodexThread,
-): SandboxPolicy | undefined {
+): SandboxPolicy | null | undefined {
   return persistedPolicyFor({
     pending: !!codexAppServerInstance?.hasPendingPolicyChange(threadId),
     invalidated: !!codexAppServerInstance?.isPolicyInvalidated(threadId),
@@ -15391,10 +15380,13 @@ function registerAppServerConversation(
     persistedAppServerThreads.delete(existingConversation);
   }
   const previous = persistedAppServerThreads.get(conversationId);
+  const carried = previous?.threadId === threadId ? previous : undefined;
+  const sandboxPolicy = policyForPersist(threadId, carried);
   persistedAppServerThreads.set(conversationId, {
-    ...(previous?.threadId === threadId ? previous : {}),
+    ...(carried ?? {}),
     threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
-    sandboxPolicy: policyForPersist(threadId, previous?.threadId === threadId ? previous : undefined),
+    sandbox: sandboxPolicy === undefined ? carried?.sandbox : undefined,
+    sandboxPolicy,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15430,13 +15422,15 @@ function markAppServerConversationResumable(
   // policy worth keeping: erasing them here is what left records that later
   // resumed under whatever default Codex chose.
   const carried = previous?.threadId === resolvedThreadId ? previous : undefined;
+  const sandboxPolicy = policyForPersist(resolvedThreadId, carried);
   persistedAppServerThreads.set(conversationId, {
     ...(carried ?? {}),
     threadId: resolvedThreadId,
     updatedAt,
     cwd: liveEntry?.cwd ?? carried?.cwd,
     approvalPolicy: liveEntry?.approvalPolicy ?? carried?.approvalPolicy,
-    sandboxPolicy: policyForPersist(resolvedThreadId, carried),
+    sandbox: sandboxPolicy === undefined ? carried?.sandbox : undefined,
+    sandboxPolicy,
   });
   return persistAppServerThreadRegistrations();
 }
@@ -15470,7 +15464,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
         }
         if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
-      const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
+      const policy = record.approvalPolicy ?? resolveCodexPermissionDefaults(activeConfig).approvalPolicy;
       const response = await server.threadResume(codexResumeParams(record, policy));
       if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
@@ -15544,6 +15538,7 @@ function loadPersistedAppServerThreadRegistrations(): void {
         updatedAt,
         cwd: record.cwd,
         approvalPolicy: record.approvalPolicy,
+        sandbox: record.sandbox,
         sandboxPolicy: record.sandboxPolicy,
         activeTurnId: record.activeTurnId,
         recoveryAttempts: record.recoveryAttempts,
@@ -23745,6 +23740,7 @@ async function main(): Promise<void> {
 
   codexAppServerInstance = new CodexAppServer({
     log,
+    defaultPermissions: () => resolveCodexPermissionDefaults(activeConfig),
     onApproval: async (threadId: string, approval: ApprovalRequest) => {
       const entry = appServerThreads.get(threadId);
       if (!entry) return true;
@@ -24052,6 +24048,7 @@ async function main(): Promise<void> {
           }));
           if (codexAppServerInstance) {
             registry.register(new CodexAppServerRuntimeDriver({
+              defaultPermissions: () => resolveCodexPermissionDefaults(activeConfig),
               io: {
                 client: codexAppServerInstance,
                 registerThread({ conversationId, threadId, cwd, approvalPolicy }) {

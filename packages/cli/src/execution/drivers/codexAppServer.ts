@@ -43,6 +43,7 @@ export interface CodexAppServerIo {
     conversationId: string;
     threadId: string;
     cwd: string;
+    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
     approvalPolicy?: "untrusted" | "on-failure" | "on-request" | "never";
   }): void;
   inspectThread(threadId: string): Promise<"alive" | "missing" | "unknown">;
@@ -53,6 +54,7 @@ export interface CodexAppServerIo {
 export interface CodexAppServerRuntimeDriverOptions {
   io: CodexAppServerIo;
   capabilities?: readonly RuntimeCapability[];
+  defaultPermissions?: () => { sandbox: "read-only" | "workspace-write" | "danger-full-access"; approvalPolicy: "untrusted" | "on-failure" | "on-request" | "never" };
 }
 
 export class CodexAppServerRuntimeDriver implements RuntimeDriver {
@@ -62,9 +64,11 @@ export class CodexAppServerRuntimeDriver implements RuntimeDriver {
   readonly capabilities: readonly RuntimeCapability[];
 
   private readonly io: CodexAppServerIo;
+  private readonly defaultPermissions?: CodexAppServerRuntimeDriverOptions["defaultPermissions"];
 
   constructor(options: CodexAppServerRuntimeDriverOptions) {
     this.io = options.io;
+    this.defaultPermissions = options.defaultPermissions;
     this.capabilities = options.capabilities ?? [...FENCED_RUNTIME_CAPABILITIES];
   }
 
@@ -79,10 +83,13 @@ export class CodexAppServerRuntimeDriver implements RuntimeDriver {
       };
     }
     try {
+      const defaults = this.defaultPermissions?.();
+      const sandbox = request.target.isolation?.sandbox ?? defaults?.sandbox ?? "danger-full-access";
+      const approvalPolicy = request.target.isolation?.approvalPolicy ?? defaults?.approvalPolicy ?? "never";
       const response = await this.io.client.threadStart({
         cwd: request.target.projectPath,
-        sandbox: request.target.isolation?.sandbox,
-        approvalPolicy: request.target.isolation?.approvalPolicy,
+        sandbox,
+        approvalPolicy,
         model: request.configuration.model,
         ...(request.configuration.effort
           ? { config: { model_reasoning_effort: request.configuration.effort } }
@@ -96,7 +103,8 @@ export class CodexAppServerRuntimeDriver implements RuntimeDriver {
         conversationId: request.target.conversationId,
         threadId,
         cwd: request.target.projectPath,
-        approvalPolicy: request.target.isolation?.approvalPolicy,
+        sandbox,
+        approvalPolicy,
       });
       return {
         state: "started",

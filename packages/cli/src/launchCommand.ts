@@ -19,6 +19,47 @@ import {
 } from "@codecast/shared/contracts";
 import { getAgentArgs, type Config } from "./config/types.js";
 import { stableClaudeBinary } from "./stableClaudeBinary.js";
+import type { ApprovalPolicy, SandboxMode } from "./codexAppServer.js";
+
+function codexPermissionArgs(args: readonly string[]): Array<[string, string | undefined]> {
+  const options: Array<[string, string | undefined]> = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") break;
+    const parts = arg.split("=", 2);
+    let flag = parts[0]!;
+    let inline: string | undefined = parts[1];
+    if (/^-[sa]/.test(arg)) {
+      flag = arg.slice(0, 2);
+      inline = arg.length > 2 ? arg.slice(2).replace(/^=/, "") : undefined;
+    }
+    if (flag === "--sandbox" || flag === "-s" || flag === "--ask-for-approval" || flag === "-a") {
+      options.push([flag, inline ?? (args[i + 1] === "--" ? undefined : args[++i])]);
+    } else if (arg === "--dangerously-bypass-approvals-and-sandbox" || arg === "--yolo" || arg === "--full-auto") {
+      options.push([arg, undefined]);
+    }
+  }
+  return options;
+}
+
+export function codexPermissionsFromArgs(args: readonly string[]): { sandbox: SandboxMode; approvalPolicy: ApprovalPolicy } {
+  let sandbox: SandboxMode = "workspace-write";
+  let approvalPolicy: ApprovalPolicy = "on-request";
+  for (const [flag, value] of codexPermissionArgs(args)) {
+    if (flag === "--dangerously-bypass-approvals-and-sandbox" || flag === "--yolo") {
+      sandbox = "danger-full-access";
+      approvalPolicy = "never";
+    } else if (flag === "--full-auto") {
+      sandbox = "workspace-write";
+      approvalPolicy = "on-request";
+    } else if (flag === "--sandbox" || flag === "-s") {
+      if (value === "read-only" || value === "workspace-write" || value === "danger-full-access") sandbox = value;
+    } else if (flag === "--ask-for-approval" || flag === "-a") {
+      if (value === "untrusted" || value === "on-failure" || value === "on-request" || value === "never") approvalPolicy = value;
+    }
+  }
+  return { sandbox, approvalPolicy };
+}
 
 /**
  * The single seam for reading a client's user-configured base launch args.
@@ -59,7 +100,7 @@ export function getPermissionFlags(agentType: AgentClientId, config?: Config | n
     return "--permission-mode bypassPermissions";
   } else if (agentType === "codex") {
     const existing = getAgentArgs(config, "codex") || "";
-    if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
+    if (codexPermissionArgs(splitFlags(existing)).length) return null;
     if (modes?.codex === "full_auto") return "--full-auto";
     if (modes?.codex === "default") return null;
     return "--dangerously-bypass-approvals-and-sandbox";
@@ -100,7 +141,7 @@ export function permissionFlagsForMode(
     return `--permission-mode ${m}`;
   }
   if (agentType === "codex") {
-    if (configuredArgs.includes("--full-auto") || configuredArgs.includes("--ask-for-approval") || configuredArgs.includes("--dangerously-bypass")) return null;
+    if (codexPermissionArgs(splitFlags(configuredArgs)).length) return null;
     if (m === "bypass") return "--dangerously-bypass-approvals-and-sandbox";
     if (m === "full_auto") return "--full-auto";
     if (m === "default") return null;
@@ -158,10 +199,14 @@ export interface LaunchArgsResult {
 export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
   const { agentType, configuredArgs, permFlags, defaultFlags } = input;
   const args: string[] = [];
+  const codexPromptArgs: string[] = [];
   let notifyCodexBypass = false;
 
   if (agentType === "codex") {
-    if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
+    const configured = splitFlags(configuredArgs);
+    const end = configured.indexOf("--");
+    if (end !== -1) codexPromptArgs.push(...configured.splice(end));
+    args.push(...configured);
     if (permFlags) {
       args.push(...permFlags.split(/\s+/).filter(Boolean));
       if (!configuredArgs && !input.hasCodexPermissionMode) notifyCodexBypass = true;
@@ -201,6 +246,7 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
   if (defaultFlags) args.push(...defaultFlags.split(/\s+/).filter(Boolean));
 
   appendModelEffortFlags(args, input);
+  args.push(...codexPromptArgs);
 
   return { binaryArgs: args, notifyCodexBypass };
 }
@@ -306,6 +352,7 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
   const print = AGENT_CLIENTS[agentType].printMode;
   const ignored: string[] = [];
   const args: string[] = [];
+  const codexPromptArgs: string[] = [];
 
   if (print.kind === "subcommand") args.push(print.token);
 
@@ -329,7 +376,10 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
     else if (input.continueLast) args.push("--continue");
   }
 
-  if (input.configuredArgs) args.push(...splitFlags(input.configuredArgs));
+  const configured = splitFlags(input.configuredArgs);
+  const end = configured.indexOf("--");
+  if (agentType === "codex" && end !== -1) codexPromptArgs.push(...configured.splice(end));
+  args.push(...configured);
 
   if (agentType === "opencode" && !input.configuredArgs.includes("--auto")) {
     args.push("--auto");
@@ -395,6 +445,7 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
     }
   }
 
+  args.push(...codexPromptArgs);
   if (print.kind === "flag") {
     if (print.promptAsValue) args.push(print.token, prompt);
     else {
