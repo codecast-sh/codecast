@@ -95,7 +95,14 @@ export type CheckEntry = {
   // workflow_run delivery for the same suite. Absent for checks that are not
   // GitHub Actions or whose workflow_run has not arrived.
   event?: string;
+  // The GitHub App that owns the run (check_run.app.slug: "github-actions",
+  // "gitguardian", ...). Present on the check_run payload itself, so it tells
+  // an Actions check from another app's before any workflow_run arrives.
+  app?: string;
 };
+
+/** The app slug GitHub Actions stamps on every check_run it owns. */
+export const GITHUB_ACTIONS_APP = "github-actions";
 
 /** Conclusions GitHub reports that do not mean the check failed. */
 export const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
@@ -152,18 +159,10 @@ export function foldShepherdState(pr: ShepherdPrState): string {
   return "ready";
 }
 
-/**
- * One spelling for a repository.
- *
- * GitHub treats an owner and a repository name as case insensitive, so the same
- * repository reaches us as "Codecast-SH/Codecast" from a person typing it and
- * "codecast-sh/codecast" from a webhook. Every index we look it up by is a byte
- * comparison, so both the value stored and the value searched for go through
- * here and one spelling wins.
- */
-export function normalizeRepository<T extends string | undefined | null>(repository: T): T {
-  return (typeof repository === "string" ? repository.toLowerCase() : repository) as T;
-}
+// One spelling for a repository. The rule lives beside the reference parser in
+// the shared contracts so the CLI, the web and this backend cannot drift; it is
+// re-exported here because every git module already imports from this file.
+export { normalizeRepository, repositoryOwner } from "@codecast/shared/contracts";
 
 export function prUrl(repository: string, number: number): string {
   return `https://github.com/${repository}/pull/${number}`;

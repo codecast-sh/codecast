@@ -1,6 +1,8 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { extractInlineImages } from "./inlineImage.js";
-import { CLIENT_ERROR_BANNER_PREFIX, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
+import { codexTurnErrorMessage } from "./codexTurnError.js";
+import type { CodexTurnError } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -137,7 +139,11 @@ export function claudeBannerText(
   return text;
 }
 
-export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
+export type TranscriptEmission = { occurrence: number; timestampPresent: boolean; nativeTimestamp: unknown; receiptTimestamp: number; queued?: boolean; dequeue?: { timestampPresent: boolean; nativeTimestamp: unknown } };
+export type TranscriptEmissionObserver = (message: ParsedMessage, source: TranscriptEmission) => void;
+type ClaudeEmissionObserver = (message: ParsedMessage, entry: ClaudeSessionEntry, receiptTimestamp: number, dequeue?: { timestampPresent: boolean; nativeTimestamp: unknown }) => void;
+
+export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEmissionObserver): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   // A slash command's expansion (the command's .md body) is flagged isMeta by Claude Code,
   // so the generic meta-skip below drops it. Keep it when it directly follows the command
@@ -153,11 +159,13 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
   // instead: the queue-operation "remove" for the same text (written just
   // before it) carries that time; failing one, never earlier than the turn
   // already emitted in this pass.
-  let lastDequeue: { content: string; timestamp: number } | null = null;
+  let lastDequeue: { content: string; timestamp: number; receiptTimestamp: number; timestampPresent: boolean; nativeTimestamp: unknown } | null = null;
   let lastEmittedTimestamp = 0;
+  let lastEmittedReceiptTimestamp = 0;
 
   for (const entry of entries) {
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+    const receiptTimestamp = entry.timestamp ? timestamp : 0;
 
     if (entry.type === "system") {
       if (entry.content && entry.subtype) {
@@ -168,12 +176,13 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
           timestamp,
           subtype: entry.subtype,
         });
+        onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
       }
       continue;
     }
 
     if (entry.type === "queue-operation") {
-      if (entry.operation === "remove" && typeof entry.content === "string") lastDequeue = { content: entry.content, timestamp };
+      if (entry.operation === "remove" && typeof entry.content === "string") lastDequeue = { content: entry.content, timestamp, receiptTimestamp, timestampPresent: Object.hasOwn(entry, "timestamp"), nativeTimestamp: entry.timestamp };
       continue;
     }
 
@@ -215,6 +224,10 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
             timestamp: queuedTimestamp,
             images: promptImages.length > 0 ? promptImages : undefined,
           });
+          const matchedDequeue = lastDequeue?.content === promptText ? lastDequeue : undefined;
+          const queuedReceiptTimestamp = Math.max(receiptTimestamp, matchedDequeue?.receiptTimestamp ?? 0, lastEmittedReceiptTimestamp);
+          onEmit?.(messages[messages.length - 1], entry, queuedReceiptTimestamp, matchedDequeue);
+          lastEmittedReceiptTimestamp = Math.max(lastEmittedReceiptTimestamp, queuedReceiptTimestamp);
           lastEmittedTimestamp = Math.max(lastEmittedTimestamp, queuedTimestamp);
         }
       }
@@ -331,6 +344,8 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         stopReason,
         model,
       });
+      onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
+      lastEmittedReceiptTimestamp = Math.max(lastEmittedReceiptTimestamp, receiptTimestamp);
       lastEmittedTimestamp = Math.max(lastEmittedTimestamp, timestamp);
     }
 
@@ -344,12 +359,24 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
   return messages;
 }
 
-export function parseSessionFile(content: string): ParsedMessage[] {
+export function parseSessionFile(content: string, onEmit?: TranscriptEmissionObserver): ParsedMessage[] {
   const lines = content.split("\n");
+  const offsets = onEmit ? new WeakMap<ClaudeSessionEntry, number>() : undefined;
+  let offset = 0;
   const entries = lines
-    .map(line => parseSessionLine(line))
+    .map(line => {
+      const entry = parseSessionLine(line);
+      if (offsets) {
+        if (entry && typeof entry === "object") offsets.set(entry, offset);
+        offset += Buffer.byteLength(line) + 1;
+      }
+      return entry;
+    })
     .filter((e): e is ClaudeSessionEntry => e !== null);
-  return extractMessages(entries);
+  return extractMessages(entries, onEmit ? (message, entry, receiptTimestamp, dequeue) => onEmit(message, {
+    occurrence: offsets!.get(entry)!, timestampPresent: Object.hasOwn(entry, "timestamp"), nativeTimestamp: entry.timestamp, receiptTimestamp,
+    ...(entry.type === "attachment" ? { queued: true, ...(dequeue ? { dequeue: { timestampPresent: dequeue.timestampPresent, nativeTimestamp: dequeue.nativeTimestamp } } : {}) } : {}),
+  }) : undefined);
 }
 
 export function extractSlug(content: string): string | undefined {
@@ -483,8 +510,11 @@ export function parseCodexLines(content: string): CodexMessage[] {
 
 interface CodexSessionEntry {
   timestamp: string;
+  isMeta?: boolean;
   type: "session_meta" | "response_item" | "event_msg" | "turn_context";
   payload: {
+    turn_id?: string;
+    error?: CodexTurnError | null;
     model?: string;
     id?: string;
     cwd?: string;
@@ -697,7 +727,11 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       state.model = currentModel;
       continue;
     }
-    if (entry.type !== "response_item") continue;
+    if (entry.type === "event_msg" && entry.payload.type === "task_complete" && entry.payload.error) {
+      if (pendingAssistantThinking) pushAssistantMessage({ timestamp: lastTimestamp });
+      messages.push(codexTurnErrorMessage(entry.payload.turn_id ?? entry.timestamp, entry.payload.error, new Date(entry.timestamp).getTime(), currentModel));
+    }
+    if (entry.type !== "response_item" || entry.isMeta) continue;
 
     const payload = entry.payload;
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
@@ -712,14 +746,7 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       const trimmedText = text.trim();
 
       if (role === "user") {
-        const isSystemContext =
-          trimmedText.startsWith("<environment_context>") ||
-          trimmedText.startsWith("<INSTRUCTIONS>") ||
-          trimmedText.startsWith("# AGENTS.md instructions") ||
-          trimmedText.startsWith("<permissions") ||
-          trimmedText.startsWith("<collaboration_mode>") ||
-          trimmedText.startsWith("<app-context>");
-        if ((trimmedText || images.length > 0) && !isSystemContext) {
+        if ((trimmedText || images.length > 0) && !isAgentContextMessage(trimmedText)) {
           messages.push({
             uuid,
             role: "user",
@@ -1136,7 +1163,7 @@ interface GeminiSessionFile {
   messages: GeminiSessionMessage[];
 }
 
-export function parseGeminiSessionFile(content: string): ParsedMessage[] {
+export function parseGeminiSessionFile(content: string, onEmit?: TranscriptEmissionObserver): ParsedMessage[] {
   let session: GeminiSessionFile;
   try {
     session = JSON.parse(content);
@@ -1150,7 +1177,7 @@ export function parseGeminiSessionFile(content: string): ParsedMessage[] {
 
   const messages: ParsedMessage[] = [];
 
-  for (const msg of session.messages) {
+  for (const [occurrence, msg] of session.messages.entries()) {
     if (msg.type === "info") continue;
 
     const timestamp = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
@@ -1204,6 +1231,7 @@ export function parseGeminiSessionFile(content: string): ParsedMessage[] {
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
       });
+      onEmit?.(messages[messages.length - 1], { occurrence, timestampPresent: Object.hasOwn(msg, "timestamp"), nativeTimestamp: msg.timestamp, receiptTimestamp: msg.timestamp ? timestamp : 0 });
     }
   }
 
@@ -1993,12 +2021,12 @@ export function extractGrokSessionId(content: string): string | undefined {
  * blob path uses parseCursorPrompts directly. OpenCode reads an assembled
  * multi-file snapshot (see parseOpencodeSessionFile).
  */
-export function parseTranscriptFor(clientId: AgentClientId, content: string): ParsedMessage[] {
+export function parseTranscriptFor(clientId: AgentClientId, content: string, onEmit?: TranscriptEmissionObserver): ParsedMessage[] {
   switch (clientId) {
     case "codex":
       return parseCodexSessionFile(content);
     case "gemini":
-      return parseGeminiSessionFile(content);
+      return parseGeminiSessionFile(content, onEmit);
     case "cursor":
       return parseCursorTranscriptFile(content);
     case "opencode":
@@ -2008,6 +2036,6 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string): Pa
     case "grok":
       return parseGrokSessionFile(content);
     default:
-      return parseSessionFile(content);
+      return parseSessionFile(content, onEmit);
   }
 }

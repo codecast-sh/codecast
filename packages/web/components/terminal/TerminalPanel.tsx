@@ -102,8 +102,12 @@ export function TerminalPanel() {
       }
       setEp({ phase: "ready", endpoint });
       if (!restoredOnce.current) {
+        const existing = await probeEndpoint(endpoint);
+        if (existing === null) {
+          setEp({ phase: "unavailable", reason: "Terminal sessions are temporarily unavailable. Retry in a moment." });
+          return;
+        }
         restoredOnce.current = true;
-        const existing = (await probeEndpoint(endpoint)) ?? [];
         const openNames = new Set(listTabs().map((t) => t.sessionName));
         for (const sess of existing) {
           // Belt-and-braces: never try to restore a name the daemon would

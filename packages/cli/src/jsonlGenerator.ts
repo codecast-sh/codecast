@@ -10,6 +10,8 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
 import { claudeProjectDirName } from "./projectPathResolver.js";
+import { buildCodexImportContext, type CodexImportItem } from "./codexImportContext.js";
+import { encodePiCwdSlug } from "./transcriptDirWatcher.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -508,6 +510,56 @@ export function resumeEffortFlagFromFile(jsonlPath: string, extraFlags: string):
 export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
   sessionId?: string;
+  /** Where the regenerated session runs. See generatedSessionCwd. */
+  cwd?: string;
+}
+
+// The cwd stamped into a regenerated transcript. An explicit caller cwd wins,
+// then the conversation's recorded project path. process.cwd() is the fallback
+// for the CLI (a `cast` command runs where the user stands) and is exactly
+// wrong under the daemon, whose cwd is `/` (launchd): a rollout stamped with
+// `/` resumes into Codex's "Choose working directory" picker. Daemon callers
+// therefore resolve the cwd up front (regenerationCwd) and refuse when there is
+// none, rather than letting this fallback write a rollout nobody can resume.
+/**
+ * Trim an export to its last `tailMessages` messages for a rebuilt session,
+ * keeping every earlier human instruction and prepending a notice that names
+ * what was cut and how to read it back (`cast read`). Shared by every client
+ * writer; `fitReason` names the window the trim serves (in the notice).
+ */
+export function applyImportTailTrim(data: ExportResult, tailMessages: number | undefined, fitReason: string): ExportedMessage[] {
+  const messages = data.messages;
+  if (!tailMessages || tailMessages <= 0 || messages.length <= tailMessages) return messages;
+  const originalCount = messages.length;
+  // The index in data.messages maps 1:1 to `cast read` line numbers (both walk
+  // the same isNonEmptyMessage-filtered, ascending message list), so the numbers
+  // below are directly usable in the notice's `cast read` hint.
+  const cutoffIndex = originalCount - tailMessages; // tail begins here (0-based)
+  const tailStartLine = cutoffIndex + 1;            // 1-based, `cast read` numbering
+  const tail = messages.slice(cutoffIndex);
+  // Keep every earlier human instruction, not just the first — they carry the
+  // human's intent through the whole conversation and cost little.
+  const earlierInstructions = messages.slice(0, cutoffIndex).filter(isHumanInstruction);
+
+  const convRef = data.conversation.id;
+  const kept = earlierInstructions.length;
+  const notice: ExportedMessage = {
+    role: "user",
+    timestamp: data.conversation.started_at,
+    isMeta: true,
+    content:
+      `${CODECAST_IMPORT_NOTICE_PREFIX} This session was trimmed to fit ${fitReason}. ` +
+      `The full conversation is ${originalCount} messages.\n` +
+      `Kept here: ${kept > 0 ? `your ${kept} earlier instruction${kept === 1 ? "" : "s"} (below), then ` : ""}` +
+      `the last ${tailMessages} messages (starting at message ${tailStartLine}).\n` +
+      `Need anything from the omitted middle? Read it with: cast read ${convRef} <from>:<to> ` +
+      `— e.g. \`cast read ${convRef} 1:${Math.max(1, tailStartLine - 1)}\` for everything before the tail.`,
+  };
+  return [notice, ...earlierInstructions, ...tail];
+}
+
+export function generatedSessionCwd(data: ExportResult, options: { cwd?: string }): string {
+  return options.cwd || data.conversation.project_path || process.cwd();
 }
 
 type ExportedToolResult = NonNullable<ExportedMessage["tool_results"]>[number];
@@ -534,7 +586,7 @@ export function generateClaudeCodeJsonl(
 ): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
   const sessionId = options.sessionId || uuidv4();
-  const cwd = data.conversation.project_path || process.cwd();
+  const cwd = generatedSessionCwd(data, options);
   let parentUuid: string | null = null;
   let expectedToolUseIds = new Set<string>();
 
@@ -546,37 +598,7 @@ export function generateClaudeCodeJsonl(
     isSnapshotUpdate: false,
   }));
 
-  let messages = data.messages;
-  const tailMessages = typeof options.tailMessages === "number" ? options.tailMessages : undefined;
-  if (tailMessages && tailMessages > 0 && messages.length > tailMessages) {
-    const originalCount = messages.length;
-    // The index in data.messages maps 1:1 to `cast read` line numbers (both walk
-    // the same isNonEmptyMessage-filtered, ascending message list), so the numbers
-    // below are directly usable in the notice's `cast read` hint.
-    const cutoffIndex = originalCount - tailMessages; // tail begins here (0-based)
-    const tailStartLine = cutoffIndex + 1;            // 1-based, `cast read` numbering
-    const tail = messages.slice(cutoffIndex);
-    // Keep every earlier human instruction, not just the first — they carry the
-    // human's intent through the whole conversation and cost little.
-    const earlierInstructions = messages.slice(0, cutoffIndex).filter(isHumanInstruction);
-
-    const convRef = data.conversation.id;
-    const kept = earlierInstructions.length;
-    const notice: ExportedMessage = {
-      role: "user",
-      timestamp: data.conversation.started_at,
-      isMeta: true,
-      content:
-        `${CODECAST_IMPORT_NOTICE_PREFIX} This session was trimmed to fit Claude's context window ` +
-        `(an over-long session breaks Claude Code /compact). The full conversation is ${originalCount} messages.\n` +
-        `Kept here: ${kept > 0 ? `your ${kept} earlier instruction${kept === 1 ? "" : "s"} (below), then ` : ""}` +
-        `the last ${tailMessages} messages (starting at message ${tailStartLine}).\n` +
-        `Need anything from the omitted middle? Read it with: cast read ${convRef} <from>:<to> ` +
-        `— e.g. \`cast read ${convRef} 1:${Math.max(1, tailStartLine - 1)}\` for everything before the tail.`,
-    };
-
-    messages = [notice, ...earlierInstructions, ...tail];
-  }
+  const messages = applyImportTailTrim(data, options.tailMessages, "Claude's context window (an over-long session breaks Claude Code /compact)");
 
   for (const msg of messages) {
     if (isServerMetaMessage(msg)) continue;
@@ -702,6 +724,12 @@ function mapToolName(name: string): string {
 
 export interface GenerateCodexJsonlOptions {
   sessionId?: string;
+  /** Where the regenerated session runs. See generatedSessionCwd. */
+  cwd?: string;
+}
+
+export function normalizeCodexCallId(id: string): string {
+  return id.length <= 64 ? id : crypto.createHash("sha256").update(id).digest("hex");
 }
 
 export function generateCodexJsonl(
@@ -710,10 +738,17 @@ export function generateCodexJsonl(
 ): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
   const sessionId = options.sessionId || uuidv4();
-  const cwd = data.conversation.project_path || process.cwd();
+  const cwd = generatedSessionCwd(data, options);
   const startTime = data.conversation.started_at;
+  const model = data.conversation.agent_type === "codex" ? data.conversation.model || undefined : undefined;
+  const push = (entry: { timestamp: string; type: string; payload: unknown; isMeta?: boolean }) => {
+    lines.push(JSON.stringify({
+      ...entry,
+      ...(options.sessionId && entry.type === "response_item" ? { isMeta: true } : {}),
+    }));
+  };
 
-  lines.push(JSON.stringify({
+  push({
     timestamp: startTime, type: "session_meta",
     payload: {
       id: sessionId, timestamp: startTime, cwd,
@@ -721,25 +756,25 @@ export function generateCodexJsonl(
       model_provider: "openai",
       base_instructions: { text: "You are Codex, a coding agent.", source: "built-in" },
     },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: {
       type: "message", role: "developer",
       content: [{ type: "input_text", text: `<permissions instructions>\nFilesystem sandboxing: sandbox_mode is danger-full-access. approval_policy is never.\n</permissions instructions>` }],
     },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `# Project context\nWorking directory: ${cwd}` }] },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `<environment_context>\n  <cwd>${cwd}</cwd>\n  <shell>bash</shell>\n</environment_context>` }] },
-  }));
+  });
 
   for (const msg of data.messages) {
     if (isServerMetaMessage(msg)) continue;
@@ -748,62 +783,286 @@ export function generateCodexJsonl(
     if (msg.role === "user") {
       if (msg.tool_results && msg.tool_results.length > 0) {
         for (const tr of msg.tool_results) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
-          }));
+            payload: { type: "function_call_output", call_id: normalizeCodexCallId(tr.tool_use_id), output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
+          });
         }
       } else {
         if (msg.content) {
-          lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } }));
-          lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } }));
-          lines.push(JSON.stringify({
+          push({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } });
+          push({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } });
+          if (model) push({
             timestamp: ts, type: "turn_context",
             payload: {
               cwd, approval_policy: "never", sandbox_policy: { type: "danger-full-access" },
-              model: "gpt-5.2-codex", personality: "friendly",
-              collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
+              model, personality: "friendly",
+              collaboration_mode: { mode: "code", settings: { model, reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
               effort: "high", summary: "auto",
             },
-          }));
+          });
         }
       }
     } else if (msg.role === "assistant") {
       if (msg.thinking) {
-        lines.push(JSON.stringify({
+        push({
           timestamp: ts, type: "response_item",
           payload: { type: "reasoning", summary: [{ type: "summary_text", text: msg.thinking.slice(0, 500) }], content: null, encrypted_content: null },
-        }));
+        });
       }
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: tc.id },
-          }));
+            payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: normalizeCodexCallId(tc.id) },
+          });
         }
       }
       if (msg.content) {
-        lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: msg.content }] } }));
-        lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: msg.content } }));
+        push({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: msg.content }] } });
+        push({ timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: msg.content } });
       }
       // Inline tool_results from incremental sync
       if (msg.tool_results && msg.tool_results.length > 0) {
         for (const tr of msg.tool_results) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
-          }));
+            payload: { type: "function_call_output", call_id: normalizeCodexCallId(tr.tool_use_id), output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
+          });
         }
       }
-      lines.push(JSON.stringify({
+      push({
         timestamp: ts, type: "event_msg",
         payload: { type: "token_count", info: null, rate_limits: { primary: { used_percent: 0.0, window_minutes: 300, resets_at: 0 }, secondary: { used_percent: 0.0, window_minutes: 10080, resets_at: 0 }, credits: { has_credits: false, unlimited: false, balance: null }, plan_type: null } },
-      }));
+      });
     }
   }
 
+  const responseItems = lines.flatMap(line => {
+    const entry = JSON.parse(line);
+    return entry.type === "response_item" ? [entry.payload as CodexImportItem] : [];
+  });
+  const replacementHistory = buildCodexImportContext(responseItems, data.conversation.id);
+  if (replacementHistory) lines.push(JSON.stringify({
+    timestamp: data.conversation.updated_at, type: "compacted",
+    payload: { message: "", replacement_history: replacementHistory },
+  }));
+
   return { jsonl: lines.join("\n") + "\n", sessionId };
+}
+
+// ── Grok ─────────────────────────────────────────────────────────────────────
+// A grok session is a directory, ~/.grok/sessions/<encodeURIComponent(cwd)>/<uuid>/.
+// The model context it resumes from is chat_history.jsonl (`chat_format_version`
+// 1: one `{type, content}` line per item), and summary.json carries the id and
+// cwd. Live-verified 2026-09-05: a directory holding only those two files plus
+// an empty updates.jsonl resumes headless and the model answers from the
+// written history; grok fills in the rest of the bundle (prompt_context,
+// system_prompt, events, rewind points) on launch. Tool activity is rendered as
+// text, the way the trimmed Claude import does — grok's own tool-call items
+// are not reproduced.
+
+export interface GenerateGrokSessionOptions {
+  /** A caller-assigned UUID; a fresh one is minted otherwise (grok requires a UUID). */
+  sessionId?: string;
+  cwd?: string;
+  /** Keep only the last N messages (plus earlier human instructions and a notice). */
+  tailMessages?: number;
+  /** grok model id for the summary; the conversation's model is used only when it is a grok one. */
+  model?: string;
+}
+
+export interface GrokSessionFiles {
+  sessionId: string;
+  cwd: string;
+  chatHistoryJsonl: string;
+  summaryJson: string;
+}
+
+function grokTextBlock(text: string): Array<{ type: "text"; text: string }> {
+  return [{ type: "text", text }];
+}
+
+/** Tool calls and results of one message rendered as text, for clients whose
+ *  rebuilt transcript carries no structured tool items. */
+export function toolActivityText(msg: ExportedMessage): string[] {
+  const parts: string[] = [];
+  for (const tc of msg.tool_calls ?? []) parts.push(`<tool_call id="${tc.id}" name="${tc.name}">\n${tc.input}\n</tool_call>`);
+  for (const tr of msg.tool_results ?? []) {
+    parts.push(`<tool_result id="${tr.tool_use_id}"${tr.is_error ? ' error="true"' : ""}>\n${tr.content}\n</tool_result>`);
+  }
+  return parts;
+}
+
+/**
+ * The conversation as plain text for a client that can only take a USER
+ * message (OpenCode's `noReply` message endpoint): the trimmed history with
+ * every turn labelled, under a notice that names the source. The client's
+ * model reads it as context; the client's UI shows it as one imported message.
+ */
+export function renderConversationHandoff(data: ExportResult, tailMessages?: number): string {
+  const messages = applyImportTailTrim(data, tailMessages, "the new agent's context window");
+  const chunks: string[] = [];
+  for (const msg of messages) {
+    if (isServerMetaMessage(msg)) continue;
+    const parts: string[] = [];
+    if (msg.content) parts.push(msg.content);
+    parts.push(...toolActivityText(msg));
+    if (parts.length === 0) continue;
+    chunks.push(`### ${msg.role}\n${parts.join("\n\n")}`);
+  }
+  return `${CODECAST_IMPORT_NOTICE_PREFIX} This session continues a codecast conversation ` +
+    `(${data.conversation.id}, ${data.messages.length} messages) that ran with another agent. ` +
+    `The history below is the record so far; continue from where it ends.\n\n${chunks.join("\n\n")}`;
+}
+
+export function generateGrokSession(data: ExportResult, options: GenerateGrokSessionOptions = {}): GrokSessionFiles {
+  const sessionId = options.sessionId || uuidv4();
+  const cwd = generatedSessionCwd(data, options);
+  const messages = applyImportTailTrim(data, options.tailMessages, "Grok's context window");
+  const lines: string[] = [];
+  let promptIndex = 0;
+  for (const msg of messages) {
+    if (isServerMetaMessage(msg)) continue;
+    if (msg.role === "user") {
+      const results = toolActivityText({ ...msg, tool_calls: undefined });
+      if (results.length > 0) {
+        lines.push(JSON.stringify({ type: "user", synthetic_reason: "system_reminder", content: grokTextBlock(results.join("\n")) }));
+      }
+      if (msg.content) {
+        lines.push(JSON.stringify({
+          type: "user",
+          ...(msg.isMeta ? { synthetic_reason: "system_reminder" } : { prompt_index: promptIndex++ }),
+          content: grokTextBlock(msg.isMeta ? msg.content : `<user_query>\n${msg.content}\n</user_query>`),
+        }));
+      }
+    } else if (msg.role === "assistant") {
+      const parts: string[] = [];
+      if (msg.content) parts.push(msg.content);
+      parts.push(...toolActivityText(msg));
+      if (parts.length > 0) lines.push(JSON.stringify({ type: "assistant", content: parts.join("\n\n") }));
+    }
+  }
+  const now = new Date().toISOString();
+  const model = options.model
+    || (data.conversation.agent_type === "grok" && data.conversation.model ? data.conversation.model : "grok-4.6");
+  const summary = {
+    info: { id: sessionId, cwd },
+    session_summary: data.conversation.title || "Codecast import",
+    generated_title: data.conversation.title || "Codecast import",
+    created_at: data.conversation.started_at || now,
+    updated_at: now,
+    last_active_at: now,
+    num_messages: lines.length,
+    num_chat_messages: lines.length,
+    current_model_id: model,
+    next_trace_turn: 1,
+    chat_format_version: 1,
+  };
+  return { sessionId, cwd, chatHistoryJsonl: lines.join("\n") + (lines.length ? "\n" : ""), summaryJson: JSON.stringify(summary, null, 2) + "\n" };
+}
+
+/** The session directory grok uses for `cwd` (same encoding the watcher decodes). */
+export function grokSessionDir(cwd: string, sessionId: string, grokHome?: string): string {
+  return path.join(grokHome || process.env.GROK_HOME || path.join(process.env.HOME!, ".grok"), "sessions", encodeURIComponent(cwd), sessionId);
+}
+
+/** Write a rebuilt grok session bundle. `filePath` is the watched updates.jsonl
+ *  (empty: the watcher then ingests only what the resumed session appends). */
+export function writeGrokSession(files: GrokSessionFiles, grokHome?: string): { sessionId: string; filePath: string } {
+  const dir = grokSessionDir(files.cwd, files.sessionId, grokHome);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "chat_history.jsonl"), files.chatHistoryJsonl);
+  fs.writeFileSync(path.join(dir, "summary.json"), files.summaryJson);
+  const filePath = path.join(dir, "updates.jsonl");
+  fs.writeFileSync(filePath, "");
+  return { sessionId: files.sessionId, filePath };
+}
+
+// ── pi ───────────────────────────────────────────────────────────────────────
+// A pi session is one JSONL under ~/.pi/agent/sessions/<cwd slug>/<ISO ts>_<uuid>.jsonl:
+// a `session` header (version 3, id, cwd) followed by a parentId-linked chain of
+// entries; pi resumes the chain ending at the last entry (the same walk
+// parser.parsePiSessionFile does). Live-verified 2026-09-06: a written file of
+// header + user + assistant entries loads in `pi --session <file>` with both
+// messages rendered; pi appends its own bookkeeping entries on load. Tool calls
+// are written as pi `toolCall` blocks and tool results as `toolResult` entries,
+// so the resumed model sees them as pi would have recorded them.
+
+export interface GeneratePiSessionOptions {
+  sessionId?: string;
+  cwd?: string;
+  tailMessages?: number;
+  /** Stamped on every assistant entry so pi restores this model on resume
+   *  (session-manager reads provider/model off the last assistant entry). When
+   *  absent, pi falls back to its settings default. */
+  model?: { provider: string; modelId: string };
+}
+
+// pi's footer sums `usage` across every assistant entry on render, so an entry
+// without one crashes the TUI at startup (observed 2026-09-06).
+const PI_ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+export function generatePiSession(data: ExportResult, options: GeneratePiSessionOptions = {}): { jsonl: string; sessionId: string; cwd: string } {
+  const sessionId = options.sessionId || uuidv4();
+  const cwd = options.cwd || data.conversation.project_path || process.cwd();
+  const messages = applyImportTailTrim(data, options.tailMessages, "pi's context window");
+  const lines: string[] = [JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: data.conversation.started_at, cwd })];
+  let parentId: string | null = null;
+  const toolNames = new Map<string, string>();
+  const push = (entry: Record<string, unknown>, timestamp: string) => {
+    const id = uuidv4().replace(/-/g, "").slice(0, 8);
+    lines.push(JSON.stringify({ type: "message", id, parentId, timestamp, message: entry }));
+    parentId = id;
+  };
+  const toolResultEntry = (tr: NonNullable<ExportedMessage["tool_results"]>[number], timestamp: string) => push({
+    role: "toolResult",
+    toolCallId: tr.tool_use_id,
+    toolName: toolNames.get(tr.tool_use_id) || "tool",
+    content: [{ type: "text", text: tr.content }],
+    ...(tr.is_error ? { isError: true } : {}),
+    timestamp: Date.parse(timestamp) || Date.now(),
+  }, timestamp);
+  for (const msg of messages) {
+    if (isServerMetaMessage(msg)) continue;
+    const ts = msg.timestamp || data.conversation.started_at;
+    if (msg.role === "user") {
+      for (const tr of msg.tool_results ?? []) toolResultEntry(tr, ts);
+      if (msg.content) push({ role: "user", content: [{ type: "text", text: msg.content }], timestamp: Date.parse(ts) || Date.now() }, ts);
+    } else if (msg.role === "assistant") {
+      const content: Array<Record<string, unknown>> = [];
+      if (msg.content) content.push({ type: "text", text: msg.content });
+      for (const tc of msg.tool_calls ?? []) {
+        toolNames.set(tc.id, tc.name);
+        let args: unknown;
+        try { args = JSON.parse(tc.input); } catch { args = { input: tc.input }; }
+        content.push({ type: "toolCall", id: tc.id, name: tc.name, arguments: args });
+      }
+      if (content.length > 0) push({
+        role: "assistant",
+        content,
+        ...(options.model ? { api: "codecast-import", provider: options.model.provider, model: options.model.modelId } : {}),
+        usage: PI_ZERO_USAGE,
+        stopReason: content.some((c) => c.type === "toolCall") ? "toolUse" : "stop",
+        timestamp: Date.parse(ts) || Date.now(),
+      }, ts);
+      for (const tr of msg.tool_results ?? []) toolResultEntry(tr, ts);
+    }
+  }
+  return { jsonl: lines.join("\n") + "\n", sessionId, cwd };
+}
+
+/** The file pi's own writer would create for this session (watched by the pi dir watcher). */
+export function piSessionFilePath(cwd: string, sessionId: string, piHome?: string): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(piHome || path.join(process.env.HOME!, ".pi", "agent"), "sessions", encodePiCwdSlug(cwd), `${ts}_${sessionId}.jsonl`);
+}
+
+export function writePiSession(jsonl: string, sessionId: string, cwd: string, piHome?: string): { sessionId: string; filePath: string } {
+  const filePath = piSessionFilePath(cwd, sessionId, piHome);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, jsonl);
+  return { sessionId, filePath };
 }
 
 export function writeCodexSession(jsonl: string, sessionId: string, name?: string, codexHome?: string): { sessionId: string; filePath: string } {

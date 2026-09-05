@@ -12,6 +12,7 @@ import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
 import { liveConversationIdSet } from "./lib/liveSessions";
+import { docRelatesToTask } from "@codecast/shared/tasks";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -1065,7 +1066,8 @@ export const webGetDocDetail = query({
       }
     }
 
-    // Find tasks linked to same conversation
+    // Tasks the same session filed for this doc: the reverse of the task
+    // page's related docs, so the two views agree (docRelatesToTask).
     let relatedTasks: any[] = [];
     if (doc.conversation_id) {
       const allTasks = await ctx.db
@@ -1073,7 +1075,7 @@ export const webGetDocDetail = query({
         .withIndex("by_user_id", (q) => q.eq("user_id", doc.user_id))
         .collect();
       relatedTasks = allTasks.filter(
-        (t) => t.created_from_conversation === doc.conversation_id
+        (t) => t.created_from_conversation === doc.conversation_id && docRelatesToTask(doc, t)
       );
     }
 
@@ -1322,6 +1324,8 @@ export const webGetTaskDetail = query({
       }
     }
 
+    // The origin session's docs, narrowed to the ones it wrote for this task
+    // (docRelatesToTask): a long-lived session's whole journal is not related.
     let relatedDocs: any[] = [];
     if (task.created_from_conversation) {
       const convDocs = await ctx.db
@@ -1329,7 +1333,7 @@ export const webGetTaskDetail = query({
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", task.created_from_conversation))
         .collect();
       for (const d of convDocs) {
-        if (d.archived_at || !await canAccessDoc(ctx, userId, d)) continue;
+        if (d.archived_at || !docRelatesToTask(d, task) || !await canAccessDoc(ctx, userId, d)) continue;
         relatedDocs.push({
           _id: d._id,
           title: d.title,
