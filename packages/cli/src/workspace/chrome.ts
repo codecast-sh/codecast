@@ -67,6 +67,13 @@ export class ChromeLaunchError extends Error {
   }
 }
 
+export class ChromeStopError extends Error {
+  constructor(public readonly pid: number, timeoutMs: number) {
+    super(`Chromium (pid ${pid}) is still alive ${timeoutMs}ms after SIGKILL`);
+    this.name = "ChromeStopError";
+  }
+}
+
 /**
  * Resolve the Chromium/Chrome binary path. Returns null if none found
  * (callers should throw ChromeNotFoundError with the probe list).
@@ -216,39 +223,39 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
 /** Politely stop a Chrome instance: SIGTERM, then SIGKILL after timeout. */
 export async function stopChrome(
   pid: number,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; killTimeoutMs?: number } = {},
 ): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? 3000;
-  if (!isPidAlive(pid)) return;
-
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    return; // already gone
-  }
-
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const killTimeoutMs = opts.killTimeoutMs ?? 3000;
+  const stages = [["SIGTERM", timeoutMs], ["SIGKILL", killTimeoutMs]] as const;
+  for (const [signal, waitMs] of stages) {
     if (!isPidAlive(pid)) return;
-    await sleep(100);
+    try {
+      process.kill(pid, signal);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw err;
+    }
+
+    const deadline = performance.now() + waitMs;
+    while (performance.now() < deadline) {
+      if (!isPidAlive(pid)) return;
+      await sleep(Math.min(100, Math.max(0, deadline - performance.now())));
+    }
   }
-  // Escalate.
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    /* ignore */
-  }
+  if (isPidAlive(pid)) throw new ChromeStopError(pid, killTimeoutMs);
 }
 
 /** Returns true if a process with `pid` is alive. Cheap; uses signal 0. */
 export function isPidAlive(pid: number): boolean {
-  if (!pid || pid <= 0) return false;
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fff_ffff) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    // EPERM means the process exists but we don't own it — still alive.
-    return code === "EPERM";
+    if (code === "ESRCH") return false;
+    if (code === "EPERM" || code === "EACCES") return true;
+    throw err;
   }
 }

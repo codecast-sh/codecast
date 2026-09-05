@@ -1,8 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import {
   chromeBinaryProbes,
   ChromeNotFoundError,
@@ -93,12 +92,174 @@ describe("isPidAlive", () => {
     expect(isPidAlive(process.pid)).toBe(true);
   });
   test("returns false for invalid pid", () => {
-    expect(isPidAlive(0)).toBe(false);
-    expect(isPidAlive(-1)).toBe(false);
+    const kill = spyOn(process, "kill").mockImplementation(() => {
+      throw new Error("invalid PID was probed");
+    });
+    try {
+      for (const pid of [0, -1, NaN, Infinity, 1.5, 2 ** 31, Number.MAX_SAFE_INTEGER]) {
+        expect(isPidAlive(pid)).toBe(false);
+      }
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
   });
   test("returns false for an unused pid", () => {
     // PID 999999999 is well above typical max; safe assumption.
     expect(isPidAlive(999999999)).toBe(false);
+  });
+});
+
+describe("stopChrome exit confirmation", () => {
+  const pid = 999999998;
+
+  function stubKill(handler: (signal: string | number) => true) {
+    const original = process.kill.bind(process);
+    return spyOn(process, "kill").mockImplementation((target, signal = "SIGTERM") =>
+      target === pid ? handler(signal) : original(target, signal),
+    );
+  }
+
+  test.each(["EPERM", "EACCES"])("treats a signal-0 %s probe as alive", async (code) => {
+    const denied = Object.assign(new Error("permission denied"), { code });
+    const kill = stubKill(() => { throw denied; });
+    try {
+      expect(isPidAlive(pid)).toBe(true);
+      await expect(stopChrome(pid)).rejects.toBe(denied);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test.each(["EIO", undefined])("propagates an unexpected signal-0 error (%s)", async (code) => {
+    const unexpected = Object.assign(new Error("probe failed"), { code });
+    const kill = stubKill(() => { throw unexpected; });
+    try {
+      expect(() => isPidAlive(pid)).toThrow(unexpected);
+      await expect(stopChrome(pid)).rejects.toBe(unexpected);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test("does not mistake a failed post-SIGKILL probe for exit", async () => {
+    let killed = false;
+    const unexpected = Object.assign(new Error("probe failed"), { code: "EIO" });
+    const kill = stubKill((signal) => {
+      if (signal === "SIGKILL") killed = true;
+      if (signal === 0 && killed) throw unexpected;
+      return true;
+    });
+    try {
+      await expect(stopChrome(pid, { timeoutMs: 0 })).rejects.toBe(unexpected);
+      expect(killed).toBe(true);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test("accepts ESRCH as proof that the process is gone", async () => {
+    const kill = stubKill(() => {
+      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+    });
+    try {
+      expect(isPidAlive(pid)).toBe(false);
+      await stopChrome(pid);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test("waits for exit after SIGKILL before resolving", async () => {
+    let alive = true;
+    let finished = false;
+    const signals: Array<string | number> = [];
+    const kill = stubKill((signal) => {
+      if (!alive) throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+      if (signal !== 0) signals.push(signal);
+      return true;
+    });
+    const stopping = stopChrome(pid, { timeoutMs: 0 }).then(() => { finished = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(finished).toBe(false);
+      alive = false;
+      await stopping;
+      expect(finished).toBe(true);
+      expect(isPidAlive(pid)).toBe(false);
+    } finally {
+      alive = false;
+      kill.mockRestore();
+      await stopping;
+    }
+  });
+
+  test("rejects when the process survives the final deadline", async () => {
+    const signals: Array<string | number> = [];
+    const kill = stubKill((signal) => {
+      if (signal !== 0) signals.push(signal);
+      return true;
+    });
+    try {
+      await expect(stopChrome(pid, { timeoutMs: 0, killTimeoutMs: 0 })).rejects.toMatchObject({
+        name: "ChromeStopError",
+        pid,
+      });
+      expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test.each(["SIGTERM", "SIGKILL"] as const)("rejects a %s permission failure", async (deniedSignal) => {
+    const denied = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    const kill = stubKill((signal) => {
+      if (signal === deniedSignal) throw denied;
+      return true;
+    });
+    try {
+      await expect(stopChrome(pid, { timeoutMs: 0 })).rejects.toBe(denied);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test.each(["SIGTERM", "SIGKILL"] as const)("accepts exit just before %s", async (exitSignal) => {
+    const signals: Array<string | number> = [];
+    const kill = stubKill((signal) => {
+      if (signal !== 0) {
+        signals.push(signal);
+        if (signal === exitSignal) throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    try {
+      await stopChrome(pid, { timeoutMs: 0 });
+      expect(signals).toEqual(exitSignal === "SIGTERM" ? ["SIGTERM"] : ["SIGTERM", "SIGKILL"]);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  test("does not escalate after a graceful exit", async () => {
+    let alive = true;
+    const signals: Array<string | number> = [];
+    const kill = stubKill((signal) => {
+      if (!alive) throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+      if (signal !== 0) {
+        signals.push(signal);
+        alive = false;
+      }
+      return true;
+    });
+    try {
+      await stopChrome(pid);
+      expect(signals).toEqual(["SIGTERM"]);
+      expect(isPidAlive(pid)).toBe(false);
+    } finally {
+      kill.mockRestore();
+    }
   });
 });
 
@@ -175,19 +336,18 @@ describe.if(HAVE_CHROME)("launchChrome — real Chrome", () => {
     expect(verB.Browser).toBeTruthy();
   }, 25000);
 
-  test("stopChrome cleanly terminates the process", async () => {
+  test.each([3000, 0])("stopChrome terminates the process with a %ims grace period", async (timeoutMs) => {
     const port = await pickPort(39800);
     const inst = await launchChrome({
       cdpPort: port,
       userDataDir: path.join(tmpDir, "stoptest"),
     });
-    // NOT pushing to launched[] — we're stopping it here intentionally.
+    launched.push(inst);
 
     expect(isPidAlive(inst.pid)).toBe(true);
-    await stopChrome(inst.pid, { timeoutMs: 3000 });
+    await stopChrome(inst.pid, { timeoutMs });
     expect(isPidAlive(inst.pid)).toBe(false);
     // CDP port released.
-    await sleep(200); // give socket a moment to fully release
     expect(await isPortFree(port)).toBe(true);
   }, 20000);
 
