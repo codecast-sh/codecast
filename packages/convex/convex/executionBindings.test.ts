@@ -169,6 +169,40 @@ async function recordRestartIntent(
 }
 
 describe("fenced execution startup authority", () => {
+  test("safety holds queued delivery without consuming its message or creating an attempt", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    await db.patch(CONVERSATION, { pending_api_error: true, pending_api_error_kind: "safety" });
+    const id = await enqueue(ctx, "safety-queued", "Preserve this update");
+    expect(await claimDelivery(ctx)).toEqual({ state: "busy", reason: "safety" });
+    expect(db._tables.delivery_attempts).toHaveLength(0);
+    expect(await db.get(id)).toMatchObject({ content: "Preserve this update", status: "pending" });
+  });
+
+  test("safety arriving after a claim prevents the delivery effect", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const id = await enqueue(ctx, "safety-race");
+    const claim = await claimDelivery(ctx);
+    await db.patch(CONVERSATION, { pending_api_error_kind: "safety" });
+    await expect(startDeliveryInDb(ctx, USER, { ...fence(claim.permit), now: 21 }))
+      .rejects.toThrow("CONVERSATION_SAFETY_BLOCKED");
+    expect(await db.get(id)).toMatchObject({ delivery_status: "claimed", content: "safety-race" });
+    expect(db._tables.delivery_attempts[0].state).toBe("claimed");
+  });
+
+  test("a safety stop still permits recording an effect that already happened", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const id = await enqueue(ctx, "safety-after-effect");
+    const claim = await claimDelivery(ctx);
+    const started = await startDeliveryInDb(ctx, USER, { ...fence(claim.permit), now: 21 });
+    await db.patch(CONVERSATION, { pending_api_error_kind: "safety" });
+    expect(await completeDeliveryInDb(ctx, USER, { ...fence(started), externalDeliveryId: "turn-1", now: 22 }))
+      .toEqual({ accepted: true });
+    expect((await db.get(id)).delivery_status).toBe("delivered");
+  });
+
   test("ambient browser auth cannot enter the daemon effect authority", async () => {
     const browserOnlyCtx = {
       auth: { getUserIdentity: async () => ({ subject: String(USER) }) },
@@ -1385,6 +1419,49 @@ describe("conversation-global ordered delivery", () => {
 // its attempt and the head's slot), so before this a kill cancelled NOTHING here
 // and the queue simply outlived the session.
 describe("cancelFencedDeliveriesOnKill", () => {
+  test("cutoff excludes later traffic before the read cap and preserves newer claimed authority", async () => {
+    const db = makeFakeDb(tables());
+    const future = Array.from({ length: 400 }, (_, n) => ({
+      _id: `future_${n}`, conversation_id: CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "pending", kill_generation: 1,
+      created_at: 1,
+    }));
+    db._tables.pending_messages.push(...future, {
+      _id: "future_claimed", conversation_id: CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "claimed", kill_generation: 1,
+      active_delivery_attempt_id: "attempt_future", created_at: 1,
+    }, {
+      _id: "old_missing", conversation_id: CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "pending", created_at: 9,
+    }, {
+      _id: "old_zero", conversation_id: CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "pending", kill_generation: 0, created_at: 9,
+    }, {
+      _id: "old_started", conversation_id: CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "delivery-started", kill_generation: 0,
+    }, {
+      _id: "old_ambiguous", conversation_id: CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "ambiguous", kill_generation: 0,
+    }, {
+      _id: "foreign", conversation_id: OTHER_CONVERSATION, status: "pending",
+      delivery_protocol_version: 1, delivery_status: "pending", kill_generation: 0,
+    });
+    db._tables.delivery_attempts.push({ _id: "attempt_future", state: "claimed", message_id: "future_claimed" });
+    db._tables.conversation_execution_heads.push({
+      _id: "head", conversation_id: CONVERSATION,
+      active_delivery_attempt_id: "attempt_future", active_delivery_state: "claimed",
+    });
+    const preserved = structuredClone(db._tables.pending_messages.filter((row: any) => !["old_missing", "old_zero"].includes(row._id)));
+    const heads = structuredClone(db._tables.conversation_execution_heads);
+    const attempts = structuredClone(db._tables.delivery_attempts);
+    expect(await cancelFencedDeliveriesOnKill({ db }, CONVERSATION, 99, 4, 0)).toEqual({ cancelled: 2, inFlight: 2 });
+    for (const id of ["old_missing", "old_zero"]) expect(await db.get(id)).toMatchObject({ status: "cancelled", delivery_status: "cancelled-by-supersession" });
+    expect(db._tables.pending_messages.filter((row: any) => !["old_missing", "old_zero"].includes(row._id))).toEqual(preserved);
+    expect(db._tables.conversation_execution_heads).toEqual(heads);
+    expect(db._tables.delivery_attempts).toEqual(attempts);
+    expect(await cancelFencedDeliveriesOnKill({ db }, CONVERSATION, 100, 4, 0)).toEqual({ cancelled: 0, inFlight: 2 });
+  });
+
   test("terminalizes unstarted deliveries, unwinds a claimed one, releases the head slot", async () => {
     const db = makeFakeDb(tables());
     const ctx = await initializeAndReady(db);

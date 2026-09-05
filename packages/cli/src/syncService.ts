@@ -438,6 +438,70 @@ export class SyncService {
     });
   }
 
+  /**
+   * Publish one checkout's git metadata into the repository cache
+   * (repos.ingestLocal). The server decides who may read it from the
+   * directory team mapping; `published: false` with a reason is an ordinary
+   * answer (a private path), not an error. Undefined means the call failed.
+   */
+  async ingestLocalRepo(payload: {
+    root: string;
+    repository: string;
+    remote_url?: string;
+    device_label?: string;
+    default_branch?: string;
+    head_sha?: string;
+    rows: Array<{ kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean }>;
+    commits?: Array<{ sha: string; message: string; author_name: string; author_email: string; timestamp: number; files_changed: number; insertions: number; deletions: number; branch?: string; conversation_id?: string }>;
+  }): Promise<{ published: boolean; reason?: string; rows?: number; commits_created?: number } | undefined> {
+    try {
+      return await this.mutate("repos:ingestLocal", { api_token: this.apiToken, ...payload });
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      return undefined;
+    }
+  }
+
+  /**
+   * Report a session checkout's live git state (conversations.updateGitState):
+   * HEAD, branch, distance from upstream, dirtiness. The server writes only
+   * what moved. Undefined means the call failed.
+   */
+  async updateGitState(args: {
+    conversation_id: string;
+    git_commit_hash?: string;
+    git_branch?: string;
+    git_ahead?: number;
+    git_behind?: number;
+    git_dirty?: boolean;
+  }): Promise<{ updated: boolean } | undefined> {
+    try {
+      return await this.mutate("conversations:updateGitState", { api_token: this.apiToken, ...args });
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      return undefined;
+    }
+  }
+
+  /**
+   * Answer one on-demand repository read (repos.answerLocalRead): the cache
+   * row, a commit's diff, or the reason it could not be answered. Undefined
+   * means the call itself failed and the request stays open for a retry.
+   */
+  async answerLocalRead(args: {
+    request_id: string;
+    row?: { kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean };
+    commit?: { files: Array<{ filename: string; status: string; additions: number; deletions: number; changes: number; patch?: string }>; additions: number; deletions: number };
+    error?: string;
+  }): Promise<{ ok: boolean; reason?: string } | undefined> {
+    try {
+      return await this.mutate("repos:answerLocalRead", { api_token: this.apiToken, ...args });
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      return undefined;
+    }
+  }
+
   getSubscriptionClient(): ConvexClient {
     if (!this.subscriptionClient) {
       this.subscriptionClient = new ConvexClient(this.convexUrl);
@@ -964,6 +1028,7 @@ export class SyncService {
     title: string;
     description?: string;
     planShortId?: string;
+    clientKey?: string;
   }): Promise<string | null> {
     await this.throttle();
     return this.guarded(async () => {
@@ -979,6 +1044,7 @@ export class SyncService {
           source: "plan_mode",
           conversation_id: params.sessionId,
           plan_id: params.planShortId,
+          ...(params.clientKey ? {client_key: params.clientKey} : {}),
         }
       );
       return result?.short_id || null;
@@ -1118,7 +1184,9 @@ export class SyncService {
       model?: string;
     }>;
     reconcileRemoteExisting?: boolean;
-  }): Promise<{ inserted: number; ids: string[] }> {
+  }, options?: { onBatchAccepted?: (inputIndexes: readonly number[]) => void; beforeBatch?: () => void }): Promise<{ inserted: number; ids: string[] }> {
+    const onBatchAccepted = options?.onBatchAccepted;
+    const beforeBatch = options?.beforeBatch;
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
     }
@@ -1132,7 +1200,8 @@ export class SyncService {
     };
 
     const preparedMessages: Array<any> = [];
-    for (const msg of params.messages) {
+    const preparedIndexes = onBatchAccepted ? new Map<object, number>() : undefined;
+    for (const [inputIndex, msg] of params.messages.entries()) {
       const redactedContent = truncate(redactSecrets(msg.content), MAX_CONTENT_SIZE);
       const redactedThinking = msg.thinking
         ? truncate(redactSecrets(msg.thinking), MAX_CONTENT_SIZE)
@@ -1189,6 +1258,7 @@ export class SyncService {
         model: msg.model,
         timestamp: msg.timestamp,
       });
+      preparedIndexes?.set(preparedMessages[preparedMessages.length - 1], inputIndex);
     }
 
     let sendMessages = preparedMessages;
@@ -1226,6 +1296,7 @@ export class SyncService {
       for (const batch of batches) {
         await this.throttle();
         await this.guarded(async () => {
+          beforeBatch?.();
           const result = await withTimeout(
             this.mutate(
               "messages:addMessages" as any,
@@ -1238,6 +1309,7 @@ export class SyncService {
             ADD_MESSAGES_BATCH_TIMEOUT_MS,
             `addMessages batch (${batch.length} msgs)`
           );
+          if (onBatchAccepted) onBatchAccepted(batch.map(message => preparedIndexes!.get(message)!));
           const typed = result as { inserted: number; ids: string[] };
           totalInserted += typed.inserted;
           allIds.push(...typed.ids);
@@ -1396,6 +1468,16 @@ export class SyncService {
 
   async getConversationOwner(conversationId: string): Promise<string | null> {
     return (await this.getConversationOwnerInfo(conversationId))?.ownerDeviceId ?? null;
+  }
+
+  async isWorktreeShared(conversationId: string, worktreePath: string): Promise<boolean> {
+    const rows = await this.client.query("cloud:hostSessions" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+    });
+    if (!Array.isArray(rows)) throw new Error("Worktree ownership query returned no roster");
+    return rows.some((row: any) => row.conversation_id !== conversationId &&
+      (row.project_path === worktreePath || row.project_path?.startsWith(worktreePath + "/")));
   }
 
   /**
@@ -1702,10 +1784,11 @@ export class SyncService {
     });
   }
 
-  async claimPendingMessageForDelivery(messageId: string): Promise<PendingMessageForDelivery | null> {
+  async claimPendingMessageForDelivery(messageId: string, conversationId?: string): Promise<PendingMessageForDelivery | null> {
     return this.guarded(async () => {
       const result = await this.mutate("pendingMessages:claimPendingMessageForDelivery" as any, {
         message_id: messageId,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
         api_token: this.apiToken,
         device_id: deviceId(),
       });
@@ -1840,10 +1923,10 @@ export class SyncService {
   // hibernatedAt: a number stamps the park, null clears it, undefined leaves the
   // field alone — so a resume can undo the park in the same write that reports
   // the session is back.
-  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<void> {
-    if (!this.apiToken) return;
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<boolean> {
+    if (!this.apiToken) return false;
     try {
-      await this.mutate(
+      const result = await this.mutate(
         "managedSessions:updateAgentStatus" as any,
         {
           conversation_id: conversationId,
@@ -1858,7 +1941,8 @@ export class SyncService {
           ...(hibernatedAt !== undefined ? { hibernated_at: hibernatedAt } : {}),
         }
       );
-    } catch {}
+      return result?.applied === true;
+    } catch { return false; }
   }
 
   async listManagedSessions(): Promise<Array<{

@@ -1,3 +1,5 @@
+import { HibernatedMarker } from "./HibernatedMarker";
+import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -25,8 +27,9 @@ import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inb
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { actedBlockedConversations, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { rankByHeadroom, isStashHidden } from "@codecast/shared/contracts";
+import { actedBlockedConversations, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { withSafetyBlock } from "@codecast/shared/contracts";
+import { rankByHeadroom, isStashHidden, USER_RESTS, type UserRest } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -50,7 +53,14 @@ import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedHideSession } from "../store/undoActions";
+import { animatedHideSession, undoableSetSessionRest, USER_REST_LABEL } from "../store/undoActions";
+
+// What the card says under a user-filed row: the next activity re-files it.
+const USER_REST_CARD_LINE: Record<UserRest, string> = {
+  dormant: "Parked — returns on the next wake",
+  done: "Filed as done — until the next wake",
+  needs_input: "Filed as needs input — until the next wake",
+};
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff } from "lucide-react";
@@ -312,7 +322,10 @@ function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?:
   // Only the parked-and-won't-heal kinds get a badge. kind "error" (statusful
   // 429/5xx provider failures) self-retries — badging it paints a healthy
   // session as blocked.
-  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle") return null;
+  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle" && kind !== "safety") return null;
+  if (kind === "safety") {
+    return <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-500 border border-amber-500/30" title="OpenAI stopped this conversation for safety review. Automatic retries and account switching cannot resolve it.">safety</span>;
+  }
   if (kind === "throttle") {
     return (
       <span
@@ -590,7 +603,9 @@ function BlockedSessionsBanner({
   // moved on, so reviving them spends the fresh account on work nobody is
   // waiting for. Same predicate the server selection uses, so the counts on
   // the buttons are exactly what the mutations will touch.
-  const subagents = blocked.filter(isSubagentConversation);
+  const subagents = blocked.filter((sess) => isSubagentConversation(sess) && sess.pending_api_error_kind !== "safety");
+  const safetyBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "safety");
+  const safetyCount = safetyBlocked.length;
   // Workers join the acted set only through the checkbox — never because they
   // are all that is blocked. Continuing an in-process worker cannot reach it;
   // it resumes a standalone copy that reruns its brief for nobody (the
@@ -602,6 +617,9 @@ function BlockedSessionsBanner({
   const fatalCount = acted.filter((sess) => sess.pending_api_error_kind === "fatal").length;
   const throttleCount = acted.filter((sess) => sess.pending_api_error_kind === "throttle").length;
   const limitCount = acted.length - authCount - connCount - fatalCount - throttleCount;
+  // Named over the WHOLE blocked set (what the headline counts), never the
+  // acted set — same definition the blocked notification's title uses.
+  const headlineOn = blockedHeadlineCause(blocked);
   // When a session's block landed: the banner message's own timestamp, with
   // updated_at standing in for rows flagged before the field existed. The
   // headline shows the newest one — the moment the incident (last) grew.
@@ -769,7 +787,7 @@ function BlockedSessionsBanner({
   // subagents are skipped the label drops to a plain number and the breakdown
   // line right above accounts for the difference.
   const countLabel =
-    acted.length === 1 ? "it" : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
+    acted.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
   const continueTitle = selectedAccount
     ? `Switch ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} to ${selectedAccount.email ?? selectedAccount.name}, restart the blocked sessions, and continue them on it`
     : `Send "continue" to each blocked session on the current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account's token is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`;
@@ -800,14 +818,7 @@ function BlockedSessionsBanner({
             {/* Headline names the LARGEST slice — a fleet that is mostly
                 signed out shouldn't read "blocked on usage limits" because a
                 couple of stragglers also hit a limit. */}
-            {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on{" "}
-            {([
-              [limitCount, "usage limits"],
-              [authCount, "login"],
-              [throttleCount, "rate-limit bursts"],
-              [connCount, "dropped connections"],
-              [fatalCount, "api errors"],
-            ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1]}
+            {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on {headlineOn}
           </button>
           {/* The breakdown items always sum to the headline count: when the
               checkbox excludes subagents from the acted set, the excluded
@@ -820,6 +831,7 @@ function BlockedSessionsBanner({
               connCount > 0 ? `${connCount} dropped mid-response` : null,
               fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
+              safetyCount > 0 ? `${safetyCount} need${safetyCount === 1 ? "s" : ""} safety review (excluded from automatic recovery)` : null,
               !includeSubs && subagents.length > 0
                 ? `${subagents.length} subagent worker${subagents.length === 1 ? "" : "s"} skipped`
                 : null,
@@ -867,7 +879,7 @@ function BlockedSessionsBanner({
           mixed fleet (limits + a few signed out) the remedy the banner leads
           with is continue/switch; a loud sign-in button under a "usage
           limits" headline reads as the wrong fix. */}
-      {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && loginDevice && (
+      {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && safetyCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
       {expanded && (
@@ -915,6 +927,12 @@ function BlockedSessionsBanner({
           One solid button, one quiet select, one quiet escape hatch — nothing
           folded away, nothing competing. */}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        {safetyCount > 0 && (
+          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10">
+            Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
+          </button>
+        )}
+        {acted.length > 0 && <>
         <button
           onClick={handleContinue}
           disabled={busy !== null || acted.length === 0}
@@ -953,6 +971,7 @@ function BlockedSessionsBanner({
             </select>
           </label>
         )}
+        </>}
         <button
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
           disabled={busy !== null}
@@ -1759,8 +1778,8 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
         isActive={isActive}
         family="Wake"
         title="state claims a machine wake"
-        detail={`unverified — no armed trigger, watch, or loop · ${ts.provenance}`}
-        badge="claimed"
+        detail={`no armed trigger, watch, or loop · ${ts.provenance}`}
+        badge="unverified"
         badgeClass="bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
         onClick={() => onOpen(session)}
       />
@@ -1769,7 +1788,11 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
   let family: string;
   let title: string;
   let detail: string;
-  if (session.agent_status === "waiting") {
+  if (session.agent_status === "hibernated") {
+    family = "Hibernated";
+    title = HIBERNATED_COPY;
+    detail = "";
+  } else if (session.agent_status === "waiting") {
     family = "Background";
     title = "waiting on background work";
     detail = "the turn ended on an open task — the agent resumes when it finishes";
@@ -1777,10 +1800,10 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
     family = "Dormant";
     title = ts?.headline || "parked on a machine wake";
     detail = ts?.provenance ? `declared by the agent · ${ts.provenance}` : "declared by the agent";
-  } else if (session.is_dormant) {
+  } else if (session.user_rest === "dormant") {
     family = "Parked";
     title = "parked by you";
-    detail = "a machine wake resumes it; open it to un-park";
+    detail = "the next activity un-parks it; drag it to another section to re-file it";
   } else {
     family = "Dormant";
     title = ts?.headline || "waiting on a machine wake";
@@ -1792,23 +1815,25 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
       family={family}
       title={title}
       detail={detail}
-      badge="parked"
-      badgeClass="bg-sol-blue/10 text-sol-blue border-sol-blue/30"
       onClick={() => onOpen(session)}
     />
   );
 }
 
 // The one row anatomy both wake-reason variants wear: ↳ child glyph, family
-// eyebrow, title, badge, optional detail line. Kept identical to the trigger /
-// monitor bars' two-line shape so a card's children always read as one family.
+// eyebrow, title, optional badge, optional detail line. Kept identical to the
+// trigger / monitor bars' two-line shape so a card's children always read as
+// one family. The badge slot means one thing on every child row: the state of
+// the WAKE (a trigger's countdown, a command "running", a claim "unverified").
+// The plain reason row has no wake to report, so it carries no badge — the
+// card's section already says the session is parked.
 function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass, onClick }: {
   isActive: boolean;
   family: string;
   title: string;
   detail: string;
-  badge: string;
-  badgeClass: string;
+  badge?: string;
+  badgeClass?: string;
   onClick: () => void;
 }) {
   const ariaLabel = `${family} — why this session is parked`;
@@ -1831,9 +1856,11 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
-              <span className={`ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border ${badgeClass}`}>
-                {badge}
-              </span>
+              {badge && (
+                <span className={`ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border ${badgeClass ?? ""}`}>
+                  {badge}
+                </span>
+              )}
             </div>
             {detail && (
               <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
@@ -2116,7 +2143,7 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession?: (id: string) => void;
   /** Right-click: the panel owns ONE cursor-anchored menu for all cards. */
   onCardContextMenu?: (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => void;
-  variant?: "default" | "working" | "dismissed" | "stashed";
+  variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
   // subagent — the trigger view renders a trigger's sessions as sub rows under
@@ -2130,6 +2157,7 @@ export const SessionCard = memo(function SessionCard({
   sessionLabel: string | null;
   isFavorite: boolean;
 }) {
+  session = withSafetyBlock(session);
   const tipActions = useTipActions();
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
   // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
@@ -2160,7 +2188,7 @@ export const SessionCard = memo(function SessionCard({
   const ownerDevice = useRosterDevice(session.owner_device_id);
   const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
   const isWorking = variant === "working";
-  const isStashed = variant === "stashed";
+  const isStashed = variant === "stashed" || variant === "snoozed";
   // Stashed cards share the dismissed bucket's muted look — but NOT its
   // liveness suppression (a stashed agent is still running; see the idle-dot
   // gate below, which stays keyed on the real dismissed variant).
@@ -2372,7 +2400,7 @@ export const SessionCard = memo(function SessionCard({
         const { storageId } = await result.json();
         storageIds.push(storageId);
       }
-      await sendMessage({ conversation_id: session._id as Id<"conversations">, content: "[image]", image_storage_ids: storageIds });
+      await sendMessage({ conversation_id: session._id as Id<"conversations">, content: "[image]", image_storage_ids: storageIds, human: true });
       toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${displayTitle}"`);
     } catch {
       toast.error("Failed to attach files");
@@ -2467,7 +2495,8 @@ export const SessionCard = memo(function SessionCard({
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-              {session.session_error && (
+            <HibernatedMarker status={session.agent_status} compact />
+              {session.session_error && session.pending_api_error_kind !== "safety" && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
               {session.is_unresponsive && !session.session_error && (
@@ -2705,13 +2734,19 @@ export const SessionCard = memo(function SessionCard({
             <FormattedSummary text={cardSummary} />
           </div>
         )}
-        {/* The user's park gesture has no declaration or wake row of its own to
-            explain it, so the card says what will happen: the next wake — any
-            message, trigger, or turn — brings the row back on its own. */}
-        {session.is_dormant && !isDismissed && (
+        {/* The user's own verdict has no declaration or wake row of its own to
+            explain it, so the card says what will happen: the next activity —
+            any message, trigger, or turn — files the row on its own again. */}
+        {variant === "snoozed" && session.inbox_snoozed_until && (
+          <div className="mt-1 flex items-center gap-1 text-[10px] text-sol-blue">
+            <Clock className="h-3 w-3 shrink-0" />
+            <span>Until {new Date(session.inbox_snoozed_until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+          </div>
+        )}
+        {session.user_rest && !isDismissed && (
           <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-blue/70">
             <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />
-            <span>Parked — returns on the next wake</span>
+            <span>{USER_REST_CARD_LINE[session.user_rest]}</span>
           </div>
         )}
         {cleanedUserMsg && (
@@ -2820,7 +2855,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-            <BranchCodeLink session={session} className="max-w-[110px]" />
+            <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />
             <PrStatusChip status={session.pr_status} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
@@ -2889,7 +2924,8 @@ export const SessionCard = memo(function SessionCard({
               );
             })()}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-            {session.session_error && (
+            <HibernatedMarker status={session.agent_status} compact />
+            {session.session_error && session.pending_api_error_kind !== "safety" && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
             {session.is_unresponsive && !session.session_error && (
@@ -3089,7 +3125,7 @@ export const SessionCard = memo(function SessionCard({
             </ShortcutTooltip>
           )}
           {onRestore && (
-            <ShortcutTooltip label="Restore" side="left">
+            <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs Input now" : "Restore"} side="left">
               <button
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
@@ -3459,13 +3495,13 @@ function SessionListPanelImpl({
   // armed-trigger/loop facts replace the trigger-absorption pass — placement
   // now says DORMANT for a machine-owned home identically on every client.
   const placed = useMemo(
-    () => placeInboxRows(s, { focusedId, now: coarseNow }),
+    () => placeInboxRows(s, { focusedId, now: Math.max(coarseNow, Date.now()) }),
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, coarseNow],
   );
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -3559,7 +3595,7 @@ function SessionListPanelImpl({
   // (label, layout, project) changes — filterByChip's identity is that filter.
   // It used to live in the synced clientState (show_stashed / show_dismissed),
   // so one auto-reveal left the bucket open on every device, forever.
-  const CLOSED_BUCKETS = { stashed: false, dismissed: false };
+  const CLOSED_BUCKETS = { snoozed: false, stashed: false, dismissed: false };
   const [openBuckets, setOpenBuckets] = useState(CLOSED_BUCKETS);
   const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
   if (bucketsFilter !== filterByChip) {
@@ -3713,6 +3749,7 @@ function SessionListPanelImpl({
     );
     return filtered.sort((a, b) => (b.dismissed_at || b.updated_at || 0) - (a.dismissed_at || a.updated_at || 0));
   }, [filterByChip, dismissedList]);
+  const filteredSnoozed = useMemo(() => filterByChip(snoozedList), [filterByChip, snoozedList]);
   const filteredStashed = useMemo(() => {
     // Same recency window as Dismissed for the same noise reason.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
@@ -3782,6 +3819,7 @@ function SessionListPanelImpl({
         (sess) =>
           !isSessionHidden(sess) &&
           !sess.is_pinned &&
+          !sess.inbox_snoozed_until &&
           sess._id !== activeSessionId &&
           (sess.updated_at ?? 0) < staleCutoff,
       )
@@ -3815,7 +3853,7 @@ function SessionListPanelImpl({
     // resets once the agent resumes; if that never happens the stamp expires
     // and the session re-enters here (coarseNow keeps the TTL live).
     const reviving = freshReviveRequestIds(s.blockedReviveRequestedAt, now);
-    return (Object.values(s.sessions) as InboxSession[]).filter(
+    return (Object.values(s.sessions) as InboxSession[]).map(withSafetyBlock).filter(
       (sess) =>
         isBlockedConversation({ ...sess, agent_type: sess.agent_type ?? "claude_code" }) &&
         !isSessionHidden(sess) &&
@@ -4040,7 +4078,20 @@ function SessionListPanelImpl({
     }
   }, []);
 
-  // Section drop targets ("by label" view): whole group is droppable.
+  // Dropping a card on a status section files it there: the user's rest
+  // verdict, undoable like the menu gesture. One stable handler per verdict.
+  const dropSessionOnRest = useMemo(() => Object.fromEntries(
+    USER_RESTS.map((rest) => [rest, (draggedId: string) => {
+      const store = useInboxStore.getState();
+      const row = store.sessions[draggedId];
+      if (!row) return;
+      if (row.inbox_killed_at) { toast.error("A killed session can't be filed — restore it first"); return; }
+      undoableSetSessionRest(draggedId, rest);
+      toast.success(USER_REST_LABEL[rest]);
+    }]),
+  ) as Record<UserRest, (draggedId: string) => void>, []);
+
+  // Section drop targets: whole group is droppable.
   const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
 
   // Drag-to-reorder in the "time" view. There's no separate grip handle — the
@@ -4199,6 +4250,10 @@ function SessionListPanelImpl({
         return;
       }
     }
+    if (inList(filteredSnoozed) && !openBuckets.snoozed) {
+      setOpenBuckets((o) => ({ ...o, snoozed: true }));
+      return;
+    }
     if (inList(filteredStashed) && !openBuckets.stashed) {
       setOpenBuckets((o) => ({ ...o, stashed: true }));
       return;
@@ -4221,7 +4276,7 @@ function SessionListPanelImpl({
     items: InboxSession[];
     expanded: boolean;
     onToggle: () => void;
-    variant: "stashed" | "dismissed";
+    variant: "stashed" | "dismissed" | "snoozed";
     onKill: (id: string) => void;
     headerAction?: React.ReactNode;
   }) => {
@@ -4255,7 +4310,7 @@ function SessionListPanelImpl({
     // existing newest-first order within each half.
     const rowLive = (sess: InboxSession) =>
       isBucketLive(sess) || (subMap.get(sess._id) ?? []).some(isBucketLive);
-    topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
+    if (variant !== "snoozed") topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className="border-t border-sol-border/30">
         <div data-sv-hidden-head className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
@@ -4303,7 +4358,7 @@ function SessionListPanelImpl({
                   globalIndex={-1}
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
-                  onRestore={restoreWithNotice}
+                  onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                   onKill={onKill}
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
@@ -4331,7 +4386,7 @@ function SessionListPanelImpl({
                     globalIndex={-1}
                     onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
-                    onRestore={restoreWithNotice}
+                    onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
                     sessionLabel={labelByConv[sub._id] ?? null}
@@ -4368,10 +4423,10 @@ function SessionListPanelImpl({
       // The header number when it differs from items.length: the chokepoint's
       // section count (flat cards plus members nested under a same-bucket lead).
       count?: number;
-      // Present (even as null) = the whole section is a drop target in the
-      // "by label" view. A label id assigns it; null removes the label
-      // (dropping onto a project group returns the session to its project).
-      dropLabelId?: string | null;
+      // Present = the whole section is a drop target for a dragged session
+      // card. The "by label" view files the session under the label (null
+      // removes it); the status sections stamp the user's rest verdict.
+      onDropSession?: (draggedId: string) => void;
       // "time" view only: each row accepts a dragged session card as a reorder drop.
       reorderable?: boolean;
       // Render the heading as a monospace, normal-case, truncating label instead
@@ -4387,7 +4442,7 @@ function SessionListPanelImpl({
     if (items.length === 0) return null;
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
-    const isDropTarget = opts !== undefined && "dropLabelId" in (opts ?? {});
+    const isDropTarget = !!opts?.onDropSession;
     const isDragOverSection = dragOverSectionKey === key;
     const dropProps = isDropTarget
       ? {
@@ -4408,7 +4463,7 @@ function SessionListPanelImpl({
             const draggedId = e.dataTransfer.getData("codecast/session-id");
             if (!draggedId) return;
             e.preventDefault();
-            dropSessionOnLabel(draggedId, opts!.dropLabelId ?? null);
+            opts!.onDropSession!(draggedId);
           },
         }
       : {};
@@ -4622,7 +4677,7 @@ function SessionListPanelImpl({
             <button
               key={blockedIncidentTs}
               onClick={openBlockedBanner}
-              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on a usage limit, login, dropped connection, or api error — restart them all`}
+              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, or safety review — view blockers`}
               className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -4876,14 +4931,14 @@ function SessionListPanelImpl({
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
-            {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, dropLabelId: bucket._id })}
+            {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, onDropSession: (id) => dropSessionOnLabel(id, bucket._id) })}
           </div>
         ))}
         {/* Unlabeled sessions group by project — the auto-derived label tier.
             Dropping a card here strips its label (back to its own project). */}
         {bucketView.projectGroups.map(({ name, items }) => (
           <div key={`proj-${name}`}>
-            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `bucketproj_${name}`, dropLabelId: null })}
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `bucketproj_${name}`, onDropSession: (id) => dropSessionOnLabel(id, null) })}
           </div>
         ))}
         </>
@@ -4966,13 +5021,17 @@ function SessionListPanelImpl({
         })}
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
-        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow", undefined, undefined, { count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput) })}
+        {/* Needs Input, Done and Dormant take a dragged card: the drop is the
+            user's rest verdict (setSessionRest), the same stamp the context
+            menu and the dormant chord write. Working is not a target — nobody
+            can file a row as "the agent is producing". */}
+        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow", undefined, undefined, { count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
         {/* Sections read top-down as "who acts next": you (Questions, Needs
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
-        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { count: countOf(statusDone, done, placed.counts.done) })}
+        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { count: countOf(statusDone, done, placed.counts.done), onDropSession: dropSessionOnRest.done })}
         {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { count: countOf(statusWorking, working, placed.counts.working) })}
-        {renderSection("Dormant", statusDormant, "text-sol-blue", undefined, undefined, { count: countOf(statusDormant, dormant, placed.counts.dormant) })}
+        {renderSection("Dormant", statusDormant, "text-sol-blue", undefined, undefined, { count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
         </>
         )}
         {sortedSessions.length === 0 && (
@@ -4980,6 +5039,14 @@ function SessionListPanelImpl({
             No active sessions
           </div>
         )}
+        {renderHiddenBucket({
+          label: "Snoozed",
+          items: filteredSnoozed,
+          expanded: openBuckets.snoozed,
+          onToggle: () => setOpenBuckets((o) => ({ ...o, snoozed: !o.snoozed })),
+          variant: "snoozed",
+          onKill: handleKillStashed,
+        })}
         {renderHiddenBucket({
           label: "Stashed",
           items: filteredStashed,

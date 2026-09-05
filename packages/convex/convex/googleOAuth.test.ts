@@ -47,7 +47,8 @@ import {
   resolveConnectUser,
   signStateWith,
   storeConnection,
-  updateStoredRefreshToken,
+  claimRefresh,
+  writeRefreshOutcome,
 } from "./googleOAuth";
 
 const CLIENT_ID = "test-client.apps.googleusercontent.com";
@@ -75,17 +76,29 @@ const registry: Record<string, any> = {
   "googleOAuth:getOwnedConnection": getOwnedConnection,
   "googleOAuth:finishConfirm": finishConfirm,
   "googleOAuth:deleteConnection": deleteConnection,
-  "googleOAuth:updateStoredRefreshToken": updateStoredRefreshToken,
+  "googleOAuth:claimRefresh": claimRefresh,
+  "googleOAuth:writeRefreshOutcome": writeRefreshOutcome,
 };
 
 // Action/httpAction ctx: no db — run* dispatches to the real registered
 // handlers over the fake db, like production's runQuery/runMutation would.
-function actionCtx(userId: string | null, t: Record<string, any[]>) {
+/** A gate a test can hold shut: the caller stalls at that function until
+ *  `open()` — how "provider answered, DB write not yet issued" is staged. */
+function gate() {
+  let open!: () => void;
+  const held = new Promise<void>((r) => { open = r; });
+  let arrived!: () => void;
+  const reached = new Promise<void>((r) => { arrived = r; });
+  return { held, open, reached, arrived };
+}
+function actionCtx(userId: string | null, t: Record<string, any[]>, gates: Record<string, ReturnType<typeof gate>> = {}) {
   const inner = dbCtx(userId, t);
   const dispatch = async (ref: any, args: any) => {
     const name = getFunctionName(ref);
     const fn = registry[name];
     if (!fn) throw new Error(`no test handler registered for "${name}" — typo'd function path?`);
+    const g = gates[name];
+    if (g) { g.arrived(); await g.held; }
     return (fn as any)._handler(inner, args);
   };
   return { runQuery: dispatch, runMutation: dispatch, _inner: inner } as any;
@@ -567,5 +580,182 @@ describe("listConnections", () => {
     // Another user sees nothing; an unauthenticated caller sees nothing.
     expect(await (listConnections as any)._handler(dbCtx("u_other", t), {})).toHaveLength(0);
     expect(await (listConnections as any)._handler(dbCtx(null, t), {})).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------------
+ * Single flight refresh (lib/tokenRefresh) on the Gmail connection: the
+ * provider answers only when the test says so, which is how two refreshes,
+ * a reconnect, or a disconnect are made to overlap the await.
+ * ---------------------------------------------------------------------- */
+describe("getFreshAccessToken: cache, single flight and fenced writes", () => {
+  function stubGoogleDeferred() {
+    const pending: Array<{ body: string; resolve: (r: Response) => void }> = [];
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const u = typeof input === "string" ? input : input.url;
+      if (u !== GOOGLE_TOKEN_URL) throw new Error(`unexpected fetch: ${u}`);
+      return new Promise<Response>((resolve) => pending.push({ body: String(init?.body ?? ""), resolve }));
+    }) as any;
+    const answer = (i: number, body: any, status = 200) =>
+      pending[i].resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+    const untilCalls = async (n: number) => {
+      for (let i = 0; i < 200 && pending.length < n; i++) await new Promise((r) => setTimeout(r, 0));
+      if (pending.length < n) throw new Error(`Google saw ${pending.length} calls, wanted ${n}`);
+    };
+    return { pending, answer, untilCalls };
+  }
+  const grant = (n: string, rotate = false) => ({ access_token: `ya29.${n}`, expires_in: 3599, ...(rotate ? { refresh_token: `1//${n}` } : {}) });
+  const run = (t: any, gates?: Record<string, ReturnType<typeof gate>>) =>
+    (getFreshAccessToken as any)._handler(actionCtx(OWNER, t, gates), { installation_id: "gi_1" });
+  const seeded = async () => tables({ google_installations: [confirmedRow(await encryptRefreshToken(PLAINTEXT_RT, CLIENT_SECRET))] });
+  const cached = async (t: any) => (t.google_installations[0]?.access_token_enc ? decryptRefreshToken(t.google_installations[0].access_token_enc, CLIENT_SECRET) : null);
+  const reconnect = (t: any) => (async () => (storeConnection as any)._handler(dbCtx(OWNER, t), {
+    user_id: OWNER, email: "person@gmail.com", granted_scopes: [GMAIL_READONLY_SCOPE], pending_confirm_hash: "h",
+    refresh_token_enc: await encryptRefreshToken("1//reconnected", CLIENT_SECRET),
+  }))();
+
+  test("a row from before caching refreshes once, caches the token with its expiry, and the next call skips Google", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const a = run(t);
+    await google.untilCalls(1);
+    google.answer(0, grant("one"));
+    const res = await a;
+    expect(res.ok).toBe(true);
+    expect(res.access_token).toBe("ya29.one");
+    expect(res.expires_in).toBeGreaterThan(3500);
+    expect(await cached(t)).toBe("ya29.one");
+    expect(t.google_installations[0].access_expires_at).toBeGreaterThan(Date.now() + 3_500_000);
+    expect(t.google_installations[0].refresh_lease_id).toBeUndefined();
+    const again = await run(t);
+    expect(again.access_token).toBe("ya29.one");
+    expect(google.pending).toHaveLength(1);   // served from the cache
+  });
+
+  test("two overlapping refreshes make ONE Google call; the waiter returns the claimant's token", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const a = run(t);
+    await google.untilCalls(1);
+    const b = run(t);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(google.pending).toHaveLength(1);
+    google.answer(0, grant("one", true));
+    expect((await a).access_token).toBe("ya29.one");
+    expect((await b).access_token).toBe("ya29.one");
+    expect(google.pending).toHaveLength(1);
+    expect(await decryptRefreshToken(t.google_installations[0].refresh_token_enc, CLIENT_SECRET)).toBe("1//one");
+  });
+
+  test("a reconnect during the await wins: the fetched pair is dropped and the caller refreshes once more on the new grant", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const a = run(t);
+    await google.untilCalls(1);
+    await reconnect(t);
+    google.answer(0, grant("stale", true));   // refused: the row moved on
+    await google.untilCalls(2);               // second grant, with the reconnected refresh token
+    expect(new URLSearchParams(google.pending[1].body).get("refresh_token")).toBe("1//reconnected");
+    google.answer(1, grant("fresh"));
+    const res = await a;
+    expect(res.access_token).toBe("ya29.fresh");
+    expect(await cached(t)).toBe("ya29.fresh");
+    expect(await decryptRefreshToken(t.google_installations[0].refresh_token_enc, CLIENT_SECRET)).toBe("1//reconnected");
+    expect(t.google_installations).toHaveLength(1);
+  });
+
+  test("PRE-CLAIM reconnect: A reads the old grant, the reconnect lands before A claims; A's stale claim is refused and the only Google call carries the reconnected grant", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const g = gate();
+    const a = run(t, { "googleOAuth:claimRefresh": g });
+    await g.reached;                                       // read done, claim not yet issued
+    await reconnect(t);                                    // new refresh grant, still no access ciphertext
+    g.open();
+    await google.untilCalls(1);
+    expect(new URLSearchParams(google.pending[0].body).get("refresh_token")).toBe("1//reconnected");
+    google.answer(0, grant("fresh", true));
+    const res = await a;
+    expect(res.access_token).toBe("ya29.fresh");
+    expect(google.pending).toHaveLength(1);                // the old grant was never sent
+    expect(await decryptRefreshToken(t.google_installations[0].refresh_token_enc, CLIENT_SECRET)).toBe("1//fresh");
+    expect(await cached(t)).toBe("ya29.fresh");
+  });
+
+  test("a disconnect during the await yields no credentials and resurrects nothing", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const a = run(t);
+    await google.untilCalls(1);
+    t.google_installations.length = 0;
+    google.answer(0, grant("one"));
+    const res = await a;
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("No such Gmail connection");
+    expect(t.google_installations).toHaveLength(0);
+  });
+
+  test("A succeeds and stalls before its write; lease expires; B claims and succeeds; A writes first: A is refused, B's pair lands, both return B's token", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const gateA = gate();
+    const gateB = gate();
+    const a = run(t, { "googleOAuth:writeRefreshOutcome": gateA });
+    await google.untilCalls(1);
+    google.answer(0, grant("a", true));
+    await gateA.reached;
+    t.google_installations[0].refresh_lease_until = Date.now() - 1;   // A looks dead
+    const b = run(t, { "googleOAuth:writeRefreshOutcome": gateB });
+    await google.untilCalls(2);
+    const leaseB = t.google_installations[0].refresh_lease_id;
+    google.answer(1, grant("b", true));
+    await gateB.reached;
+    gateA.open();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await cached(t)).toBeNull();                                  // A wrote nothing
+    expect(t.google_installations[0].refresh_lease_id).toBe(leaseB);    // and cleared no lease
+    gateB.open();
+    expect((await b).access_token).toBe("ya29.b");
+    expect((await a).access_token).toBe("ya29.b");
+    expect(await cached(t)).toBe("ya29.b");
+    expect(await decryptRefreshToken(t.google_installations[0].refresh_token_enc, CLIENT_SECRET)).toBe("1//b");
+    expect(t.google_installations[0].refresh_lease_id).toBeUndefined();
+  });
+
+  test("a late invalid_grant after a reconnect stamps nothing on the reconnected row", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const a = run(t);
+    await google.untilCalls(1);
+    await reconnect(t);
+    google.answer(0, { error: "invalid_grant" }, 400);   // refused: not ours to park
+    await google.untilCalls(2);                            // refreshes again on the new grant
+    google.answer(1, grant("fresh"));
+    expect((await a).access_token).toBe("ya29.fresh");
+    expect(t.google_installations[0].last_error).toBeUndefined();
+    expect(t.google_installations[0].refresh_lease_id).toBeUndefined();
+  });
+
+  test("the generic path refuses the released Linear action's access-only stamp: Gmail never accepts a legacy form", async () => {
+    const t = await seeded();
+    t.google_installations[0].access_token_enc = "cached-enc";
+    const claim = await (claimRefresh as any)._handler(dbCtx(OWNER, t), { installation_id: "gi_1", expected_enc: "cached-enc", now: Date.now() });
+    expect(claim).toEqual({ ok: false, reason: "superseded" });
+    const write = await (writeRefreshOutcome as any)._handler(dbCtx(OWNER, t), { installation_id: "gi_1", expected_enc: "cached-enc", lease: "any", refresh_token_enc: "late" });
+    expect(write).toEqual({ ok: false, reason: "superseded" });
+    expect(t.google_installations[0].refresh_token_enc).not.toBe("late");
+  });
+
+  test("invalid_grant alone parks the row with the reconnect hint and releases the lease", async () => {
+    const google = stubGoogleDeferred();
+    const t = await seeded();
+    const a = run(t);
+    await google.untilCalls(1);
+    google.answer(0, { error: "invalid_grant" }, 400);
+    const res = await a;
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("reconnect Gmail");
+    expect(t.google_installations[0].last_error).toContain("invalid_grant");
+    expect(t.google_installations[0].refresh_lease_id).toBeUndefined();
   });
 });

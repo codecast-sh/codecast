@@ -614,7 +614,7 @@ export function isBlockedConversation(conv: {
   return (
     conv.pending_api_error === true &&
     BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind ?? "") &&
-    conv.agent_type === "claude_code" &&
+    (conv.agent_type === "claude_code" || (conv.agent_type === "codex" && conv.pending_api_error_kind === "safety")) &&
     !conv.inbox_dismissed_at
   );
 }
@@ -656,11 +656,43 @@ export function isSubagentConversation(conv: {
 // brief again with nobody collecting the result. Shared by the server
 // selection and the web banner so the acted count is one number.
 export function actedBlockedConversations<T extends {
+  pending_api_error_kind?: string | null;
   is_subagent?: boolean;
   parent_conversation_id?: string | null;
 }>(blocked: T[], includeSubagents: boolean): T[] {
-  const topLevel = blocked.filter((c) => !isSubagentConversation(c));
-  return includeSubagents ? [...topLevel, ...blocked.filter(isSubagentConversation)] : topLevel;
+  const recoverable = blocked.filter((c) => c.pending_api_error_kind !== "safety");
+  const topLevel = recoverable.filter((c) => !isSubagentConversation(c));
+  return includeSubagents ? [...topLevel, ...recoverable.filter(isSubagentConversation)] : topLevel;
+}
+
+// The one-line cause a blocked FLEET is reported on — the banner headline and
+// the blocked-notification title both read it here, so a push and the banner
+// can never name different causes for the same incident.
+//
+// Two rules earn their own definition. It is computed over the WHOLE blocked
+// set, the same set whose size the headline states: deriving it from the
+// ACTED set (subagent workers are held out by default) named a cause nothing
+// was in — 44 workers parked on a usage limit left every acted count at zero,
+// and the label fell through to the first entry, "safety review". And the
+// order breaks ties toward the ordinary cause, so "safety review" leads only
+// when it is strictly the largest slice.
+export function blockedHeadlineCause<T extends { pending_api_error_kind?: string | null }>(blocked: T[]): string {
+  const of = (kind: string) => blocked.filter((c) => c.pending_api_error_kind === kind).length;
+  const auth = of("auth");
+  const conn = of("connection");
+  const fatal = of("fatal");
+  const throttle = of("throttle");
+  const safety = of("safety");
+  // A park with no kind recorded is a usage limit — the original park shape.
+  const limit = blocked.length - auth - conn - fatal - throttle - safety;
+  return ([
+    [limit, "usage limits"],
+    [auth, "login"],
+    [throttle, "rate-limit bursts"],
+    [conn, "dropped connections"],
+    [fatal, "api errors"],
+    [safety, "safety review"],
+  ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1];
 }
 
 // The parent-link fields every inbox session row MUST carry so the client can

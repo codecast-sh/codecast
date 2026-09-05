@@ -5,7 +5,7 @@
 //
 // PURE isomorphic code: no Node or DOM APIs, no BigInt, so the Convex runtime,
 // the daemon, the browser and React Native all run the same bytes.
-import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, trustedAgentStatus } from "./agentStatus";
+import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, trustedAgentStatus } from "./agentStatus";
 import { isMachineDeliveredMessage } from "./machineMessages";
 import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState";
 import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS } from "./openTasks";
@@ -24,6 +24,7 @@ export const INBOX_BUCKETS = [
   "dormant",
   "working",
   "idle",
+  "snoozed",
   "stashed",
   "dismissed",
   "hidden",
@@ -45,6 +46,7 @@ export const INBOX_TRUNCATION_KINDS = [
   "recent",
   "pinned",
   "dismissed",
+  "snoozed",
   "stashed",
   "owned",
   "members",
@@ -62,7 +64,7 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // selection and fold; `as_of` removed from the envelope.
 // v3: an agent-team teammate rides its present lead's bucket and fold
 // (rideLeadPlacements), so the team files as one group everywhere.
-export const INBOX_PROJECTION_VERSION = 4 as const;
+export const INBOX_PROJECTION_VERSION = 6 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -102,8 +104,10 @@ export interface WorkStateInput {
   messageCount: number;
   /** conversations.inbox_killed_at — the user retired this row. Outranks everything below. */
   killed?: boolean;
-  /** The user parked this row (inbox_dormant_at) and nothing has happened since — see isUserDormant. */
-  userDormant?: boolean;
+  /** The user's own rest verdict (inbox_rest, current per userRestOf): the row is filed where the user put it until the next activity. */
+  userRest?: UserRest | null;
+  snoozed?: boolean;
+  snoozeDue?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
   armedTriggerHome?: boolean;
   /** The session sleeps on a live harness /loop wakeup (loop_state armed, not overdue — see dormancy.isArmedLoopHome). Same standing strength as armedTriggerHome: the machine owns the next move. */
@@ -114,8 +118,11 @@ export interface WorkStateInput {
   settleVerdict?: string | null;
   /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
   declaredStatus?: string | null;
+  /** A declared `dormant` that names no wake the system can verify (no armed trigger or loop into the session, no daemon-checked open task) and has been quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
+  dormantClaimExpired?: boolean;
   /** conversations.pending_api_error — the latest turn is an unresolved auth / API-error banner; the CLI is parked on the user (or a limit reset). */
   pendingApiError?: boolean;
+  sessionError?: boolean;
 }
 
 // A single, coarse "who acts next on this session" label for CLI discovery,
@@ -132,14 +139,19 @@ export interface WorkStateInput {
 //                    task is delivered.
 //   - "dormant":     settled, and a machine wake owns the next move — the agent
 //                    declared it, an open background task implies it, the home
-//                    of an armed inject trigger, or the user parked it.
+//                    of an armed inject trigger, or the user parked it. A bare
+//                    declaration (no wake the system can verify) holds for
+//                    DORMANT_CLAIM_TTL_MS of quiet, then reads needs_input.
 //   - "idle":        nothing to act on: blank sessions (no messages yet), and
 //                    KILLED sessions — the user retired those, so they never
 //                    read as working or needs-input again (see `killed` below).
 //
 // Precedence among the settled states is the safety order: a hard block (open
-// question, permission, error banner, dead agent) beats every rest verdict,
-// dormant beats done (a session that both delivered and parked itself is
+// question, permission, error banner, dead agent) beats every rest verdict the
+// MACHINE produced; the user's own verdict (a drag into a section, the
+// dormant/done/needs-input gesture) is triage, not a claim, and stands until
+// the next activity expires it — the same standing as a snooze. Among the
+// machine verdicts, dormant beats done (a session that both delivered and parked itself is
 // parked — its next move is still a machine's), and every rest verdict beats
 // the "settled with content → needs input" fallthrough. An armed ONCE inject
 // trigger applies the same "dormant beats done" only to the done verdict:
@@ -155,7 +167,12 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // structure (an open background task, an armed inject trigger), the user's
   // park gesture, and last the settle classifier — which only speaks when no
   // declaration exists, and only for THIS settle.
-  const declaredDormant = agentStatus === "dormant" || agentStatus === "waiting";
+  // A declared dormant is a promise about a wake. Verified wakes (an armed
+  // trigger or loop, checked open work) park in their own right below; a bare
+  // promise parks only until DORMANT_CLAIM_TTL_MS of quiet — nothing else can
+  // re-derive it, because the re-derivation IS the wake landing.
+  const declaredDormant =
+    (agentStatus === "dormant" && !input.dormantClaimExpired) || agentStatus === "waiting";
   // The daemon carries a declaration as the settle status while the session is
   // live. When there is NO daemon status at all (the managed row aged out, the
   // machine is gone, the row predates the feature), the row's own pinned
@@ -171,7 +188,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // hide an open ask.
   const doneRest = (): WorkState => (input.armedOnceTriggerHome ? "dormant" : "done");
   const restState = (): WorkState => {
-    if (declaredDormant || input.armedTriggerHome || input.armedLoopHome || input.userDormant) return "dormant";
+    if (declaredDormant || input.armedTriggerHome || input.armedLoopHome) return "dormant";
     if (declaredDone) return doneRest();
     if (agentStatus === "idle" || !agentStatus) {
       // A blocked PIN is the agent's explicit claim on the human — the same
@@ -197,11 +214,19 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // alone deliberately does NOT qualify — an ordinary finished session with a
   // queued message really is about to work on it.
   if (killed) return "idle";
+  if (input.snoozed) return "dormant";
+  if (input.snoozeDue) return "needs_input";
+  // The user filed this row themselves (setSessionRest / a drag between the
+  // status sections). Their verdict outranks every signal below, hard blocks
+  // included: a dead agent parked as dormant IS dormant until something
+  // happens to it. The stamp expires on the next activity (userRestOf), so
+  // nothing here can hide a NEW ask — only the one the user already saw.
+  if (input.userRest) return input.userRest;
 
   // An unresolved API-error banner ("Please run /login", a usage limit) parks
   // the CLI on the user or on a reset: the agent cannot proceed, whatever its
   // daemon status claims. Rule the web inbox had and the server lacked.
-  if (input.pendingApiError && hasMsgs) return "needs_input";
+  if ((input.pendingApiError || (agentStatus === "hibernated" && input.sessionError)) && hasMsgs) return "needs_input";
 
   // Blocked on the user right now (open AskUserQuestion poll, or a tool-use
   // awaiting approve/deny) → needs input. A poll/permission on an empty session
@@ -212,6 +237,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Actively producing, or carrying deliverable queued work on a live daemon.
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
+  if (agentStatus === "hibernated" && !hasPending) return "dormant";
 
   // Dead or unresponsive with output → a human needs to read/restart it. A
   // dead daemon cannot deliver a wake, so no rest verdict survives this arm —
@@ -270,12 +296,18 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   let bucket: InboxBucket;
   if (input.dismissed) bucket = "dismissed";
   else if (input.stashed) bucket = "stashed";
+  else if (input.snoozed) bucket = "snoozed";
+  else if (input.snoozeDue && !input.killed) bucket = "needs_input";
   else if (input.isAnchor && !isHardBlocked(input)) bucket = "hidden";
   // A killed row is triaged: its prompt or pending decide has nobody to answer
   // it, so it never files as a question (the replica's asking derivation and
   // the web decision queue already skip killed rows; the two-replica
   // simulation caught the server stamping a killed pinned row `questions`).
-  else if (input.asking && !input.killed) bucket = "questions";
+  // The user's own verdict files the row in the section they chose, an open
+  // ask notwithstanding — they saw the ask and triaged past it (the same
+  // standing snooze has above). The next activity expires the verdict and
+  // the ask surfaces again.
+  else if (input.asking && !input.killed && !input.userRest) bucket = "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
   else bucket = work_state;
@@ -464,7 +496,7 @@ export function settleRiders(
   for (const id of ids) settle(id, new Set());
 }
 
-export const RIDE_KEEPS_OWN: ReadonlySet<InboxBucket> = new Set<InboxBucket>(["dismissed", "stashed", "pinned"]);
+export const RIDE_KEEPS_OWN: ReadonlySet<InboxBucket> = new Set<InboxBucket>(["dismissed", "stashed", "snoozed", "pinned"]);
 
 // The bucket ride over an id → placement map, in place: a rider takes its
 // present lead's bucket. The fold rides inside computeFold (the one fold
@@ -524,23 +556,45 @@ export function shouldShowInInbox(conv: InboxVisibilityRow): boolean {
   return true;
 }
 
-// ── Stamp currency (dormant gesture, settle verdict) ────────────────────────
+// ── Stamp currency (user rest verdict, settle verdict) ──────────────────────
 
-// The user's "dormant" gesture is a stamp that any later activity silently
-// expires: honored while newer than the row's last activity, dead the moment a
-// wake, a message, or a new turn bumps updated_at. No write un-parks; the row
-// simply moves on.
-export function isUserDormant(
-  conv: { inbox_dormant_at?: number | null; updated_at: number },
-): boolean {
-  return !!conv.inbox_dormant_at && conv.inbox_dormant_at >= conv.updated_at;
+// The user's rest verdict: where THEY filed the row — Needs Input, Done or
+// Dormant — by gesture or by dragging it into that section.
+export type UserRest = "needs_input" | "done" | "dormant";
+export const USER_RESTS: readonly UserRest[] = ["needs_input", "done", "dormant"];
+
+// The effective stamp: the inbox_rest / inbox_rest_at pair, or the legacy
+// dormant-only inbox_dormant_at from before the pair existed — whichever is
+// newer, so a row parked back then keeps its verdict. The server ships THIS
+// pair as the row's raw stamp (enrichment), so every replica re-checks the
+// same two numbers against updated_at and can never disagree with it.
+export function userRestStampOf(
+  conv: { inbox_rest?: string | null; inbox_rest_at?: number | null; inbox_dormant_at?: number | null },
+): { rest: UserRest; at: number } | null {
+  const legacyAt = conv.inbox_dormant_at ?? 0;
+  const at = conv.inbox_rest_at ?? 0;
+  if (conv.inbox_rest && at && at >= legacyAt && (USER_RESTS as readonly string[]).includes(conv.inbox_rest)) {
+    return { rest: conv.inbox_rest as UserRest, at };
+  }
+  if (legacyAt) return { rest: "dormant", at: legacyAt };
+  return null;
+}
+
+// The verdict is a stamp that any later activity silently expires: honored
+// while newer than the row's last activity, dead the moment a wake, a message,
+// or a new turn bumps updated_at. No write un-files; the row simply moves on.
+export function userRestOf(
+  conv: { inbox_rest?: string | null; inbox_rest_at?: number | null; inbox_dormant_at?: number | null; updated_at: number },
+): UserRest | null {
+  const stamp = userRestStampOf(conv);
+  return stamp && stamp.at >= conv.updated_at ? stamp.rest : null;
 }
 
 // The settle classifier writes its verdict AFTER the settle it describes, so a
 // current verdict is always newer than the row's last activity. The next turn
 // bumps updated_at past it and the verdict is stale until the next settle —
 // during which the active arms of classifyWorkState win anyway. Same contract
-// as isUserDormant, deliberately.
+// as userRestOf, deliberately.
 export function isSettleVerdictCurrent(
   conv: { settle_verdict_at?: number | null; updated_at: number },
 ): boolean {
@@ -557,6 +611,7 @@ export const INBOX_WINDOW_CAPS = {
   pinned: 100,
   dismissed: 200,
   stashed: 200,
+  snoozed: 200,
   owned: 200,
 } as const;
 
@@ -583,6 +638,7 @@ export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
   updated_at: number;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   has_pending_messages?: boolean | null;
   /** Membership in the viewer's session_owners set, stamped by the caller. */
   owned_by_me?: boolean | null;
@@ -601,6 +657,7 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
   if (!row.inbox_killed_at) {
     if (row.inbox_dismissed_at && row.inbox_dismissed_at >= horizon) windows.push("dismissed");
     if (row.inbox_stashed_at && row.inbox_stashed_at >= horizon) windows.push("stashed");
+    if (row.inbox_snoozed_until) windows.push("snoozed");
   }
   if (row.owned_by_me && recentEligible) windows.push("owned");
   return windows;
@@ -611,6 +668,7 @@ const WINDOW_SORT_KEY: Record<Exclude<WorkingSetWindow, "owned">, (row: WorkingS
   pinned: (r) => r.inbox_pinned_at ?? 0,
   dismissed: (r) => r.inbox_dismissed_at ?? 0,
   stashed: (r) => r.inbox_stashed_at ?? 0,
+  snoozed: (r) => r.inbox_snoozed_until ?? 0,
 };
 
 export type WorkingSetMember<Row extends WorkingSetRow = WorkingSetRow> = {
@@ -662,7 +720,7 @@ export function selectWorkingSet<Row extends WorkingSetRow>(
 // instead of the stamp diverged exactly at the 30-day stamp horizon (found by
 // the generated-world property test, 2026-09-01).
 export function isFoldExempt(row: WorkingSetRow): boolean {
-  if (row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at) return true;
+  if (row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until) return true;
   return !!row.owned_by_me;
 }
 
@@ -729,6 +787,9 @@ export function computeFold(
 // fields plus the overlay-owned facts. All optional except updated_at — a
 // classifier must read an absent fact as unknown and fall back honestly.
 export interface ProjectableInboxRow extends WorkingSetRow {
+  inbox_rest?: string | null;
+  inbox_rest_at?: number | null;
+  /** Legacy dormant-only stamp; userRestOf still honors it. */
   inbox_dormant_at?: number | null;
   anchor_id?: unknown;
   armed_trigger_kind?: string | null;
@@ -747,6 +808,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   settle_verdict_at?: number | null;
   thread_state_status?: string | null;
   pending_api_error?: boolean | null;
+  session_error?: string | null;
   /** The last USER message (conversations.last_message_preview / last_user_message). */
   last_message_preview?: string | null;
   last_user_message?: string | null;
@@ -757,6 +819,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   awaiting_input?: boolean | null;
   last_turn_allows_park?: boolean | null;
   agent_status_updated_at?: number | null;
+  hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
   auq_open?: boolean | null;
@@ -820,6 +883,7 @@ export function isSessionIdle(input: SessionIdleInput): boolean {
   if (agentStatus) {
     if (ACTIVE_AGENT_STATUSES.has(agentStatus)) return false;
     if (hasPending) return false; // queued work — agent isn't waiting on the user
+    if (agentStatus === "hibernated") return true;
     const settled =
       agentStatusUpdatedAt !== undefined &&
       now - agentStatusUpdatedAt >= AGENT_IDLE_GRACE_MS;
@@ -841,6 +905,7 @@ export interface LiveFactsRow {
   has_pending_messages?: boolean | null;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   agent_status?: string | null;
   agent_status_updated_at?: number | null;
   last_heartbeat?: number | null;
@@ -874,7 +939,7 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
   const daemonAlive = agentStatus !== "stopped" && row.daemon_alive_until != null && t < row.daemon_alive_until;
   const recentlyUpdated = t - row.updated_at < AGENT_IDLE_GRACE_MS;
   const lastRoleIsUser = !!row.last_role_is_user;
-  const isUnresponsive = (row.status ?? "active") === "active" && !daemonAlive && (
+  const isUnresponsive = (agentStatus !== "hibernated" || hasPending) && (row.status ?? "active") === "active" && !daemonAlive && (
     (lastRoleIsUser && !recentlyUpdated) || (hasPending && !recentlyUpdated)
   );
   let isIdle = isSessionIdle({
@@ -891,7 +956,7 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
   // older channel carries only the epoch's awaiting_input, which is the same
   // answer already gated on not-idle.
   let awaitingInput = false;
-  if (!isIdle && msgs > 0 && (row.auq_open ?? row.awaiting_input ?? false)) {
+  if ((!isIdle || agentStatus === "hibernated") && msgs > 0 && (row.auq_open ?? row.awaiting_input ?? false)) {
     awaitingInput = true;
     isIdle = true;
   }
@@ -919,8 +984,11 @@ export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
     row.last_heartbeat != null ? row.last_heartbeat + HEARTBEAT_ALIVE_MS : null,
     row.daemon_alive_until ?? null,
     row.producing_until ?? null,
+    row.inbox_snoozed_until ?? null,
     row.open_tasks_at != null ? row.open_tasks_at + OPEN_TASKS_FRESH_MS : null,
     row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
+    // A bare dormant claim outliving its trust (placeProjectableRow).
+    u + DORMANT_CLAIM_TTL_MS,
   ];
 }
 
@@ -947,6 +1015,14 @@ export function placeProjectableRow(
 ): InboxPlacement {
   const park = rowLastTurnAllowsPark(row);
   const loop = row.loop_state;
+  // The wakes the system can stand behind. Trigger and loop homes are counted
+  // raw here (not gated on `park`): a human who spoke last starts a turn that
+  // re-derives the status anyway, and the question is only whether SOMETHING
+  // will wake the session.
+  const verifiedWake =
+    (row.armed_trigger_kind ?? "none") !== "none" ||
+    (!!loop && loop.status === "armed" && isLoopFresh(loop, epoch)) ||
+    openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, epoch);
   return placeInboxRow({
     agentStatus: row.agent_status ?? undefined,
     isIdle: !!row.is_idle,
@@ -955,13 +1031,17 @@ export function placeProjectableRow(
     isUnresponsive: !!row.is_unresponsive,
     messageCount: row.message_count ?? 0,
     killed: !!row.inbox_killed_at,
-    userDormant: isUserDormant(row as { inbox_dormant_at?: number | null; updated_at: number }),
+    snoozed: !!row.inbox_snoozed_until && row.inbox_snoozed_until > epoch,
+    snoozeDue: !!row.inbox_snoozed_until && row.inbox_snoozed_until <= epoch,
+    userRest: userRestOf(row),
     armedTriggerHome: (row.armed_trigger_kind ?? "none") === "standing" && park,
     armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
     armedOnceTriggerHome: (row.armed_trigger_kind ?? "none") === "once" && park,
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,
+    dormantClaimExpired: row.agent_status === "dormant" && !verifiedWake && epoch - row.updated_at >= DORMANT_CLAIM_TTL_MS,
     pendingApiError: row.pending_api_error === true,
+    sessionError: !!row.session_error,
     dismissed: !!row.inbox_dismissed_at,
     stashed: !!row.inbox_stashed_at,
     pinned: !!row.inbox_pinned_at,
@@ -1043,6 +1123,7 @@ export const INBOX_FACT_FIELDS = [
   // the +45s settle, the heartbeat lapse and the trust decay flip on the
   // replica's own clock instead of waiting for a server re-execution.
   "agent_status_updated_at",
+  "hibernated_at",
   "last_heartbeat",
   "last_role_is_user",
   "auq_open",

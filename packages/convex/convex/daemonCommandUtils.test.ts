@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
+import { enqueueHibernateSession, hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { makeFakeDb } from "./testDb";
 
 describe("hasRecentPendingDaemonCommand", () => {
@@ -86,3 +86,27 @@ describe("resumeConversationSession", () => {
     expect(ctx.db._inserted.length).toBe(0);
   });
 });
+
+for (const axis of ["owner_device_id", "session_id", "conversation_id"] as const) {
+  test(`omitted hibernate request ID keeps bounded pending dedupe and distinguishes ${axis}`, async () => {
+    const conv: any = { _id: "conv", user_id: "owner", session_id: "session", owner_device_id: "device" };
+    const db = makeFakeDb({ managed_sessions: [{ _id: "managed", conversation_id: "conv", user_id: "owner", session_id: "session" }], daemon_commands: [] });
+    const ctx = { db };
+    const first = await enqueueHibernateSession(ctx, conv);
+    expect(await enqueueHibernateSession(ctx, conv)).toEqual({ ...first, deduplicated: true });
+    expect(db._tables.daemon_commands[0].request_id).toBeUndefined();
+    await db.patch(first.command_id, { _creationTime: Date.now() - 31_000 });
+    const fresh = await enqueueHibernateSession(ctx, conv);
+    expect(fresh.deduplicated).toBe(false);
+    expect(fresh.command_id).not.toBe(first.command_id);
+    await db.patch(fresh.command_id, { executed_at: Date.now(), result: "hibernated" });
+    const afterCompletion = await enqueueHibernateSession(ctx, conv);
+    expect(afterCompletion.deduplicated).toBe(false);
+    const next = { ...conv, [axis === "conversation_id" ? "_id" : axis]: "new-target" };
+    await db.patch("managed", { conversation_id: next._id, session_id: next.session_id });
+    const retargeted = await enqueueHibernateSession(ctx, next);
+    expect(retargeted.deduplicated).toBe(false);
+    expect(retargeted.command_id).not.toBe(afterCompletion.command_id);
+    expect(db._tables.daemon_commands).toHaveLength(4);
+  });
+}
