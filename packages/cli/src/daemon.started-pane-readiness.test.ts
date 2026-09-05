@@ -3,7 +3,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
-import { classifyStartedPane } from "./daemon.js";
+import { functionBlock, sliceBetween } from "./test-helpers/sourceRegion";
+
+const daemonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "daemon.ts");
+const daemonSource = fs.readFileSync(daemonPath, "utf8");
+const classifierSource = [
+  sliceBetween(daemonSource, "const STARTED_PANE_FATAL_ERRORS =", "const TRUST_PROMPT_RE =").text,
+  ...["paneContentAfterLaunchEcho", "classifyStartedPane"].map(name => functionBlock(daemonSource, name).text),
+].join("\n").replace(/^export /gm, "");
+const classifyStartedPane: (paneContent: string, promptPattern: RegExp) => string = new Function(
+  new Bun.Transpiler({ loader: "ts" }).transformSync(classifierSource) + "; return classifyStartedPane;",
+)();
 
 // Regression coverage for the unbound blank new session (root-caused 2026-09-02).
 //
@@ -60,8 +70,6 @@ describe("classifyStartedPane", () => {
 });
 
 describe("discovery binds the assigned session id at prompt readiness", () => {
-  const daemonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "daemon.ts");
-  const daemonSource = fs.readFileSync(daemonPath, "utf8");
   const idx = daemonSource.indexOf("async function discoverAndLinkSession(");
   const body = daemonSource.slice(idx, daemonSource.indexOf("\n}\n", idx));
 
@@ -80,7 +88,7 @@ describe("discovery binds the assigned session id at prompt readiness", () => {
   test("first-message delivery reuses the same probe instead of its own capture loop", () => {
     const at = daemonSource.indexOf("const tryStartedTmux = async");
     const delivery = daemonSource.slice(at, at + 4000);
-    expect(delivery).toContain("probeStartedPane(entry)");
+    expect(delivery).toContain("probeStartedPane(entry, isMachineDeliveredMessage(content) ? assertMachinePromptAbsent : undefined)");
     expect(delivery).not.toContain("trustPromptPatterns");
   });
 

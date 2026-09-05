@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize } from "./conversationScroll";
 
 describe("shouldFollowStreaming", () => {
   test("follows normally before the user scrolls away", () => {
@@ -152,5 +152,35 @@ describe("shouldLoadNewer", () => {
   // stand down for that whole window so the snap can't chain another load.
   test("stands down during a pagination/jump cooldown (the loop breaker)", () => {
     expect(shouldLoadNewer({ ...can, cooldownActive: true })).toBe(false);
+  });
+});
+
+describe("shouldAdjustScrollForResize", () => {
+  const above = { itemStart: 1000, scrollOffset: 5000, held: false, scrollDirection: null as const };
+
+  test("a row above the viewport shifts scrollTop by its delta", () => {
+    expect(shouldAdjustScrollForResize(above)).toBe(true);
+  });
+
+  // THE REGRESSION the user reported: scrolling up, the content lurched under
+  // the pointer on every wheel tick. Rows above the viewport render for the
+  // first time on the way up and replace their estimate with a real height;
+  // the correction was skipped whenever the scroll direction was backward, so
+  // every estimate error became a visible jump.
+  test("still shifts while scrolling UP (backward)", () => {
+    expect(shouldAdjustScrollForResize({ ...above, scrollDirection: "backward" })).toBe(true);
+  });
+
+  test("still shifts while scrolling down (forward)", () => {
+    expect(shouldAdjustScrollForResize({ ...above, scrollDirection: "forward" })).toBe(true);
+  });
+
+  test("a row at or below the viewport top leaves scrollTop alone", () => {
+    expect(shouldAdjustScrollForResize({ ...above, itemStart: 5000 })).toBe(false);
+    expect(shouldAdjustScrollForResize({ ...above, itemStart: 7000 })).toBe(false);
+  });
+
+  test("a held row (in-row disclosure just toggled) leaves scrollTop alone even above the viewport", () => {
+    expect(shouldAdjustScrollForResize({ ...above, held: true })).toBe(false);
   });
 });

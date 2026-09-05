@@ -1,7 +1,9 @@
 import { v } from "convex/values";
 import { internalMutation, query } from "./functions";
 import { internal } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
+import { normalizeRepository } from "./lib/gitRefs";
 import {
   canAccessConversation,
   canAccessPullRequest,
@@ -85,7 +87,7 @@ export const create = internalMutation({
     const prId = await ctx.db.insert("pull_requests", {
       team_id: args.team_id,
       github_pr_id: args.github_pr_id,
-      repository: args.repository,
+      repository: normalizeRepository(args.repository),
       number: args.number,
       title: args.title,
       body: args.body,
@@ -148,7 +150,7 @@ export const syncPRFromGitHub = internalMutation({
     const prId = await ctx.db.insert("pull_requests", {
       team_id: args.team_id,
       github_pr_id: args.github_pr_id,
-      repository: args.repository,
+      repository: normalizeRepository(args.repository),
       number: args.number,
       title: args.title,
       body: args.body,
@@ -237,7 +239,8 @@ export const listPRsForTeam = query({
       .collect();
 
     if (args.repository) {
-      prs = prs.filter((pr) => pr.repository === args.repository);
+      const repository = normalizeRepository(args.repository);
+      prs = prs.filter((pr) => pr.repository === repository);
     }
 
     if (args.state) {
@@ -254,6 +257,15 @@ export const listPRsForTeam = query({
   },
 });
 
+/** The row for `owner/repo#number`, before any access check. */
+async function pullRequestByNumber(ctx: any, repository: string, number: number) {
+  return await ctx.db
+    .query("pull_requests")
+    .withIndex("by_repository", (q: any) => q.eq("repository", normalizeRepository(repository)))
+    .filter((q: any) => q.eq(q.field("number"), number))
+    .first();
+}
+
 export const getPRByNumber = query({
   args: {
     repository: v.string(),
@@ -261,17 +273,34 @@ export const getPRByNumber = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
-    const memberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const allowedTeams = new Set(memberships.map((m) => String(m.team_id)));
-    const prs = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_repository", (q) => q.eq("repository", args.repository))
-      .collect();
+    const pr = await pullRequestByNumber(ctx, args.repository, args.number);
+    return pr && (await canAccessPullRequest(ctx, userId, pr)) ? pr : undefined;
+  },
+});
 
-    return prs.find((pr) => pr.number === args.number && allowedTeams.has(String(pr.team_id)));
+/**
+ * One pull request for a reference surface (an inline pill, a shared-object
+ * card, `cast link`): by Convex id, or by repository and number — the two
+ * halves of the `owner/repo#482` reference. Null, never a throw, when the row
+ * is missing or not the caller's to see, so a reference degrades to the text
+ * it was written as.
+ */
+export const webGet = query({
+  args: {
+    id: v.optional(v.id("pull_requests")),
+    repository: v.optional(v.string()),
+    number: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const pr = args.id
+      ? await ctx.db.get(args.id)
+      : args.repository && args.number !== undefined
+        ? await pullRequestByNumber(ctx, args.repository, args.number)
+        : null;
+    if (!pr || !(await canAccessPullRequest(ctx, userId, pr))) return null;
+    return pr;
   },
 });
 
@@ -443,7 +472,8 @@ export const getPRsForTimeline = query({
     ))).flat();
 
     if (args.repository) {
-      prs = prs.filter((pr) => pr.repository === args.repository);
+      const repository = normalizeRepository(args.repository);
+      prs = prs.filter((pr) => pr.repository === repository);
     }
 
     prs.sort((a, b) => b.updated_at - a.updated_at);

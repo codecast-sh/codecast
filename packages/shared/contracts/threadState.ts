@@ -165,3 +165,21 @@ export function threadStateFreshness(
 export function hasThreadState(fields: ThreadStateFields | null | undefined): boolean {
   return !!fields?.thread_state && fields.thread_state.trim().length > 0;
 }
+
+/** The patch that takes a pinned state down: all four fields unset together,
+ * so no writer can leave a status or a count behind without its text. Used by
+ * `cast state clear`, by the enqueue of a human's message (the declaration of
+ * who acts next has been answered), and by the web store's optimistic clear. */
+export function clearedThreadStateFields(): {
+  thread_state: undefined;
+  thread_state_at: undefined;
+  thread_state_msg_count: undefined;
+  thread_state_status: undefined;
+} {
+  return {
+    thread_state: undefined,
+    thread_state_at: undefined,
+    thread_state_msg_count: undefined,
+    thread_state_status: undefined,
+  };
+}

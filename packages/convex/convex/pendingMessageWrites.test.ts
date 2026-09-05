@@ -22,6 +22,32 @@ function baseFields() {
 }
 
 describe("pending-message insertion boundary", () => {
+  test("every new admission reads the current kill generation and ignores caller stamps", async () => {
+    const ctx = context();
+    ctx.db._tables.conversations = [{ _id: "conversation_1" }];
+    const first = await insertEnqueuedPendingMessage(ctx, baseFields());
+    expect(await ctx.db.get(first)).toMatchObject({ kill_generation: 0 });
+    await ctx.db.patch("conversation_1", { pending_kill_generation: 7 });
+    const fields = { ...baseFields(), clientId: "message-command-2", kill_generation: 0, killGeneration: 0 };
+    const second = await insertEnqueuedPendingMessage(ctx, fields);
+    expect(await ctx.db.get(second)).toMatchObject({ kill_generation: 7 });
+    expect(await ctx.db.get(first)).toMatchObject({ kill_generation: 0 });
+  });
+
+  test("a risk resend is a new admission at the current generation without restamping its original", async () => {
+    const ctx = context();
+    ctx.db._tables.conversations = [{ _id: "conversation_1", pending_kill_generation: 2 }];
+    const original = await insertEnqueuedPendingMessage(ctx, baseFields());
+    await ctx.db.patch("conversation_1", { pending_kill_generation: 3 });
+    const resend = await insertRiskResendPendingMessage(ctx, {
+      ...baseFields(), clientId: "message-command-2",
+      delivery: { protocolVersion: 1, deliveryId: "message-command-2", conversationSequence: 8, executionEpoch: 3 },
+      resendOfDeliveryId: "message-command-1",
+    });
+    expect(await ctx.db.get(resend)).toMatchObject({ kill_generation: 3, resend_of_delivery_id: "message-command-1" });
+    expect(await ctx.db.get(original)).toMatchObject({ kill_generation: 2 });
+  });
+
   test("normal admission owns defaults and copies a complete fenced allocation", async () => {
     const ctx = context();
     const id = await insertEnqueuedPendingMessage(ctx, {

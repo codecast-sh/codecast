@@ -9,7 +9,7 @@ byte-identical.
 
 A message is an interruption, and interruptions are expensive. It lands as a new turn, so a session mid-task stops what it is doing to answer you. When you only need to know what another session found, decided, or changed, read it first: `cast read <id>` for its recent turns, `cast diff <id>` for the files it touched. The transcript usually already holds the answer, and reading costs the session nothing. Send when reading is not enough: a question only that session can answer, a task you want it to take on, or a redirect while it is working. Those are worth the interruption, so don't let the cost talk you out of a message that moves the work.
 
-A send is attributed to you; inbound arrives wrapped as `<session-message from="jx7c6zk">…</session-message>` — reply to its ID.
+A send is attributed to you; inbound arrives wrapped as `<session-message from="jx7c6zk">…</session-message>` — reply to its ID. A person typing into your session from the dashboard arrives as `<user-message from="Their Name">…</user-message>`: a human wrote it directly, not a session, so answer them in this thread as you would your own user.
 
 Target on evidence, not inference: work state says who is paying attention, not who wrote what, so check the diff before attributing a change. A teammate's session runs on another machine, in their own checkout: it can never explain your local tree, so coordinate on what you truly share — branches, schemas, deploys — and phrase what you can't verify as a question.
 

@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -703,5 +703,36 @@ describe("extractDecideArgs", () => {
     expect(out.verb).toBe("ask");
     expect(out.question).toBe("Ship");
     expect(out.options.map((o) => o.label)).toEqual(["Yes", "No"]);
+  });
+});
+
+describe("browserTabOf", () => {
+  const bash = (id: string, command: string) => ({ id, name: "Bash", input: JSON.stringify({ command }) });
+  const cast = (command: string) => parseCastCommandString(command);
+
+  test("names the tab a cast browser row printed, with the page it was on", () => {
+    const tool = bash("t1", "cast browser open https://example.com/x");
+    const output = "✓ Example\n  https://example.com/x\n  tab 4A2CDC7E (real Chrome, via the extension)";
+    expect(browserTabOf(tool, cast("cast browser open https://example.com/x"), output, {})).toEqual({ kind: "cast", tabId: "4A2CDC7E", url: "https://example.com/x" });
+  });
+
+  test("inherits the tab and page from the carry-forward map when the row is silent", () => {
+    const tool = bash("t2", "cast browser find 'Sign in'");
+    const carried = { t2: { tabId: "4A2CDC7E", url: "https://example.com/x" } };
+    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", carried)).toEqual({ kind: "cast", tabId: "4A2CDC7E", url: "https://example.com/x" });
+    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", {})).toBeNull();
+  });
+
+  test("ignores cast rows outside the browser, and plain shell", () => {
+    expect(browserTabOf(bash("t3", "cast task ready"), cast("cast task ready"), "tab 4A2CDC7E", {})).toBeNull();
+    expect(browserTabOf(bash("t4", "ls"), null, "tab 4A2CDC7E", {})).toBeNull();
+  });
+
+  test("reads a Claude-in-Chrome tab from the input, else from the result", () => {
+    const byInput = { id: "e1", name: "mcp__claude-in-chrome__navigate", input: JSON.stringify({ tabId: 1234, url: "https://x.y" }) };
+    expect(browserTabOf(byInput, null, undefined, {})).toEqual({ kind: "extension", tabId: "1234" });
+    const byResult = { id: "e2", name: "mcp__claude-in-chrome__computer", input: JSON.stringify({ action: "screenshot" }) };
+    expect(browserTabOf(byResult, null, "Screenshot taken\n\nExecuted on tabId: 987", {})).toEqual({ kind: "extension", tabId: "987" });
+    expect(browserTabOf(byResult, null, "Screenshot taken", {})).toBeNull();
   });
 });
