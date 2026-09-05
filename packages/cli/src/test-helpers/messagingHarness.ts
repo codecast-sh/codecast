@@ -16,9 +16,13 @@ import * as os from "node:os";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeShimScript, cleanupShimScript, type ShimOptions } from "./fakeClaudeShim.js";
-import { tmuxRun } from "../tmux.js";
+import { tmuxRun as defaultTmuxRun } from "../tmux.js";
 
 export interface HarnessOptions extends ShimOptions {
+  tmuxSession?: string;
+  runTmux?: typeof defaultTmuxRun;
+  singleAttempt?: boolean;
+  onCreated?: () => void;
   /** Working directory the shim runs in. Default: a temp dir. */
   cwd?: string;
   /** Extra PATH entries (beyond the shim dir + system PATH). */
@@ -55,8 +59,9 @@ export function shellQuote(value: string): string {
 }
 
 export function spawnHarness(opts: HarnessOptions = {}): Harness {
+  const tmuxRun = opts.runTmux ?? defaultTmuxRun;
   const tmuxPrefix = opts.tmuxPrefix ?? "cc-claude-test";
-  const tmuxSession = `${tmuxPrefix}-${randomUUID().slice(0, 8)}`;
+  const tmuxSession = opts.tmuxSession ?? `${tmuxPrefix}-${randomUUID().slice(0, 8)}`;
   const cwd = opts.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "codecast-test-cwd-"));
   const sessionId = opts.sessionId ?? randomUUID();
   const shimPath = opts.command ? null : writeShimScript({ ...opts, sessionId });
@@ -94,14 +99,16 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   // exec is detected and respawned.
   let lastErr = "";
   let spawned = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < (opts.singleAttempt ? 1 : 3); attempt++) {
     const r = spawnOnce();
     if (r.status !== 0) {
       lastErr = `tmux new-session failed (status ${r.status}): ${r.stderr ?? ""} ${r.stdout ?? ""}`;
       // Try to clear any partial session that might be lingering before retry.
-      tmuxRun(["kill-session", "-t", tmuxSession]);
+      if (!opts.singleAttempt) tmuxRun(["kill-session", "-t", tmuxSession]);
       continue;
     }
+    opts.onCreated?.();
+    if (opts.singleAttempt) { spawned = true; break; }
     // Brief sync wait — uses the deadline-loop approach so the harness
     // doesn't return prematurely. 1s total max per attempt.
     const deadline = Date.now() + 1000;
@@ -114,9 +121,9 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
     tmuxRun(["kill-session", "-t", tmuxSession]);
   }
   if (!spawned) {
-    throw new Error(`harness spawn failed after 3 attempts: ${lastErr}`);
+    throw new Error(`harness spawn failed after ${opts.singleAttempt ? 1 : 3} attempts: ${lastErr}`);
   }
-  ACTIVE_SESSIONS.add(tmuxSession);
+  if (!opts.singleAttempt) ACTIVE_SESSIONS.add(tmuxSession);
 
   const projectDirName = cwd.replace(/\//g, "-");
   const jsonlPath = opts.jsonlPath ?? path.join(os.homedir(), ".claude", "projects", projectDirName, `${sessionId}.jsonl`);
@@ -187,10 +194,10 @@ export function sweepStaleSessions(prefix = "cc-claude-test"): void {
   // after its server dies ignores SIGTERM and spins at 100% CPU forever, so a
   // single bad tmux interaction during `bun test` would orphan a process that
   // outlives the run.
-  const out = tmuxRun(["list-sessions", "-F", "#{session_name}"]).stdout;
+  const out = defaultTmuxRun(["list-sessions", "-F", "#{session_name}"]).stdout;
   for (const name of out.split("\n").map((s: string) => s.trim()).filter(Boolean)) {
     if (name.startsWith(prefix)) {
-      tmuxRun(["kill-session", "-t", name]);
+      defaultTmuxRun(["kill-session", "-t", name]);
     }
   }
 }

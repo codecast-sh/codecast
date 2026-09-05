@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { modelOptionKey, findModelOption } from "./agentClients";
+import { modelOptionKey, findModelOption, modelFitsAgent } from "./agentClients";
 import { isDynamicModelKey, dynamicModelOption, featuredModelOptions } from "./modelOptions";
 
 // modelOptionKey is the inverse of the launch flag: the conversation row stores
@@ -44,6 +44,19 @@ describe("modelOptionKey", () => {
       expect(modelOptionKey(model, "codex")).toBe(model);
       expect(findModelOption("codex", model)?.cliAlias).toBe(model);
     }
+  });
+});
+
+describe("modelFitsAgent", () => {
+  it("rejects a leftover model from another agent after an in-place switch", () => {
+    expect(modelFitsAgent("claude-fable-5", "claude_code")).toBe(true);
+    expect(modelFitsAgent("claude-fable-5-1", "claude_code")).toBe(true);
+    expect(modelFitsAgent("claude-fable-5", "codex")).toBe(false);
+    expect(modelFitsAgent("gpt-6-astra", "codex")).toBe(true);
+    expect(modelFitsAgent("gpt-6-astra", "claude_code")).toBe(false);
+    // Unknown ids that don't belong to another catalog still fit (new model).
+    expect(modelFitsAgent("claude-newt-6", "claude_code")).toBe(true);
+    expect(modelFitsAgent(undefined, "claude_code")).toBe(false);
   });
 });
 

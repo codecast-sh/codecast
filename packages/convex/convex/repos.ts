@@ -1,23 +1,33 @@
 // Browsing a repository from codecast.
 //
-// The source, history and blame pages read GitHub through the App installation
-// the repository's team already has. Every fetch is a read-through cache
-// (repo_cache): the page asks for what it wants, an action refreshes the row if
-// it is stale, and the query answers from the row. Nothing here syncs to the
-// client store — these pages are read per view, and a repository is far too
-// large to mirror.
+// The source, history and blame pages read from one cache (repo_cache) that is
+// filled from two directions. GitHub, through the App installation the
+// repository's team has, fills it on demand: the page asks for what it wants,
+// an action refreshes the row if it is stale, and the query answers from the
+// row. A team member's daemon fills it from their local checkout (ingestLocal):
+// branches, tags, history, the root tree and the readme arrive whenever the
+// refs move, in the same shapes GitHub answers with, so every page reads the
+// same rows whichever side wrote them. GitHub is additive: a repository nobody
+// installed the App for is still browsable from a shared checkout. Nothing
+// here syncs to the client store — these pages are read per view, and a
+// repository is far too large to mirror.
 //
 // Freshness is per kind, and the one rule worth stating: content addressed by a
 // full commit sha never changes, so it is cached forever. Everything reached by
 // a branch name is cached for minutes, because a branch moves.
 
 import { v } from "convex/values";
-import { action, query, internalAction, internalMutation, internalQuery } from "./functions";
+import { action, mutation, query, internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessCommit, canAccessConversation, canAccessPullRequest, canAccessTask, isTeamMember } from "./lib/access";
+import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
+import { installationCoversRepo } from "./githubApp";
+import { getAuthenticatedUserId } from "./pendingMessages";
+import { resolveCreationPrivacy } from "./privacy";
+import { applyCommitFilesTo } from "./commits";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -66,22 +76,20 @@ async function installationForUser(
   userId: Id<"users">,
   repository: string,
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
-  const [owner] = repository.split("/");
-  const installations = await ctx.db
-    .query("github_app_installations")
-    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
-    .collect();
-
-  for (const candidate of installations) {
-    if (candidate.suspended_at) continue;
-    if (
-      candidate.repository_selection === "selected" &&
-      !candidate.repositories?.some((r: any) => r.full_name === repository)
-    ) continue;
+  for (const candidate of await installationsForOwner(ctx, repository)) {
+    if (!installationCoversRepo(candidate, repository)) continue;
     if (!(await isTeamMember(ctx, userId, candidate.team_id))) continue;
     return { team_id: candidate.team_id, installation_id: candidate.installation_id };
   }
   return null;
+}
+
+/** The installations under a repository's owner, by the canonical owner spelling. */
+async function installationsForOwner(ctx: { db: any }, repository: string) {
+  return await ctx.db
+    .query("github_app_installations")
+    .withIndex("by_account_login", (q: any) => q.eq("account_login", repositoryOwner(repository)))
+    .collect();
 }
 
 /**
@@ -96,19 +104,42 @@ async function installationForRepository(
   ctx: { db: any },
   repository: string,
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
-  const [owner] = repository.split("/");
-  const installations = await ctx.db
-    .query("github_app_installations")
-    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
-    .collect();
-
-  for (const candidate of installations) {
-    if (candidate.suspended_at) continue;
-    if (
-      candidate.repository_selection === "selected" &&
-      !candidate.repositories?.some((r: any) => r.full_name === repository)
-    ) continue;
+  for (const candidate of await installationsForOwner(ctx, repository)) {
+    if (!installationCoversRepo(candidate, repository)) continue;
     return { team_id: candidate.team_id, installation_id: candidate.installation_id };
+  }
+  return null;
+}
+
+/** The checkouts publishing a repository (repos.ingestLocal), whichever team they belong to. */
+async function localSourcesFor(ctx: { db: any }, repository: string) {
+  const rows = await ctx.db
+    .query("repo_sources")
+    .withIndex("by_repository", (q: any) => q.eq("repository", normalizeRepository(repository)))
+    .collect();
+  return rows.filter((row: any) => row.enabled);
+}
+
+/**
+ * How a viewer may browse a repository, or null.
+ *
+ * Two ways in, tried in order: the GitHub App installation their team has
+ * (which also carries the credential that refreshes the cache from GitHub),
+ * or a teammate's local checkout that publishes the repository. The second
+ * grants reading the cache and nothing more — there is no credential, so a
+ * row the daemon has not pushed cannot be fetched on demand.
+ */
+export type BrowseAccess = { team_id: Id<"teams">; installation_id?: number; source: "installation" | "local" };
+
+async function browseAccessForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  repository: string,
+): Promise<BrowseAccess | null> {
+  const installation = await installationForUser(ctx, userId, repository);
+  if (installation) return { ...installation, source: "installation" };
+  for (const source of await localSourcesFor(ctx, repository)) {
+    if (await isTeamMember(ctx, userId, source.team_id)) return { team_id: source.team_id, source: "local" };
   }
   return null;
 }
@@ -128,9 +159,22 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
 
     for (const installation of installations) {
       if (installation.suspended_at) continue;
+      // Keyed by the canonical spelling so a display-case entry and the rows
+      // activity wrote are one repository; the display name is what is shown.
       for (const repo of installation.repositories ?? []) {
-        found.set(repo.full_name, { repository: repo.full_name, team_id: membership.team_id, installed: true });
+        found.set(normalizeRepository(repo.full_name), { repository: repo.full_name, team_id: membership.team_id, installed: true });
       }
+    }
+
+    // Repositories teammates publish from their own checkouts need no
+    // installation at all; they are browsable from the cache the daemon fills.
+    const sources = await ctx.db
+      .query("repo_sources")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
+      .collect();
+    for (const source of sources) {
+      if (!source.enabled || found.has(source.repository)) continue;
+      found.set(source.repository, { repository: source.repository, team_id: membership.team_id, installed: false });
     }
 
     // An installation with access to every repository lists none, so the
@@ -146,8 +190,9 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
       .take(500);
 
     for (const row of [...prs, ...commits]) {
-      if (!row.repository || found.has(row.repository)) continue;
-      found.set(row.repository, { repository: row.repository, team_id: membership.team_id, installed: false });
+      const key = normalizeRepository(row.repository);
+      if (!key || found.has(key)) continue;
+      found.set(key, { repository: row.repository, team_id: membership.team_id, installed: false });
     }
   }
   return [...found.values()].sort((a, b) => a.repository.localeCompare(b.repository));
@@ -170,8 +215,8 @@ export const repoAccess = internalQuery({
     repository: v.string(),
     user_id: v.id("users"),
   },
-  handler: async (ctx, args): Promise<{ team_id: Id<"teams">; installation_id: number } | null> => {
-    return await installationForUser(ctx, args.user_id, args.repository);
+  handler: async (ctx, args): Promise<BrowseAccess | null> => {
+    return await browseAccessForUser(ctx, args.user_id, args.repository);
   },
 });
 
@@ -188,7 +233,7 @@ export const canBrowse = query({
   handler: async (ctx, args): Promise<boolean> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return false;
-    return !!(await installationForUser(ctx, userId, args.repository));
+    return !!(await browseAccessForUser(ctx, userId, args.repository));
   },
 });
 
@@ -200,13 +245,18 @@ export const getCacheRow = internalQuery({
     path: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-      .first();
+    return await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
   },
 });
+
+/** The one cache lookup: the key's repository is the canonical spelling. */
+async function cacheRowByKey(ctx: { db: any }, repository: string, kind: string, ref: string, path: string) {
+  return await ctx.db
+    .query("repo_cache")
+    .withIndex("by_key", (q: any) =>
+      q.eq("repository", normalizeRepository(repository)).eq("kind", kind).eq("ref", ref).eq("path", path))
+    .first();
+}
 
 export const upsertCache = internalMutation({
   args: {
@@ -221,30 +271,277 @@ export const upsertCache = internalMutation({
     truncated: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    return await writeCacheRow(ctx, args);
+  },
+});
+
+/** The one cache write: a row is replaced whole under its key, stamped now. */
+async function writeCacheRow(
+  ctx: { db: any },
+  args: { team_id: Id<"teams">; repository: string; kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean },
+) {
+  const existing = await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
+
+  const row = {
+    team_id: args.team_id,
+    repository: normalizeRepository(args.repository),
+    kind: args.kind,
+    ref: args.ref,
+    path: args.path,
+    sha: args.sha,
+    content: args.content,
+    size: args.size,
+    truncated: args.truncated,
+    fetched_at: Date.now(),
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, row);
+    return existing._id;
+  }
+  return await ctx.db.insert("repo_cache", row);
+}
+
+/** One row as the daemon pushes it: the same key and payload a GitHub refresh would write. */
+const localRow = v.object({
+  kind: v.string(),
+  ref: v.string(),
+  path: v.string(),
+  sha: v.optional(v.string()),
+  content: v.string(),
+  size: v.optional(v.number()),
+  truncated: v.optional(v.boolean()),
+});
+
+/** The kinds a checkout can answer; code search is the one read that needs GitHub. */
+const LOCAL_KINDS = new Set(["meta", "branches", "branchdetails", "tags", "readme", "tree", "log", "lastcommits", "blob", "blame", "compare"]);
+
+/** How long a failed answer stands before a page asking again re-opens the request. */
+const LOCAL_READ_RETRY_MS = 60 * 1000;
+
+const commitFiles = v.object({
+  files: v.array(v.object({
+    filename: v.string(),
+    status: v.string(),
+    additions: v.number(),
+    deletions: v.number(),
+    changes: v.number(),
+    patch: v.optional(v.string()),
+  })),
+  additions: v.number(),
+  deletions: v.number(),
+});
+
+/**
+ * Open (or re-open) the request for one read a checkout must answer. One row
+ * per cache key however many pages ask. A recent failure is reported back so
+ * the page can say why instead of waiting; an old one is asked again.
+ */
+export const requestLocalRead = internalMutation({
+  args: {
+    team_id: v.id("teams"),
+    repository: v.string(),
+    kind: v.string(),
+    ref: v.string(),
+    path: v.string(),
+    params: v.optional(v.any()),
+    requested_by: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<{ failed: boolean; error?: string }> => {
+    const repository = normalizeRepository(args.repository);
+    const now = Date.now();
     const existing = await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
+      .query("repo_read_requests")
+      .withIndex("by_key", (q: any) => q.eq("repository", repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
       .first();
-
-    const row = {
-      team_id: args.team_id,
-      repository: args.repository,
-      kind: args.kind,
-      ref: args.ref,
-      path: args.path,
-      sha: args.sha,
-      content: args.content,
-      size: args.size,
-      truncated: args.truncated,
-      fetched_at: Date.now(),
-    };
-
-    if (existing) {
-      await ctx.db.patch(existing._id, row);
-      return existing._id;
+    if (existing?.status === "failed" && now - existing.updated_at < LOCAL_READ_RETRY_MS) {
+      return { failed: true, error: existing.error ?? "A teammate's checkout could not answer this read" };
     }
-    return await ctx.db.insert("repo_cache", row);
+    if (existing) {
+      await ctx.db.patch(existing._id, { status: "pending", error: undefined, params: args.params, requested_by: args.requested_by, updated_at: now });
+    } else {
+      await ctx.db.insert("repo_read_requests", { ...args, repository, status: "pending", created_at: now, updated_at: now });
+    }
+    return { failed: false };
+  },
+});
+
+/**
+ * The reads waiting on this daemon: every pending request for a repository
+ * one of the caller's enabled checkouts publishes, with the checkout root to
+ * answer it from. Several machines may hold the same repository; the first
+ * answer wins and the rest find the request gone.
+ */
+export const pendingLocalReads = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    const sources = await ctx.db
+      .query("repo_sources")
+      .withIndex("by_user_root", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const out: { _id: Id<"repo_read_requests">; repository: string; root: string; kind: string; ref: string; path: string; params: any; created_at: number }[] = [];
+    for (const source of sources) {
+      if (!source.enabled) continue;
+      const requests = await ctx.db
+        .query("repo_read_requests")
+        .withIndex("by_repository", (q: any) => q.eq("repository", source.repository))
+        .collect();
+      for (const request of requests) {
+        if (request.status !== "pending" || request.team_id !== source.team_id) continue;
+        out.push({ _id: request._id, repository: request.repository, root: source.root, kind: request.kind, ref: request.ref, path: request.path, params: request.params ?? {}, created_at: request.created_at });
+      }
+    }
+    return out;
+  },
+});
+
+/**
+ * A daemon's answer to one request: the cache row (written under the
+ * request's own key, so a daemon cannot write anywhere it was not asked to),
+ * a commit's diff onto the commit row, or the reason it could not answer.
+ * Only a daemon that publishes the repository to the request's team may
+ * answer, which is the same rule that let its rows in through ingestLocal.
+ */
+export const answerLocalRead = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    request_id: v.id("repo_read_requests"),
+    row: v.optional(localRow),
+    commit: v.optional(commitFiles),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const request = await ctx.db.get(args.request_id);
+    if (!request) return { ok: false, reason: "gone" };
+
+    const sources = await ctx.db
+      .query("repo_sources")
+      .withIndex("by_user_root", (q: any) => q.eq("user_id", userId))
+      .collect();
+    if (!sources.some((s: any) => s.enabled && s.repository === request.repository && s.team_id === request.team_id)) {
+      throw new Error("Forbidden: this checkout does not publish that repository");
+    }
+
+    const now = Date.now();
+    if (args.error !== undefined) {
+      await ctx.db.patch(request._id, { status: "failed", error: args.error.slice(0, 500), updated_at: now });
+      return { ok: true };
+    }
+    if (request.kind === "commit") {
+      if (!args.commit) throw new Error("A commit request is answered with its files");
+      const candidates = await ctx.db
+        .query("commits")
+        .withIndex("by_sha", (q: any) => q.eq("sha", request.ref))
+        .collect();
+      const commit = candidates.find((c: any) => !c.repository || c.repository === request.repository);
+      if (commit) await applyCommitFilesTo(ctx, { commit_id: commit._id, ...args.commit, repository: request.repository });
+      await ctx.db.delete(request._id);
+      return { ok: !!commit, reason: commit ? undefined : "unknown_commit" };
+    }
+    if (!args.row) throw new Error("A read request is answered with a row");
+    await writeCacheRow(ctx, {
+      team_id: request.team_id,
+      repository: request.repository,
+      kind: request.kind,
+      ref: request.ref,
+      path: request.path,
+      sha: args.row.sha,
+      content: args.row.content,
+      size: args.row.size,
+      truncated: args.row.truncated,
+    });
+    await ctx.db.delete(request._id);
+    return { ok: true };
+  },
+});
+
+/**
+ * A daemon publishing one checkout's git metadata.
+ *
+ * Who may read the result is decided here, once, by the rule that already
+ * decides who sees this person's sessions from this path: the directory team
+ * mapping. A path whose sessions are shared with a team publishes to that
+ * team; a private path publishes nothing, and the daemon is told so. The
+ * repo_sources row records the checkout so the person can turn it off later
+ * and so the repository lists for the team.
+ *
+ * The first page of history also lands in the commits table, so a commit that
+ * never passed through GitHub still resolves as a reference (owner/repo@sha)
+ * and joins onto history the same way a webhook-recorded one does.
+ */
+export const ingestLocal = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    root: v.string(),
+    repository: v.string(),
+    remote_url: v.optional(v.string()),
+    device_label: v.optional(v.string()),
+    default_branch: v.optional(v.string()),
+    head_sha: v.optional(v.string()),
+    rows: v.array(localRow),
+    commits: v.optional(v.array(v.object({
+      sha: v.string(),
+      message: v.string(),
+      author_name: v.string(),
+      author_email: v.string(),
+      timestamp: v.number(),
+      files_changed: v.number(),
+      insertions: v.number(),
+      deletions: v.number(),
+      branch: v.optional(v.string()),
+    }))),
+  },
+  handler: async (ctx, args): Promise<{ published: boolean; reason?: "private" | "disabled"; rows?: number; commits_created?: number }> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.root);
+    if (!privacy.team_id || privacy.is_private) return { published: false, reason: "private" };
+    const teamId = privacy.team_id;
+    const repository = normalizeRepository(args.repository);
+
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("repo_sources")
+      .withIndex("by_user_root", (q: any) => q.eq("user_id", userId).eq("root", args.root))
+      .first();
+    const source = {
+      user_id: userId,
+      team_id: teamId,
+      repository,
+      root: args.root,
+      remote_url: args.remote_url,
+      device_label: args.device_label,
+      default_branch: args.default_branch,
+      head_sha: args.head_sha,
+      enabled: existing?.enabled ?? true,
+      last_synced_at: now,
+      updated_at: now,
+    };
+    if (existing) await ctx.db.patch(existing._id, source);
+    else await ctx.db.insert("repo_sources", { ...source, created_at: now });
+    if (!source.enabled) return { published: false, reason: "disabled" };
+
+    for (const row of args.rows) {
+      if (!LOCAL_KINDS.has(row.kind)) continue;
+      await writeCacheRow(ctx, { team_id: teamId, repository, ...row });
+    }
+
+    let created = 0;
+    for (const commit of args.commits ?? []) {
+      const dup = await ctx.db
+        .query("commits")
+        .withIndex("by_sha", (q: any) => q.eq("sha", commit.sha))
+        .first();
+      if (dup) continue;
+      await ctx.db.insert("commits", { ...commit, repository, team_id: teamId });
+      created++;
+    }
+    return { published: true, rows: args.rows.length, commits_created: created };
   },
 });
 
@@ -493,13 +790,13 @@ function refreshSpec(ctx: any, repository: string, kind: string, params: SpecPar
   }
 }
 
-/** The installation covering a repository the caller is allowed to browse. */
-async function requireRepoAccess(ctx: any, repository: string): Promise<any> {
+/** The way the caller may browse a repository: an installation, or a teammate's published checkout. */
+async function requireRepoAccess(ctx: any, repository: string): Promise<BrowseAccess> {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error("Unauthorized");
 
-  const access = await ctx.runQuery(internal.repos.repoAccess, { repository, user_id: userId });
-  if (!access) throw new Error(`No GitHub App installation you can use covers ${repository}`);
+  const access: BrowseAccess | null = await ctx.runQuery(internal.repos.repoAccess, { repository, user_id: userId });
+  if (!access) throw new Error(`Nobody has connected ${repository}: no GitHub App installation covers it and no teammate publishes a checkout of it`);
   return access;
 }
 
@@ -522,9 +819,10 @@ async function installationToken(ctx: any, access: any): Promise<string> {
 async function fillCache(
   ctx: any,
   repository: string,
-  access: { team_id: Id<"teams">; installation_id: number },
+  access: { team_id: Id<"teams">; installation_id?: number },
   spec: Refresh,
-): Promise<{ cached: boolean }> {
+  params: SpecParams = {},
+): Promise<{ cached: boolean; requested?: boolean }> {
   const cached = await ctx.runQuery(internal.repos.getCacheRow, {
     repository,
     kind: spec.kind,
@@ -532,6 +830,20 @@ async function fillCache(
     path: spec.path,
   });
   if (isFresh(cached, Date.now())) return { cached: true };
+  // Access through a teammate's checkout carries no GitHub credential: the
+  // cache holds what the daemon pushed, a stale row is still the answer, and
+  // a row nobody pushed is asked of the daemons that publish the repository.
+  if (!access.installation_id) {
+    if (cached) return { cached: true };
+    if (!LOCAL_KINDS.has(spec.kind)) throw new Error("This read needs the GitHub App; a checkout cannot answer it");
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const request = await ctx.runMutation(internal.repos.requestLocalRead, {
+      team_id: access.team_id, repository, kind: spec.kind, ref: spec.ref, path: spec.path, params, requested_by: userId,
+    });
+    if (request.failed) throw new Error(request.error);
+    return { cached: false, requested: true };
+  }
 
   const result = await spec.fetch(await installationToken(ctx, access));
 
@@ -549,16 +861,17 @@ async function fillCache(
   return { cached: false };
 }
 
-async function ensureCached(ctx: any, repository: string, spec: Refresh): Promise<{ cached: boolean }> {
-  return await fillCache(ctx, repository, await requireRepoAccess(ctx, repository), spec);
+async function ensureCached(ctx: any, repository: string, spec: Refresh, params: SpecParams): Promise<{ cached: boolean; requested?: boolean }> {
+  return await fillCache(ctx, repository, await requireRepoAccess(ctx, repository), spec, params);
 }
 
 /** One ensure action per kind, so the client keeps naming what it wants. */
 function ensureAction(kind: string) {
   return action({
     args: { repository: v.string(), ...specArgs },
-    handler: async (ctx, args): Promise<{ cached: boolean }> => {
-      return await ensureCached(ctx, args.repository, refreshSpec(ctx, args.repository, kind, args));
+    handler: async (ctx, args): Promise<{ cached: boolean; requested?: boolean }> => {
+      const { repository, ...params } = args;
+      return await ensureCached(ctx, repository, refreshSpec(ctx, repository, kind, params), params);
     },
   });
 }
@@ -607,11 +920,7 @@ export const ensureCachedPublic = internalAction({
 export const repoVisibility = internalQuery({
   args: { repository: v.string() },
   handler: async (ctx, args): Promise<{ known: boolean; private: boolean; stale: boolean }> => {
-    const row = await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", "meta").eq("ref", "-").eq("path", ""))
-      .first();
+    const row = await cacheRowByKey(ctx, args.repository, "meta", "-", "");
     if (!row) return { known: false, private: true, stale: true };
 
     const meta = JSON.parse(row.content);
@@ -633,11 +942,7 @@ export const repoVisibility = internalQuery({
 export const publicRead = internalQuery({
   args: { repository: v.string(), kind: v.string(), ref: v.string(), path: v.string() },
   handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-      .first();
+    const row = await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
     if (!row) return null;
     return { ...JSON.parse(row.content), _fetched_at: row.fetched_at, _stale: !isFresh(row, Date.now()) };
   },
@@ -661,13 +966,9 @@ export function cacheKeyFor(kind: string, params: SpecParams): { ref: string; pa
 
 async function readCache(ctx: any, repository: string, kind: string, ref: string, path: string) {
   const userId = await requireUser(ctx);
-  if (!(await installationForUser(ctx, userId, repository))) return null;
+  if (!(await browseAccessForUser(ctx, userId, repository))) return null;
 
-  const row = await ctx.db
-    .query("repo_cache")
-    .withIndex("by_key", (q: any) =>
-      q.eq("repository", repository).eq("kind", kind).eq("ref", ref).eq("path", path))
-    .first();
+  const row = await cacheRowByKey(ctx, repository, kind, ref, path);
   if (!row) return null;
 
   return {
@@ -701,6 +1002,17 @@ export const ensureCommitFiles = action({
     });
     if (!state) return { fetched: false, reason: "unknown_commit" };
     if (state.has_files) return { fetched: false, reason: "already_present" };
+    // No GitHub credential: a teammate's checkout is asked for the diff, and
+    // the commit row updates itself when the answer lands.
+    if (!access.installation_id) {
+      const userId = await getAuthUserId(ctx);
+      if (!userId) throw new Error("Unauthorized");
+      const request = await ctx.runMutation(internal.repos.requestLocalRead, {
+        team_id: access.team_id, repository: args.repository, kind: "commit", ref: args.sha, path: "", params: {}, requested_by: userId,
+      });
+      if (request.failed) throw new Error(request.error);
+      return { fetched: false, reason: "requested" };
+    }
 
     const data = await ctx.runAction(internal.githubApi.getCommit, {
       repository: args.repository,
@@ -766,6 +1078,7 @@ export const getLog = query({
     if (!cached) return null;
     const userId = await requireUser(ctx);
 
+    const repository = normalizeRepository(args.repository);
     const commits = [];
     for (const commit of cached.commits ?? []) {
       const candidates = await ctx.db
@@ -774,7 +1087,7 @@ export const getLog = query({
         .collect();
       let row = null;
       for (const candidate of candidates) {
-        if (candidate.repository === args.repository && await canAccessCommit(ctx, userId, candidate)) {
+        if (candidate.repository === repository && await canAccessCommit(ctx, userId, candidate)) {
           row = candidate;
           break;
         }
@@ -831,7 +1144,7 @@ export const getPulls = query({
       const candidates = await ctx.db
         .query("pull_requests")
         .withIndex("by_repository_number", (q) =>
-          q.eq("repository", args.repository).eq("number", pull.number))
+          q.eq("repository", normalizeRepository(args.repository)).eq("number", pull.number))
         .collect();
       let row = null;
       for (const candidate of candidates) {

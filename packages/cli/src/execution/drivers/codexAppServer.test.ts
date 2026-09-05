@@ -42,6 +42,35 @@ function fakeIo(): CodexAppServerIo {
 }
 
 describe("CodexAppServerRuntimeDriver", () => {
+  test("an ordinary launch starts and registers full access without approvals", async () => {
+    const io = fakeIo();
+    const permissions: unknown[] = [];
+    io.client.threadStart = async input => { permissions.push(input); return { thread: { id: "thread-1" } }; };
+    io.registerThread = input => { permissions.push(input); };
+    expect((await new CodexAppServerRuntimeDriver({ io }).start(startRequest())).state).toBe("started");
+    expect(permissions).toHaveLength(2);
+    for (const permission of permissions) expect(permission).toMatchObject({ sandbox: "danger-full-access", approvalPolicy: "never" });
+  });
+
+  test("configured restrictions apply when no per-session isolation was supplied", async () => {
+    const io = fakeIo();
+    let permission: unknown;
+    io.client.threadStart = async input => { permission = input; return { thread: { id: "thread-1" } }; };
+    const defaultPermissions = () => ({ sandbox: "read-only", approvalPolicy: "on-request" }) as const;
+    expect((await new CodexAppServerRuntimeDriver({ io, defaultPermissions }).start(startRequest())).state).toBe("started");
+    expect(permission).toMatchObject(defaultPermissions());
+  });
+
+  test("registers the sandbox used to start the thread for later recovery", async () => {
+    const io = fakeIo();
+    let registration: Parameters<NonNullable<CodexAppServerIo["registerThread"]>>[0] | undefined;
+    io.registerThread = input => { registration = input; };
+    const request = startRequest();
+    request.target.isolation = { sandbox: "read-only", approvalPolicy: "never" };
+    expect((await new CodexAppServerRuntimeDriver({ io }).start(request)).state).toBe("started");
+    expect(registration).toMatchObject({ threadId: "thread-1", sandbox: "read-only", approvalPolicy: "never" });
+  });
+
   test("a thread/start error is ambiguous, never a signal to choose another agent", async () => {
     const io = fakeIo();
     io.client.threadStart = async () => { throw new Error("rpc timeout"); };

@@ -29,7 +29,14 @@ import { startScribe, stopScribe } from "./transcription";
 import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
-import { hasCallPanel, isCallPanelWindow, isElectron } from "../desktop";
+import {
+  hasCallPanel,
+  isCallPanelWindow,
+  isElectron,
+  sendVoiceCommand,
+  showCallPanel,
+  voiceHostElsewhere,
+} from "../desktop";
 import { shouldYieldCallOnDisconnect } from "./callHandoff";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { readMeterLevel } from "./walkieMeter";
@@ -42,6 +49,9 @@ import {
 type ConvexHandle = {
   mutation: (fn: any, args: any) => Promise<any>;
   action: (fn: any, args: any) => Promise<any>;
+  // One-shot reads: answering a ring that just expired has to ask whether the
+  // call is still going before it gives up (see roomStillLive).
+  query: (fn: any, args: any) => Promise<any>;
 };
 
 let convex: ConvexHandle | null = null;
@@ -416,6 +426,20 @@ async function applyDeliberateJoin(roomKey: string, opts: JoinOpts): Promise<voi
   }
 }
 export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> {
+  // ONE MICROPHONE. On a desktop with a voice host, no other window ever
+  // joins a room: the join is sent there, where the walkie's ear already sits
+  // and where the call will live whatever shape it takes. That is what makes
+  // "a burst becoming a call" a resize rather than a second window joining
+  // and evicting the first. A track in hand is the walkie's own clone and
+  // never crosses a window; it cannot reach here from a remote anyway.
+  if (voiceHostElsewhere() && !opts?.micTrack) {
+    const { micTrack: _t, ...rest } = opts ?? {};
+    if (await sendVoiceCommand("joinCall", [roomKey, rest])) return;
+  }
+  return joinCallHere(roomKey, opts);
+}
+
+async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
   if (opts?.intent === "deliberate" && huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   const prior = useInboxStore.getState().call;
@@ -738,6 +762,11 @@ async function yieldRoomToOtherWindow(): Promise<void> {
 }
 
 export async function leaveCall(): Promise<void> {
+  if (voiceHostElsewhere() && !currentRoomKey && (await sendVoiceCommand("leaveCall", []))) return;
+  return leaveCallHere();
+}
+
+async function leaveCallHere(): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey;
   callGen++;
   deliberateRoomKey = null;
@@ -807,6 +836,11 @@ export async function takeOverCall(opts: {
  * exactly as `setCamera` does for the camera.
  */
 export async function setMuted(muted: boolean, opts?: { remember?: boolean }): Promise<void> {
+  if (voiceHostElsewhere() && !room && (await sendVoiceCommand("setMuted", [muted, opts ?? {}]))) return;
+  return setMutedHere(muted, opts);
+}
+
+async function setMutedHere(muted: boolean, opts?: { remember?: boolean }): Promise<void> {
   setCall({ muted });
   if (opts?.remember !== false) rememberMic(!muted);
   if (room) {
@@ -854,6 +888,11 @@ export async function mediaFailureReason(kind: "camera" | "microphone", err?: an
  * identical, so there is one path that opens a camera and not two.
  */
 export async function setCamera(on: boolean, opts?: { remember?: boolean }): Promise<void> {
+  if (voiceHostElsewhere() && !room && (await sendVoiceCommand("setCamera", [on, opts ?? {}]))) return;
+  return setCameraHere(on, opts);
+}
+
+async function setCameraHere(on: boolean, opts?: { remember?: boolean }): Promise<void> {
   setCall({ camera: on });
   // The next deliberate join starts the way this call ends. Written on the
   // INTENT rather than on the outcome below, because a camera that failed to
@@ -1023,6 +1062,15 @@ export async function startHuddle(opts: {
   toUserIds: string[];
   anchorTitle?: string;
 }): Promise<void> {
+  if (voiceHostElsewhere() && (await sendVoiceCommand("startHuddle", [opts]))) return;
+  return startHuddleHere(opts);
+}
+
+async function startHuddleHere(opts: {
+  roomKey: string;
+  toUserIds: string[];
+  anchorTitle?: string;
+}): Promise<void> {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: !readJoinPrefs().micOn });
@@ -1084,7 +1132,23 @@ function reportRingOutcomes(results: RingOutcome[]): void {
   }
 }
 
+// May we still enter this room, and is anyone actually in it? Occupancy
+// answers both at once: getRoomOccupancy returns a key only for a room the
+// caller may join, and only while someone live is in it.
+async function roomStillLive(roomKey: string): Promise<boolean> {
+  if (!convex) return false;
+  const live = await convex
+    .query(api.calls.getRoomOccupancy, { room_keys: [roomKey] })
+    .catch(() => null);
+  return !!(live as any)?.[roomKey]?.length;
+}
+
 export async function acceptInvite(inviteId: string, roomKey: string): Promise<void> {
+  if (voiceHostElsewhere() && (await sendVoiceCommand("acceptInvite", [inviteId, roomKey]))) return;
+  return acceptInviteHere(inviteId, roomKey);
+}
+
+async function acceptInviteHere(inviteId: string, roomKey: string): Promise<void> {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   // Local-first: the dock paints "connecting" the instant Join is clicked;
@@ -1102,9 +1166,15 @@ export async function acceptInvite(inviteId: string, roomKey: string): Promise<v
       invite_id: inviteId,
       accept: true,
     });
-    if (res?.expired) {
+    // A ring always outlives its invite: the ring's clock starts when the
+    // invite REACHES the callee, the invite's when the server wrote it, so the
+    // last seconds of every ring answer an already-expired invite. Failing
+    // there is wrong twice over — the call was still ringing, and the caller
+    // is usually still in the room waiting. Answer late and you join anyway
+    // whenever the call is genuinely still going; only an empty room ends it.
+    if (res?.expired && !(await roomStillLive(roomKey))) {
       if (switching) setCall({ ...prior });
-      else setCall({ phase: "error", error: "That ring expired" });
+      else setCall({ phase: "error", error: "That call already ended" });
       return;
     }
     // Release the old seat immediately — joinCall tears down its media, but
@@ -1233,6 +1303,45 @@ export async function admitKnock(roomKey: string, userId: string): Promise<void>
 // Best-effort row cleanup when the tab dies mid-call; the 45s lease is the
 // real guarantee, this just makes the common case instant.
 //
+/**
+ * Host: carry out a call gesture another window sent (lib/calls/walkie's
+ * `runVoiceCommand` hands the ones it does not own here). The same functions
+ * the remote would have run, minus the forwarding they begin with.
+ *
+ * A deliberate join for a room OTHER than the one this host is already
+ * talking in does what the remote's own join used to do when a huddle lived
+ * in another window: it raises the huddle rather than switching rooms under
+ * the person mid-sentence.
+ */
+export async function runCallCommand(cmd: string, args: unknown[]): Promise<void> {
+  const a = args as any[];
+  switch (cmd) {
+    case "joinCall": {
+      const roomKey = String(a[0]);
+      const opts = (a[1] && typeof a[1] === "object" ? a[1] : {}) as JoinOpts;
+      const call = useInboxStore.getState().call;
+      const busy = call.roomKey && call.roomKey !== roomKey && (call.phase === "connected" || call.phase === "connecting");
+      if (opts.intent === "deliberate" && busy && !opts.walkieJoin) {
+        await showCallPanel();
+        return;
+      }
+      return joinCallHere(roomKey, opts);
+    }
+    case "leaveCall":
+      return leaveCallHere();
+    case "setMuted":
+      return setMutedHere(!!a[0], a[1] && typeof a[1] === "object" ? a[1] : undefined);
+    case "setCamera":
+      return setCameraHere(!!a[0], a[1] && typeof a[1] === "object" ? a[1] : undefined);
+    case "startHuddle":
+      return a[0] && typeof a[0] === "object" ? startHuddleHere(a[0]) : undefined;
+    case "acceptInvite":
+      return acceptInviteHere(String(a[0]), String(a[1]));
+    default:
+      return;
+  }
+}
+
 // Over HTTP, not through the client. This used to write the mutation to the
 // WebSocket, which is torn down before the frame leaves — measured while
 // chasing the same bug one file over, and it meant this guard had never once

@@ -1,7 +1,3 @@
-// Loopback probes for `cast bench daemon`. The daemon's HTTP server runs on the
-// main event loop, so the response time of an unauthenticated GET /health is a
-// direct meter of loop lag, independent of the daemon's own freeze log.
-
 import * as fs from "node:fs";
 import { hookPortFile, readIdentity } from "../loopbackIdentity.js";
 import { summarizeLatency, type LatencySummary } from "./stats.js";
@@ -46,125 +42,201 @@ export function localAuthHeaders(port: number, token: string): Record<string, st
   return { Origin: `http://127.0.0.1:${port}`, Authorization: `Bearer ${token}` };
 }
 
-export interface LoopLagResult {
-  summary: LatencySummary;
-  samples: number[];
-  /** Ticks not fired because maxInFlight requests were still open. */
-  skipped: number;
-  errors: number;
-  intervalMs: number;
-  durationMs: number;
+export interface BenchClock {
+  now(): number;
+  wall(): number;
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
 }
 
-const PROBE_TIMEOUT_MS = 60_000;
+export const benchClock: BenchClock = {
+  now: () => performance.now(),
+  wall: () => Date.now(),
+  sleep: (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const done = () => { signal?.removeEventListener("abort", aborted); resolve(); };
+    const timer = setTimeout(done, Math.max(0, Math.ceil(ms)));
+    const aborted = () => { clearTimeout(timer); signal?.removeEventListener("abort", aborted); reject(signal?.reason); };
+    signal?.addEventListener("abort", aborted, { once: true });
+  }),
+};
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-async function timedGet(url: string, headers?: Record<string, string>): Promise<{ ms: number; status: number | null }> {
-  const start = performance.now();
-  try {
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-    await res.arrayBuffer();
-    return { ms: performance.now() - start, status: res.status };
-  } catch {
-    return { ms: performance.now() - start, status: null };
-  }
+export function deadlineSignal(clock: BenchClock, end: number, parent?: AbortSignal) {
+  const controller = new AbortController();
+  const timer = new AbortController();
+  const cancel = () => controller.abort(parent?.reason);
+  if (parent?.aborted) cancel();
+  else parent?.addEventListener("abort", cancel, { once: true });
+  const settled = clock.sleep(Math.max(0, end - clock.now()), timer.signal).then(
+    () => controller.abort(new DOMException("measurement deadline", "TimeoutError")),
+    () => {},
+  );
+  return {
+    signal: controller.signal,
+    async close() { timer.abort(); parent?.removeEventListener("abort", cancel); await settled; },
+  };
 }
 
-/**
- * GET /health every intervalMs for durationMs. A setTimeout chain, not
- * setInterval, so a stalled bench process cannot burst. A cap on open
- * requests keeps the meter from becoming the load during a long freeze.
- */
-export async function runLoopLagProbe(opts: {
-  port: number;
-  durationMs: number;
-  intervalMs?: number;
-  maxInFlight?: number;
-  signal?: AbortSignal;
-}): Promise<LoopLagResult> {
-  const intervalMs = opts.intervalMs ?? 100;
-  const maxInFlight = opts.maxInFlight ?? 100;
-  const url = `http://127.0.0.1:${opts.port}/health`;
-  const samples: number[] = [];
-  let skipped = 0;
-  let errors = 0;
-  const pending = new Set<Promise<void>>();
-  const deadline = performance.now() + opts.durationMs;
+export type Outcome = "ok" | "error" | "timeout" | "cancelled" | "skipped" | "missing" | "refused";
+export const outcomeFor = (signal: AbortSignal): Outcome => signal.aborted
+  ? signal.reason?.name === "TimeoutError" ? "timeout" : "cancelled" : "error";
 
-  while (performance.now() < deadline && !opts.signal?.aborted) {
-    if (pending.size >= maxInFlight) {
-      skipped++;
-    } else {
-      const p = timedGet(url).then((r) => {
-        if (r.status === 200) samples.push(r.ms);
-        else errors++;
-      });
-      pending.add(p);
-      void p.finally(() => pending.delete(p));
-    }
-    await sleep(intervalMs);
-  }
-  await Promise.all(pending);
-  return { summary: summarizeLatency(samples), samples, skipped, errors, intervalMs, durationMs: opts.durationMs };
+export interface ProbeSample {
+  slot: number;
+  scheduledAt: number;
+  startedAt: number | null;
+  dispatchedAt: number | null;
+  verificationMs: number | null;
+  finishedAt: number;
+  latenessMs: number | null;
+  ms: number | null;
+  status: number | null;
+  outcome: Outcome;
+  reason?: string;
 }
 
 export interface LatencyProbeResult {
   url: string;
+  label: string;
   summary: LatencySummary;
+  samples: number[];
+  records: ProbeSample[];
   statuses: Record<string, number>;
+  expected: number;
+  attempted: number;
+  errors: number;
+  skipped: number;
+  missing: number;
+  timeouts: number;
+  cancelled: number;
+  lateness: LatencySummary;
   intervalMs: number;
+  durationMs: number;
+  startedAt: number;
+  endedAt: number;
+}
+export type LoopLagResult = LatencyProbeResult;
+export type ProbeFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+export interface ProbeOptions {
+  url: string;
+  label?: string;
+  headers?: Record<string, string>;
+  expectedStatus?: number;
+  durationMs: number;
+  startAt?: number;
+  intervalMs?: number;
+  maxInFlight?: number;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+  clock?: BenchClock;
+  fetch?: ProbeFetch;
+  request?: (signal: AbortSignal, slot: number) => Promise<string>;
 }
 
-/** Sequential timed GETs of one route, one per intervalMs. */
-export async function runLatencyProbe(opts: {
-  url: string;
-  headers?: Record<string, string>;
-  durationMs: number;
-  intervalMs?: number;
-  signal?: AbortSignal;
-}): Promise<LatencyProbeResult> {
+export const MAX_BENCH_RECORDS = 100_000;
+export const MAX_BENCH_TIMER_MS = 2_147_483_647;
+
+export async function runLatencyProbe(opts: ProbeOptions): Promise<LatencyProbeResult> {
+  const clock = opts.clock ?? benchClock;
   const intervalMs = opts.intervalMs ?? 1000;
-  const samples: number[] = [];
-  const statuses: Record<string, number> = {};
-  const deadline = performance.now() + opts.durationMs;
-  while (performance.now() < deadline && !opts.signal?.aborted) {
-    const r = await timedGet(opts.url, opts.headers);
-    samples.push(r.ms);
-    const key = r.status === null ? "error" : String(r.status);
-    statuses[key] = (statuses[key] ?? 0) + 1;
-    const wait = intervalMs - r.ms;
-    if (wait > 0) await sleep(wait);
+  const maxInFlight = opts.maxInFlight ?? 4;
+  const expected = Math.ceil(opts.durationMs / intervalMs);
+  const start = opts.startAt ?? clock.now();
+  const end = start + opts.durationMs;
+  if ([intervalMs, opts.durationMs, opts.requestTimeoutMs ?? 1].some(value => !Number.isFinite(value) || value <= 0 || value > MAX_BENCH_TIMER_MS)
+    || !Number.isSafeInteger(maxInFlight) || maxInFlight < 1 || maxInFlight > MAX_BENCH_RECORDS
+    || !Number.isSafeInteger(expected) || expected < 1 || expected > MAX_BENCH_RECORDS
+    || !Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - clock.now() > MAX_BENCH_TIMER_MS) throw new Error("invalid probe bounds");
+  const window = deadlineSignal(clock, end, opts.signal);
+  const records: ProbeSample[] = [];
+  const pending = new Set<Promise<void>>();
+  const skipped = (slot: number, outcome: Outcome, reason: string) => records.push({
+    slot, scheduledAt: start + slot * intervalMs, startedAt: null, dispatchedAt: null, verificationMs: null, finishedAt: clock.now(),
+    latenessMs: Math.max(0, clock.now() - (start + slot * intervalMs)), ms: null, status: null, outcome, reason,
+  });
+  let slot = 0;
+  try {
+    for (; slot < expected && !window.signal.aborted; slot++) {
+      const scheduledAt = start + slot * intervalMs;
+      while (clock.now() < scheduledAt) await clock.sleep(scheduledAt - clock.now(), window.signal);
+      if (clock.now() >= end) break;
+      if (clock.now() - scheduledAt >= intervalMs) { skipped(slot, "missing", "tester missed scheduled slot"); continue; }
+      if (pending.size >= maxInFlight) { skipped(slot, "skipped", "in-flight cap"); continue; }
+      const record: ProbeSample = { slot, scheduledAt, startedAt: clock.now(), dispatchedAt: null, verificationMs: null, finishedAt: clock.now(), latenessMs: Math.max(0, clock.now() - scheduledAt), ms: null, status: null, outcome: "error" };
+      records.push(record);
+      const requestSlot = slot;
+      const work = (async () => {
+        const request = deadlineSignal(clock, Math.min(end, clock.now() + (opts.requestTimeoutMs ?? 5000)), window.signal);
+        try {
+          const url = opts.request ? await opts.request(request.signal, requestSlot) : opts.url;
+          request.signal.throwIfAborted();
+          record.dispatchedAt = clock.now();
+          record.verificationMs = record.dispatchedAt - record.startedAt!;
+          const response = await (opts.fetch ?? fetch)(url, { headers: opts.headers, signal: request.signal });
+          record.status = response.status;
+          await response.arrayBuffer();
+          request.signal.throwIfAborted();
+          record.outcome = response.status === (opts.expectedStatus ?? 200) ? "ok" : "error";
+          if (record.outcome === "error") record.reason = `HTTP ${response.status}`;
+        } catch {
+          record.outcome = outcomeFor(request.signal);
+          record.reason = record.outcome === "error" ? "request or ownership verification failed" : record.outcome;
+        } finally {
+          record.finishedAt = clock.now();
+          record.ms = record.dispatchedAt === null ? null : record.finishedAt - record.dispatchedAt;
+          await request.close();
+        }
+      })();
+      pending.add(work);
+      void work.then(() => pending.delete(work));
+    }
+    if (clock.now() < end) await clock.sleep(end - clock.now(), window.signal);
+  } catch {
+    if (!window.signal.aborted) throw new Error("probe scheduler failed");
+  } finally {
+    for (; slot < expected; slot++) skipped(slot, window.signal.aborted ? outcomeFor(window.signal) : "missing", "window ended before slot");
+    await Promise.all(pending);
+    await window.close();
   }
-  return { url: opts.url, summary: summarizeLatency(samples), statuses, intervalMs };
+  records.sort((a, b) => a.slot - b.slot);
+  const samples = records.filter(r => r.outcome === "ok").map(r => r.ms!);
+  const count = (o: Outcome) => records.filter(r => r.outcome === o).length;
+  const statuses: Record<string, number> = {};
+  for (const r of records) { const key = r.status === null ? r.outcome : String(r.status); statuses[key] = (statuses[key] ?? 0) + 1; }
+  return {
+    url: opts.url, label: opts.label ?? opts.url, summary: summarizeLatency(samples), samples, records, statuses,
+    expected, attempted: records.filter(r => r.startedAt !== null).length,
+    errors: count("error"), skipped: count("skipped"), missing: count("missing"), timeouts: count("timeout"), cancelled: count("cancelled"),
+    lateness: summarizeLatency(records.flatMap(r => r.latenessMs === null ? [] : [r.latenessMs])),
+    intervalMs, durationMs: opts.durationMs, startedAt: start, endedAt: clock.now(),
+  };
+}
+
+export function runLoopLagProbe(opts: Omit<ProbeOptions, "url"> & { port: number }): Promise<LoopLagResult> {
+  return runLatencyProbe({ ...opts, url: `http://127.0.0.1:${opts.port}/health`, label: "health HTTP RTT (includes tester scheduling)", intervalMs: opts.intervalMs ?? 100 });
 }
 
 export interface RouteProbes {
   loopLag: LoopLagResult;
   hookStatus: LatencyProbeResult;
-  /** null when there is no terminal token to authenticate with. */
   termSessions: LatencyProbeResult | null;
 }
 
-/**
- * The three probes a bench run takes, together: loop lag on /health plus the
- * two loopback routes the daemon answers from the same event loop. Observe
- * mode runs them on an idle daemon and load mode runs them again alongside the
- * churn, so both read the same numbers from the same code.
- */
 export async function runRouteProbes(opts: {
   port: number;
   durationMs: number;
+  startAt?: number;
   authHeaders: Record<string, string> | null;
   signal?: AbortSignal;
+  clock?: BenchClock;
+  fetch?: ProbeFetch;
+  hookRequest?: ProbeOptions["request"];
 }): Promise<RouteProbes> {
-  const { port, durationMs, signal } = opts;
+  const { port } = opts;
   const [loopLag, hookStatus, termSessions] = await Promise.all([
-    runLoopLagProbe({ port, durationMs, signal }),
-    runLatencyProbe({ url: `http://127.0.0.1:${port}/hook/status`, durationMs, signal }),
-    opts.authHeaders
-      ? runLatencyProbe({ url: `http://127.0.0.1:${port}/term/sessions`, headers: opts.authHeaders, durationMs, signal })
-      : Promise.resolve(null),
+    runLoopLagProbe(opts),
+    runLatencyProbe({ ...opts, url: `http://127.0.0.1:${port}/hook/status`, request: opts.hookRequest, maxInFlight: 1, expectedStatus: opts.hookRequest ? 200 : 400, label: opts.hookRequest ? "owned hook status" : "invalid hook dispatch only (HTTP 400)" }),
+    opts.authHeaders ? runLatencyProbe({ ...opts, url: `http://127.0.0.1:${port}/term/sessions`, headers: opts.authHeaders, label: "authenticated terminal HTTP RTT" }) : Promise.resolve(null),
   ]);
   return { loopLag, hookStatus, termSessions };
 }

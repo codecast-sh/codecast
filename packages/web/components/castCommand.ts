@@ -616,6 +616,39 @@ export function buildBrowserRowMap(rows: BrowserRowInput[]): Record<string, Brow
   return map;
 }
 
+/** The driven browser tab behind a tool call, for the "open tab" affordance. */
+export type BrowserTabRef =
+  | { kind: "cast"; tabId: string; url: string | null }
+  | { kind: "extension"; tabId: string };
+
+/**
+ * A `cast browser` row names an 8-char tab in its output, or inherits one from
+ * an earlier row through the carry-forward map (buildBrowserRowMap); a
+ * Claude-in-Chrome call names a numeric tabId in its input or its result. Null
+ * for every other tool, so callers can ask without checking the tool first.
+ * `cast` is the row's parsed command (null when it is not a cast command).
+ */
+export function browserTabOf(
+  tool: { id: string; name: string; input: string },
+  cast: ParsedCastCommand | null,
+  resultContent: string | undefined,
+  carried: Record<string, BrowserRowState>,
+): BrowserTabRef | null {
+  if (tool.name.startsWith("mcp__claude-in-chrome__")) {
+    let tabId: unknown;
+    try { tabId = JSON.parse(tool.input)?.tabId; } catch { tabId = undefined; }
+    if (tabId != null) return { kind: "extension", tabId: String(tabId) };
+    const m = resultContent?.match(/Executed on tabId:\s*(\d+)/);
+    return m ? { kind: "extension", tabId: m[1] } : null;
+  }
+  if (!cast || normalizeCastCategory(cast.category) !== "browser") return null;
+  const output = resultContent ?? "";
+  const tabId = extractBrowserTabId(output) ?? carried[tool.id]?.tabId ?? null;
+  if (!tabId) return null;
+  const url = extractBrowserPageUrl(cast.subcommand, cast.args, output) ?? carried[tool.id]?.url ?? null;
+  return { kind: "cast", tabId, url };
+}
+
 export function sameBrowserRowMap(a: Record<string, BrowserRowState>, b: Record<string, BrowserRowState>): boolean {
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((k) => b[k] && a[k].url === b[k].url && a[k].tabId === b[k].tabId);

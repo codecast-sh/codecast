@@ -199,7 +199,7 @@ Every package runs `bun test`. `bun run test` at the root fans out through turbo
 
 ### Driving the app itself: `cast app`
 
-`cast app` drives the running web or desktop app the way a user does, on top of `cast browser`. `cast browser` knows pages; `cast app` knows codecast: which surface is which, what "signed in" and "settled" mean, which build is loaded, and how to become a known account for a run. Every verb attaches to the page over the Chrome DevTools Protocol and reads the app's own handles (`window.__CODECAST_BUILD`, `__syncActivity`, `__syncReplication`, `__navLog`, and the dev-only `__inboxStore`), so nothing scrapes the DOM for state.
+`cast app` drives the running web or desktop app the way a user does, on top of `cast browser`. `cast browser` knows pages; `cast app` knows codecast: which surface is which, what "signed in" and "settled" mean, which build is loaded, and how to become a known account for a run. Every verb attaches to the page over the Chrome DevTools Protocol and reads the app's own handles (`window.__CODECAST_BUILD`, `__syncActivity`, `__syncReplication`, `__navLog`, and `__inboxStore`), so nothing scrapes the DOM for state.
 
 ```bash
 cast app doctor                     # origin, build, account, daemon owner, sync role, settled; exit 1 if not drivable
