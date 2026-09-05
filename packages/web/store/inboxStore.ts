@@ -2370,6 +2370,8 @@ export function sessionStructuralSig(s: InboxSession): string {
     s.git_remote_url || "",
     s.git_branch || "",
     s.worktree_branch || "",
+    s.owner_device_id || "",
+    s.cloud_placement || "",
     rowLastTurnAllowsPark(s) ? 1 : 0,
     // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
     // lands in the session — never on heartbeats — so folding it in is cheap
