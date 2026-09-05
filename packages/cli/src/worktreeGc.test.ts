@@ -5,6 +5,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { keepReason, probeWorktree, releaseSessionWorktree } from "./worktreeGc";
 
+test("daemon GC is opt-in for retirement, never account or agent recycling", () => {
+  const source = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf8");
+  const kill = source.slice(source.indexOf("async function killConversationBackends("), source.indexOf("async function killConversationBackendsForAgentSwitch("));
+  expect(kill).toContain("retireWorkspace = false");
+  expect(kill).toContain("if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree)");
+  expect(source.match(/killConversationBackends\([^\n]*, true\)/g)).toEqual([
+    "killConversationBackends(conversationId, sessionIdHint, true)",
+  ]);
+  expect(source).toContain("killConversationBackends(convId, sessionIds[convId])");
+});
+
 describe("keepReason", () => {
   test("clean and on origin → release", () => {
     expect(keepReason({ dirty: false, aheadOfOrigin: 0 })).toBeNull();
@@ -33,6 +44,16 @@ function makeRepo(): { origin: string; repo: string } {
 }
 
 describe("releaseSessionWorktree", () => {
+  test("keeps shared worktrees and fails closed when the session roster is unavailable", async () => {
+    const { repo } = makeRepo();
+    const wt = path.join(repo, ".codecast", "worktrees", "shared");
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    sh(repo, "git", ["worktree", "add", "-q", "-b", "codecast/shared", wt]);
+    expect(await releaseSessionWorktree(wt, () => {}, async () => true)).toMatchObject({ action: "kept", reason: "another session uses this worktree" });
+    expect(await releaseSessionWorktree(wt, () => {}, async () => { throw new Error("offline"); })).toMatchObject({ action: "kept", reason: "cannot verify exclusive session ownership" });
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(await releaseSessionWorktree(wt, () => {}, async () => false)).toMatchObject({ action: "released" });
+  });
   test("ignores paths that are not codecast worktrees", async () => {
     expect(await releaseSessionWorktree(undefined)).toEqual({ action: "skipped", reason: "no cwd" });
     expect((await releaseSessionWorktree("/tmp/plain")).action).toBe("skipped");

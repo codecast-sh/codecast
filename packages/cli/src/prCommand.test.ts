@@ -331,3 +331,16 @@ describe("review threads", () => {
     expect(formatPrThreads([])).toContain("No open review threads");
   });
 });
+
+describe("repository case", () => {
+  test("a reference typed with capitals resolves to the canonical repository", () => {
+    expect(buildPrLocator("Codecast-SH/Codecast#7", LOCAL)).toEqual({
+      repository: "codecast-sh/codecast",
+      number: 7,
+    });
+  });
+
+  test("a checkout whose remote carries capitals still names the canonical repository", () => {
+    expect(extractRepoFromRemoteUrl("git@github.com:Codecast-SH/Codecast.git")).toBe("codecast-sh/codecast");
+  });
+});

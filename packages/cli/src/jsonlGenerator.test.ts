@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { chooseClaudeTailMessagesForTokenBudget, fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, isHumanInstruction, writeCodexSession, type ExportResult } from "./jsonlGenerator.js";
+import { chooseClaudeTailMessagesForTokenBudget, fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, generatedSessionCwd, isHumanInstruction, writeCodexSession, type ExportResult } from "./jsonlGenerator.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -707,5 +707,30 @@ describe("generateCodexJsonl", () => {
 
     const { jsonl } = generateCodexJsonl(data);
     expect(jsonl).not.toContain('"__wf"');
+  });
+});
+
+describe("generatedSessionCwd", () => {
+  const data = (project_path: string | null): ExportResult => ({
+    conversation: { id: "c1", title: "t", project_path, started_at: "2026-09-05T00:00:00.000Z" },
+    messages: [],
+  } as unknown as ExportResult);
+
+  test("an explicit cwd wins over the recorded project path", () => {
+    expect(generatedSessionCwd(data("/tmp/project"), { cwd: "/tmp/elsewhere" })).toBe("/tmp/elsewhere");
+  });
+
+  test("the recorded project path wins over process.cwd()", () => {
+    expect(generatedSessionCwd(data("/tmp/project"), {})).toBe("/tmp/project");
+  });
+
+  test("the explicit cwd is what the codex session_meta carries", () => {
+    const { jsonl } = generateCodexJsonl(
+      { ...data("/tmp/project"), messages: [{ role: "user", content: "hi", timestamp: "2026-09-05T00:00:01.000Z" }] } as unknown as ExportResult,
+      { cwd: "/tmp/elsewhere" },
+    );
+    const meta = JSON.parse(jsonl.split("\n")[0]);
+    expect(meta.type).toBe("session_meta");
+    expect(meta.payload.cwd).toBe("/tmp/elsewhere");
   });
 });

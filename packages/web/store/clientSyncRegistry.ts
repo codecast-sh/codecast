@@ -134,7 +134,9 @@ export const CLIENT_SYNC_REGISTRY = {
         "inbox_stash_hidden",
         "inbox_pinned_at",
         "inbox_deferred_at",
-        "inbox_dormant_at",
+        "inbox_rest",
+        "inbox_rest_at",
+        "inbox_snoozed_until",
         "title",
         "is_favorite",
       ],
@@ -522,6 +524,11 @@ export const CLIENT_SYNC_REGISTRY = {
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
   // stops heartbeating leaves. Readers additionally hide rows whose
   // last_heartbeat is stale, so a persisted row can't outlive its window.
+  sessionCommands: {
+    persistence: { kind: "collection", key: "sessionCommands", perWindow: true },
+    sync: { isDelta: true },
+    feeds: ["sessionCommands.results"],
+  },
   managedSessions: {
     persistence: { kind: "collection", key: "managedSessions" },
     hydration: { phase: "deferred" },
@@ -918,6 +925,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   codeComments: "shared",
   externalEvents: "shared",
   managedSessions: "shared",
+  sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
   pendingMessageStatus: "shared",
