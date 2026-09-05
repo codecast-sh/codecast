@@ -701,6 +701,22 @@ function mapToolName(name: string): string {
   return "shell_command";
 }
 
+/**
+ * Codex's API rejects any function call id longer than 64 characters
+ * (`string_above_max_length` on `input[N].call_id`). Codecast mints ids that are
+ * structurally over: an interactive prompt card is
+ * `interactive-prompt-<uuid>-<digest>`, 72 characters, so every transcript
+ * carrying one poisons the import.
+ *
+ * Hashing is deterministic, so a call and its matching output normalize to the
+ * same value independently and the pairing survives. Ids already within the
+ * limit are returned untouched, which keeps native Codex ids (29-30 chars)
+ * readable and stable.
+ */
+export function normalizeCodexCallId(id: string): string {
+  return id.length <= 64 ? id : crypto.createHash("sha256").update(id).digest("hex");
+}
+
 export interface GenerateCodexJsonlOptions {
   sessionId?: string;
 }
@@ -751,7 +767,7 @@ export function generateCodexJsonl(
         for (const tr of msg.tool_results) {
           lines.push(JSON.stringify({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
+            payload: { type: "function_call_output", call_id: normalizeCodexCallId(tr.tool_use_id), output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
           }));
         }
       } else {
@@ -780,7 +796,7 @@ export function generateCodexJsonl(
         for (const tc of msg.tool_calls) {
           lines.push(JSON.stringify({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: tc.id },
+            payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: normalizeCodexCallId(tc.id) },
           }));
         }
       }
@@ -793,7 +809,7 @@ export function generateCodexJsonl(
         for (const tr of msg.tool_results) {
           lines.push(JSON.stringify({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
+            payload: { type: "function_call_output", call_id: normalizeCodexCallId(tr.tool_use_id), output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
           }));
         }
       }
