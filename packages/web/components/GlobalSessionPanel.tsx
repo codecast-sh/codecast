@@ -39,7 +39,8 @@ import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLab
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
-import { DeviceIcon, useRosterDevice, deviceWakesOnUse } from "./DeviceBadge";
+import { DeviceIcon, useRosterDevice, deviceWakesOnUse, deviceDisplayName } from "./DeviceBadge";
+import { SessionWorktreeChip } from "./SessionWorktreeChip";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
@@ -2426,6 +2427,16 @@ export const SessionCard = memo(function SessionCard({
   }, [session._id, displayTitle, project]);
   const handleCardDragEnd = useCallback(() => setIsDraggingCard(false), []);
 
+  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending") ? (
+    <SessionWorktreeChip
+      name={session.worktree_name}
+      branch={session.worktree_branch}
+      preparing={session.cloud_placement === "pending"}
+      hostName={runHost ? deviceDisplayName(runHost) : undefined}
+      hostIcon={runHost ? <DeviceIcon d={runHost} className="w-2.5 h-2.5 shrink-0" /> : undefined}
+    />
+  ) : null;
+
   if (isSubagent) {
     return (
       <div
@@ -2511,6 +2522,7 @@ export const SessionCard = memo(function SessionCard({
               </span>
             </div>
           </div>
+          {worktreeChip && <div className="flex min-w-0 pl-[18px] mt-0.5">{worktreeChip}</div>}
           {stateView && (
             <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
               <Pin
@@ -2807,22 +2819,7 @@ export const SessionCard = memo(function SessionCard({
               <span className="truncate">{sessionLabel ?? project}</span>
             </span>
           )}
-          {(session.worktree_name || session.cloud_placement === "pending") && (
-            <span
-              data-simple-hide
-              className={`inline-flex items-center gap-1 text-[9px] font-mono truncate max-w-[130px] ${session.cloud_placement === "pending" ? "text-sol-violet animate-pulse" : "text-sol-cyan"}`}
-              title={session.cloud_placement === "pending"
-                ? "Preparing the cloud host — its worktree is being made now."
-                : (session.worktree_branch || session.worktree_name || "")}
-            >
-              {/* The machine only appears when it is a host you would not
-                  otherwise expect — a worktree on your own laptop needs no icon. */}
-              {runHost && <DeviceIcon d={runHost} className="w-2.5 h-2.5 shrink-0" />}
-              <span className="truncate">
-                {session.cloud_placement === "pending" ? "preparing" : session.worktree_name}
-              </span>
-            </span>
-          )}
+          {worktreeChip}
           {showModelBadge && session.model && (
             <span data-simple-hide className="text-[9px] text-sol-text-dim/70 font-mono truncate max-w-[90px] flex-shrink-0" title={session.model}>
               {formatModel(session.model)}
