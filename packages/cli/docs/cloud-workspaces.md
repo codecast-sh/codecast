@@ -45,13 +45,21 @@ The host was explicitly stopped at 01:40:26 UTC. Trigger tr-500 queued at 01:43:
 
 In the current local web build, the cloud toggle selects Cloud Linux and locks isolation on. A's header identifies the cloud host and worktree. This does not establish production rollout: the older production artifact lacked the toggle and failed opening A with `ChatOn is not defined`.
 
-## Server-side wake (deployment and live proof pending)
+## Server-side wake verified in production
 
 The founder approved a dedicated server-side AWS identity. The backend now implements allowlisted wake requests and dispatches due triggers bound to those cloud conversations. `cloudWake` records a lease, bounded retries and the AWS request ID on the existing device row. An EC2 response means the instance is starting; a subsequent device heartbeat is required before the request is considered answered.
 
 For configured owner/device pairs, laptop wake responses and daemon trigger claims are suppressed. Non-cloud jobs keep the existing daemon scheduler. Removing the allowlist restores the old laptop-mediated behavior; no local daemon reload is required. New `--spawn` triggers still use the existing daemon path: this server dispatcher is for triggers bound to existing cloud sessions.
 
-AWS request signing and the queue have focused tests. The dedicated key passed real AWS DryRun authorization for the approved instance and was denied for another existing instance. **A stopped-host trigger run with all laptop mediators absent is not yet verified.** That proof requires the coordinated backend/config deployment; the earlier tr-500 evidence remains laptop-mediated only. See `infra/aws-cloud-waker/README.md` for rollout and rollback.
+The production backend and allowlist were deployed through the coordinated release on September 5. Two new bound triggers, tr-519 and tr-520, woke the stopped host and resumed the original session jx77bkw. It executed from `cloud-bc9163` with `PORT_WEB=3221` at 17:39:04 and 17:45:00 UTC, retaining native thread `01a06f28-bfa4-7700-8915-aa9d33d7eaf4`.
+
+The second cycle explicitly checked both laptop paths while work was waiting. At 17:44:22, tr-520 was due and still scheduled before and after the laptop query, but absent from `getDueTasks`; `claimTask` returned null. At 17:44:36, an actual laptop heartbeat returned `wake_devices: []` while before/after server records still had an unanswered cloud wake stamp and an old remote heartbeat. Unrelated laptop fleet jobs continued: laptop mediators were excluded for this target, not shut down globally.
+
+Server logs record the trigger dispatcher as `caller: Cron`, with the original conversation and a stable pending-message client ID. CloudTrail attributes both StartInstances calls to the dedicated `codecast-cloud-waker` IAM user from the server address, with request IDs matching the backend audit exactly. No laptop StartInstances call or SSH preparation was used for either wake. A later `cast hosts ls` used SSH only to inventory the already verified host and retained worktree.
+
+Production rejects wrong-owner and wrong-device claims, an arbitrary instance argument, and public invocation of the internal wake action. The dedicated key's real AWS DryRun allows the approved instance and denies a different existing instance. Independent review, 221 focused backend tests, and release-owner combined backend/Linux/typecheck gates passed. See `infra/aws-cloud-waker/README.md` for rollout and rollback.
+
+Production client cloud-toggle/header/fork checks remain part of the coordinated web release; this backend proof does not claim those client rollout checks.
 
 ## Deferred storage optimization
 

@@ -42,3 +42,9 @@ A daemon that already claimed a trigger before opt-in may finish that run. Use a
 - Return the test host to its prior idle/sleep policy and retain the user's worktree. Do not stop unrelated instances or processes.
 
 The trigger dispatcher's transaction inserts the normal pending message and advances the trigger together. It does not spawn an agent or copy a transcript itself. Existing remote delivery resumes the original session. The usual task-run completion semantics still count successful injection separately from the agent's eventual response.
+
+## Production acceptance recorded
+
+On September 5, tr-519 and tr-520 each woke the stopped approved host through the production cron/action and resumed original session jx77bkw, retained worktree `cloud-bc9163`, port3221. Agent execution was observed at17:39:04 and17:45:00UTC; it was not inferred from EC2 or injection status.
+
+The second run proved due-but-scheduled laptop query/claim exclusion and an empty laptop heartbeat wake list while the remote wake remained unanswered. CloudTrail recorded the dedicated IAM identity for both requests, matching backend audit IDs `11bbc678-01c7-43ca-801c-fcacc4347698` and `92ef35c7-f5e1-490a-ad98-dcb6e6b045a9`. Wrong owner/device, arbitrary instance arguments, public action access and a real AWS DryRun against another existing instance were denied. Local fleet daemons remained running for unrelated work; they did not mediate these wakes. The proof used no laptop StartInstances or SSH preparation.
