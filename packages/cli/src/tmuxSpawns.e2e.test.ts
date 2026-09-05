@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -11,8 +11,8 @@ test.skipIf(process.platform === "win32")("detached tmux transcript writer resol
   const env: NodeJS.ProcessEnv = { ...process.env, TMUX_TMPDIR: dir, NODE_ENV: "test" };
   delete env.TMUX;
   try {
-    const result = await run(process.execPath, [join(import.meta.dir, "test-helpers/tmuxSpawnFixture.ts"), dir], { env, timeout: 20_000, killSignal: "SIGKILL" });
-    expect(result.stdout.trim()).toBe("parent recovered after restart");
+    await run(process.execPath, [join(import.meta.dir, "test-helpers/tmuxSpawnFixture.ts"), dir], { env, timeout: 20_000, killSignal: "SIGKILL" });
+    expect(JSON.parse(readFileSync(join(dir, "result.json"), "utf8"))).toEqual({ parent: "parent-conversation" });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
