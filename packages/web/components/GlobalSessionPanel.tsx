@@ -2413,6 +2413,7 @@ export const SessionCard = memo(function SessionCard({
     return (
       <div
         data-session-id={session._id}
+        data-active={isActive ? "true" : undefined}
         draggable
         onDragStart={handleCardDragStart}
         onDragEnd={handleCardDragEnd}
@@ -2459,7 +2460,7 @@ export const SessionCard = memo(function SessionCard({
                 <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
               </span>
             )}
-            <span className={`truncate text-xs leading-tight flex-1 ${
+            <span data-sv-title className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
@@ -2495,7 +2496,7 @@ export const SessionCard = memo(function SessionCard({
             </div>
           </div>
           {stateView && (
-            <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
+            <div data-sv-state className="mt-0.5 flex items-start gap-1" title={stateView.text}>
               <Pin
                 className={`w-2 h-2 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
                 strokeWidth={2.4}
@@ -2506,7 +2507,7 @@ export const SessionCard = memo(function SessionCard({
             </div>
           )}
           {cleanedUserMsg && (
-            <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
+            <div data-sv-prompt className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
               <span className="text-gray-600 mr-0.5">&gt;</span>
               {cleanedUserMsg}
             </div>
@@ -2564,6 +2565,7 @@ export const SessionCard = memo(function SessionCard({
   return (
     <div
       data-session-id={session._id}
+      data-active={isActive ? "true" : undefined}
       draggable
       onDragStart={handleCardDragStart}
       onDragEnd={handleCardDragEnd}
@@ -2621,7 +2623,7 @@ export const SessionCard = memo(function SessionCard({
               <EyeOff className="w-3 h-3" />
             </span>
           )}
-          <span className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
+          <span data-sv-title className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
@@ -2677,7 +2679,7 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
         {stateView && !session.implementation_session && (
-          <div className="mt-0.5 flex items-start gap-1" title={stateView.text}>
+          <div data-sv-state className="mt-0.5 flex items-start gap-1" title={stateView.text}>
             <Pin
               className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
               strokeWidth={2.4}
@@ -2687,6 +2689,7 @@ export const SessionCard = memo(function SessionCard({
                 quiet: the liveness pulse already says "running". */}
             {stateView.status && stateView.status !== "working" && (
               <span
+                data-sv-status-chip
                 className={`shrink-0 mt-[1px] px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}
               >
                 {THREAD_STATE_STATUS_META[stateView.status].label}
@@ -2698,7 +2701,7 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
         {cardSummary && !stateView && !session.implementation_session && (
-          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
+          <div data-sv-summary className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
             <FormattedSummary text={cardSummary} />
           </div>
         )}
@@ -2712,7 +2715,7 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
         {cleanedUserMsg && (
-          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
+          <div data-sv-prompt className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
             <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
             {cleanedUserMsg}
           </div>
@@ -2760,7 +2763,7 @@ export const SessionCard = memo(function SessionCard({
             </div>
           );
         })()}
-        <div className="flex items-center gap-1.5 mt-1">
+        <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
               <AvatarImg
@@ -4628,7 +4631,7 @@ function SessionListPanelImpl({
               {blockedSessions.length}
             </button>
           )}
-          <div className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+          <div data-sv-controls className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
           {!favoritesView && <>
           {/* Inbox scope: Mine ⇄ Team. Team turns the inbox into a shared board
               of every team-visible session across the active team (a superset of
