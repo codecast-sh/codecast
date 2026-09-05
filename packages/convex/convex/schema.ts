@@ -258,6 +258,7 @@ export default defineSchema({
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
+    request_id: v.optional(v.string()),
     command: daemonCommandValidator,
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -284,7 +285,8 @@ export default defineSchema({
     claimed_by: v.optional(v.string()),
     claimed_at: v.optional(v.number()),
     claimed_device: v.optional(v.string()),
-  }).index("by_user_pending", ["user_id", "executed_at"]),
+  }).index("by_user_pending", ["user_id", "executed_at"])
+    .index("by_user_request", ["user_id", "request_id"]),
 
   teams: defineTable({
     name: v.string(),
@@ -522,6 +524,7 @@ export default defineSchema({
     // enqueuePendingMessage); unlike dismiss it never triggers a kill. A
     // dismiss clears it (the row moves to Dismissed).
     inbox_stashed_at: v.optional(v.number()),
+    inbox_snoozed_until: v.optional(v.number()),
     // "Stash and hide": the stash survives machine wakes. A trigger firing into
     // a plain stash pulls the row back into the inbox ("something happened,
     // show me"); into a hidden stash it keeps working out of sight. Asks still
@@ -531,11 +534,16 @@ export default defineSchema({
     inbox_stash_hidden: v.optional(v.boolean()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
-    // The user's "dormant" gesture: "a machine owns this, wake me when something
-    // happens". A stamp that any later activity silently expires — honored only
-    // while >= updated_at (see inboxFilters.isUserDormant), the same contract as
-    // inbox_deferred_at. Never cleared by hand; a wake, a message, or a new turn
-    // bumps updated_at past it and the row moves on.
+    // The user's own rest verdict — where they filed the row (Needs Input,
+    // Done or Dormant) by gesture or by dragging it into that section. A stamp
+    // that any later activity silently expires — honored only while
+    // inbox_rest_at >= updated_at (see inboxFilters.userRestOf), the same
+    // contract as inbox_deferred_at. Never cleared by hand; a wake, a message,
+    // or a new turn bumps updated_at past it and the row moves on.
+    inbox_rest: v.optional(v.union(v.literal("needs_input"), v.literal("done"), v.literal("dormant"))),
+    inbox_rest_at: v.optional(v.number()),
+    // Legacy dormant-only stamp from before inbox_rest; userRestOf still reads
+    // it so rows parked then keep their verdict. Nothing writes it any more.
     inbox_dormant_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
     // The settle classifier's verdict for the settle it last inspected: "done"
@@ -755,6 +763,7 @@ export default defineSchema({
     .index("by_spawned_by", ["spawned_by_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
+    .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
     // rows at the index so the scan never reads docs the inbox filter drops.
     .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
@@ -1699,11 +1708,21 @@ export default defineSchema({
     pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     // Set when work was queued for a REMOTE device that is offline (a cloud
-    // host that put itself to sleep). Local daemons read it off the heartbeat
-    // (users.heartbeat → wake_devices) and boot the host; a heartbeat from the
-    // device itself clears it. Never set for a local device — nothing can wake
+    // host that put itself to sleep). The configured server waker or a local
+    // daemon boots the host; a heartbeat from the device itself clears it.
+    // Never set for a local device — nothing can wake
     // a closed laptop.
     wake_requested_at: v.optional(v.number()),
+    cloud_wake: v.optional(v.object({
+      request_at: v.number(),
+      attempt: v.number(),
+      next_attempt_at: v.number(),
+      status: v.union(v.literal("pending"), v.literal("starting"), v.literal("awake"), v.literal("failed")),
+      lease_token: v.optional(v.string()),
+      lease_until: v.optional(v.number()),
+      last_error: v.optional(v.string()),
+      aws_request_id: v.optional(v.string()),
+    })),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
@@ -1788,6 +1807,7 @@ export default defineSchema({
     last_heartbeat: v.number(),
     agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
+    agent_status_write_at: v.optional(v.number()),
     // When the daemon parked this session's pane to stay under the fleet cap.
     // Cleared when the session resumes. Separate from agent_status_updated_at
     // so a later status write does not lose when the park started.
@@ -1823,6 +1843,7 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
     .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
+    .index("by_user_status", ["user_id", "agent_status"])
     .index("by_heartbeat", ["last_heartbeat"]),
 
   session_metrics: defineTable({
@@ -1994,6 +2015,7 @@ export default defineSchema({
       external_id: v.optional(v.string()),
       suite_id: v.optional(v.string()),
       event: v.optional(v.string()),
+      app: v.optional(v.string()),
     }))),
     checks_state: v.optional(v.string()),
     // Reasons that piled up since the last wake was DELIVERED. Several events

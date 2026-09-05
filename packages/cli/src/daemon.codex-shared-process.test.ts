@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { processLookupAllowsCwdFallback, readCodexSessionMetaHeadAsync, sessionMetaHeadCut, sessionProcessOwnership } from "./daemon.js";
+import { processLookupAllowsCwdFallback, readCodexSessionMetaHeadAsync, sessionMetaHeadCut, acquireSessionProcessOwnership as sessionProcessOwnership } from "./daemon.js";
 import { planSessionTeardown, shortId } from "./sessionProcessMatcher.js";
 
 // ct-41071, anchored to the incident that produced it: ~/.codex/sessions/2026/08/02.
@@ -132,39 +132,39 @@ describe("sessionProcessOwnership — the incident's own sessions", () => {
     expect(processLookupAllowsCwdFallback("claude")).toBe(true);
   });
 
-  test("every in-process subagent THREAD of 019fc25f borrows the parent's process", () => {
+  test("every in-process subagent THREAD of 019fc25f borrows the parent's process", async () => {
     for (const sid of THREAD_SUBAGENTS) {
-      expect(sessionProcessOwnership(sid)).toBe("borrowed");
+      expect(await sessionProcessOwnership(sid)).toBe("borrowed");
     }
   });
 
-  test("a `codex exec` review child OWNS its process despite having a parent", () => {
+  test("a `codex exec` review child OWNS its process despite having a parent", async () => {
     // The over-fire that parent_thread_id alone would cause. These are separate
     // OS processes; calling them borrowers means killing a review card silently
     // leaves the review running.
     for (const sid of EXEC_SUBAGENTS) {
-      expect(sessionProcessOwnership(sid)).toBe("owned");
+      expect(await sessionProcessOwnership(sid)).toBe("owned");
     }
   });
 
-  test("the parent TUI owns its process", () => {
-    expect(sessionProcessOwnership(PARENT)).toBe("owned");
+  test("the parent TUI owns its process", async () => {
+    expect(await sessionProcessOwnership(PARENT)).toBe("owned");
   });
 
-  test("a distinct root session owns its process (ct-41115 stays out of scope)", () => {
-    expect(sessionProcessOwnership(ROOT_SIBLING)).toBe("owned");
+  test("a distinct root session owns its process (ct-41115 stays out of scope)", async () => {
+    expect(await sessionProcessOwnership(ROOT_SIBLING)).toBe("owned");
   });
 
-  test("a Claude session always owns its process", () => {
-    expect(sessionProcessOwnership(CLAUDE_SESSION)).toBe("owned");
+  test("a Claude session always owns its process", async () => {
+    expect(await sessionProcessOwnership(CLAUDE_SESSION)).toBe("owned");
   });
 
-  test("an id with no file on disk is UNKNOWN, not owned", () => {
+  test("an id with no file on disk is UNKNOWN, not owned", async () => {
     // "unknown" is what makes the destructive paths fail closed.
-    expect(sessionProcessOwnership("00000000-0000-0000-0000-000000000000")).toBe("unknown");
+    expect(await sessionProcessOwnership("00000000-0000-0000-0000-000000000000")).toBe("unknown");
   });
 
-  test("a materialized Claude JSONL must not override the Codex rollout", () => {
+  test("a materialized Claude JSONL must not override the Codex rollout", async () => {
     // NEW-1, the regression that silently restored the whole defect.
     // materializeSession writes a CLAUDE-shaped transcript under a CODEX session
     // id (clientOwnsSessionStore excludes codex, so its skip never fires), and
@@ -183,14 +183,14 @@ describe("sessionProcessOwnership — the incident's own sessions", () => {
       JSON.stringify({ type: "user", cwd: "/Users/jasonbenn/code/codecast" }) + "\n",
     );
 
-    expect(sessionProcessOwnership(MAT)).toBe("borrowed");
-    expect(planSessionTeardown(sessionProcessOwnership(MAT))).toEqual({
+    expect(await sessionProcessOwnership(MAT)).toBe("borrowed");
+    expect(planSessionTeardown(await sessionProcessOwnership(MAT))).toEqual({
       reapPidTree: false,
       killCachedResumeTmux: false,
     });
   });
 
-  test("a rollout whose session_meta is still being written is UNKNOWN, not owned", () => {
+  test("a rollout whose session_meta is still being written is UNKNOWN, not owned", async () => {
     // The race that matters: session_meta is ~37KB because base_instructions
     // embeds the system prompt, while Strategy A2 matches on the PATH, which
     // exists the instant the file is created. A half-written first line parses
@@ -204,12 +204,12 @@ describe("sessionProcessOwnership — the incident's own sessions", () => {
     });
     const p = path.join(rolloutDir, `rollout-2026-08-02T14-08-13-${PARTIAL}.jsonl`);
     fs.writeFileSync(p, full.slice(0, Math.floor(full.length / 2))); // truncated mid-line
-    expect(sessionProcessOwnership(PARTIAL)).toBe("unknown");
+    expect(await sessionProcessOwnership(PARTIAL)).toBe("unknown");
 
     // …and once the writer finishes, the real answer must still be reachable —
     // i.e. the undecided pass must NOT have been memoized.
     fs.writeFileSync(p, full + "\n" + JSON.stringify({ type: "event_msg", payload: {} }) + "\n");
-    expect(sessionProcessOwnership(PARTIAL)).toBe("borrowed");
+    expect(await sessionProcessOwnership(PARTIAL)).toBe("borrowed");
   });
 });
 
@@ -239,26 +239,26 @@ describe("planSessionTeardown — what a kill may destroy", () => {
     expect(plan.killCachedResumeTmux).toBe(true);
   });
 
-  test("resuming then killing a subagent card cannot kill the parent's tmux", () => {
+  test("resuming then killing a subagent card cannot kill the parent's tmux", async () => {
     // The S1 bypass, end to end at the decision level: Resume caches the PARENT's
     // tmux name under the SUBAGENT's id, then a later kill/dismiss reads it back.
     for (const sid of THREAD_SUBAGENTS) {
-      expect(planSessionTeardown(sessionProcessOwnership(sid)).killCachedResumeTmux).toBe(false);
+      expect(planSessionTeardown(await sessionProcessOwnership(sid)).killCachedResumeTmux).toBe(false);
     }
   });
 
-  test("killing the PARENT still tears everything down", () => {
+  test("killing the PARENT still tears everything down", async () => {
     // The over-fire case: cascadeHideToNestedChildren enqueues a per-child
     // kill_session when a parent is killed, and those children no-op — but the
     // parent's own kill must still reap the shared process exactly once.
-    const plan = planSessionTeardown(sessionProcessOwnership(PARENT));
+    const plan = planSessionTeardown(await sessionProcessOwnership(PARENT));
     expect(plan.reapPidTree).toBe(true);
     expect(plan.killCachedResumeTmux).toBe(true);
   });
 
-  test("killing a `codex exec` review card still reaps it", () => {
+  test("killing a `codex exec` review card still reaps it", async () => {
     for (const sid of EXEC_SUBAGENTS) {
-      expect(planSessionTeardown(sessionProcessOwnership(sid)).reapPidTree).toBe(true);
+      expect(planSessionTeardown(await sessionProcessOwnership(sid)).reapPidTree).toBe(true);
     }
   });
 });
@@ -304,7 +304,7 @@ describe("the guards are actually wired into the kill sites", () => {
   ]) {
     const name = sig.replace("async function ", "").replace("(", "");
 
-    test(`${name} gates BOTH destructive actions on the plan`, () => {
+    test(`${name} gates BOTH destructive actions on the plan`, async () => {
       const body = bodyOf(sig);
       // Sanity: this really is a destructive site, so the assertions below matter.
       expect(body).toContain("reapPidTree(");
@@ -316,7 +316,7 @@ describe("the guards are actually wired into the kill sites", () => {
       expect(body).toContain("teardownPlan.killCachedResumeTmux");
     });
 
-    test(`${name} never kills the cached resume tmux outside a plan-gated branch`, () => {
+    test(`${name} never kills the cached resume tmux outside a plan-gated branch`, async () => {
       // Token presence alone let a mutation pass that deleted the guard and left
       // the flag's name in a comment. Tie the flag to the ACTION instead: the
       // tmux read out of resumeSessionCache must only be killed inside a branch
@@ -348,7 +348,7 @@ describe("the guards are actually wired into the kill sites", () => {
       expect(checked).toBe(1);
     });
 
-    test(`${name} gates on the plan with the correct polarity`, () => {
+    test(`${name} gates on the plan with the correct polarity`, async () => {
       // Catches a wholesale inversion — every borrower destroyed, every owner
       // spared — which token matching cannot see. The reap must be skipped when
       // the plan says NOT to reap, and performed when it says to.
@@ -363,19 +363,19 @@ describe("the guards are actually wired into the kill sites", () => {
 });
 
 describe("memoization", () => {
-  test("a session whose rollout appears later is re-decided, not cached as owned", () => {
+  test("a session whose rollout appears later is re-decided, not cached as owned", async () => {
     const LATE = "019fc290-0000-7000-8000-000000000001";
-    expect(sessionProcessOwnership(LATE)).toBe("unknown");
+    expect(await sessionProcessOwnership(LATE)).toBe("unknown");
     writeThreadSubagent(LATE, "/root/late");
-    expect(sessionProcessOwnership(LATE)).toBe("borrowed");
+    expect(await sessionProcessOwnership(LATE)).toBe("borrowed");
   });
 
-  test("a decided answer is memoized (session_meta is immutable once written)", () => {
+  test("a deleted rollout revokes a previously decoded ownership answer", async () => {
     const STABLE = "019fc290-0000-7000-8000-000000000002";
     const p = writeThreadSubagent(STABLE, "/root/stable");
-    expect(sessionProcessOwnership(STABLE)).toBe("borrowed");
+    expect(await sessionProcessOwnership(STABLE)).toBe("borrowed");
     fs.rmSync(p);
-    expect(sessionProcessOwnership(STABLE)).toBe("borrowed");
+    expect(await sessionProcessOwnership(STABLE)).toBe("unknown");
   });
 });
 

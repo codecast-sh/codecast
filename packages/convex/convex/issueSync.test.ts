@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { GITHUB_EVENT_KINDS, linearEventKind } from "./issueSync";
 import { linearDeliveryId, verifyLinearSignature } from "./linearWebhooks";
+import { markSourceSynced } from "./issueSync";
+import { makeFakeDb } from "./testDb";
 import {
   normalizeGithubComment,
   normalizeGithubIssue,
@@ -247,5 +249,24 @@ describe("github webhook payloads", () => {
       body: "On it.",
       author_login: "ada",
     });
+  });
+});
+
+describe("markSourceSynced status transitions", () => {
+  const run = (status: string, args: Record<string, any>) => {
+    const t = { issue_sync_sources: [{ _id: "src_1", status, updated_at: 1 }] as any[] };
+    return (markSourceSynced as any)._handler({ db: makeFakeDb(t) }, { source_id: "src_1", ...args }).then(() => t.issue_sync_sources[0]);
+  };
+  test("a parked source heals on a clean sync; a paused one stays paused", async () => {
+    expect((await run("error", {})).status).toBe("active");
+    expect((await run("paused", {})).status).toBe("paused");
+    expect((await run("active", {})).status).toBe("active");
+  });
+  test("only an auth failure parks; a transient error leaves the status alone", async () => {
+    expect((await run("active", { error: "Linear API 401", auth_failed: true })).status).toBe("error");
+    const transient = await run("active", { error: "Linear API 502" });
+    expect(transient.status).toBe("active");
+    expect(transient.last_error).toBe("Linear API 502");
+    expect((await run("paused", { error: "Linear API 401", auth_failed: true })).status).toBe("error");
   });
 });

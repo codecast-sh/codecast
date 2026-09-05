@@ -1,0 +1,143 @@
+/* The ring card: a face with a pulse, and Join. Its own stylesheet because it
+ * is drawn in two windows (the voice host's ring shape, an older shell's ring
+ * window) that share nothing else. Always dark: it sits over other apps. */
+
+.ring-card {
+  --ring-accent: var(--sol-green);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 360px;
+  padding: 22px 20px 18px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--ring-accent) 45%, transparent);
+  background: color-mix(in srgb, #002b36 96%, transparent);
+  color: #eee8d5;
+  box-shadow:
+    0 24px 60px rgb(0 0 0 / 0.5),
+    0 0 0 1px color-mix(in srgb, var(--ring-accent) 18%, transparent),
+    0 0 40px color-mix(in srgb, var(--ring-accent) 22%, transparent);
+  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+  user-select: none;
+  /* No entrance animation, on purpose: the card mounts in a window the shell
+     reveals a frame later, and an animation that started while the window
+     was hidden sat on its first frame — an invisible ring. The pulse below
+     is the motion; it loops, so a late start costs nothing. */
+}
+
+.ring-card-face-wrap {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+}
+
+.ring-card-face {
+  position: relative;
+  z-index: 1;
+  width: 84px;
+  height: 84px;
+  border-radius: 9999px;
+  object-fit: cover;
+  border: 3px solid var(--ring-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ring-accent) 25%, transparent);
+  background: #073642;
+}
+
+.ring-card-face-initial {
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+  font-weight: 600;
+  color: #93a1a1;
+}
+
+/* Two rings leaving the face, half a period apart: the picture of a phone
+ * ringing, readable from across a room. */
+.ring-card-pulse {
+  position: absolute;
+  inset: 6px;
+  border-radius: 9999px;
+  border: 2px solid var(--ring-accent);
+  opacity: 0;
+  animation: ring-card-pulse 1.5s ease-out infinite;
+}
+.ring-card-pulse-2 {
+  animation-delay: 0.75s;
+}
+@keyframes ring-card-pulse {
+  0% { transform: scale(0.85); opacity: 0.9; }
+  100% { transform: scale(1.75); opacity: 0; }
+}
+
+.ring-card-words {
+  text-align: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.ring-card-name {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ring-card-line {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: #93a1a1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ring-card-anchor {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #839496;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.ring-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+.ring-card-join,
+.ring-card-decline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms, filter 120ms, background 120ms;
+  -webkit-app-region: no-drag;
+}
+.ring-card-join {
+  background: var(--ring-accent);
+  color: #002b36;
+  border: 1px solid transparent;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--ring-accent) 40%, transparent);
+}
+.ring-card-join:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.ring-card-decline {
+  background: color-mix(in srgb, #dc322f 14%, transparent);
+  color: #dc322f;
+  border: 1px solid color-mix(in srgb, #dc322f 35%, transparent);
+}
+.ring-card-decline:hover { background: color-mix(in srgb, #dc322f 24%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-card-pulse { animation: none; }
+  .ring-card-pulse { opacity: 0.5; transform: scale(1.2); }
+}

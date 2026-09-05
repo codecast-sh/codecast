@@ -1,6 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
 import { timeSyncFs } from "./slowSync.js";
+import { scanPredicates } from "./workers/scanPolicy.js";
+import { scanWorkerHost } from "./workers/bridge.js";
+import { visitScan, scanCanFallback, ScanCancelled, yieldScanBatch } from "./workers/scanClient.js";
+import type { ScanPolicy, ScanFile } from "./workers/scanTypes.js";
 
 /**
  * A dirFilter from one rule per depth: rule[0] judges a top level dir by its
@@ -17,15 +21,21 @@ export function dirFilterByDepth(...rules: Array<(seg: string, parts: string[]) 
 }
 
 export interface WalkFile {
+  cwd?: string | null;
   path: string;
   /** Path relative to the walk root. */
   rel: string;
   /** Segments in `rel`: a file directly under the root has depth 1. */
   depth: number;
-  stat: fs.Stats;
+  stat: Pick<fs.Stats, "mtimeMs" | "size" | "isFile">;
 }
 
 export interface WalkOptions {
+  policy?: ScanPolicy;
+  signal?: AbortSignal;
+  excludeCodexAppServer?: boolean;
+  observeCwd?: boolean;
+  requireComplete?: boolean;
   /** Deepest file depth to report. A directory is entered only while a file one
    *  level deeper would still qualify. Default: unbounded. */
   maxDepth?: number;
@@ -49,6 +59,28 @@ export interface WalkEntry {
   rel: string;
   depth: number;
   name: string;
+}
+
+export async function walkEntryBatches(root: string, opts: WalkOptions, onBatch: (files: WalkEntry[]) => void | Promise<void>): Promise<void> {
+  const apply = async (files: WalkEntry[]) => {
+    for (let i = 0; i < files.length; i += 128) {
+      if (opts.signal?.aborted) throw new ScanCancelled("walk stopped");
+      await onBatch(files.slice(i, i + 128));
+      await yieldScanBatch();
+    }
+  };
+  if (!opts.policy || !scanWorkerHost()) return walkDirs(root, opts, apply);
+  const seen = new Set<string>();
+  try {
+    await visitScan({ name: "walk", root, policy: opts.policy, ...(Number.isFinite(opts.maxDepth) ? { maxDepth: opts.maxDepth } : {}), stats: false, ...(opts.requireComplete ? { requireComplete: true } : {}) }, async rows => {
+      const files = rows.filter((r): r is ScanFile => r.type === "file");
+      for (const f of files) seen.add(f.path);
+      await onBatch(files);
+    }, opts.signal);
+  } catch (error) {
+    if (!scanCanFallback(error)) throw error;
+    await walkDirs(root, opts, files => apply(files.filter(f => !seen.has(f.path))));
+  }
 }
 
 function splitDir(root: string, dir: string, dirDepth: number, entries: fs.Dirent[], opts: WalkOptions) {
@@ -89,14 +121,21 @@ export async function walkDirs(
   opts: WalkOptions,
   onDir: (files: WalkEntry[]) => void | Promise<void>,
 ): Promise<void> {
+  if (opts.policy) {
+    const predicates = scanPredicates(root, opts.policy);
+    opts = {...opts, dirFilter: opts.dirFilter ?? predicates.dirFilter, fileFilter: opts.fileFilter ?? predicates.fileFilter};
+  }
   const walkDir = async (dir: string, dirDepth: number): Promise<void> => {
+    if (opts.signal?.aborted) throw new ScanCancelled("walk stopped");
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      if (opts.requireComplete && !["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
       return; // vanished or unreadable: nothing under it to report
     }
     const { depth, files, subdirs } = splitDir(root, dir, dirDepth, entries, opts);
+    if (opts.signal?.aborted) throw new ScanCancelled("walk stopped");
     await onDir(files);
     for (let i = 0; i < subdirs.length; i += DIR_BATCH) {
       await Promise.all(subdirs.slice(i, i + DIR_BATCH).map((sub) => walkDir(sub, depth)));
@@ -133,16 +172,47 @@ export async function walkFiles(
   opts: WalkOptions,
   onFile: (file: WalkFile) => void,
 ): Promise<void> {
+  if (opts.policy && scanWorkerHost()) {
+    const seen = new Map<string, string>();
+    try {
+      await visitScan({ name: "walk", root, policy: opts.policy, ...(Number.isFinite(opts.maxDepth) ? { maxDepth: opts.maxDepth } : {}), stats: true, ...(opts.requireComplete ? { requireComplete: true } : {}), ...(opts.observeCwd ? { observeCwd: true } : {}), ...(opts.excludeCodexAppServer ? { excludeCodexAppServer: true } : {}) }, rows => {
+        for (const r of rows) {
+          if (r.type !== "file" || r.mtimeMs === undefined || r.size === undefined) throw new Error("invalid file observation");
+          seen.set(r.path, `${r.mtimeMs}:${r.size}`);
+          onFile({ path: r.path, rel: r.rel, depth: r.depth, ...(r.cwd !== undefined ? { cwd: r.cwd } : {}), stat: { mtimeMs: r.mtimeMs, size: r.size, isFile: () => true } });
+        }
+      }, opts.signal);
+      return;
+    } catch (error) {
+      if (!scanCanFallback(error)) throw error;
+      const predicates = scanPredicates(root, opts.policy);
+      return walkFiles(root, { ...opts, dirFilter: opts.dirFilter ?? predicates.dirFilter, fileFilter: opts.fileFilter ?? predicates.fileFilter, policy: undefined }, f => {
+        if (seen.get(f.path) !== `${f.stat.mtimeMs}:${f.stat.size}`) onFile(f);
+      });
+    }
+  }
   await walkDirs(root, opts, async (files) => {
     for (let i = 0; i < files.length; i += STAT_BATCH) {
       await Promise.all(files.slice(i, i + STAT_BATCH).map(async (f) => {
         try {
           const stat = await fs.promises.stat(f.path);
-          onFile({ path: f.path, rel: f.rel, depth: f.depth, stat });
+          if (opts.signal?.aborted) return;
+          if (opts.excludeCodexAppServer) {
+            const { isAppServerManagedCodexSessionHead } = await import("./codexWatcher.js");
+            const handle = await fs.promises.open(f.path, "r");
+            let excluded: boolean;
+            try { const b = Buffer.alloc(2048); const r = await handle.read(b, 0, b.length, 0); excluded = isAppServerManagedCodexSessionHead(b.subarray(0, r.bytesRead).toString("utf8")); }
+            finally { await handle.close(); }
+            if (excluded) return;
+          }
+          const cwd = opts.observeCwd ? await (await import("./workers/transcriptObservation.js")).readTranscriptCwdAsync(f.path) : undefined;
+          if (opts.signal?.aborted) return;
+          onFile({ path: f.path, rel: f.rel, depth: f.depth, stat, ...(cwd !== undefined ? { cwd } : {}) });
         } catch {
           // deleted between readdir and stat
         }
       }));
+      await yieldScanBatch();
     }
   });
 }

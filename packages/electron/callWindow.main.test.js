@@ -85,7 +85,7 @@ test("an unknown size lands on the stage, never on an invisible window", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
   rig.handlers.get("set-call-window-size")(sender, "circles");
-  assert.equal(rig.handlers.get("set-call-window-size")(sender, "faces"), "panel");
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "banana"), "panel");
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
 });
 
@@ -296,4 +296,365 @@ test("showing a huddle finds the regular window hosting it when no panel exists"
   assert.equal(rig.handlers.get("show-call-panel")(), true);
   assert.equal(rig.mainWindow.did("show").length, 1);
   assert.equal(rig.mainWindow.did("focus").length, 1);
+});
+
+// ── The voice host ────────────────────────────────────────────────────────
+//
+// The window is persistent: built at boot with no room, it holds the walkie's
+// ear and takes rooms as commands. A burst becoming a call is this window
+// changing shape, so nothing here may ever reload it or build a second one.
+
+/** The voice window as the app boots it: no room, idle, hidden. */
+function bootVoiceWindow(rig) {
+  rig.handlers.get("open-faces-window")(null);
+  const win = rig.windows[rig.windows.length - 1];
+  const sender = { sender: win.webContents };
+  return { win, sender };
+}
+
+function declareHost(rig, sender) {
+  rig.handlers.get("voice-host-ready")(sender);
+}
+
+test("a host takes a room as a command — the window is never reloaded under it", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  const sent = [];
+  win.webContents.send = (channel, payload) => sent.push([channel, payload]);
+  const loads = win.did("loadURL").length;
+  rig.handlers.get("open-call-panel")(null, "dm:a:b", { mic: true, size: "speaker" });
+  assert.equal(win.did("loadURL").length, loads);
+  assert.deepEqual(sent, [
+    ["call-panel-open", { room: "dm:a:b", mic: true, camera: false, scribe: false, ring: false, size: "speaker" }],
+  ]);
+  // The shell does not move the window itself: the host reshapes once it has
+  // the room, so the strip it may be showing is not yanked mid-burst.
+  assert.equal(rig.handlers.get("get-call-window-size")(sender), "idle");
+});
+
+test("before the renderer declares itself, a room still reaches it the older way", () => {
+  // The first second after boot, and an older web build: a room in the URL is
+  // the one form every renderer understands.
+  const rig = loadShell();
+  const { win } = bootVoiceWindow(rig);
+  rig.handlers.get("open-call-panel")(null, "dm:a:b", { mic: true });
+  assert.match(win.last("loadURL")[0], /call-panel\?room=dm%3Aa%3Ab&mic=1/);
+});
+
+test("a host's hang-up hides the window; it is destroyed only by quitting", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  rig.handlers.get("set-call-window-size")(sender, "panel");
+  assert.equal(win.isVisible(), true);
+  rig.handlers.get("close-call-panel")(sender, { ended: true });
+  assert.equal(win.destroyed, false);
+  assert.equal(win.isVisible(), false);
+});
+
+test("the strip is a shape: bottom-right corner, floating, taking the mouse, never remembered as a call size", () => {
+  const rig = loadShell({ callPanelWindow: { size: "tiny" } });
+  const { win, sender } = bootVoiceWindow(rig);
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "walkie"), "walkie");
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }]);
+  assert.equal(win.isResizable(), false);
+  // One rem in, five rem up from the bottom-right of the 1600x1000 work area.
+  const [w, h] = win.getContentSize();
+  assert.deepEqual(win.getPosition(), [1600 - w - 16, 1000 - h - 80]);
+  assert.equal(win.did("showInactive").length, 1);
+  // The call size the person chose is untouched, and it is what the host is
+  // told to open a call in.
+  assert.equal(readSettings().callPanelWindow.size, "tiny");
+  assert.deepEqual(rig.handlers.get("get-voice-window-state")(sender), { size: "walkie", callSize: "tiny" });
+});
+
+test("the strip grows from its bottom-right corner, so the corner it is tucked into stays put", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  rig.handlers.get("set-call-window-size")(sender, "walkie");
+  const [x0, y0] = win.getPosition();
+  const [w0, h0] = win.getContentSize();
+  rig.handlers.get("set-call-window-content-size")(sender, { width: w0, height: h0 + 60 });
+  assert.deepEqual(win.getPosition(), [x0, y0 - 60]);
+  rig.handlers.get("set-call-window-content-size")(sender, { width: w0, height: h0 });
+  assert.deepEqual(win.getPosition(), [x0, y0]);
+});
+
+test("the strip's corner is remembered on its own, apart from the circles and the stage", async () => {
+  const rig = loadShell({ callPanelWindow: { circles: { x: 40, y: 40 } } });
+  const { win, sender } = bootVoiceWindow(rig);
+  rig.handlers.get("set-call-window-size")(sender, "walkie");
+  win.setPosition(900, 700);
+  win.emit("move");
+  await new Promise((r) => setTimeout(r, 500));
+  const saved = readSettings().callPanelWindow;
+  assert.deepEqual(saved.walkie, { x: 900, y: 700 });
+  assert.deepEqual(saved.circles, { x: 40, y: 40 });
+  // And a strip that comes back lands where it was left.
+  rig.handlers.get("set-call-window-size")(sender, "idle");
+  rig.handlers.get("set-call-window-size")(sender, "walkie");
+  assert.deepEqual(win.last("setPosition"), [900, 700]);
+});
+
+test("commands from other windows reach the host, and nobody when there is none", () => {
+  const rig = loadShell();
+  assert.equal(rig.handlers.get("voice-command")(null, "startBurst", ["ch1", "dm:a:b"]), false);
+  const { win, sender } = bootVoiceWindow(rig);
+  // Built but not yet declared: the renderer may still be loading, or old.
+  assert.equal(rig.handlers.get("voice-command")(null, "startBurst", ["ch1", "dm:a:b"]), false);
+  declareHost(rig, sender);
+  const sent = [];
+  win.webContents.send = (channel, payload) => sent.push([channel, payload]);
+  assert.equal(rig.handlers.get("voice-command")(null, "startBurst", ["ch1", "dm:a:b"]), true);
+  assert.deepEqual(sent, [["voice-command", { cmd: "startBurst", args: ["ch1", "dm:a:b"] }]]);
+  // A command with no name, or with arguments that are not a list, is dropped.
+  assert.equal(rig.handlers.get("voice-command")(null, "", []), false);
+  rig.handlers.get("voice-command")(null, "endBurst", "not-a-list");
+  assert.deepEqual(sent[sent.length - 1], ["voice-command", { cmd: "endBurst", args: [] }]);
+});
+
+test("the host's mirror reaches every other window, and a window that opens later gets the last one", () => {
+  const rig = loadShell();
+  // A people window of its own, from before the host declared (with a host
+  // the buddy list is the host's wall, not a window).
+  rig.handlers.get("open-people-window")();
+  const people = rig.windows[rig.windows.length - 1];
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  const main = [];
+  rig.mainWindow.webContents.send = (channel, payload) => {
+    if (channel === "voice-mirror") main.push(payload);
+  };
+  const own = [];
+  win.webContents.send = (channel, payload) => own.push([channel, payload]);
+  const mirror = { walkie: { sending: null }, call: { phase: "idle" } };
+  rig.handlers.get("voice-mirror")(sender, mirror);
+  assert.deepEqual(main, [mirror]);
+  // Never back to the host itself.
+  assert.deepEqual(own, []);
+  // Only the host may mirror.
+  rig.handlers.get("voice-mirror")({ sender: { id: 999 } }, { walkie: null });
+  assert.deepEqual(main, [mirror]);
+
+  // A window reporting its state for the first time gets the last mirror in
+  // reply, so its talk keys do not start blank.
+  const late = [];
+  people.webContents.send = (channel, payload) => {
+    if (channel === "voice-mirror") late.push(payload);
+  };
+  people.webContents.once = () => {};
+  rig.handlers.get("report-window-state")({ sender: people.webContents }, { active: "/people", open: [] });
+  assert.deepEqual(late, [mirror]);
+});
+
+test("the call lives in the voice window only while it hosts a room", async () => {
+  const rig = loadShell();
+  const roles = [];
+  rig.mainWindow.webContents.send = (channel, payload) => {
+    if (channel === "window-role") roles.push(payload);
+  };
+  const { sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  await new Promise((r) => setTimeout(r, 60));
+  let role = roles[roles.length - 1];
+  assert.equal(role.voiceWindow, true);
+  assert.equal(role.callPanel, false);
+  // A room arrives: the other windows stand down from their docks.
+  rig.handlers.get("report-call-panel-state")(sender, { room: "dm:a:b", mic: true, camera: false, scribe: false });
+  await new Promise((r) => setTimeout(r, 60));
+  role = roles[roles.length - 1];
+  assert.equal(role.callPanel, true);
+  // And a hang-up gives them back their surfaces, while the host stays.
+  rig.handlers.get("report-call-panel-state")(sender, { room: null, mic: false, camera: false, scribe: false });
+  await new Promise((r) => setTimeout(r, 60));
+  role = roles[roles.length - 1];
+  assert.equal(role.callPanel, false);
+  assert.equal(role.voiceWindow, true);
+});
+
+test("raising the huddle on a host tells the host, which takes the call's shape itself", () => {
+  // The host derives its shape from what is happening; the shell moving it
+  // would fight that. A host hiding the call behind the wall is told to stop.
+  const rig = loadShell({ callPanelWindow: { size: "speaker" } });
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  const sent = [];
+  win.webContents.send = (channel) => sent.push(channel);
+  rig.handlers.get("report-call-panel-state")(sender, { room: "dm:a:b", mic: true, camera: false, scribe: false });
+  rig.handlers.get("set-call-window-size")(sender, "wall");
+  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.deepEqual(sent, ["call-panel-show"]);
+  assert.equal(rig.handlers.get("get-call-window-size")(sender), "wall");
+  // In a call shape that was merely closed, the shell reveals it as well.
+  rig.handlers.get("set-call-window-size")(sender, "speaker");
+  win.hide();
+  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.equal(win.isVisible(), true);
+});
+
+// ── The wall ──────────────────────────────────────────────────────────────
+
+test("with a host, asking for the people window asks the host for the wall — and puts the faces away", async () => {
+  const rig = loadShell({ facesWindow: { open: true } });
+  const roles = [];
+  rig.mainWindow.webContents.send = (channel, payload) => {
+    if (channel === "window-role") roles.push(payload);
+  };
+  const { sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  const count = rig.windows.length;
+  rig.handlers.get("open-people-window")();
+  // No second window.
+  assert.equal(rig.windows.length, count);
+  assert.equal(readSettings().peopleWindow.open, true);
+  assert.equal(readSettings().facesWindow.open, false);
+  await new Promise((r) => setTimeout(r, 60));
+  const role = roles[roles.length - 1];
+  assert.equal(role.peopleWall, true);
+  assert.equal(role.facesOverlay, false);
+  assert.equal(role.peopleWindow, false);
+  // Putting it away.
+  rig.handlers.get("close-people-window")();
+  assert.equal(readSettings().peopleWindow.open, false);
+  // And asking for the faces puts the wall away in turn.
+  rig.handlers.get("open-people-window")();
+  rig.handlers.get("open-faces-window")();
+  assert.equal(readSettings().peopleWindow.open, false);
+  assert.equal(readSettings().facesWindow.open, true);
+});
+
+test("without a host, the people window is still a window of its own", () => {
+  const rig = loadShell();
+  const count = rig.windows.length;
+  rig.handlers.get("open-people-window")();
+  assert.equal(rig.windows.length, count + 1);
+  assert.match(rig.windows[rig.windows.length - 1].last("loadURL")[0], /\/people$/);
+});
+
+test("the wall takes the people window's rectangle, floats by its pin, and is resized by its edges", () => {
+  const rig = loadShell({ peopleWindow: { bounds: { x: 100, y: 80, width: 340, height: 700 }, alwaysOnTop: true } });
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "wall"), "wall");
+  assert.deepEqual(win.getBounds(), { x: 100, y: 80, width: 340, height: 700 });
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
+  assert.equal(win.isResizable(), true);
+  // The renderer may not size it: the person's own bounds are the answer.
+  rig.handlers.get("set-call-window-content-size")(sender, { width: 50, height: 50 });
+  assert.deepEqual(win.getBounds(), { x: 100, y: 80, width: 340, height: 700 });
+  // Never remembered as the size the person left a call in.
+  assert.equal(readSettings().callPanelWindow?.size, undefined);
+});
+
+test("the wall's pin is set from the voice window and lands only on the wall", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  rig.handlers.get("set-call-window-size")(sender, "wall");
+  assert.equal(rig.handlers.get("get-always-on-top")(sender), false);
+  assert.equal(rig.handlers.get("set-always-on-top")(sender, true), true);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.equal(readSettings().peopleWindow.alwaysOnTop, true);
+  assert.equal(rig.handlers.get("get-always-on-top")(sender), true);
+  // The stage does not inherit the pin, and asks about the pin, not itself.
+  rig.handlers.get("set-call-window-size")(sender, "panel");
+  assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
+  assert.equal(rig.handlers.get("get-always-on-top")(sender), true);
+  // Back on the wall the pin is worn again.
+  rig.handlers.get("set-call-window-size")(sender, "wall");
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+});
+
+test("the wall's rectangle is remembered in the people window's own slot", async () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  rig.handlers.get("set-call-window-size")(sender, "wall");
+  win.setBounds({ x: 300, y: 200, width: 400, height: 600 });
+  win.emit("resize");
+  await new Promise((r) => setTimeout(r, 500));
+  assert.deepEqual(readSettings().peopleWindow.bounds, { x: 300, y: 200, width: 400, height: 600 });
+  assert.equal(readSettings().callPanelWindow?.bounds, undefined);
+});
+
+test("closing the wall puts the buddy list away; the host stays", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  rig.handlers.get("open-people-window")();
+  rig.handlers.get("set-call-window-size")(sender, "wall");
+  assert.equal(win.isVisible(), true);
+  // With focus, because the person asked for it.
+  assert.equal(win.did("focus").length, 1);
+  win.close();
+  assert.equal(win.destroyed, false);
+  assert.equal(win.isVisible(), false);
+  assert.equal(readSettings().peopleWindow.open, false);
+});
+
+
+// ── The ring ──────────────────────────────────────────────────────────────
+
+test("the ring shape is pinned above everything at the top-right of the cursor's display, revealed without focus", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "ring"), "ring");
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "screen-saver"]);
+  assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }]);
+  assert.equal(win.isResizable(), false);
+  // The rig's cursor is at 400,400 on a 1600x1000 work area.
+  const [w] = win.getContentSize();
+  assert.deepEqual(win.getPosition(), [1600 - w - 16, 16]);
+  assert.equal(win.did("showInactive").length, 1);
+  assert.equal(win.did("focus").length, 0);
+  // A card that grows keeps its right edge where it is.
+  const [x0, y0] = win.getPosition();
+  rig.handlers.get("set-call-window-content-size")(sender, { width: w + 40, height: 300 });
+  assert.deepEqual(win.getPosition(), [x0 - 40, y0]);
+  // Never remembered as the size the person left a call in.
+  assert.equal(readSettings().callPanelWindow?.size, undefined);
+});
+
+test("a ring bounces the dock until it is answered, and stops the moment the shape changes", () => {
+  const rig = loadShell();
+  const bounces = [];
+  const cancels = [];
+  rig.electron.app.dock.bounce = (kind) => {
+    bounces.push(kind);
+    return 7;
+  };
+  rig.electron.app.dock.cancelBounce = (id) => cancels.push(id);
+  const { sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  rig.handlers.get("set-call-window-size")(sender, "ring");
+  assert.deepEqual(bounces, ["critical"]);
+  // The host may also say so on its own; a second ask does not bounce twice.
+  rig.handlers.get("ring-attention")(sender, true);
+  assert.deepEqual(bounces, ["critical"]);
+  rig.handlers.get("set-call-window-size")(sender, "panel");
+  assert.deepEqual(cancels, [7]);
+  // Only the host may ask.
+  rig.handlers.get("ring-attention")({ sender: { id: 999 } }, true);
+  assert.deepEqual(bounces, ["critical"]);
+});
+
+test("a ring's banner goes up whatever is focused; every other banner stays quiet while the app is in front", () => {
+  const rig = loadShell();
+  rig.mainWindow.isFocused = () => true;
+  const shown = [];
+  rig.electron.Notification = class {
+    static isSupported() { return true; }
+    constructor(opts) { shown.push(opts); }
+    on() {}
+    show() {}
+  };
+  const handle = rig.handlers.get("show-notification");
+  assert.equal(handle(null, { title: "a", body: "b", data: { key: "n1" } }).shown, false);
+  assert.equal(handle(null, { title: "Sam wants to huddle", body: "b", data: { key: "ring:1", kind: "call", force: true } }).shown, true);
 });

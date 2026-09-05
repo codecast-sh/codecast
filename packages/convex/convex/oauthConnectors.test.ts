@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl } from "./oauthConnectors";
-import { signStateWith, verifyStateWith } from "./googleOAuth";
+import {
+  PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl, accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS,
+  getConnectionForTeam, updateStoredTokens, getFreshAccessTokenForTeam, claimRefresh, REFRESH_LEASE_MS,
+} from "./oauthConnectors";
+import { signStateWith, verifyStateWith, encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
 
 // The generic connector shares Google's security design; these tests pin the
 // PROVIDER TABLE (a new connector must be a config, not a fork) and the
@@ -144,5 +148,241 @@ describe("storeConnection + finishConfirm", () => {
     const member = await (deleteConnection as any)._handler(c, { user_id: "u_member", installation_id: "ai_1" });
     expect(member.ok).toBe(true);
     expect(t.app_installations).toHaveLength(0);
+  });
+});
+
+describe("token refresh policy", () => {
+  const now = 1_800_000_000_000;
+
+  test("expires_in becomes an absolute expiry; a provider without one records none", () => {
+    expect(accessExpiresAt({ expires_in: 86399 }, now)).toBe(now + 86_399_000);
+    expect(accessExpiresAt({}, now)).toBeUndefined();
+    expect(accessExpiresAt({ expires_in: 0 }, now)).toBeUndefined();
+  });
+
+  test("a row refreshes when it can and its token is expiring or of unknown age", () => {
+    const fresh = { refresh_token_enc: "r", access_expires_at: now + 60 * 60 * 1000 };
+    const expiring = { refresh_token_enc: "r", access_expires_at: now + REFRESH_MARGIN_MS - 1 };
+    const expired = { refresh_token_enc: "r", access_expires_at: now - 1 };
+    const unknownAge = { refresh_token_enc: "r" };
+    expect(needsRefresh(fresh, now)).toBe(false);
+    expect(needsRefresh(expiring, now)).toBe(true);
+    expect(needsRefresh(expired, now)).toBe(true);
+    // The rows connected before expiry was recorded: refresh once, then it is known.
+    expect(needsRefresh(unknownAge, now)).toBe(true);
+  });
+
+  test("a row without a refresh token never refreshes (Notion: the access token is all there is)", () => {
+    expect(needsRefresh({ access_expires_at: now - 1 }, now)).toBe(false);
+    expect(needsRefresh({}, now)).toBe(false);
+  });
+
+  test("storeConnection persists the expiry on insert and on re-store", async () => {
+    const t = { users: [{ _id: OWNER }], teams: [{ _id: TEAM }], app_installations: [] as any[] };
+    const c = ctx(t);
+    const base = {
+      provider: "linear", user_id: OWNER, team_id: TEAM, access_token_enc: "a1", refresh_token_enc: "r1",
+      granted_scopes: ["read"], pending_confirm_hash: "h", access_expires_at: now + 1000,
+    };
+    await (storeConnection as any)._handler(c, base);
+    expect(t.app_installations[0].access_expires_at).toBe(now + 1000);
+    t.app_installations[0].last_error = "stale";
+    await (storeConnection as any)._handler(c, { ...base, access_token_enc: "a2", access_expires_at: now + 2000 });
+    expect(t.app_installations.length).toBe(1);
+    expect(t.app_installations[0].access_expires_at).toBe(now + 2000);
+    expect(t.app_installations[0].last_error).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------------
+ * The refresh action, over the real handlers and a provider we control.
+ * The provider answers only when the test says so, which is how two
+ * refreshes, a reconnect, or a disconnect are made to overlap the await.
+ * ---------------------------------------------------------------------- */
+describe("getFreshAccessTokenForTeam (Linear)", () => {
+  const CLIENT_ID = "lin-client";
+  const SECRET = "lin-secret-for-tests";
+  const realFetch = globalThis.fetch;
+  const savedEnv = { id: process.env.LINEAR_OAUTH_CLIENT_ID, secret: process.env.LINEAR_OAUTH_CLIENT_SECRET };
+  beforeEach(() => {
+    process.env.LINEAR_OAUTH_CLIENT_ID = CLIENT_ID;
+    process.env.LINEAR_OAUTH_CLIENT_SECRET = SECRET;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    process.env.LINEAR_OAUTH_CLIENT_ID = savedEnv.id;
+    process.env.LINEAR_OAUTH_CLIENT_SECRET = savedEnv.secret;
+  });
+
+  const registry: Record<string, any> = {
+    "oauthConnectors:getConnectionForTeam": getConnectionForTeam,
+    "oauthConnectors:updateStoredTokens": updateStoredTokens,
+    "oauthConnectors:storeConnection": storeConnection,
+    "oauthConnectors:claimRefresh": claimRefresh,
+  };
+  function actionCtx(t: Record<string, any[]>) {
+    const inner = ctx(t);
+    const dispatch = async (ref: any, args: any) => {
+      const fn = registry[getFunctionName(ref)];
+      if (!fn) throw new Error(`no test handler for ${getFunctionName(ref)}`);
+      return (fn as any)._handler(inner, args);
+    };
+    return { runQuery: dispatch, runMutation: dispatch, _inner: inner } as any;
+  }
+
+  /** Linear's token endpoint, answering one call at a time on command. */
+  function stubLinear() {
+    const pending: Array<{ body: string; resolve: (r: Response) => void }> = [];
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const u = typeof input === "string" ? input : input.url;
+      if (u !== PROVIDERS.linear.tokenUrl) throw new Error(`unexpected fetch ${u}`);
+      return new Promise<Response>((resolve) => pending.push({ body: String(init?.body ?? ""), resolve }));
+    }) as any;
+    const answer = (i: number, body: any, status = 200) =>
+      pending[i].resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+    const untilCalls = async (n: number) => {
+      for (let i = 0; i < 200 && pending.length < n; i++) await new Promise((r) => setTimeout(r, 0));
+      if (pending.length < n) throw new Error(`provider saw ${pending.length} calls, wanted ${n}`);
+    };
+    return { pending, answer, untilCalls };
+  }
+
+  const pair = (n: number) => ({ access_token: `access-${n}`, refresh_token: `refresh-${n}`, expires_in: 86399, token_type: "Bearer" });
+
+  async function tables(opts: { expiresAt?: number } = {}) {
+    return {
+      users: [{ _id: OWNER }],
+      teams: [{ _id: TEAM }],
+      app_installations: [{
+        _id: "inst_1", provider: "linear", team_id: TEAM, connected_by: OWNER, granted_scopes: ["read"],
+        access_token_enc: await encryptRefreshToken("access-0", SECRET),
+        refresh_token_enc: await encryptRefreshToken("refresh-0", SECRET),
+        access_expires_at: opts.expiresAt, created_at: 1, updated_at: 1,
+      }] as any[],
+    };
+  }
+  const run = (t: any) => (getFreshAccessTokenForTeam as any)._handler(actionCtx(t), { provider: "linear", team_id: TEAM });
+  const stored = async (t: any) => ({
+    access: await decryptRefreshToken(t.app_installations[0].access_token_enc, SECRET),
+    refresh: await decryptRefreshToken(t.app_installations[0].refresh_token_enc, SECRET),
+    row: t.app_installations[0],
+  });
+
+  test("an unknown-age token refreshes once; the rotated pair and expiry land together, and a fresh row skips the provider", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const p = run(t);
+    await linear.untilCalls(1);
+    expect(linear.pending[0].body).toContain("grant_type=refresh_token");
+    expect(linear.pending[0].body).toContain("refresh_token=refresh-0");
+    linear.answer(0, pair(1));
+    const res = await p;
+    expect(res).toEqual({ ok: true, token: "access-1" });
+    const s = await stored(t);
+    expect([s.access, s.refresh]).toEqual(["access-1", "refresh-1"]);
+    expect(s.row.access_expires_at).toBeGreaterThan(Date.now() + 86_000_000);
+    expect(s.row.last_error).toBeUndefined();
+    // Known fresh now: no second provider call.
+    const again = await run(t);
+    expect(again).toEqual({ ok: true, token: "access-1" });
+    expect(linear.pending).toHaveLength(1);
+  });
+
+  test("two overlapping refreshes make ONE provider call; the waiter returns the claimant's pair", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const a = run(t);
+    await linear.untilCalls(1);
+    expect(t.app_installations[0].refresh_lease_until).toBeGreaterThan(Date.now());
+    const b = run(t);                        // finds the lease held and waits
+    await new Promise((r) => setTimeout(r, 400));
+    expect(linear.pending).toHaveLength(1);  // B never asked the provider
+    linear.answer(0, pair(1));
+    expect(await a).toEqual({ ok: true, token: "access-1" });
+    expect(await b).toEqual({ ok: true, token: "access-1" });
+    expect(linear.pending).toHaveLength(1);
+    const s = await stored(t);
+    expect([s.access, s.refresh]).toEqual(["access-1", "refresh-1"]);
+    expect(s.row.refresh_lease_until).toBeUndefined();   // released with the write
+  });
+
+  test("a lease left by a dead claimant expires and the next caller refreshes", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    t.app_installations[0].refresh_lease_until = Date.now() - 1;   // stale
+    const a = run(t);
+    await linear.untilCalls(1);
+    linear.answer(0, pair(1));
+    expect(await a).toEqual({ ok: true, token: "access-1" });
+  });
+
+  test("a stale read cannot claim over credentials that already moved on", async () => {
+    const t = await tables();
+    const res = await (claimRefresh as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: "not-the-row's", now: Date.now() });
+    expect(res).toEqual({ ok: false, reason: "superseded" });
+    const held = await (claimRefresh as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: t.app_installations[0].access_token_enc, now: Date.now() });
+    expect(held).toEqual({ ok: true });
+    const again = await (claimRefresh as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: t.app_installations[0].access_token_enc, now: Date.now() });
+    expect(again).toEqual({ ok: false, reason: "held" });
+    expect(t.app_installations[0].refresh_lease_until).toBeLessThanOrEqual(Date.now() + REFRESH_LEASE_MS);
+  });
+
+  test("a reconnect during the await keeps the reconnect's credentials", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const a = run(t);
+    await linear.untilCalls(1);
+    await (storeConnection as any)._handler(ctx(t), {
+      provider: "linear", user_id: OWNER, team_id: TEAM, granted_scopes: ["read"], pending_confirm_hash: "h",
+      access_token_enc: await encryptRefreshToken("access-re", SECRET),
+      refresh_token_enc: await encryptRefreshToken("refresh-re", SECRET),
+      access_expires_at: Date.now() + 86_399_000,
+    });
+    linear.answer(0, pair(1));
+    expect(await a).toEqual({ ok: true, token: "access-1" });
+    const s = await stored(t);
+    expect([s.access, s.refresh]).toEqual(["access-re", "refresh-re"]);
+    expect(t.app_installations).toHaveLength(1);
+  });
+
+  test("a disconnect during the await is reported, not resurrected", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const a = run(t);
+    await linear.untilCalls(1);
+    t.app_installations.length = 0;
+    linear.answer(0, pair(1));
+    expect(await a).toEqual({ ok: true, token: "access-1" });
+    expect(t.app_installations).toHaveLength(0);
+  });
+
+  test("a late refusal never stamps last_error over a reconnect that succeeded; the caller gets the reconnect's token", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const a = run(t);
+    await linear.untilCalls(1);
+    await (storeConnection as any)._handler(ctx(t), {
+      provider: "linear", user_id: OWNER, team_id: TEAM, granted_scopes: ["read"], pending_confirm_hash: "h",
+      access_token_enc: await encryptRefreshToken("access-re", SECRET),
+      refresh_token_enc: await encryptRefreshToken("refresh-re", SECRET),
+      access_expires_at: Date.now() + 86_399_000,
+    });
+    linear.answer(0, { error: "invalid_grant" }, 400);
+    expect(await a).toEqual({ ok: true, token: "access-re" });
+    expect(t.app_installations[0].last_error).toBeUndefined();
+  });
+
+  test("a refusal with nobody else involved parks the connection with a reconnect message", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const a = run(t);
+    await linear.untilCalls(1);
+    linear.answer(0, { error: "invalid_grant" }, 400);
+    const res = await a;
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("reconnect Linear");
+    expect(t.app_installations[0].last_error).toContain("invalid_grant");
+    const s = await stored(t);
+    expect([s.access, s.refresh]).toEqual(["access-0", "refresh-0"]);  // nothing lost
   });
 });
