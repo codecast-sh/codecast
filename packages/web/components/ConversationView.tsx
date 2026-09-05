@@ -33,7 +33,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
@@ -12943,8 +12943,8 @@ const ConversationViewInner = (
     // Context-only import truncation notices are never user-facing. Rows synced by
     // older CLIs still carry them; drop here (some() guard keeps the common-case
     // array identity stable).
-    const base = messagesFromConv.some(m => m.role === "user" && isImportNotice(m.content))
-      ? messagesFromConv.filter(m => !(m.role === "user" && isImportNotice(m.content)))
+    const base = messagesFromConv.some(m => m.role === "user" && isContextOnlyUserMessage(m.content))
+      ? messagesFromConv.filter(m => !(m.role === "user" && isContextOnlyUserMessage(m.content)))
       : messagesFromConv;
     // A real (JSONL) AskUserQuestion tool call carries full fidelity. During the
     // brief race before its tool_use is detected, the daemon may also emit a
@@ -13662,6 +13662,7 @@ const ConversationViewInner = (
 
   const userMsgKindMap = useMemo(() => {
     const map = new Map<string, UserMessageKind>();
+    const initialPromptId = initialSubagentPromptId(messages, conversation?.parent_conversation_id, hasMoreAbove);
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
@@ -13681,10 +13682,13 @@ const ConversationViewInner = (
         contextPrev = pm;
         break;
       }
-      map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
+      const kind = classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev);
+      map.set(msg._id, msg._id === initialPromptId && kind.kind === "normal"
+        ? { kind: "session_message", from: conversation!.parent_conversation_id!.slice(0, 7), body: msg.content || "" }
+        : kind);
     }
     return map;
-  }, [timeline, conversation?.agent_type]);
+  }, [timeline, messages, conversation?.agent_type, conversation?.parent_conversation_id, hasMoreAbove]);
 
   // Aggregation for the condensed/compact feeds. Built once per timeline; O(n).
   //
@@ -16983,6 +16987,10 @@ const ConversationViewInner = (
               </div>
               <div className="flex items-center gap-2 mb-1">
                 {(() => {
+                  const kind = userMsgKindMap.get(activeStickyMsg.id);
+                  if (kind?.kind === "session_message") {
+                    return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
+                  }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
                   return (
                     <>
