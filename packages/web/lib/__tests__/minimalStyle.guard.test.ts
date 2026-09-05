@@ -26,4 +26,12 @@ describe("Minimal interface style", () => {
     expect(panel).toContain("data-sv-controls");
     expect(css).toContain("[data-sv-rail] [data-sv-controls]");
   });
+
+  test("keeps the composer compact and conversation text readable", () => {
+    expect(css).toMatch(/\[data-sv-composer\] form:not\(\.w-full\) > div \{[\s\S]*?min-height: 52px;[\s\S]*?padding: 9px 12px 8px;/);
+    expect(css).toMatch(/\[data-sv-title\] \{[\s\S]*?font-size: 15px;/);
+    expect(css).toMatch(/\[data-sv-prompt\] \{[\s\S]*?font-size: 12\.5px;/);
+    expect(css).toMatch(/\[data-sv-sec\] \{[\s\S]*?font-size: 12px;/);
+    expect(css).toContain("background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)) !important;");
+  });
 });
