@@ -11,6 +11,7 @@ export function liveFactsOf(s: {
   has_pending?: boolean | null;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   agent_status?: string | null;
   agent_status_updated_at?: number | null;
   last_heartbeat?: number | null;
@@ -30,6 +31,7 @@ export function liveFactsOf(s: {
     has_pending_messages: s.has_pending ?? null,
     inbox_dismissed_at: s.inbox_dismissed_at ?? null,
     inbox_stashed_at: s.inbox_stashed_at ?? null,
+    inbox_snoozed_until: s.inbox_snoozed_until ?? null,
     agent_status: s.agent_status ?? null,
     agent_status_updated_at: s.agent_status_updated_at ?? null,
     last_heartbeat: s.last_heartbeat ?? null,

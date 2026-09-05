@@ -780,11 +780,16 @@ async function tokenFor(
 ): Promise<string | null> {
   if (provider === "linear") {
     if (!teamId) return null;
-    const res = await ctx.runQuery(internal.oauthConnectors.getAccessTokenForTeam, {
+    // Refreshes an expiring or unknown-age token first (Linear rotates 24h
+    // tokens). A missing connection is null like GitHub's; a refresh refusal
+    // is thrown so the source's last_error says "reconnect", not "401".
+    const res = await ctx.runAction(internal.oauthConnectors.getFreshAccessTokenForTeam, {
       provider: "linear",
       team_id: teamId,
     });
-    return res?.token ?? null;
+    if (res.ok && res.token) return res.token;
+    if (res.error?.startsWith("no_connection")) return null;
+    throw new Error(res.error ?? "Linear token refresh failed");
   }
   if (!repo) return null;
   const installation = teamId
@@ -1074,7 +1079,12 @@ export const getSource = internalQuery({
 export const listActiveSources = internalQuery({
   args: {},
   handler: async (ctx) =>
-    await ctx.db.query("issue_sync_sources").withIndex("by_status", (q: any) => q.eq("status", "active")).collect(),
+    [
+      ...(await ctx.db.query("issue_sync_sources").withIndex("by_status", (q: any) => q.eq("status", "active")).collect()),
+      // Parked on an auth failure: still worth one call per tick, because the
+      // token refresh or a reconnect heals it without anyone pressing Resume.
+      ...(await ctx.db.query("issue_sync_sources").withIndex("by_status", (q: any) => q.eq("status", "error")).collect()),
+    ],
 });
 
 export const markSourceSynced = internalMutation({
@@ -1085,17 +1095,26 @@ export const markSourceSynced = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const source = await ctx.db.get(args.source_id);
+    if (!source) return;
     const patch: Record<string, any> = { updated_at: now, last_error: args.error };
-    if (!args.error) patch.last_synced_at = now;
+    if (!args.error) {
+      patch.last_synced_at = now;
+      // A parked source that syncs again is healthy again (a refreshed token,
+      // a reconnect): flip it back without a manual resume.
+      if (source.status === "error") patch.status = "active";
+    }
     // Only an auth failure parks the source: a transient 500 must not stop the
-    // next reconcile from trying again.
-    if (args.auth_failed) patch.status = "error";
+    // next reconcile from trying again. A pause is the user's word and wins
+    // over a failure that lands late from a sync already running: the error
+    // is recorded, the status stays paused.
+    if (args.auth_failed && source.status !== "paused") patch.status = "error";
     await ctx.db.patch(args.source_id, patch);
   },
 });
 
 function isAuthFailure(message: string): boolean {
-  return /\b(401|403)\b|no_connection|unauthorized|authentication/i.test(message);
+  return /\b(401|403)\b|no_connection|unauthorized|authentication|invalid_grant|reconnect/i.test(message);
 }
 
 /**

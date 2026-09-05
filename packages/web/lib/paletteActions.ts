@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
-import { Archive, ArrowUp, Bot, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus } from "lucide-react";
-import type { ShortcutAction } from "../shortcuts/registry";
+import { Archive, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus } from "lucide-react";
+import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { isForeignSession } from "./liveEntities";
 
@@ -22,12 +22,12 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
   const target = targets[0];
   if (!type || !target) return [];
   const single = targets.length === 1;
-  const row = (key: string, label: string, icon: PaletteAction["icon"], hotkey?: string, shortcutAction?: ShortcutAction): PaletteAction => ({ key, label, icon, hotkey, shortcutAction });
+  const row = (key: string, label: string, icon: PaletteAction["icon"], hotkey?: string, shortcutAction?: ShortcutAction): PaletteAction => ({ key, label, icon, hotkey: shortcutAction ? undefined : hotkey, shortcutAction });
   const common = single ? [
     row("open", "Open", ExternalLink, "o"),
     row("newtab", "Open in new tab", ExternalLink, "n"),
     row("copy", `Copy ${type} ID`, Copy, "i"),
-    row("copylink", "Copy link", Link, "c"),
+    row("copylink", "Copy link", Link, "c", type === "session" ? "conv.copyLink" : undefined),
     ...(chatOn ? [row("forward", "Send to chat…", Forward, "h")] : []),
   ] : [];
   if (type === "session") {
@@ -41,11 +41,15 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("session_pin", target.is_pinned ? "Unpin session" : "Pin session", target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? "Remove from favorites" : "Add to favorites", Star, "v", "conv.favorite"),
       row("bucket", "Label session…", Tag, "l", "session.moveToBucket"),
+      ...(!target.inbox_killed_at ? [row("snooze", "Snooze session…", Clock, "z", "session.snooze")] : []),
+      ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
       ...((target.dismissed || target.inbox_stashed_at || target.inbox_killed_at || target.inbox_dismissed_at) ? [row("session_restore", "Restore session to inbox", RefreshCw, "u")] : [
         row("session_stash", "Stash session", Archive, "s", "session.stash"),
         row("session_stash_hide", "Stash and hide session", EyeOff, "b", "session.stashHide"),
         row("session_defer", "Defer session", Clock, "d", "session.deferAdvance"),
         row("session_dormant", "Dormant — a machine wakes it", Moon, "z", "session.dormantAdvance"),
+        row("session_done", "Mark done", CheckCircle2, "e"),
+        row("session_needs_input", "Mark needs input", CircleDot, "g"),
       ]),
       ...(!target.inbox_killed_at ? [row("session_kill", "Kill session", Square, "k", "session.kill")] : []),
       ...(target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
@@ -109,4 +113,18 @@ export function paletteDigitIndex(event: { key: string; metaKey: boolean; ctrlKe
   if (event.isComposing || event.altKey || event.shiftKey || (!event.metaKey && !event.ctrlKey) || !/^[1-9]$/.test(event.key)) return -1;
   const index = Number(event.key) - 1;
   return index < count ? index : -1;
+}
+
+export function paletteActionForKey(event: KeyboardEvent, actions: PaletteAction[]): PaletteAction | undefined {
+  if (event.isComposing || event.defaultPrevented) return;
+  const target = event.target as HTMLElement | null;
+  return actions.find(action => {
+    if (action.shortcutAction) {
+      return getShortcutsForAction(action.shortcutAction).some(def =>
+        matchShortcut(event, def) && (!isEditableTarget(target) || inputGuardBypass(def, target)),
+      );
+    }
+    return event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey
+      && !!action.hotkey && event.code === `Key${action.hotkey.toUpperCase()}`;
+  });
 }
