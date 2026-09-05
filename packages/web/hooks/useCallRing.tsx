@@ -8,6 +8,7 @@ import {
   canRingInWindow,
   isCallRingWindow,
   openCallRingWindow,
+  voiceHostElsewhere,
 } from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
 import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
@@ -89,7 +90,13 @@ export function useCallRing(): void {
       // shell cannot. Idempotent — a second ring finds the window already up.
       // Never from inside the ring window itself, which would be it asking
       // for itself.
-      if (inWindow && !isCallRingWindow()) void openCallRingWindow();
+      //
+      // Unless a voice host will show it: the host draws the ring as a shape
+      // of its own, pinned over everything, and sounds it. The ring window is
+      // then only for a ring that arrives while the host is busy in a call,
+      // where the ring shape would cover the stage.
+      const hostShowsIt = voiceHostElsewhere() && !inCall;
+      if (inWindow && !isCallRingWindow() && !hostShowsIt) void openCallRingWindow();
       if (!inWindow) {
         toast.custom(
         () => (
@@ -172,7 +179,9 @@ export function useCallRing(): void {
         void notifyNative(
           `${invite.from_name} wants to huddle`,
           invite.anchor_title || "Tap to join",
-          { key: `ring:${invite._id}`, kind: "call" },
+          // And `force`: a ring goes up whatever is focused. The app being
+          // in front does not mean the person is looking at it.
+          { key: `ring:${invite._id}`, kind: "call", force: true },
         );
       }
     }

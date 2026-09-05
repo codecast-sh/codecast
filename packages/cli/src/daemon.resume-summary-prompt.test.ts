@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AGENT_ENV_SCRUB, buildResumeEnvPrefix } from "./daemon.js";
 
 // Regression coverage for the auto-resume wedge: `claude --resume` on an old/large
@@ -9,6 +12,20 @@ import { AGENT_ENV_SCRUB, buildResumeEnvPrefix } from "./daemon.js";
 // flag to skip the prompt, only the CLAUDE_CODE_RESUME_THRESHOLD_* env gates, so the
 // resume command must carry them.
 describe("buildResumeEnvPrefix", () => {
+  test("a resumed cloud worktree gets its reserved port back", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "resume-env-"));
+    const stateDir = path.join(root, ".codecast/workspaces/cloud-test");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ resourceIndex: 2, ports: { web: 3241 } }));
+    try {
+      const prefix = buildResumeEnvPrefix("codex", path.join(root, ".codecast/worktrees/cloud-test"));
+      expect(prefix).toContain("PORT_WEB='3241'");
+      expect(prefix).toContain("AGENT_RESOURCE_INDEX='2'");
+      expect(prefix.startsWith(AGENT_ENV_SCRUB)).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("claude resume pushes both resume-prompt thresholds out of reach", () => {
     const prefix = buildResumeEnvPrefix("claude");
     expect(prefix).toContain("env -u CLAUDECODE");

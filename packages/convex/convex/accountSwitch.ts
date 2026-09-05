@@ -18,6 +18,8 @@ import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages
 import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS, newestSignificantMessage, isBannerTurn } from "./inboxFilters";
 import {
   actedBlockedConversations,
+  skippedBlockedWorkers,
+  blockedHeadlineCause,
   ccAccountsValidator,
   decideAutoSwitch,
   splitAuthParks,
@@ -49,6 +51,7 @@ import {
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
+import { withSafetyBlock } from "@codecast/shared/contracts";
 
 // The freshest online NON-remote device: it holds the keychain profiles and is
 // the canonical credential source remotes are pushed from.
@@ -80,13 +83,17 @@ const MAX_REVIVE = 30;
 // another session) are excluded from the default revive — their parent has
 // usually moved on, so resuming them spends the fresh account on work nobody
 // is waiting for. `includeSubagents` opts them back in; the cap applies to the
-// combined acted set, top-level first.
+// combined acted set, top-level first. `skipped` is the workers the opt-out
+// leaves behind — the revive dismisses them (see dismissSkippedWorkers), so
+// declining to continue a worker is the same decision as dismissing it.
 async function listBlockedConversations(
   ctx: { db: any },
   userId: Id<"users">,
   includeSubagents: boolean,
+  includeSafety = false,
 ): Promise<{
   blocked: Doc<"conversations">[];
+  skipped: Doc<"conversations">[];
   topLevelCount: number;
   subagentCount: number;
   totalBlocked: number;
@@ -97,16 +104,35 @@ async function listBlockedConversations(
     .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", since))
     .order("desc")
     .take(1000);
-  const all: Doc<"conversations">[] = recent.filter(isBlockedConversation);
+  const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter(isBlockedConversation);
   const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
   const subagents = all.filter(isSubagentConversation);
-  const acted = actedBlockedConversations(all, includeSubagents).slice(0, MAX_REVIVE);
+  const selected = (includeSafety
+    ? includeSubagents ? [...topLevel, ...subagents] : topLevel
+    : actedBlockedConversations(all, includeSubagents)).slice(0, MAX_REVIVE);
   return {
-    blocked: acted,
+    blocked: selected,
+    skipped: skippedBlockedWorkers(all, includeSubagents),
     topLevelCount: topLevel.length,
     subagentCount: subagents.length,
     totalBlocked: all.length,
   };
+}
+
+// The one patch that takes a conversation out of the blocked set — the
+// permanent "don't restart this" decision, whether the user made it with the
+// dismiss button (acknowledgeBlocked) or by leaving workers out of a revive
+// (dismissSkippedWorkers). Only a NEW banner re-flags a cleared row.
+const BLOCKED_FLAG_CLEAR = { pending_api_error: false, pending_api_error_kind: undefined, pending_api_error_at: undefined } as const;
+
+// A revive that leaves the workers out dismisses them in the same gesture:
+// the user chose not to continue them, and nothing else ever will, so
+// carrying them as "blocked" only keeps the incident count (and the header
+// pill) inflated with rows nobody will act on. The web banner paints the
+// same clear on the click and says so on the button; the CLI prints it.
+async function dismissSkippedWorkers(ctx: { db: any }, skipped: Doc<"conversations">[]): Promise<number> {
+  for (const conv of skipped) await ctx.db.patch(conv._id, BLOCKED_FLAG_CLEAR);
+  return skipped.length;
 }
 
 // Send "continue" to every session parked on a usage-limit or dropped
@@ -135,18 +161,21 @@ export const continueAllBlocked = mutation({
     // need a switch (plain continue re-fails) and error-kind (statusful
     // 429/5xx, self-retrying) never enters the selection at all.
     const kinds = new Set(args.kinds ?? CONTINUE_BANNER_KINDS);
-    const { blocked: candidates, topLevelCount, subagentCount, totalBlocked } =
+    const { blocked: candidates, skipped, topLevelCount, subagentCount, totalBlocked } =
       await listBlockedConversations(ctx, userId, args.include_subagents === true);
-    const blocked = candidates.filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
+    const blocked = actedBlockedConversations(candidates, args.include_subagents === true)
+      .filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
     if (args.dry_run) {
       return {
         continued: 0,
         would_continue: blocked.length,
+        would_dismiss: skipped.length,
         top_level: topLevelCount,
         subagents: subagentCount,
         total_blocked: totalBlocked,
       };
     }
+    const dismissedSubagents = await dismissSkippedWorkers(ctx, skipped);
 
     // The no-switch revive: a plain continue for every session a message can
     // reach, a kill + resume (with its account pin corrected) for the ones it
@@ -166,6 +195,7 @@ export const continueAllBlocked = mutation({
       continued: res.messaged + res.restarted,
       restarted: res.restarted,
       subagents: subagentCount,
+      dismissed_subagents: dismissedSubagents,
       total_blocked: totalBlocked,
     };
   },
@@ -211,13 +241,15 @@ export const requestAccountSwitch = mutation({
 
     const now = Date.now();
     const reviveWanted = args.continue_blocked !== false;
-    const { blocked, topLevelCount, subagentCount, totalBlocked } = reviveWanted
+    const { blocked: candidates, skipped, topLevelCount, subagentCount, totalBlocked } = reviveWanted
       ? await listBlockedConversations(ctx, userId, args.include_subagents === true)
-      : { blocked: [], topLevelCount: 0, subagentCount: 0, totalBlocked: 0 };
+      : { blocked: [], skipped: [], topLevelCount: 0, subagentCount: 0, totalBlocked: 0 };
+    const blocked = actedBlockedConversations(candidates, args.include_subagents === true);
     if (args.dry_run) {
       return {
         devices: 0,
         conversations: blocked.length,
+        would_dismiss: skipped.length,
         top_level: topLevelCount,
         subagents: subagentCount,
         total_blocked: totalBlocked,
@@ -238,6 +270,9 @@ export const requestAccountSwitch = mutation({
       );
     }
 
+    // A pure swap (continue_blocked: false) selects nothing, so `skipped` is
+    // empty there and Settings' account switch never touches a session.
+    const dismissedSubagents = await dismissSkippedWorkers(ctx, skipped);
     const res = await insertSwitchCommands(ctx, userId, {
       profile: args.profile,
       email: args.email,
@@ -269,6 +304,7 @@ export const requestAccountSwitch = mutation({
       restarted: res.restarted,
       messaged: res.messaged,
       subagents: subagentCount,
+      dismissed_subagents: dismissedSubagents,
       total_blocked: totalBlocked,
       unreachable: blocked.length - res.routed - res.unswitchable,
       // Sessions owned by machines that don't have the target account saved —
@@ -347,6 +383,7 @@ export async function insertSwitchCommands(
 
   const groups = new Map<string, Doc<"conversations">[]>();
   for (const conv of opts.blocked) {
+    if (withSafetyBlock(conv).pending_api_error_kind === "safety") continue;
     const owner =
       conv.owner_device_id && onlineById.has(conv.owner_device_id)
         ? conv.owner_device_id
@@ -553,6 +590,7 @@ export const blockedNotifyCheck = internalMutation({
       ctx,
       args.user_id,
       true,
+      true,
     );
     if (blocked.length === 0) return { notified: false, reason: "nothing_blocked" };
     const user = await ctx.db.get(args.user_id);
@@ -569,18 +607,22 @@ export const blockedNotifyCheck = internalMutation({
     const authCount = blocked.filter((c) => c.pending_api_error_kind === "auth").length;
     const connCount = blocked.filter((c) => c.pending_api_error_kind === "connection").length;
     const fatalCount = blocked.filter((c) => c.pending_api_error_kind === "fatal").length;
-    const limitCount = blocked.length - authCount - connCount - fatalCount;
-    // Same headline the banner leads with.
-    const on =
-      limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : fatalCount > 0 ? "api errors" : "login";
+    const safetyCount = blocked.filter((c) => c.pending_api_error_kind === "safety").length;
+    const throttleCount = blocked.filter((c) => c.pending_api_error_kind === "throttle").length;
+    const limitCount = blocked.length - authCount - connCount - fatalCount - safetyCount - throttleCount;
+    // Same headline the banner leads with — one shared definition, so the
+    // push and the banner can't name different causes for one incident.
+    const on = blockedHeadlineCause(blocked);
     const title = `${totalBlocked} session${totalBlocked === 1 ? "" : "s"} blocked on ${on}`;
     const parts = [
       limitCount > 0 ? `${limitCount} hit a usage limit` : null,
       connCount > 0 ? `${connCount} dropped mid-response` : null,
       fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
       authCount > 0 ? `${authCount} signed out` : null,
+      safetyCount > 0 ? `${safetyCount} need${safetyCount === 1 ? "s" : ""} safety review` : null,
+      throttleCount > 0 ? `${throttleCount} rate limited by a burst` : null,
     ].filter(Boolean);
-    const hint = authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
+    const hint = safetyCount > 0 ? "review safety stops in the inbox; they are excluded from automatic recovery" : authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
     const message =
       parts.join(" · ") +
       (subagentCount > 0 ? ` (${subagentCount} subagent${subagentCount === 1 ? "" : "s"})` : "") +
@@ -750,7 +792,7 @@ export const acknowledgeBlocked = mutation({
       const conv = await ctx.db.get(convId);
       if (!conv || conv.user_id.toString() !== userId.toString()) continue;
       if (conv.pending_api_error !== true) continue;
-      await ctx.db.patch(convId, { pending_api_error: false, pending_api_error_kind: undefined, pending_api_error_at: undefined });
+      await ctx.db.patch(convId, BLOCKED_FLAG_CLEAR);
       acknowledged++;
     }
     return { acknowledged };

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
+  Image,
   Pressable,
   StyleSheet,
   View,
@@ -232,9 +233,13 @@ export default function CallScreen() {
                   <View
                     style={[styles.bigAvatar, speaking.has(p.identity) && styles.speakingRing]}
                   >
-                    <Text style={styles.bigAvatarLetter}>
-                      {(p.name || "?").charAt(0).toUpperCase()}
-                    </Text>
+                    {p.image ? (
+                      <Image source={{ uri: p.image }} style={styles.bigAvatarImage} />
+                    ) : (
+                      <Text style={styles.bigAvatarLetter}>
+                        {(p.name || "?").charAt(0).toUpperCase()}
+                      </Text>
+                    )}
                   </View>
                   <View style={styles.avatarNameRow}>
                     <Text style={styles.avatarName}>{p.isLocal ? "you" : firstName(p.name)}</Text>
@@ -505,6 +510,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  // Fills the circle exactly, so the speaking ring stays a ring around the
+  // photo rather than a border with a gap.
+  bigAvatarImage: { width: 84, height: 84, borderRadius: 42 },
   speakingRing: { borderWidth: 3, borderColor: Theme.cyan },
   bigAvatarLetter: { fontSize: 30, color: Theme.bgAlt },
   avatarNameRow: { flexDirection: "row", alignItems: "center", gap: 5 },
