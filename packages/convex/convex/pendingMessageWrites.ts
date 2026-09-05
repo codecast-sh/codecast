@@ -90,8 +90,10 @@ async function insertPendingMessageRow(
     }
   }
 
+  const conversation = await ctx.db.get(fields.conversationId);
   return await ctx.db.insert("pending_messages", {
     conversation_id: fields.conversationId,
+    kill_generation: conversation?.pending_kill_generation ?? 0,
     from_user_id: fields.fromUserId,
     owner_user_id: fields.ownerUserId,
     from_conversation_id: fields.fromConversationId,

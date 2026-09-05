@@ -28,6 +28,7 @@ import { CdpConnection, cdpHttpUrl, type CdpEndpoint } from "./cdp.js";
 import { engineSession, engineStateDir, isRealSession } from "./engine.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
+import { grantTab } from "./bridge/host.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
 
@@ -87,7 +88,9 @@ export interface PinnedTabBrowser {
  */
 export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowser | null> {
   if (isRealSession(session)) {
-    const endpoint = await bridgeEndpointIfConfigured();
+    // Named on the socket, so the host files the tab under this session and
+    // lets only this session's engine discover it.
+    const endpoint = await bridgeEndpointIfConfigured(session);
     if (!endpoint) return null;
     return {
       endpoint,
@@ -108,8 +111,16 @@ export async function ensurePinnedTab(session = engineSession()): Promise<void> 
   try {
     const browser = await pinnedTabBrowser(session);
     if (!browser) return;
-    if (sessionDaemonPid(session)) return;
     const bound = readBoundTarget(session);
+    // Real mode: the host keeps the session → tab partition in memory only,
+    // so hand it the binding again on every command. Cheap (one loopback
+    // POST), and it is what brings a session's tab back into view after the
+    // host was restarted — without it the engine would see no tab of its
+    // own and pin a fresh one, orphaning this one.
+    if (bound && typeof browser.endpoint !== "number" && browser.endpoint.token && browser.endpoint.session) {
+      await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true }).catch(() => {});
+    }
+    if (sessionDaemonPid(session)) return;
     if (bound && (await targetAlive(browser.endpoint, bound))) return;
 
     const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);

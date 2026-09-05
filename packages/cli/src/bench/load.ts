@@ -1,41 +1,27 @@
-// Load mode for `cast bench daemon`: N stand-in agent panes against the LIVE
-// daemon, transcript churn, and delivery round trips sampled on K panes.
-//
-// The pane runs the doctor's node stub, not the fake claude bash shim. The
-// daemon treats only agent binaries and node/bun/deno as live agents; a bash
-// pane fails isTmuxAgentAlive, and the health check would then kill the pane
-// and launch a real `claude --resume` for every bench session.
-//
-// The bench never boots a daemon. CONFIG_DIR is fixed to ~/.codecast and a
-// daemon boot kills every other daemon it finds.
-
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { randomUUID, randomBytes } from "node:crypto";
-import {
-  STUB_SOURCE,
-  resolveStubRuntime,
-  pickDoctorProjectDir,
-  exportHasToken,
-  doctorPost,
-  readConversationMapping,
-} from "../doctor.js";
-import { fetchExport } from "../jsonlGenerator.js";
-import { claudeProjectDirName } from "../projectPathResolver.js";
-import { spawnHarness, sweepStaleSessions, shellQuote, type Harness } from "../test-helpers/messagingHarness.js";
-import { runRouteProbes, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
+import { randomUUID } from "node:crypto";
+import { exportHasToken } from "../doctor.js";
+import { BenchFixture, type Fixture } from "./fixture.js";
+import { benchClock, deadlineSignal, outcomeFor, runRouteProbes, MAX_BENCH_RECORDS, MAX_BENCH_TIMER_MS, type BenchClock, type LatencyProbeResult, type ProbeFetch, type RouteProbes, type Outcome } from "./probes.js";
 import { summarizeLatency, type LatencySummary } from "./stats.js";
 import type { Config } from "../config/types.js";
 
+export interface RuntimeIdentity {
+  pid: number | null;
+  processIdentity: string | null;
+  build: string | null;
+  runtime: string | null;
+  workerSetting: boolean | null;
+  workerRouting: string | null;
+  configHash: string | null;
+}
 export interface LoadDeps {
   config: Config;
   siteUrl: string;
   apiToken: string;
   configDir: string;
   getDaemonPid: () => number | null;
+  observeRuntime?: () => Promise<RuntimeIdentity>;
 }
-
 export interface LoadOptions {
   n: number;
   sample: number;
@@ -43,253 +29,341 @@ export interface LoadOptions {
   churnIntervalMs: number;
   keep: boolean;
   projectDir?: string;
-  /** Loopback port for the concurrent probes; null skips them. */
   port: number | null;
   authHeaders: Record<string, string> | null;
+  signal?: AbortSignal;
+  totalTimeoutMs?: number;
+  mappingTimeoutMs?: number;
+  pollMs?: number;
 }
-
+export interface Leg {
+  outcome: Outcome;
+  startedAt: number | null;
+  finishedAt: number | null;
+  ms: number | null;
+  polls: number;
+  reason?: string;
+}
 export interface RoundTrip {
-  sessionId: string;
-  conversationId: string;
-  /** Transcript append to export visibility. */
+  sessionId: string | null;
+  conversationId: string | null;
+  up: Leg;
+  injected: Leg;
+  echoed: Leg;
   upMs: number | null;
-  /** Send to the pane's transcript carrying the token. */
   injectedMs: number | null;
-  /** Send to the assistant echo visible in the export. */
   echoedMs: number | null;
 }
-
+export interface Startup {
+  sessionId: string;
+  startedAt: number;
+  spawnedAt: number | null;
+  mappedAt: number | null;
+  outcome: Outcome;
+}
+export interface Failure { phase: string; outcome: Outcome; sessionId?: string; reason: string; at: number }
 export interface LoadResult {
   runId: string;
   scratchDir: string;
   n: number;
+  sampleRequested: number;
   spawned: number;
   spawnMs: LatencySummary;
   spawnErrors: string[];
   mapped: number;
   mappingMs: LatencySummary;
-  churn: { durationMs: number; intervalMs: number; linesAppended: number };
+  startup: Startup[];
+  window: { start: number; end: number; finishedAt: number; wallStart: string } | null;
+  phases: { phase: string; startedAt: number; finishedAt: number }[];
+  churn: { durationMs: number; intervalMs: number; linesAppended: number; startedAt: number | null; endedAt: number | null; expectedRounds: number; missedRounds: number; rounds: { scheduledAt: number; startedAt: number; finishedAt: number; lines: number; attempts: { sessionId: string; outcome: Outcome | "paused"; startedAt: number | null; finishedAt: number | null }[] }[] };
   roundTrips: RoundTrip[];
   upMs: LatencySummary;
   injectedMs: LatencySummary;
   echoedMs: LatencySummary;
-  loopLag: LoopLagResult | null;
+  loopLag: LatencyProbeResult | null;
   hookStatus: LatencyProbeResult | null;
   termSessions: LatencyProbeResult | null;
-  teardown: { kept: boolean; conversationsDeleted: number; warnings: string[] };
+  failures: Failure[];
+  before: RuntimeIdentity | null;
+  after: RuntimeIdentity | null;
+  resources: Fixture[];
+  teardown: { kept: boolean; conversationsDeleted: number; verified: boolean; warnings: string[] };
+  acceptance: { status: "FAIL" | "NOT ESTABLISHED"; reasons: string[] };
+}
+export type FixtureIO = Pick<BenchFixture, "scratch" | "fixtures" | "prepare" | "allocate" | "spawn" | "recordHook" | "verify" | "mapping" | "append" | "pauseWrites" | "resumeWrites" | "hasToken" | "cleanup" | "finish">;
+export interface LoadIO {
+  clock: BenchClock;
+  fixture: (runId: string) => FixtureIO;
+  post: (route: string, body: Record<string, unknown>, signal: AbortSignal) => Promise<any>;
+  routes: (opts: Parameters<typeof runRouteProbes>[0]) => Promise<RouteProbes>;
 }
 
-const MAPPING_TIMEOUT_MS = 45_000;
-const UP_TIMEOUT_MS = 60_000;
-const ROUNDTRIP_TIMEOUT_MS = 90_000;
-const POLL_MS = 750;
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/** The stub's own transcript line shape, so churn looks like the stub wrote it. */
-function transcriptLine(sessionId: string, cwd: string, role: "user" | "assistant", text: string): string {
-  const base = { uuid: randomUUID(), sessionId, cwd, timestamp: new Date().toISOString() };
-  const message = role === "user"
-    ? { role, content: text }
-    : { role, content: [{ type: "text", text }] };
-  return JSON.stringify({ ...base, type: role, message }) + "\n";
-}
-
-export async function runLoadBench(
-  deps: LoadDeps,
-  opts: LoadOptions,
-  say: (line: string) => void,
-): Promise<LoadResult> {
-  if (deps.getDaemonPid() === null) throw new Error("no live daemon (the bench never boots one); run `cast start` first");
-  const runtime = resolveStubRuntime();
-  if (!runtime) throw new Error("no node or bun on PATH for the stub agent");
-  const runId = `bench-${randomBytes(4).toString("hex")}`;
-  const scratch = pickDoctorProjectDir(deps.config, runId, opts.projectDir);
-  if (!scratch) throw new Error("no syncable scratch dir: sync_mode is 'selected' and no allowed root accepts a test dir (`cast sync-settings`)");
-  fs.mkdirSync(scratch, { recursive: true });
-  const realScratch = fs.realpathSync(scratch);
-  const stubPath = path.join(realScratch, "stub.cjs");
-  fs.writeFileSync(stubPath, STUB_SOURCE);
-  const tmuxPrefix = `cc-claude-test-${runId}`;
-  const projectDir = path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(realScratch));
-
-  const harnesses: Harness[] = [];
-  const registryPaths: string[] = [];
-  const spawnMs: number[] = [];
-  const spawnErrors: string[] = [];
-  const mappings = new Map<string, string>();
-  const mappingMs: number[] = [];
-  const warnings: string[] = [];
-  let linesAppended = 0;
-  let conversationsDeleted = 0;
-  const roundTrips: RoundTrip[] = [];
-  let loopLag: LoopLagResult | null = null;
-  let hookStatus: LatencyProbeResult | null = null;
-  let termSessions: LatencyProbeResult | null = null;
-
-  const abort = new AbortController();
-  const onSigint = () => abort.abort();
-  process.once("SIGINT", onSigint);
-
-  try {
-    say(`  spawning ${opts.n} stub panes in ${realScratch}`);
-    for (let i = 0; i < opts.n && !abort.signal.aborted; i++) {
-      const sessionId = randomUUID();
-      const jsonlPath = path.join(projectDir, `${sessionId}.jsonl`);
-      const registryPath = path.join(deps.configDir, "session-registry", `${sessionId}.json`);
-      const bootToken = `boot-${randomBytes(4).toString("hex")}`;
-      const command = `DOCTOR_BOOT_TOKEN=${shellQuote(bootToken)} exec ${shellQuote(runtime)} ${shellQuote(stubPath)} ${shellQuote(sessionId)} ${shellQuote(jsonlPath)} ${shellQuote(registryPath)}`;
-      const start = Date.now();
-      try {
-        harnesses.push(spawnHarness({ cwd: realScratch, sessionId, jsonlPath, tmuxPrefix, command }));
-        registryPaths.push(registryPath);
-        spawnMs.push(Date.now() - start);
-      } catch (err) {
-        spawnErrors.push(`${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if ((i + 1) % 10 === 0) say(`  spawned ${i + 1}/${opts.n}`);
-    }
-
-    // The watcher creates one conversation per transcript; wait for the mapping
-    // of every pane (this is the doctor's first leg, N times).
-    say(`  waiting for ${harnesses.length} conversation mappings`);
-    const mapStart = Date.now();
-    const pendingIds = new Set(harnesses.map((h) => h.sessionId));
-    while (pendingIds.size > 0 && Date.now() - mapStart < MAPPING_TIMEOUT_MS && !abort.signal.aborted) {
-      await sleep(POLL_MS);
-      for (const id of [...pendingIds]) {
-        const conv = readConversationMapping(deps.configDir, id);
-        if (conv) {
-          mappings.set(id, conv);
-          mappingMs.push(Date.now() - mapStart);
-          pendingIds.delete(id);
-        }
-      }
-    }
-    if (pendingIds.size > 0) warnings.push(`${pendingIds.size} panes never mapped to a conversation within ${MAPPING_TIMEOUT_MS / 1000}s`);
-    say(`  mapped ${mappings.size}/${harnesses.length}`);
-
-    // Churn plus the probes, concurrently, for the measurement window.
-    say(`  churning ${harnesses.length} transcripts for ${Math.round(opts.durationMs / 1000)}s`);
-    const churnDone = (async () => {
-      const deadline = Date.now() + opts.durationMs;
-      let i = 0;
-      while (Date.now() < deadline && !abort.signal.aborted) {
-        for (const h of harnesses) {
-          try {
-            fs.appendFileSync(h.jsonlPath, transcriptLine(h.sessionId, realScratch, "user", `churn ${i} for ${runId}`));
-            fs.appendFileSync(h.jsonlPath, transcriptLine(h.sessionId, realScratch, "assistant", `churn reply ${i}`));
-            linesAppended += 2;
-          } catch {}
-        }
-        i++;
-        await sleep(opts.churnIntervalMs);
-      }
-    })();
-    const probes = opts.port === null
-      ? Promise.resolve(null)
-      : runRouteProbes({ port: opts.port, durationMs: opts.durationMs, authHeaders: opts.authHeaders, signal: abort.signal });
-    const [, probed] = await Promise.all([churnDone, probes]);
-    if (probed) ({ loopLag, hookStatus, termSessions } = probed);
-
-    // Delivery legs on a sample of K mapped panes, sequentially, like the doctor.
-    const sampled = harnesses.filter((h) => mappings.has(h.sessionId)).slice(0, opts.sample);
-    say(`  sampling delivery round trips on ${sampled.length} panes`);
-    for (const h of sampled) {
-      if (abort.signal.aborted) break;
-      const conversationId = mappings.get(h.sessionId)!;
-      const trip: RoundTrip = { sessionId: h.sessionId, conversationId, upMs: null, injectedMs: null, echoedMs: null };
-      roundTrips.push(trip);
-
-      const upToken = `up-${randomBytes(4).toString("hex")}`;
-      let legStart = Date.now();
-      fs.appendFileSync(h.jsonlPath, transcriptLine(h.sessionId, realScratch, "user", `bench up leg ${upToken}`));
-      while (trip.upMs === null && Date.now() - legStart < UP_TIMEOUT_MS && !abort.signal.aborted) {
-        await sleep(POLL_MS);
-        try {
-          const exported = await fetchExport(deps.siteUrl, deps.apiToken, conversationId);
-          if (exportHasToken(exported.messages, upToken)) trip.upMs = Date.now() - legStart;
-        } catch {}
-      }
-
-      const downToken = `pong-${randomBytes(4).toString("hex")}`;
-      legStart = Date.now();
-      try {
-        await doctorPost(deps.siteUrl, deps.apiToken, "/cli/messages/send", { to: conversationId, body: `codecast bench ${runId}: reply with ${downToken}` });
-      } catch (err) {
-        warnings.push(`send to ${conversationId.slice(0, 12)} failed: ${err instanceof Error ? err.message : String(err)}`);
-        continue;
-      }
-      while (trip.echoedMs === null && Date.now() - legStart < ROUNDTRIP_TIMEOUT_MS && !abort.signal.aborted) {
-        await sleep(POLL_MS);
-        if (trip.injectedMs === null) {
-          try {
-            if (fs.readFileSync(h.jsonlPath, "utf-8").includes(downToken)) trip.injectedMs = Date.now() - legStart;
-          } catch {}
-        }
-        if (trip.injectedMs !== null) {
-          try {
-            const exported = await fetchExport(deps.siteUrl, deps.apiToken, conversationId);
-            if (exportHasToken(exported.messages, downToken, "assistant")) trip.echoedMs = Date.now() - legStart;
-          } catch {}
-        }
-      }
-      say(`  ${h.sessionId.slice(0, 8)} up=${trip.upMs ?? "timeout"} injected=${trip.injectedMs ?? "timeout"} echoed=${trip.echoedMs ?? "timeout"}`);
-    }
-  } finally {
-    // bun types accept signal names on `on` but not on `off`; the EventEmitter view does.
-    (process as unknown as NodeJS.EventEmitter).off("SIGINT", onSigint);
-    if (opts.keep) {
-      say(`  kept: tmux ${tmuxPrefix}-*, ${realScratch}, ${projectDir}`);
-    } else {
-      say(`  tearing down ${harnesses.length} panes`);
-      for (const h of harnesses) {
-        try { h.tearDown(); } catch {}
-      }
-      sweepStaleSessions(tmuxPrefix);
-      for (const p of registryPaths) {
-        try { fs.rmSync(p, { force: true }); } catch {}
-      }
-      try { fs.rmSync(realScratch, { recursive: true, force: true }); } catch {}
-      try {
-        if (fs.existsSync(projectDir) && fs.readdirSync(projectDir).length === 0) fs.rmdirSync(projectDir);
-      } catch {}
-      // One delete-by-path call caps its mutations; loop until the server says
-      // nothing is left. The scratch path is unique to this run.
-      try {
-        let hasMore = true;
-        let guard = 0;
-        while (hasMore && guard++ < 50) {
-          const result = await doctorPost(deps.siteUrl, deps.apiToken, "/cli/conversations/delete-by-path", { path_prefix: realScratch });
-          conversationsDeleted += Number(result?.conversationsDeleted ?? 0);
-          hasMore = result?.hasMore === true;
-        }
-      } catch (err) {
-        warnings.push(`delete-by-path failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (conversationsDeleted < mappings.size) {
-        warnings.push(`server delete removed ${conversationsDeleted} conversations but ${mappings.size} were mapped; the rest are still in the inbox under ${realScratch}`);
-      }
-    }
-  }
-
-  return {
-    runId,
-    scratchDir: realScratch,
-    n: opts.n,
-    spawned: harnesses.length,
-    spawnMs: summarizeLatency(spawnMs),
-    spawnErrors,
-    mapped: mappings.size,
-    mappingMs: summarizeLatency(mappingMs),
-    churn: { durationMs: opts.durationMs, intervalMs: opts.churnIntervalMs, linesAppended },
-    roundTrips,
-    upMs: summarizeLatency(roundTrips.map((t) => t.upMs).filter((v): v is number => v !== null)),
-    injectedMs: summarizeLatency(roundTrips.map((t) => t.injectedMs).filter((v): v is number => v !== null)),
-    echoedMs: summarizeLatency(roundTrips.map((t) => t.echoedMs).filter((v): v is number => v !== null)),
-    loopLag,
-    hookStatus,
-    termSessions,
-    teardown: { kept: opts.keep, conversationsDeleted, warnings },
+export function benchPost(siteUrl: string, apiToken: string, transport: ProbeFetch = fetch): LoadIO["post"] {
+  return async (route, body, signal) => {
+    signal.throwIfAborted();
+    const response = await transport(`${siteUrl}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: apiToken, ...body }), signal });
+    if (response.status !== 200) { await response.body?.cancel(); throw new Error(`HTTP ${response.status}`); }
+    const result = await response.json() as any;
+    signal.throwIfAborted();
+    if (!result || typeof result !== "object" || result.error) throw new Error("backend error or malformed response");
+    return result;
   };
+}
+
+export async function exportedToken(post: LoadIO["post"], conversationId: string, token: string, role: "user" | "assistant", signal: AbortSignal, expected?: { sessionId: string; projectPath: string }) {
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (let page = 0; page < 1000; page++) {
+    const data = await post("/cli/export", { conversation_id: conversationId, cursor, limit: 500 }, signal);
+    if (!data.conversation || !Array.isArray(data.messages)) throw new Error("malformed export");
+    if (expected && (data.conversation.id !== conversationId || data.conversation.session_id !== expected.sessionId || data.conversation.project_path !== expected.projectPath || (data.conversation.git_root && data.conversation.git_root !== expected.projectPath))) throw new Error("conversation ownership mismatch");
+    if (exportHasToken(data.messages, token, role)) return true;
+    if (data.done === true) return false;
+    if (typeof data.next_cursor !== "string" || !data.next_cursor || seen.has(data.next_cursor)) throw new Error("invalid export cursor");
+    cursor = data.next_cursor;
+    seen.add(cursor!);
+  }
+  throw new Error("export page limit");
+}
+
+export async function ownedHookUrl(port: number, fixture: FixtureIO, f: Fixture, clock: BenchClock, signal: AbortSignal) {
+  if (!fixture.fixtures.includes(f) || !f.created || !f.pid || !f.conversationId) throw new Error("unowned hook target");
+  signal.throwIfAborted();
+  const stamp = { ts: Math.floor(clock.wall() / 1000), message: `bench hook ${randomUUID()}` };
+  await fixture.recordHook(f, stamp);
+  await fixture.verify(f, signal);
+  signal.throwIfAborted();
+  const query = new URLSearchParams({ session_id: f.sessionId, status: "working", ts: String(stamp.ts), message: stamp.message, transcript_path: f.jsonlPath });
+  return `http://127.0.0.1:${port}/hook/status?${query}`;
+}
+
+const failureText = (error: unknown) => error instanceof Error ? `${error.name}: ${error.message.slice(0, 400)}` : "unknown failure";
+const missingLeg = (): Leg => ({ outcome: "missing", startedAt: null, finishedAt: null, ms: null, polls: 0, reason: "not attempted" });
+const unknownRuntime = (pid: number | null): RuntimeIdentity => ({ pid, processIdentity: null, build: null, runtime: null, workerSetting: null, workerRouting: null, configHash: null });
+
+export const MAX_BENCH_FIXTURES = 1000;
+
+function loadBounds(opts: LoadOptions, now: number) {
+  const rounds = Math.ceil(opts.durationMs / opts.churnIntervalMs);
+  const records = rounds * (opts.n + 1) + Math.ceil(opts.durationMs / 100) + 2 * Math.ceil(opts.durationMs / 1000) + opts.sample * 3 + opts.n;
+  const timeoutMs = opts.totalTimeoutMs ?? opts.n * 6000 + 45000 + opts.durationMs;
+  if (!Number.isSafeInteger(opts.n) || opts.n < 1 || opts.n > MAX_BENCH_FIXTURES
+    || !Number.isSafeInteger(opts.sample) || opts.sample < 1 || opts.sample > opts.n
+    || [opts.durationMs, opts.churnIntervalMs, timeoutMs, opts.mappingTimeoutMs ?? 45000, opts.pollMs ?? 250].some(value => !Number.isFinite(value) || value <= 0 || value > MAX_BENCH_TIMER_MS)
+    || !Number.isSafeInteger(rounds) || rounds < 1 || !Number.isSafeInteger(records) || records > MAX_BENCH_RECORDS
+    || !Number.isFinite(now) || !Number.isFinite(now + timeoutMs) || now + opts.durationMs <= now) throw new Error("invalid load bounds or computed work total");
+  return { rounds, timeoutMs };
+}
+
+export function measurementFailures(r: LoadResult): string[] {
+  const reasons: string[] = [];
+  if (r.failures.length) reasons.push(`${r.failures.length} recorded failures`);
+  if (r.spawned !== r.n || r.mapped !== r.n) reasons.push("incomplete fleet");
+  if (r.resources.filter(f => f.created).some(f => !f.transcriptVerified)) reasons.push("transcript correctness unverified");
+  if (!r.teardown.verified || r.teardown.kept || r.teardown.warnings.length) reasons.push("cleanup unverified");
+  if (r.churn.missedRounds || !r.churn.linesAppended) reasons.push("churn incomplete");
+  if (r.roundTrips.length !== r.sampleRequested || r.roundTrips.some(t => [t.up, t.injected, t.echoed].some(l => l.outcome !== "ok"))) reasons.push("delivery incomplete");
+  for (const [name, probe] of [["health", r.loopLag], ["owned hook", r.hookStatus], ["terminal", r.termSessions]] as const) {
+    if (!probe || probe.expected === 0 || probe.records.length !== probe.expected || probe.records.some(p => p.outcome !== "ok")) reasons.push(`${name} missing or failed slots`);
+  }
+  if (!r.hookStatus || r.hookStatus.label !== "owned hook status") reasons.push("valid hook handling unproven");
+  if ((r.loopLag?.summary.over1s ?? 0) > 0) reasons.push("health RTT >=1000ms");
+  if (r.termSessions?.summary.p99 === null || (r.termSessions?.summary.p99 ?? Infinity) >= 50) reasons.push("terminal p99 >=50ms or missing");
+  const window = r.window;
+  if (!window || r.roundTrips.some(t => [t.up, t.injected, t.echoed].some(l => {
+    if (l.startedAt === null || l.finishedAt === null || l.startedAt < window.start || l.finishedAt > window.end) return true;
+    const activeChurn = r.churn.startedAt !== null && r.churn.endedAt !== null && r.churn.startedAt <= l.startedAt && r.churn.endedAt >= l.finishedAt;
+    const activeProbes = [r.loopLag, r.hookStatus, r.termSessions].every(p => p && p.startedAt <= l.startedAt! && p.endedAt >= l.finishedAt!);
+    return !activeChurn || !activeProbes;
+  }))) reasons.push("delivery/churn/route overlap unproven");
+  const starts = r.roundTrips.flatMap(t => [t.up, t.injected, t.echoed].flatMap(l => l.startedAt === null ? [] : [l.startedAt]));
+  const finishes = r.roundTrips.flatMap(t => [t.up, t.injected, t.echoed].flatMap(l => l.finishedAt === null ? [] : [l.finishedAt]));
+  const first = Math.min(...starts), last = Math.max(...finishes);
+  if (!r.churn.rounds.some(c => c.lines > 0 && c.startedAt <= last && c.finishedAt >= first)
+    || [r.loopLag, r.hookStatus, r.termSessions].some(p => !p?.records.some(s => s.outcome === "ok" && s.startedAt !== null && s.startedAt <= last && s.finishedAt >= first))) reasons.push("no observed traffic during delivery cohort");
+  if (!r.before || !r.after || JSON.stringify(r.before) !== JSON.stringify(r.after)) reasons.push("runtime changed or unobserved");
+  return reasons;
+}
+
+export async function runLoadBench(deps: LoadDeps, opts: LoadOptions, say: (line: string) => void, overrides: Partial<LoadIO> = {}): Promise<LoadResult> {
+  const clock = overrides.clock ?? benchClock;
+  const runId = `bench-${randomUUID()}`;
+  const io: LoadIO = { clock, fixture: id => new BenchFixture(id, deps.config, deps.configDir, { projectDir: opts.projectDir, clock }), post: benchPost(deps.siteUrl, deps.apiToken), routes: runRouteProbes, ...overrides };
+  let acquiredFixture: FixtureIO | null = null;
+  const r: LoadResult = { runId, scratchDir: "", n: opts.n, sampleRequested: opts.sample, spawned: 0, spawnMs: summarizeLatency([]), spawnErrors: [], mapped: 0, mappingMs: summarizeLatency([]), startup: [], window: null, phases: [], churn: { durationMs: opts.durationMs, intervalMs: opts.churnIntervalMs, linesAppended: 0, startedAt: null, endedAt: null, expectedRounds: 0, missedRounds: 0, rounds: [] }, roundTrips: [], upMs: summarizeLatency([]), injectedMs: summarizeLatency([]), echoedMs: summarizeLatency([]), loopLag: null, hookStatus: null, termSessions: null, failures: [], before: null, after: null, resources: [], teardown: { kept: opts.keep, conversationsDeleted: 0, verified: false, warnings: [] }, acceptance: { status: "NOT ESTABLISHED", reasons: [] } };
+  const cancellation = new AbortController();
+  const onInt = () => cancellation.abort(new DOMException("SIGINT", "AbortError"));
+  const onTerm = () => cancellation.abort(new DOMException("SIGTERM", "AbortError"));
+  const onAbort = () => cancellation.abort(opts.signal?.reason);
+  process.once("SIGINT", onInt); process.once("SIGTERM", onTerm);
+  if (opts.signal?.aborted) onAbort(); else opts.signal?.addEventListener("abort", onAbort, { once: true });
+  let overall = { signal: cancellation.signal, close: async () => {} };
+  const recordFailure = (phase: string, signal: AbortSignal, sessionId?: string, reason = "operation failed") => r.failures.push({ phase, outcome: outcomeFor(signal), sessionId, reason: signal.aborted ? String(signal.reason?.name ?? "cancelled") : reason, at: clock.now() });
+  const phase = async (name: string, work: () => Promise<void>) => {
+    const span = { phase: name, startedAt: clock.now(), finishedAt: clock.now() }; r.phases.push(span);
+    try { await work(); } finally { span.finishedAt = clock.now(); }
+  };
+  const observe = () => deps.observeRuntime?.() ?? Promise.resolve(unknownRuntime(deps.getDaemonPid()));
+  try {
+    const bounds = loadBounds(opts, clock.now());
+    r.churn.expectedRounds = bounds.rounds;
+    r.roundTrips = Array.from({ length: opts.sample }, () => ({ sessionId: null, conversationId: null, up: missingLeg(), injected: missingLeg(), echoed: missingLeg(), upMs: null, injectedMs: null, echoedMs: null }));
+    const fixture = io.fixture(runId); acquiredFixture = fixture; r.resources = fixture.fixtures;
+    overall = deadlineSignal(clock, clock.now() + bounds.timeoutMs, cancellation.signal);
+    r.before = await observe();
+    if (r.before.pid === null || opts.port === null || !opts.authHeaders?.Authorization || !deps.apiToken) throw new Error("daemon identity or authentication missing");
+    await phase("prepare", () => fixture.prepare(overall.signal));
+    r.scratchDir = fixture.scratch;
+    say(`spawning ${opts.n} owned stub panes`);
+    await phase("startup", async () => {
+      const mappings: Promise<void>[] = [];
+      try {
+        for (let index = 0; index < opts.n; index++) {
+          overall.signal.throwIfAborted();
+          const f = fixture.allocate();
+          const start: Startup = { sessionId: f.sessionId, startedAt: clock.now(), spawnedAt: null, mappedAt: null, outcome: "missing" }; r.startup.push(start);
+          const mappingWindow = deadlineSignal(clock, start.startedAt + (opts.mappingTimeoutMs ?? 45000), overall.signal);
+          try {
+            await fixture.spawn(f, mappingWindow.signal);
+            start.spawnedAt = clock.now(); r.spawned++;
+            mappings.push((async () => {
+              try {
+                while (!f.conversationId) {
+                  mappingWindow.signal.throwIfAborted();
+                  const id = await fixture.mapping(f);
+                  if (id && await exportedToken(io.post, id, `boot-${f.sessionId}`, "user", mappingWindow.signal, { sessionId: f.sessionId, projectPath: fixture.scratch }) && await exportedToken(io.post, id, `boot-${f.sessionId}`, "assistant", mappingWindow.signal, { sessionId: f.sessionId, projectPath: fixture.scratch })) { f.conversationId = id; start.mappedAt = clock.now(); start.outcome = "ok"; r.mapped++; break; }
+                  await clock.sleep(opts.pollMs ?? 250, mappingWindow.signal);
+                }
+              } catch (e) { start.outcome = outcomeFor(mappingWindow.signal); recordFailure("mapping", mappingWindow.signal, f.sessionId, failureText(e)); }
+              finally { await mappingWindow.close(); }
+            })());
+          } catch (e) {
+            start.outcome = outcomeFor(mappingWindow.signal); r.spawnErrors.push(f.sessionId); recordFailure("spawn", mappingWindow.signal, f.sessionId, failureText(e)); await mappingWindow.close();
+          }
+        }
+      } finally { await Promise.all(mappings); }
+    });
+    overall.signal.throwIfAborted();
+    if (r.mapped !== opts.n || r.spawned !== opts.n) throw new Error("fleet incomplete");
+    await phase("measurement", async () => {
+      const start = clock.now();
+      const end = start + opts.durationMs;
+      r.window = { start, end, finishedAt: start, wallStart: new Date(clock.wall()).toISOString() };
+      const window = deadlineSignal(clock, Math.min(end, clock.now() + (opts.totalTimeoutMs ?? Infinity)), overall.signal);
+      const population = fixture.fixtures.filter(f => f.conversationId);
+      const churn = (async () => {
+        r.churn.startedAt = clock.now();
+        let slot = 0;
+        try {
+          for (; slot < r.churn.expectedRounds; slot++) {
+            const scheduledAt = start + slot * opts.churnIntervalMs;
+            if (clock.now() < scheduledAt) await clock.sleep(scheduledAt - clock.now(), window.signal);
+            window.signal.throwIfAborted();
+            if (clock.now() - scheduledAt >= opts.churnIntervalMs) { r.churn.missedRounds++; continue; }
+            const round: LoadResult["churn"]["rounds"][number] = { scheduledAt, startedAt: clock.now(), finishedAt: clock.now(), lines: 0, attempts: population.map(f => ({ sessionId: f.sessionId, outcome: "missing", startedAt: null, finishedAt: null })) }; r.churn.rounds.push(round);
+            try {
+              for (const [index, f] of population.entries()) {
+                const attempt = round.attempts[index]; attempt.startedAt = clock.now();
+                try {
+                  const written = await fixture.append(f, `churn ${slot} ${runId}`, window.signal);
+                  attempt.outcome = written ? "ok" : "paused";
+                  if (written) { round.lines++; r.churn.linesAppended++; }
+                } catch (error) { attempt.outcome = outcomeFor(window.signal); throw error; }
+                finally { attempt.finishedAt = clock.now(); }
+              }
+            } finally { round.finishedAt = clock.now(); }
+          }
+          if (clock.now() < end) await clock.sleep(end - clock.now(), window.signal);
+        } catch (e) { if (slot < r.churn.expectedRounds) { recordFailure("churn", window.signal, undefined, failureText(e)); r.churn.missedRounds += r.churn.expectedRounds - slot; } }
+        finally { r.churn.endedAt = clock.now(); }
+      })();
+      const probes = io.routes({ port: opts.port!, durationMs: opts.durationMs, startAt: start, authHeaders: opts.authHeaders, signal: window.signal, clock, hookRequest: (signal, slot) => ownedHookUrl(opts.port!, fixture, population[slot % population.length], clock, signal) }).then(result => { Object.assign(r, result); }, e => { recordFailure("probes", window.signal, undefined, failureText(e)); });
+      const sample = async (f: Fixture, trip: RoundTrip) => {
+        trip.sessionId = f.sessionId; trip.conversationId = f.conversationId!;
+        const leg = async (value: Leg, work: () => Promise<void>, startedAt = clock.now()) => {
+          value.startedAt = startedAt; value.reason = undefined;
+          try { window.signal.throwIfAborted(); await work(); window.signal.throwIfAborted(); value.outcome = "ok"; }
+          catch (e) { value.outcome = outcomeFor(window.signal); value.reason = failureText(e); recordFailure("delivery", window.signal, f.sessionId, value.reason); }
+          finally { value.finishedAt = clock.now(); value.ms = value.outcome === "ok" ? value.finishedAt - startedAt : null; }
+        };
+        const poll = async (value: Leg, check: () => Promise<boolean>) => {
+          for (;;) { window.signal.throwIfAborted(); value.polls++; if (await check()) return; await clock.sleep(opts.pollMs ?? 250, window.signal); }
+        };
+        const upToken = `up-${randomUUID()}`;
+        await leg(trip.up, async () => {
+          if (!await fixture.append(f, upToken, window.signal)) throw new Error("up append refused");
+          await poll(trip.up, () => exportedToken(io.post, f.conversationId!, upToken, "user", window.signal, { sessionId: f.sessionId, projectPath: fixture.scratch }));
+        });
+        const downToken = `pong-${randomUUID().replaceAll("-", "")}`;
+        try {
+          await fixture.pauseWrites(f);
+          await fixture.verify(f, window.signal);
+          const sentAt = clock.now();
+          await leg(trip.injected, async () => {
+            await io.post("/cli/messages/send", { to: f.conversationId, body: `codecast bench ${runId}: reply with ${downToken}` }, window.signal);
+            await poll(trip.injected, () => fixture.hasToken(f, downToken, window.signal));
+          }, sentAt);
+          if (trip.injected.outcome === "ok") await leg(trip.echoed, () => poll(trip.echoed, () => exportedToken(io.post, f.conversationId!, downToken, "assistant", window.signal, { sessionId: f.sessionId, projectPath: fixture.scratch })), sentAt);
+          else { trip.echoed.outcome = trip.injected.outcome; trip.echoed.reason = "injection failed"; }
+        } catch { recordFailure("delivery ownership", window.signal, f.sessionId); trip.injected.outcome = outcomeFor(window.signal); trip.injected.reason = "ownership or cancellation"; trip.echoed.outcome = trip.injected.outcome; }
+        finally { if (trip.echoed.outcome === "ok") fixture.resumeWrites(f); }
+        trip.upMs = trip.up.ms; trip.injectedMs = trip.injected.ms; trip.echoedMs = trip.echoed.ms;
+      };
+      const deliveries = (async () => {
+        for (let i = 0; i < opts.sample; i++) await sample(population[i], r.roundTrips[i]);
+      })();
+      try { await Promise.all([churn, probes, deliveries]); }
+      finally { await window.close(); r.window.finishedAt = clock.now(); }
+    });
+  } catch (e) { recordFailure("run", overall.signal, undefined, failureText(e)); }
+  finally {
+    await overall.close();
+    if (acquiredFixture) await phase("cleanup", async () => {
+      const fixture = acquiredFixture!;
+      const cleanupEndsAt = clock.now() + Math.max(10000, fixture.fixtures.length * 6000);
+      const cleanup = deadlineSignal(clock, cleanupEndsAt);
+      const checkCleanup = () => {
+        cleanup.signal.throwIfAborted();
+        if (clock.now() >= cleanupEndsAt) throw new DOMException("cleanup deadline", "TimeoutError");
+      };
+      try {
+        r.scratchDir = fixture.scratch;
+        if (opts.keep) r.teardown.warnings.push("resources retained by --keep");
+        else {
+          for (const f of fixture.fixtures) {
+            try { await fixture.cleanup(f, cleanup.signal); }
+            catch (e) { r.teardown.warnings.push(`fixture ${f.sessionId} cleanup failed or ownership refused: ${failureText(e)}`); }
+          }
+          if (fixture.scratch && !r.teardown.warnings.length) {
+            try {
+              let done = fixture.fixtures.length === 0;
+              for (let page = 0; !done && page < 50; page++) {
+                const result = await io.post("/cli/conversations/delete-by-path", { path_prefix: fixture.scratch }, cleanup.signal);
+                if (!Number.isInteger(result.conversationsDeleted) || result.conversationsDeleted < 0 || typeof result.hasMore !== "boolean") throw new Error("invalid cleanup response");
+                r.teardown.conversationsDeleted += result.conversationsDeleted;
+                if (!result.hasMore) { done = true; break; }
+              }
+              if (!done || r.teardown.conversationsDeleted !== r.mapped) throw new Error("backend deletion incomplete or unexpected count");
+              checkCleanup();
+              await fixture.finish(cleanup.signal);
+              checkCleanup();
+            } catch (e) { r.teardown.warnings.push(`backend or file cleanup incomplete: ${failureText(e)}`); }
+          }
+          if (cleanup.signal.aborted || clock.now() >= cleanupEndsAt) r.teardown.warnings.push("cleanup deadline expired or cancelled");
+          r.teardown.verified = r.teardown.warnings.length === 0;
+        }
+        try { r.after = await observe(); } catch { recordFailure("runtime after", cleanup.signal); }
+      } finally { await cleanup.close(); }
+    });
+    (process as NodeJS.EventEmitter).off("SIGINT", onInt); (process as NodeJS.EventEmitter).off("SIGTERM", onTerm); opts.signal?.removeEventListener("abort", onAbort);
+  }
+  r.spawnMs = summarizeLatency(r.startup.flatMap(s => s.spawnedAt === null ? [] : [s.spawnedAt - s.startedAt]));
+  r.mappingMs = summarizeLatency(r.startup.flatMap(s => s.mappedAt === null ? [] : [s.mappedAt - s.startedAt]));
+  r.upMs = summarizeLatency(r.roundTrips.flatMap(t => t.up.ms === null ? [] : [t.up.ms]));
+  r.injectedMs = summarizeLatency(r.roundTrips.flatMap(t => t.injected.ms === null ? [] : [t.injected.ms]));
+  r.echoedMs = summarizeLatency(r.roundTrips.flatMap(t => t.echoed.ms === null ? [] : [t.echoed.ms]));
+  if (cancellation.signal.aborted) recordFailure("cancellation", cancellation.signal);
+  const reasons = measurementFailures(r);
+  r.acceptance = { status: reasons.length ? "FAIL" : "NOT ESTABLISHED", reasons: [...reasons, ...(r.n !== 200 ? ["N=200 not measured"] : []), "independent F3 acceptance, boot blackout and runtime routing proof require parent verification"] };
+  return r;
 }

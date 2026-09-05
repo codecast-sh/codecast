@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, primeSessionFileIndexAtBoot, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, primeSessionFileIndexAtBoot, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked, trackSessionPaneForTests } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import type { TranscriptTurnState } from "./daemon.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
@@ -602,8 +602,12 @@ describe("started session is pane-tracked for the interactive-prompt sweep", () 
     expect(isSessionPaneTracked(sid)).toBe(false);
     // No syncServiceRef in tests: the function records the pane (local bookkeeping) then
     // returns at the guard — exercising exactly the line that closes the gap.
-    registerManagedStartedSession("jx7e0c1b0crwpsfyj5y017mgmd87ybtc", sid, "cc-claude-testpane");
-    expect(isSessionPaneTracked(sid)).toBe(true);
+    try {
+      registerManagedStartedSession("jx7e0c1b0crwpsfyj5y017mgmd87ybtc", sid, "cc-claude-testpane");
+      expect(isSessionPaneTracked(sid)).toBe(true);
+    } finally {
+      trackSessionPaneForTests(sid, null);
+    }
   });
 });
 

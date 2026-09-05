@@ -335,9 +335,11 @@ export const VaultExplorer = memo(function VaultExplorer({
     : null;
   const menuBookmarked = !!menuBookmark && isBookmarked(bookmarks, menuBookmark);
   // Notes, their attachments, and folders can be renamed or trashed. Code is
-  // read-only — see the menu items below.
+  // read-only — see the menu items below. So is anything listed only because
+  // "show ignored files" is on: the daemon's write scope never widens.
   const menuEditable =
     !!menuNode &&
+    !menuNode.ignored &&
     (menuNode.dir || isVaultMarkdownPath(menuNode.path) || isVaultAssetPath(menuNode.path));
 
   return (
@@ -368,7 +370,11 @@ export const VaultExplorer = memo(function VaultExplorer({
             const isFocused = vi.index === focusIndex;
             const isExpanded = node.dir && !!expandedDirs[node.path];
             const isRenaming = node.path === renameTarget;
+            // Ignored rows read as present-but-secondary, the way an editor dims
+            // gitignored files: still a row, still opens, visibly not a note.
             const rowClass = `w-full flex items-center gap-1.5 px-2 py-[3px] text-left truncate rounded-sm transition-colors ${
+              node.ignored ? "opacity-60 " : ""
+            }${
               isActive
                 ? "bg-sol-bg-highlight text-sol-text"
                 : isFocused
