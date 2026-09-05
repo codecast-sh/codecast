@@ -5477,7 +5477,7 @@ async function executeRemoteCommand(
               result = JSON.stringify({ forked: false, reason: "no_local_checkout" });
               break;
             }
-            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId });
+            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId: randomUUID() });
             const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
             const importBytes = fs.statSync(importPath).size;
             setPosition(importPath, importBytes);
