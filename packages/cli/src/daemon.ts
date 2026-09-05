@@ -15468,7 +15468,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/thread not found|no rollout found/i.test(message)) {
+      if (isMissingAppServerThreadError(err)) {
         dropped++;
         forgetPersistedAppServerConversation(conversationId);
       } else {
@@ -18876,6 +18876,30 @@ export function clientOwnsSessionStore(agentType: AgentClientId | undefined | nu
   return agentType != null && agentType !== "claude" && agentType !== "codex";
 }
 
+// Materialization writes a CLAUDE transcript AND binds it to the conversation as
+// its session id, so the conversation's next resume launches claude. That is only
+// ever right for a conversation whose declared agent IS claude (or an unhinted one,
+// which defaults to claude downstream). Codex is excluded even though the daemon
+// can generate a codex JSONL: a codex conversation's live backend is its app-server
+// thread, its history lives in ~/.codex/sessions, and a fabricated claude session is
+// therefore not a recovery but a SECOND agent answering in the same thread. On
+// 2026-09-04 that put opus-5 and gpt-6-astra in one conversation, each briefing the
+// same fleet of seventeen sessions, and minted a duplicate conversation row for the
+// twin. This is the delivery twin of startFreshSessionForDelivery's cross-agent
+// refusal: a message left pending is recoverable, a wrong-agent backend is not.
+export function mayMaterializeClaudeTranscript(agentType: AgentClientId | undefined | null): boolean {
+  return agentType == null || agentType === "claude";
+}
+
+// Does an app-server error prove the thread is GONE? Only "thread not found" and
+// "no rollout found" do. A timeout says nothing: under load turn/start routinely
+// exceeds its deadline while the turn itself runs, so treating that as a dead
+// thread retires a live binding and sends the next delivery down the fallback
+// chain (2026-09-04).
+export function isMissingAppServerThreadError(err: unknown): boolean {
+  return /thread not found|no rollout found/i.test(err instanceof Error ? err.message : String(err));
+}
+
 // The resume paths' twin of clientOwnsSessionStore: may a resume with NO local
 // transcript fabricate one from the convex export? Only for the clients whose
 // missing-transcript recovery has always been a local reconstitution — claude,
@@ -19348,13 +19372,14 @@ async function materializeSession(
         logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
-      // A store-owned client (opencode/pi/cursor) has no Claude-JSONL transcript to
-      // materialize — fabricating one is invalid and, for opencode, the write path
-      // corrupts the shared opencode.db (ct-39174/ct-39178). Delivery falls back to
-      // the started-pane injection / re-resume instead of a materialized session.
+      // Only a claude (or unhinted) conversation may be materialized. A store-owned
+      // client (opencode/pi/cursor) has no Claude-JSONL transcript at all, and for
+      // opencode the write path corrupts the shared opencode.db (ct-39174/ct-39178);
+      // codex has its own live backend and would gain a second agent. Delivery falls
+      // back to the started-pane injection / re-resume instead.
       const matAgentType = fromConvexAgentType(exportData.conversation.agent_type);
-      if (clientOwnsSessionStore(matAgentType)) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: ${matAgentType} owns its session store (no Claude JSONL to materialize)`);
+      if (!mayMaterializeClaudeTranscript(matAgentType)) {
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: conversation is ${matAgentType}, a materialized session would attach a claude backend to it`);
         return null;
       }
 
@@ -19510,8 +19535,12 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
-        removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
-        if (err instanceof Error && /thread not found|no rollout found/i.test(err.message)) {
+        // Retire the binding ONLY when the thread is provably gone. A timed-out or
+        // dropped turn/start leaves a live thread live, and unregistering it there
+        // was what made a codex conversation look backend-less on the next delivery
+        // (2026-09-04); the recovery sweep re-resumes anything genuinely lost.
+        if (isMissingAppServerThreadError(err)) {
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
           forgetPersistedAppServerConversation(conversationId);
         }
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
