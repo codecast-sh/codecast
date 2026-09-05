@@ -73,7 +73,7 @@ export function registerCloudCommand(program: Command): void {
       await waitForDeviceOnline(client, api, token, prepared.deviceId, say);
       const name = target.worktree_name || freshWorktreeName();
       say(`acquiring worktree ${name} on the host (install runs there)`);
-      const ws = acquireRemoteWorkspace(prepared.host, prepared.repoPath, name);
+      const ws = acquireRemoteWorkspace(prepared.host, prepared.repoPath, name, prepared.localGitRoot);
       const r = await client.mutation(api.cloud.placeConversation, {
         api_token: token,
         conversation_id: conversationId,

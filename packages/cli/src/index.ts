@@ -10881,7 +10881,7 @@ program
           const name = freshWorktreeName();
           if (!options.json) console.log(`  acquiring worktree ${name} on ${cloud.prepared.cloud.id}`);
           try {
-            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
             worktreeName = ws.name;
             cloudPlacement = {
               cloud_device_id: cloud.prepared.deviceId,
@@ -11188,7 +11188,7 @@ program
         say(`acquiring worktree ${name} on ${cloud.prepared.cloud.id} (install runs there)`);
         let ws: import("./cloud/prepare.js").RemoteWorkspace;
         try {
-          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
         } catch (err) {
           console.error(`Spawn failed for "${promptGist(prompt)}": ${err instanceof Error ? err.message : String(err)}`);
           process.exit(1);

@@ -1398,6 +1398,16 @@ export class SyncService {
     return (await this.getConversationOwnerInfo(conversationId))?.ownerDeviceId ?? null;
   }
 
+  async isWorktreeShared(conversationId: string, worktreePath: string): Promise<boolean> {
+    const rows = await this.client.query("cloud:hostSessions" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+    });
+    if (!Array.isArray(rows)) throw new Error("Worktree ownership query returned no roster");
+    return rows.some((row: any) => row.conversation_id !== conversationId &&
+      (row.project_path === worktreePath || row.project_path?.startsWith(worktreePath + "/")));
+  }
+
   /**
    * Owner device of a conversation, with whether that owner is a remote box and
    * online. Lets a local daemon distinguish "another laptop owns this, back off"
