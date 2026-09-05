@@ -217,9 +217,7 @@ export function useCallRing(): void {
     }
   }, [outgoing]);
 
-  useMountEffect(
-    () => () => {
-      if (ringTimer.current) clearInterval(ringTimer.current);
-    },
-    []);
+  useMountEffect(() => () => {
+    if (ringTimer.current) clearInterval(ringTimer.current);
+  });
 }

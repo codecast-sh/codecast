@@ -7953,6 +7953,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
+  const chatOn = useTeamFeature("chat");
   const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   const handleToggleExpand = () => {

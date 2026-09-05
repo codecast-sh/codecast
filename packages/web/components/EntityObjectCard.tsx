@@ -506,11 +506,9 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
     if (open) setMounted(true);
     else unmountTimer.current = setTimeout(() => setMounted(false), 320);
   }, []);
-  useMountEffect(
-    () => () => {
-      if (unmountTimer.current) clearTimeout(unmountTimer.current);
-    },
-    []);
+  useMountEffect(() => () => {
+    if (unmountTimer.current) clearTimeout(unmountTimer.current);
+  });
 
   const toggle = useCallback(() => {
     // A click that ends a text selection is copying, not toggling.
