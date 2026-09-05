@@ -1,0 +1,17 @@
+{
+  "title": "Agent Organization v2 · A codecast product proposal",
+  "description": "A product proposal for an organization of agent sessions in codecast: leads at workspace, project and plan scope, workers at task scope, each understanding the work at its own level, integrated with tasks, plans, projects, docs, chat, decisions and triggers.",
+  "kicker": "A codecast product proposal · version two · 5 September 2026",
+  "headline": "An organization of agents",
+  "dek": "Give the work a chain of understanding. Every level, from a single task to the whole workspace, has an agent that knows its scope, keeps a live account of it, answers the questions it is trusted with, and brings you only the ones that are yours.",
+  "railNote": "Version two. Builds on the version one control plane proposal (pl-519) and designs the product experience it left open. Examples are illustrative unless marked as measured.",
+  "paths": [
+    {"id": "s1", "label": "Start here", "note": "The thesis and what Monday looks like"},
+    {"id": "s4", "label": "The experience", "note": "Brief, zoom, decisions, hiring a lead"},
+    {"id": "s6", "label": "Integration map", "note": "Tasks, plans, projects, chat, triggers"},
+    {"id": "s10", "label": "Rollout", "note": "Three stages, gated by trust"}
+  ],
+  "levels": ["workspace","workspace","project","project","plan","plan","task","task","session","session","session","session"],
+  "footerTitle": "Agent Organization v2",
+  "footerNote": "Product design, integration contract, agent contract, data model, failure modes and a trust gated rollout."
+}

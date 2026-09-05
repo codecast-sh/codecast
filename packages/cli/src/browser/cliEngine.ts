@@ -34,7 +34,7 @@ import {
   ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isRealSession,
   realSessionKey, runEngine, runEngineJson,
 } from "./engine.js";
-import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags } from "./bridge/real.js";
+import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
 import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches } from "./snapshot.js";
@@ -107,8 +107,7 @@ function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint:
 
 /**
  * Options every engine call carries: this session, and the browser it drives.
- * The clone is the default: the one managed Chrome, whose port runEngine
- * reads from the state file. Real mode (bridge/real.ts isRealMode) is a
+ * Real mode (bridge/real.ts isRealMode) is the default once paired: a
  * second engine session, keyed `<session>-real`, on the bridge host's socket;
  * the daemon resets its tab when a session's flags change, so the two never
  * share a key. The human's Chrome is already running with its own logins;
@@ -521,6 +520,8 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     const url = args.find((a) => !a.startsWith("--"));
     const deny = url ? refuseNavigation(url, owner, "open") : null;
     if (deny) die(deny.message, deny.hint);
+    const wall = real && url ? walledOffFromExtension(url) : null;
+    if (wall) die(wall, "the human opens this page in their own Chrome; hand them the URL and the steps. The agent browser can drive it (--clone) only if they ask.");
     // The real Chrome is the human's, already running; its bridge came up in
     // ctx. The clone is ours to start.
     if (!real) await ensureBrowser();
@@ -1062,12 +1063,15 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   grant                    camera/mic/clipboard permission for this origin — no prompt, no restart
   shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot)
 
-The human's real Chrome instead of the clone (they want to watch, or a site fights the clone):
+Your Chrome is the default once the extension is paired, including after restarts:
 
-  target real              sticky for this session; --real / --clone on any verb overrides it once
+  target                   show which browser this session uses and why
+  target clone             opt this session into the agent browser; target real switches back
+  --real / --clone         override the browser for one verb
   open <url>               a tab of its own there, in the "Cast" tab group;
                            act only on tabs you opened. Needs the extension paired once by
                            the human: cast browser extension setup
+                           Commands wait for reconnect; --clone explicitly uses the agent browser.
 
 \`cast browser help <command>\` documents every flag; \`cast browser skills get core --full\` is the engine's full guide.`,
   );

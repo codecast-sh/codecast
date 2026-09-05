@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, it, expect, describe } from "bun:test";
 import {
   buildNavigatorRows,
   filterNavigatorRows,
@@ -6,6 +6,8 @@ import {
   formatTimeAgo,
   sampleTicks,
   activeTickIndex,
+  isStickyEligible,
+  stickyPromptContent,
   pickStickyFallback,
   pickStickyFallbackFromLoaded,
   resolveStickyPrompt,
@@ -282,6 +284,17 @@ describe("pickStickyFallbackFromLoaded", () => {
     expect(pickStickyFallbackFromLoaded(all, [])?.id).toBe("p3");
     expect(pickStickyFallbackFromLoaded(undefined, [])).toBeNull();
   });
+
+  test("interruption notices never replace the last human prompt", () => {
+    const notices = [
+      "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background.",
+      "<turn_aborted>user aborted</turn_aborted>",
+      "<turn_aborted>user aborted",
+    ].map((content, index) => user(`notice-${index}`, content, 400 + index));
+    for (const notice of notices) expect(isStickyEligible(notice.content)).toBe(false);
+    expect(pickStickyFallbackFromLoaded([...all, ...notices], [{ _id: "reply", timestamp: 500 }])?.id).toBe("p3");
+    expect(pickStickyFallbackFromLoaded(notices, [])).toBeNull();
+  });
 });
 
 describe("resolveStickyPrompt", () => {
@@ -299,5 +312,79 @@ describe("resolveStickyPrompt", () => {
   test("null when the reader is above every prompt", () => {
     expect(resolveStickyPrompt(sticky, 1, new Set([1]))).toBeNull();
     expect(resolveStickyPrompt([], 5, new Set([5]))).toBeNull();
+  });
+});
+
+const interruptionNotice = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+
+const interruptionMessages = [
+  interruptionNotice,
+  `<turn_aborted>\n${interruptionNotice}\n</turn_aborted>`,
+  "  <turn_aborted>\nuser aborted\n</turn_aborted>  ",
+  `<turn_aborted>\n${interruptionNotice.slice(0, 100)}`,
+];
+
+// The sticky header surfaces what the human asked for. Trigger runs, spawned
+// briefings and bare nudges are not that, whichever sticky source they reach
+// through (timeline, cached user list, last-message fallback).
+describe("stickyPromptContent", () => {
+  it.each(interruptionMessages)("drops an automatic interruption notice: %s", (content) => {
+    expect(stickyPromptContent(content)).toBeNull();
+  });
+
+  it("keeps a human prompt about an interruption", () => {
+    const prompt = "I interrupted the previous turn. Please check which commands completed.";
+    expect(stickyPromptContent(prompt)).toBe(prompt);
+  });
+
+  it("drops an injected trigger run", () => {
+    const run = '<scheduled-task title="Market growth mandate — daily autonomous run" task-id="abc">\n# Market Growth Mandate\n\n**Goal: increase the match rate.**</scheduled-task>';
+    expect(stickyPromptContent(run)).toBeNull();
+  });
+
+  it("drops a spawned run's opening briefing", () => {
+    const spawned = "[Codecast Task: Growth audit]\nTask ID: abc\nMode: spawn\n\nAudit budget allocation across markets.";
+    expect(stickyPromptContent(spawned)).toBeNull();
+  });
+
+  it("drops a bare nudge", () => {
+    expect(stickyPromptContent("continue")).toBeNull();
+    expect(stickyPromptContent("go")).toBeNull();
+  });
+
+  it("keeps a real prompt", () => {
+    expect(stickyPromptContent("fix the login bug")).toBe("fix the login bug");
+  });
+});
+
+// A slash command is the human steering their client, not asking the agent.
+// Its stored form is tag soup, so a sticky that only strips tags painted
+// "/model model opus" as the prompt.
+describe("stickyPromptContent: client commands", () => {
+  const invocation = "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>";
+
+  it("drops a slash command invocation", () => {
+    expect(stickyPromptContent(invocation)).toBeNull();
+    expect(isStickyEligible(invocation)).toBe(false);
+  });
+
+  it("drops a typed slash command and its output", () => {
+    expect(stickyPromptContent("/model opus")).toBeNull();
+    expect(stickyPromptContent("/compact")).toBeNull();
+    expect(stickyPromptContent("<local-command-stdout>Set model to opus</local-command-stdout>")).toBeNull();
+  });
+
+  it("drops the legacy stripped form older syncs persisted", () => {
+    expect(stickyPromptContent("model\n/model\nopus")).toBeNull();
+  });
+
+  it("drops `!` bash mode input and output", () => {
+    expect(stickyPromptContent("<bash-input>git status</bash-input>")).toBeNull();
+    expect(stickyPromptContent("<bash-stdout>clean</bash-stdout><bash-stderr></bash-stderr>")).toBeNull();
+  });
+
+  it("keeps an ask that opens with a pasted path", () => {
+    const ask = "/Users/ashot/shot.png look at this";
+    expect(stickyPromptContent(ask)).toBe(ask);
   });
 });

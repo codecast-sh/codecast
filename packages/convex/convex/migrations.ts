@@ -2,6 +2,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { redactSecrets } from "./redact";
+import { normalizeRepository } from "./lib/gitRefs";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -409,5 +410,71 @@ export const analyzeMessageRoles = internalQuery({
     }
 
     return stats;
+  },
+});
+
+// One-time backfill: rewrite every indexed repository name to its canonical
+// spelling (`normalizeRepository`: lower case). Every writer now stores that
+// form and every reader searches for it, so a row stored with capitals before
+// this rule existed can never be found by index. The installation table is in
+// the list because every repository lookup splits the owner out and searches
+// `by_account_login`. Idempotent: a row already canonical is skipped, so a
+// re-run is a no-op. Pass auto:true to drain each table and continue with the
+// next one via the scheduler.
+//   npx convex run migrations:canonicalizeRepositoryNames '{"dryRun":false,"auto":true}'
+export const REPOSITORY_NAME_TABLES = [
+  "pull_requests",
+  "commits",
+  "review_comments",
+  "external_events",
+  "github_check_suites",
+  "github_app_installations",
+] as const;
+type RepositoryNameTable = (typeof REPOSITORY_NAME_TABLES)[number];
+
+/** The field that carries the repository name (or, for installations, the owner login). */
+function repositoryNameField(table: RepositoryNameTable): "repository" | "account_login" {
+  return table === "github_app_installations" ? "account_login" : "repository";
+}
+
+export const canonicalizeRepositoryNames = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    table: v.optional(v.union(...REPOSITORY_NAME_TABLES.map((t) => v.literal(t)))),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+    auto: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const numItems = args.numItems ?? 200;
+    const table: RepositoryNameTable = args.table ?? REPOSITORY_NAME_TABLES[0];
+    const field = repositoryNameField(table);
+    const page = await ctx.db
+      .query(table)
+      .paginate({ cursor: args.cursor ?? null, numItems });
+
+    let rewritten = 0;
+    for (const row of page.page as Array<Record<string, any>>) {
+      const stored = row[field];
+      const canonical = normalizeRepository(stored);
+      if (typeof stored !== "string" || stored === canonical) continue;
+      if (!dryRun) await ctx.db.patch(row._id, { [field]: canonical });
+      rewritten++;
+    }
+
+    const nextTable = page.isDone
+      ? REPOSITORY_NAME_TABLES[REPOSITORY_NAME_TABLES.indexOf(table) + 1]
+      : table;
+    if (args.auto && nextTable) {
+      await ctx.scheduler.runAfter(0, internal.migrations.canonicalizeRepositoryNames, {
+        dryRun,
+        table: nextTable,
+        cursor: page.isDone ? undefined : page.continueCursor,
+        numItems,
+        auto: true,
+      });
+    }
+    return { dryRun, table, rewritten, scanned: page.page.length, done: page.isDone, cursor: page.continueCursor };
   },
 });

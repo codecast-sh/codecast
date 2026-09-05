@@ -38,6 +38,13 @@ import { useInboxStore } from "../../store/inboxStore";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
 import { joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
+import {
+  isVoiceHost,
+  mirrorVoice,
+  sendVoiceCommand,
+  voiceHostElsewhere,
+  type VoiceMirror,
+} from "../desktop";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
 import {
   acquireMic,
@@ -219,6 +226,100 @@ function emit(patch: Partial<WalkieStatus>) {
   }
   status = next;
   for (const cb of subscribers) cb();
+  publishVoiceMirror();
+}
+
+// ── one microphone, many windows ────────────────────────────────────────────
+//
+// On the desktop the shell keeps ONE persistent window that holds every
+// microphone: the walkie's ear, the burst, the call (lib/desktop, "the voice
+// host"). This module runs in every window, but only in that one does it DO
+// anything. Everywhere else it is a remote: every gesture below is sent to the
+// host as a command, and the status it reports is the host's own, mirrored
+// back — so a talk key in the main window lights for a burst the host is
+// speaking, and the strip, the sounds and the seat never exist twice.
+//
+// The host is the ONLY renderer that joins a room. That is the whole of what
+// keeps a burst becoming a call from re-joining: the window that holds the
+// microphone never changes, so nothing is ever evicted.
+
+/** What the call plane looks like from the host, as the host last said. Read
+ *  in place of this window's own (idle) call slice by everything below that
+ *  asks where the call is. */
+let mirroredCall: VoiceMirror["call"] | null = null;
+
+/** Host: tell every other window what the walkie and the call are doing. A
+ *  no-op everywhere else. Called on every status move, and by the host's page
+ *  when the call slice moves (a mute, a camera) without the walkie noticing. */
+export function publishVoiceMirror(): void {
+  if (!isVoiceHost()) return;
+  const call = useInboxStore.getState().call as any;
+  mirrorVoice({
+    walkie: status,
+    call: {
+      roomKey: call?.roomKey ?? null,
+      phase: call?.phase ?? "idle",
+      muted: call?.muted !== false,
+      micDenied: !!call?.micDenied,
+      camera: !!call?.camera,
+    },
+  });
+}
+
+/** The burst this window painted a bubble for, by the client id it handed the
+ *  host — so the bubble can be taken back if the host throws the burst away. */
+let mirroredBurstId: string | null = null;
+
+/** Every other window: take the host's word for it. The status is replaced
+ *  whole — this window's engine holds nothing of its own to merge. */
+export function applyVoiceMirror(payload: VoiceMirror): void {
+  if (isVoiceHost()) return;
+  if (!payload || typeof payload !== "object" || !payload.walkie) return;
+  const next = payload.walkie as WalkieStatus;
+  mirroredCall = payload.call ?? null;
+  status = { ...status, ...next };
+  for (const cb of subscribers) cb();
+  reconcileMirroredBubble(next.sending?.clientId ?? null);
+}
+
+/**
+ * THE BUBBLE THIS WINDOW PAINTED, against the burst the host actually landed.
+ *
+ * A press here paints a stub under the client id the host is told to use, and
+ * the server row the host creates supersedes it through the channel sync.
+ * Two things can leave the stub behind: the host threw the burst away (a
+ * brushed key, a microphone that never opened) and no server row ever
+ * existed; or this window is not looking at the channel, so the row has not
+ * synced yet. Either way, once the host says the burst is over, a stub still
+ * standing under its own id is nothing the server knows about — it is taken
+ * back, and the real row arrives with the channel when it is opened. A beat
+ * after the end rather than on it: the row usually lands a moment before.
+ */
+function reconcileMirroredBubble(sendingId: string | null): void {
+  if (sendingId) {
+    mirroredBurstId = sendingId;
+    return;
+  }
+  const ended = mirroredBurstId;
+  if (!ended) return;
+  mirroredBurstId = null;
+  setTimeout(() => {
+    const st = useInboxStore.getState() as any;
+    const row = st.chatMessages?.[ended];
+    if (row && row._id === ended && row.voice?.status === "live") st.dropVoiceBurstRow({ clientId: ended });
+  }, 2_000);
+}
+
+/**
+ * Send a gesture to the host, or make it here.
+ *
+ * The shell answers whether a host took the command. No host — an older
+ * shell, a browser, or the second between the host's page loading and its
+ * declaration — means this window acts for itself, exactly as it always did.
+ */
+async function viaHost(cmd: string, args: unknown[], local: () => Promise<void>): Promise<void> {
+  if (voiceHostElsewhere() && (await sendVoiceCommand(cmd, args))) return;
+  await local();
 }
 
 // The siblings, re-exported: which of the four files a level, a duration or the
@@ -259,8 +360,35 @@ export function bindWalkie(client: ConvexHandle) {
 type CallState = { roomKey: string | null; phase: string; muted: boolean };
 
 function callState(): CallState {
+  if (voiceHostElsewhere() && mirroredCall) {
+    return { roomKey: mirroredCall.roomKey, phase: mirroredCall.phase, muted: mirroredCall.muted };
+  }
   const call = useInboxStore.getState().call as any;
   return { roomKey: call?.roomKey ?? null, phase: call?.phase ?? "idle", muted: call?.muted !== false };
+}
+
+/**
+ * WHERE THE CALL IS, for the surfaces that draw a talk key. This window's own
+ * call slice on the host and in a browser; the host's, mirrored, everywhere
+ * else — where the local slice is idle for as long as the host holds the
+ * microphone, and a key reading it would call every burst "dropped".
+ */
+export function walkieCallState(): CallState & { micDenied: boolean } {
+  if (voiceHostElsewhere() && mirroredCall) {
+    return {
+      roomKey: mirroredCall.roomKey,
+      phase: mirroredCall.phase,
+      muted: mirroredCall.muted,
+      micDenied: mirroredCall.micDenied,
+    };
+  }
+  const call = useInboxStore.getState().call as any;
+  return {
+    roomKey: call?.roomKey ?? null,
+    phase: call?.phase ?? "idle",
+    muted: call?.muted !== false,
+    micDenied: !!call?.micDenied,
+  };
 }
 
 function inRoom(roomKey: string): boolean {
@@ -365,6 +493,9 @@ export function walkieJoinedRoom(s: WalkieStatus): string | null {
 
 /** Recompute what the UI may offer. Called whenever the world moves. */
 function refresh() {
+  // A remote holds the host's status, not its own; reconciling it here would
+  // overwrite the mirror with this window's idle view of a room it is not in.
+  if (voiceHostElsewhere()) return;
   reconcileLiveRoom();
   emit({ unavailable: walkieBlockedFor(status.liveRoom?.key) });
   reconcileIdleRelease();
@@ -656,7 +787,20 @@ async function resolveServerChannelId(b: Burst, channelId: string): Promise<stri
  * promise, and a release that arrives before it lands still finalizes a
  * complete burst.
  */
-export function startBurst(channelId: string, roomKey: string): Promise<void> {
+export function startBurst(channelId: string, roomKey: string, clientId?: string): Promise<void> {
+  if (voiceHostElsewhere()) {
+    // The bubble is on screen HERE, in the window the person pressed in, before
+    // the host has heard about it: a voice message is a message, and a message
+    // never waits for a round trip to appear. The same client id goes to the
+    // host, so the server row supersedes both stubs.
+    const id = clientId ?? newChatMessageClientId();
+    if (!burst) useInboxStore.getState().beginVoiceBurstRow(channelId, id, roomKey);
+    return viaHost("startBurst", [channelId, roomKey, id], () => startBurstHere(channelId, roomKey, id));
+  }
+  return startBurstHere(channelId, roomKey, clientId);
+}
+
+function startBurstHere(channelId: string, roomKey: string, clientId?: string): Promise<void> {
   if (!convex) {
     refresh();
     return Promise.resolve();
@@ -668,7 +812,7 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     return Promise.resolve();
   }
 
-  const clientId = newChatMessageClientId();
+  clientId = clientId ?? newChatMessageClientId();
   const b: Burst = {
     channelId,
     roomKey,
@@ -932,6 +1076,11 @@ function burstUpgraded(b: Burst): boolean {
  *  said. Safe to call twice — the max-length cap releases the key first, and
  *  the hand coming off it afterwards finds nothing left to do. */
 export async function endBurst(): Promise<void> {
+  if (voiceHostElsewhere()) return viaHost("endBurst", [], endBurstHere);
+  return endBurstHere();
+}
+
+async function endBurstHere(): Promise<void> {
   const b = burst;
   if (!b) return;
   // THREE CONDITIONS, and each one is a sound that used to play wrongly.
@@ -1230,6 +1379,11 @@ export async function joinWalkieLive(
    *  the call" — so a caller that cannot name them still joins the same way. */
   opts: { name?: string | null } = {},
 ): Promise<void> {
+  if (voiceHostElsewhere()) return viaHost("joinWalkieLive", [roomKey, opts], () => joinWalkieLiveHere(roomKey, opts));
+  return joinWalkieLiveHere(roomKey, opts);
+}
+
+async function joinWalkieLiveHere(roomKey: string, opts: { name?: string | null }): Promise<void> {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   markWalkieUpgraded(roomKey);
   // SAID BEFORE THE JOIN. The answer to a press has to be immediate, the stamp
@@ -1249,6 +1403,11 @@ export async function joinWalkieLive(
  * invitation to answer. Any burst still open lands as the message it is.
  */
 export async function endWalkie(): Promise<void> {
+  if (voiceHostElsewhere()) return viaHost("endWalkie", [], endWalkieHere);
+  return endWalkieHere();
+}
+
+async function endWalkieHere(): Promise<void> {
   if (burst) await endBurst();
   const held = status.liveRoom;
   if (status.incoming) emit({ incoming: null });
@@ -1268,6 +1427,14 @@ export async function endWalkie(): Promise<void> {
  * The message is untouched: snoozing mutes a speaker, it never silences one.
  */
 export function shutWalkieDoor(): void {
+  if (voiceHostElsewhere()) {
+    void viaHost("shutWalkieDoor", [], async () => shutWalkieDoorHere());
+    return;
+  }
+  shutWalkieDoorHere();
+}
+
+function shutWalkieDoorHere(): void {
   const was = status.incoming;
   // The mode is deliberately NOT cleared. Snooze shuts a door; it does not
   // hang up a call somebody chose to be in, and a "not now" button ending a
@@ -1320,6 +1487,10 @@ export function pickLiveBurst(bursts: LiveBurstRow[], now: number): LiveBurstRow
  * burst lands as an ordinary chat message with its unread and its push.
  */
 export function observeWalkie(input: { bursts: LiveBurstRow[]; doorOpen: boolean }): void {
+  // The host hears for the whole app. A remote's report is a copy of the same
+  // rows, and its door is shut by construction; acting on it would tear the
+  // mirrored `incoming` down as if the burst had ended.
+  if (voiceHostElsewhere()) return;
   lastReport = input;
   applyReport();
 }
@@ -1327,7 +1498,33 @@ export function observeWalkie(input: { bursts: LiveBurstRow[]; doorOpen: boolean
 /** Re-decide with the same report and a fresh view of the call plane — the
  *  user joined a huddle, or left one, which is the other half of the answer. */
 export function refreshWalkie(): void {
+  if (voiceHostElsewhere()) return;
   applyReport();
+}
+
+/**
+ * Host: carry out a gesture another window sent. The names are this module's
+ * and callManager's own exports, so a remote and the host run the same code
+ * — one of them merely runs it a window away.
+ */
+export async function runVoiceCommand(cmd: string, args: unknown[]): Promise<void> {
+  const a = args as any[];
+  switch (cmd) {
+    case "startBurst":
+      return startBurstHere(String(a[0]), String(a[1]), a[2] ? String(a[2]) : undefined);
+    case "endBurst":
+      return endBurstHere();
+    case "joinWalkieLive":
+      return joinWalkieLiveHere(String(a[0]), a[1] && typeof a[1] === "object" ? a[1] : {});
+    case "endWalkie":
+      return endWalkieHere();
+    case "shutWalkieDoor":
+      return shutWalkieDoorHere();
+    default: {
+      const { runCallCommand } = await import("./callManager");
+      return runCallCommand(cmd, args);
+    }
+  }
 }
 
 /**
@@ -1532,5 +1729,7 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     joinLive: joinWalkieLive,
     joinedRoom: () => walkieJoinedRoom(getWalkieStatus()),
     end: endWalkie,
+    mirror: applyVoiceMirror,
+    command: runVoiceCommand,
   };
 }

@@ -1,0 +1,53 @@
+<template id="figure-hero">
+<figure class="orgmap reveal" style="--i:3" aria-labelledby="hero-cap">
+<svg viewBox="0 0 860 330" role="img" aria-label="Organization map: you at the top, a workspace lead, project leads, plan leads, and task workers below, each with a short account of its scope">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#9aa3b2"/></marker>
+  </defs>
+  <g font-size="12" fill="#5b6577" font-weight="500">
+    <text x="16" y="40">You</text>
+    <text x="16" y="105">Workspace</text>
+    <text x="16" y="170">Projects</text>
+    <text x="16" y="235">Plans</text>
+    <text x="16" y="300">Tasks</text>
+  </g>
+  <g stroke="#e8e7e0"><line x1="120" y1="72" x2="850" y2="72"/><line x1="120" y1="137" x2="850" y2="137"/><line x1="120" y1="202" x2="850" y2="202"/><line x1="120" y1="267" x2="850" y2="267"/></g>
+  <!-- edges -->
+  <g stroke="#b8bfcb" stroke-width="1.5" fill="none">
+    <path d="M470 52 V 90"/>
+    <path d="M470 118 V 130 H 300 V 155"/><path d="M470 118 V 130 H 640 V 155"/>
+    <path d="M300 183 V 195 H 220 V 220"/><path d="M300 183 V 195 H 380 V 220"/>
+    <path d="M640 183 V 220"/>
+    <path d="M220 248 V 260 H 170 V 285"/><path d="M220 248 V 260 H 270 V 285"/>
+    <path d="M380 248 V 285"/>
+    <path d="M640 248 V 260 H 590 V 285"/><path d="M640 248 V 260 H 690 V 285"/>
+    <path d="M760 183 V 285" stroke-dasharray="3 4"/>
+  </g>
+  <!-- you -->
+  <g transform="translate(400 22)"><rect width="140" height="30" rx="8" fill="#101828"/><text x="70" y="19" text-anchor="middle" font-size="12.5" fill="#fff" font-weight="600">Ashot · decides</text></g>
+  <!-- workspace -->
+  <g transform="translate(380 90)"><rect width="180" height="28" rx="7" fill="#e9e7fb" stroke="#3f36c9"/><text x="90" y="18" text-anchor="middle" font-size="12" fill="#3f36c9" font-weight="600">Workspace lead · morning brief</text></g>
+  <!-- projects -->
+  <g transform="translate(225 155)"><rect width="150" height="28" rx="7" fill="#e3eefb" stroke="#0a5fc4"/><text x="75" y="18" text-anchor="middle" font-size="12" fill="#0a5fc4" font-weight="600">Codecast lead</text></g>
+  <g transform="translate(565 155)"><rect width="150" height="28" rx="7" fill="#e3eefb" stroke="#0a5fc4"/><text x="75" y="18" text-anchor="middle" font-size="12" fill="#0a5fc4" font-weight="600">Union mobile lead</text></g>
+  <g transform="translate(735 155)"><rect width="110" height="28" rx="7" fill="#fff" stroke="#d9d8d0" stroke-dasharray="3 3"/><text x="55" y="18" text-anchor="middle" font-size="11.5" fill="#5b6577">Outreach · no lead</text></g>
+  <!-- plans -->
+  <g transform="translate(160 220)"><rect width="120" height="28" rx="7" fill="#dff2ef" stroke="#0b7d70"/><text x="60" y="18" text-anchor="middle" font-size="11.5" fill="#0b7d70" font-weight="600">Sync reliability</text></g>
+  <g transform="translate(320 220)"><rect width="120" height="28" rx="7" fill="#dff2ef" stroke="#0b7d70"/><text x="60" y="18" text-anchor="middle" font-size="11.5" fill="#0b7d70" font-weight="600">Issue sync</text></g>
+  <g transform="translate(580 220)"><rect width="120" height="28" rx="7" fill="#dff2ef" stroke="#0b7d70"/><text x="60" y="18" text-anchor="middle" font-size="11.5" fill="#0b7d70" font-weight="600">App redesign</text></g>
+  <!-- tasks -->
+  <g font-size="11" font-weight="600" fill="#2b8a3e">
+    <g transform="translate(135 285)"><rect width="70" height="26" rx="6" fill="#e2f3e5" stroke="#2b8a3e"/><text x="35" y="17" text-anchor="middle">worker</text></g>
+    <g transform="translate(235 285)"><rect width="70" height="26" rx="6" fill="#e2f3e5" stroke="#2b8a3e"/><text x="35" y="17" text-anchor="middle">worker</text></g>
+    <g transform="translate(345 285)"><rect width="70" height="26" rx="6" fill="#e2f3e5" stroke="#2b8a3e"/><text x="35" y="17" text-anchor="middle">worker</text></g>
+    <g transform="translate(555 285)"><rect width="70" height="26" rx="6" fill="#e2f3e5" stroke="#2b8a3e"/><text x="35" y="17" text-anchor="middle">worker</text></g>
+    <g transform="translate(655 285)"><rect width="70" height="26" rx="6" fill="#e2f3e5" stroke="#2b8a3e"/><text x="35" y="17" text-anchor="middle">worker</text></g>
+    <g transform="translate(725 285)"><rect width="88" height="26" rx="6" fill="#fff" stroke="#d9d8d0"/><text x="44" y="17" text-anchor="middle" fill="#5b6577" font-weight="500">your session</text></g>
+  </g>
+  <!-- decision ladder arrow -->
+  <g stroke="#d6431f" stroke-width="1.5" fill="none" marker-end="url(#arr)"><path d="M545 300 C 520 240, 520 150, 545 40" stroke-dasharray="4 4"/></g>
+  <text x="500" y="200" font-size="11" fill="#d6431f" font-weight="600" transform="rotate(-88 500 200)">decisions climb, briefs descend</text>
+</svg>
+<figcaption id="hero-cap"><strong>One organization, four levels of understanding.</strong> Leads keep a live account of their scope and answer what they are trusted with. Decisions climb only as far as they must. Levels can be missing: Outreach has no lead and reports to you directly; your own sessions stay yours.</figcaption>
+</figure>
+</template>
