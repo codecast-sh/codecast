@@ -35,6 +35,7 @@ import {
 } from "./prShepherd";
 import {
   type CheckEntry,
+  GITHUB_ACTIONS_APP,
   commitUrl,
   extractTaskShortIds,
   prUrl,
@@ -155,13 +156,23 @@ function isSyntheticSuite(entry: CheckEntry): boolean {
  * folding them into one row shows whichever reported last. When the suite's
  * triggering event is known, the name is keyed with it. When only one side
  * knows its event (the workflow_run delivery for the other has not arrived),
- * the suite id decides: the same suite is the same check. Checks that never
- * learn an event (commit statuses, other apps) keep the name alone.
+ * the suite id decides: the same suite is the same check.
+ *
+ * Deliveries are not ordered, so both suites' check_runs can land before
+ * either workflow_run. Neither side knows its event then, and the name alone
+ * would fold the second suite onto the first and let a success overwrite a
+ * failure. The check_run payload itself says which app owns the run, so an
+ * Actions check is keyed by its suite until the event is learned; the suite
+ * stays on the entry, and the later delivery for the same suite (event now
+ * known) replaces it by suite, so nothing is re-keyed. Checks that never learn
+ * an event (commit statuses, other apps) keep the name alone.
  */
 function sameCheck(a: CheckEntry, b: CheckEntry): boolean {
   if (a.name !== b.name) return false;
   if (a.event && b.event) return a.event === b.event;
-  if (a.event || b.event) return !!a.suite_id && a.suite_id === b.suite_id;
+  const sameSuite = !!a.suite_id && a.suite_id === b.suite_id;
+  if (a.event || b.event) return sameSuite;
+  if (a.app === GITHUB_ACTIONS_APP || b.app === GITHUB_ACTIONS_APP) return sameSuite;
   return true;
 }
 
@@ -1048,6 +1059,7 @@ export const processCheckRunEvent = internalMutation({
       external_id: String(run.id),
       suite_id: suiteId,
       event: await checkSuiteEvent(ctx, repository, suiteId),
+      app: run.app?.slug ?? undefined,
     };
 
     for (const pr of prs) {

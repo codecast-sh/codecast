@@ -95,7 +95,14 @@ export type CheckEntry = {
   // workflow_run delivery for the same suite. Absent for checks that are not
   // GitHub Actions or whose workflow_run has not arrived.
   event?: string;
+  // The GitHub App that owns the run (check_run.app.slug: "github-actions",
+  // "gitguardian", ...). Present on the check_run payload itself, so it tells
+  // an Actions check from another app's before any workflow_run arrives.
+  app?: string;
 };
+
+/** The app slug GitHub Actions stamps on every check_run it owns. */
+export const GITHUB_ACTIONS_APP = "github-actions";
 
 /** Conclusions GitHub reports that do not mean the check failed. */
 export const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
