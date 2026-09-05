@@ -21,6 +21,77 @@ export type SandboxPolicy =
   | { type: "readOnly"; networkAccess: boolean }
   | { type: "externalSandbox"; networkAccess: unknown }
   | { type: "workspaceWrite"; writableRoots: string[]; networkAccess: boolean; excludeTmpdirEnvVar: boolean; excludeSlashTmp: boolean };
+/**
+ * Resume params that reproduce a policy the server previously reported.
+ *
+ * PROTOCOL LIMITATION, measured against codex-cli 0.153.3 on a live restart:
+ * thread/resume accepts only a coarse `sandbox: SandboxMode`, so a mode alone
+ * does NOT restore a workspaceWrite thread's writable roots or network access.
+ * A cold resume naming `workspace-write` came back with empty writableRoots and
+ * networkAccess false, losing both. The fine-grained values survive only through
+ * the generic `config` override map, which is not part of the typed sandbox
+ * contract; sending them there restored the exact original policy.
+ *
+ * An absent or unrecognised policy returns {} on purpose. An unknown prior
+ * sandbox must stay unspecified rather than be guessed: naming a mode we cannot
+ * justify would widen a thread that was deliberately restricted. `externalSandbox`
+ * is deliberately not reproduced, since its settings are not expressible here.
+ */
+export function sandboxResumeParams(
+  policy: SandboxPolicy | undefined | null,
+): { sandbox?: SandboxMode; config?: Record<string, unknown> } {
+  if (!policy || typeof policy !== "object") return {};
+  switch (policy.type) {
+    case "dangerFullAccess":
+      return { sandbox: "danger-full-access" };
+    case "readOnly":
+      // KNOWN GAP: SandboxPolicy.readOnly carries `networkAccess`, but
+      // thread/resume offers no channel to restore it, so a read-only thread
+      // that had network access resumes without it. That direction is narrower,
+      // never broader, so it fails closed, but it is NOT exact preservation.
+      return { sandbox: "read-only" };
+    case "workspaceWrite":
+      // Every field FAILS CLOSED. A missing roots list becomes no extra roots,
+      // absent network access becomes none, and an absent exclude flag becomes
+      // `true` (exclude), because defaulting it to `false` would hand back a
+      // writable /tmp or $TMPDIR that the recorded policy never granted.
+      return {
+        sandbox: "workspace-write",
+        config: {
+          "sandbox_workspace_write.writable_roots": Array.isArray(policy.writableRoots) ? policy.writableRoots : [],
+          "sandbox_workspace_write.network_access": policy.networkAccess === true,
+          "sandbox_workspace_write.exclude_tmpdir_env_var": policy.excludeTmpdirEnvVar !== false,
+          "sandbox_workspace_write.exclude_slash_tmp": policy.excludeSlashTmp !== false,
+        },
+      };
+    default:
+      return {};
+  }
+}
+
+/**
+ * A JSON-RPC error response: the server answered and REFUSED the request. This
+ * is authoritative, so the thread's previous policy still holds. It is
+ * deliberately distinct from a timeout or a dropped connection, where the
+ * request may well have been applied and the outcome is simply unknown.
+ */
+export class CodexRequestRefused extends Error {
+  readonly refused = true as const;
+}
+
+/** True only for an answered refusal, never for an ambiguous transport failure. */
+export function isAuthoritativeRefusal(error: unknown): boolean {
+  return !!error && typeof error === "object" && (error as { refused?: unknown }).refused === true;
+}
+
+/**
+ * The durability barrier failed: the thread's stored policy could not be cleared
+ * before a request that may change it. Thrown BEFORE anything reaches the
+ * socket, so a narrowing is never in flight while the on-disk record still
+ * authorizes the older, broader policy.
+ */
+export class CodexPolicyInvalidationFailed extends Error {}
+
 export type ApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 export type TurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
 
@@ -240,6 +311,22 @@ export class CodexAppServer extends EventEmitter {
    *  override replays, so writable roots and network access survive verbatim
    *  and a restatement can never widen a thread's real access. */
   private threadPolicies = new Map<string, SandboxPolicy>();
+  /** Overrides in flight per thread, REFCOUNTED. While a turn is awaiting the
+   *  server's verdict the thread's policy is genuinely unknown: the old one may
+   *  already be superseded and the new one is not yet confirmed. A count rather
+   *  than a set, because concurrent turns on one thread must not clear each
+   *  other's mark, and an implicit turn must not clear an override's at all. */
+  private pendingPolicyCounts = new Map<string, number>();
+  /** Threads whose policy is unknown until an AUTHORITATIVE one arrives. Set the
+   *  moment an override is sent and cleared only by acceptance or by an answered
+   *  refusal. An ambiguous outcome leaves it set, because "no live value" must
+   *  not decay back into the old, broader value the record still holds. */
+  private invalidatedPolicyThreads = new Set<string>();
+  /** The latest policy request issued per thread. A response may only record its
+   *  policy if it is still the latest: an older response must never clear the
+   *  uncertainty a newer request introduced. Refcounting alone does not give
+   *  this, because two overrides can settle out of order. */
+  private policyGenerations = new Map<string, number>();
   private restartDelay = 1000;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -293,27 +380,71 @@ export class CodexAppServer extends EventEmitter {
   async threadStart(params: ThreadStartParams): Promise<ThreadStartResponse> {
     const response = await this.sendRequest("thread/start", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
     this.threadModels.set(response.thread.id, response.model);
-    this.rememberPolicy(response.thread.id, response.sandbox);
+    this.rememberPolicy(response.thread.id, response.sandbox, this.nextPolicyGeneration(response.thread.id));
     return response;
   }
 
   async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
     if (params.model) this.threadModels.set(params.threadId, params.model);
-    const sandboxPolicy = params.sandboxPolicy ?? this.threadPolicies.get(params.threadId);
-    const response = await this.sendRequest("turn/start", sandboxPolicy ? { ...params, sandboxPolicy } : params, DEFAULT_TIMEOUT_MS) as TurnStartResponse;
-    // Only a policy the server ACCEPTED becomes the thread's remembered one. A
-    // rejected override must not leak into the next implicit turn, which would
-    // replay access the server refused to grant.
-    if (params.sandboxPolicy) this.rememberPolicy(params.threadId, params.sandboxPolicy);
-    return response;
+    const previous = this.threadPolicies.get(params.threadId);
+
+    // An implicit turn changes nothing about the thread's policy, so it must not
+    // touch the in-flight bookkeeping at all: doing so would clear an override's
+    // mark that a concurrent call is relying on.
+    if (!params.sandboxPolicy) {
+      return await this.sendRequest(
+        "turn/start", previous ? { ...params, sandboxPolicy: previous } : params, DEFAULT_TIMEOUT_MS,
+      ) as TurnStartResponse;
+    }
+
+    // From here the thread's policy is UNKNOWN, starting before the write hits
+    // the socket. The server may apply the override and we may never learn it,
+    // so both memory and disk have to stop claiming the old, broader value now
+    // rather than after the response.
+    const generation = this.beginPendingPolicy(params.threadId);
+    this.invalidatePolicyOrThrow(params.threadId);
+    try {
+      const response = await this.sendRequest(
+        "turn/start", { ...params, sandboxPolicy: params.sandboxPolicy }, DEFAULT_TIMEOUT_MS,
+      ) as TurnStartResponse;
+      // Only if no later override has been issued for this thread. Two overrides
+      // can settle out of order, and an earlier acceptance must not resolve the
+      // uncertainty a later one created.
+      const latest = this.isLatestPolicyGeneration(params.threadId, generation);
+      this.rememberPolicy(params.threadId, params.sandboxPolicy, generation);
+      this.endPendingPolicy(params.threadId);
+      if (latest) this.emit("policyConfirmed", params.threadId, params.sandboxPolicy);
+      return response;
+    } catch (error) {
+      if (isAuthoritativeRefusal(error) && previous && this.isLatestPolicyGeneration(params.threadId, generation)) {
+        // The server answered and refused, so the previous policy still holds
+        // and may be restored to memory and disk.
+        this.rememberPolicy(params.threadId, previous, generation);
+        this.endPendingPolicy(params.threadId);
+        this.emit("policyConfirmed", params.threadId, previous);
+      } else {
+        // Ambiguous: a timeout or a dropped connection says nothing about
+        // whether the override was applied. Leave the policy unspecified until
+        // an authoritative one is known; a resume with none is restrictive.
+        this.endPendingPolicy(params.threadId);
+      }
+      throw error;
+    }
   }
 
   /** Records the policy the server resolved for a thread. Only a server-reported
    *  or caller-supplied policy is ever stored, never one inferred from a mode,
    *  so replaying it cannot widen access. */
-  private rememberPolicy(threadId: string, policy?: SandboxPolicy | null): void {
+  private rememberPolicy(threadId: string, policy?: SandboxPolicy | null, generation?: number): void {
+    // A superseded response records nothing. Storing its policy would be stale,
+    // and clearing the unknown flag would erase uncertainty a later request
+    // introduced, which is how an accepted narrowing gets replayed as the older
+    // broader policy.
+    if (generation !== undefined && !this.isLatestPolicyGeneration(threadId, generation)) return;
     if (policy && typeof policy === "object" && typeof (policy as { type?: unknown }).type === "string") {
       this.threadPolicies.set(threadId, policy);
+      // An authoritative value ends the unknown state.
+      this.invalidatedPolicyThreads.delete(threadId);
     }
   }
 
@@ -322,21 +453,95 @@ export class CodexAppServer extends EventEmitter {
     return this.threadPolicies.get(threadId);
   }
 
+  /** True while any override for this thread is awaiting the server's verdict,
+   *  so the thread's real policy is momentarily unknown. */
+  hasPendingPolicyChange(threadId: string): boolean {
+    return (this.pendingPolicyCounts.get(threadId) ?? 0) > 0;
+  }
+
+  /** Marks a policy request in flight and returns its generation. */
+  private beginPendingPolicy(threadId: string): number {
+    this.pendingPolicyCounts.set(threadId, (this.pendingPolicyCounts.get(threadId) ?? 0) + 1);
+    this.invalidatedPolicyThreads.add(threadId);
+    return this.nextPolicyGeneration(threadId);
+  }
+
+  private nextPolicyGeneration(threadId: string): number {
+    const generation = (this.policyGenerations.get(threadId) ?? 0) + 1;
+    this.policyGenerations.set(threadId, generation);
+    return generation;
+  }
+
+  private isLatestPolicyGeneration(threadId: string, generation: number): boolean {
+    return (this.policyGenerations.get(threadId) ?? 0) === generation;
+  }
+
+  /** True when this thread's policy is unknown and must not fall back to a
+   *  previously recorded one. */
+  isPolicyInvalidated(threadId: string): boolean {
+    return this.invalidatedPolicyThreads.has(threadId);
+  }
+
+  /**
+   * Clears the thread's policy in memory and on disk before a request that may
+   * change it. A listener that cannot make the clear durable throws, and that
+   * failure aborts the request: sending anyway would leave a narrowing in flight
+   * against a record that still grants the old broader access.
+   */
+  private invalidatePolicyOrThrow(threadId: string): void {
+    this.threadPolicies.delete(threadId);
+    try {
+      this.emit("policyInvalidated", threadId);
+    } catch (cause) {
+      this.endPendingPolicy(threadId);
+      throw new CodexPolicyInvalidationFailed(
+        `could not clear the stored sandbox policy for thread ${threadId.slice(0, 8)}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
+  private endPendingPolicy(threadId: string): void {
+    const next = (this.pendingPolicyCounts.get(threadId) ?? 0) - 1;
+    if (next > 0) this.pendingPolicyCounts.set(threadId, next);
+    else this.pendingPolicyCounts.delete(threadId);
+  }
+
   async turnInterrupt(threadId: string, turnId: string): Promise<void> {
     await this.sendRequest("turn/interrupt", { threadId, turnId }, DEFAULT_TIMEOUT_MS);
   }
 
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
-    const response = await this.sendRequest("thread/resume", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
-    this.threadModels.set(response.thread.id, response.model);
-    this.rememberPolicy(response.thread.id, response.sandbox);
-    return response;
+    // Unlike start and fork, a resume already knows its thread id, so its
+    // generation must be taken BEFORE the request goes out. Taking it after the
+    // await would make a slow response the newest by definition, letting it
+    // overwrite a narrowing that was accepted while it was in flight. A resume
+    // can change the policy, so the thread is unknown from here until it answers.
+    const generation = this.beginPendingPolicy(params.threadId);
+    this.invalidatePolicyOrThrow(params.threadId);
+    try {
+      const response = await this.sendRequest("thread/resume", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
+      this.threadModels.set(response.thread.id, response.model);
+      // Resume by history or by path can return a different thread. That id has
+      // no earlier generation to capture, so it records under a fresh one.
+      const sameThread = response.thread.id === params.threadId;
+      const recordGeneration = sameThread ? generation : this.nextPolicyGeneration(response.thread.id);
+      const current = this.isLatestPolicyGeneration(response.thread.id, recordGeneration);
+      this.rememberPolicy(response.thread.id, response.sandbox, recordGeneration);
+      this.endPendingPolicy(params.threadId);
+      if (current) this.emit("policyConfirmed", response.thread.id, response.sandbox);
+      return response;
+    } catch (error) {
+      // A failed resume says nothing about the thread's policy, so it stays
+      // unknown rather than reverting to the value the record still holds.
+      this.endPendingPolicy(params.threadId);
+      throw error;
+    }
   }
 
   async threadFork(params: ThreadForkParams, timeoutMs = THREAD_START_TIMEOUT_MS): Promise<ThreadForkResponse> {
     const response = await this.sendRequest("thread/fork", withWorktreeConfig(params), timeoutMs) as ThreadForkResponse;
     this.threadModels.set(response.thread.id, response.model);
-    this.rememberPolicy(response.thread.id, response.sandbox);
+    this.rememberPolicy(response.thread.id, response.sandbox, this.nextPolicyGeneration(response.thread.id));
     return response;
   }
 
@@ -561,7 +766,7 @@ export class CodexAppServer extends EventEmitter {
 
     if (msg.error) {
       const err = msg.error as Record<string, unknown>;
-      pending.reject(new Error(String(err.message || JSON.stringify(err))));
+      pending.reject(new CodexRequestRefused(String(err.message || JSON.stringify(err))));
     } else {
       pending.resolve(msg.result);
     }
