@@ -17,7 +17,7 @@ The existing host is woken over AWS and reached over SSH. The repository is refr
 
 Manifest-listed private files travel directly over SSH, not Convex. Each worktree receives a private input snapshot, including local manifest overrides, without modifying the shared checkout. Healing uses that same snapshot. Setup and dependency installation run on the host. `PORT_WEB` (or the corresponding manifest port name), `CODECAST_PORT_WEB`, and the worktree identity are available in new and resumed sessions. Use the allocated port explicitly when starting a development server.
 
-Port reservations are persisted before setup begins and coordinated across processes and registered repositories. A workspace reserves its ports even before anything listens. Deleting the workspace releases the reservations.
+Port reservations are persisted before setup begins and coordinated across processes and registered repositories. A workspace reserves its ports even before anything listens. Deleting the workspace releases the reservations. Lock owner metadata is published atomically; dead or unreadable owners are never automatically reclaimed. Drain old reservation writers during an upgrade: they share the lock namespace but still have their old age-based reclamation behavior.
 
 Creation, healing and destruction share per-workspace operation ownership. A concurrent same-name operation is refused; another workspace can proceed independently. Ordinary failures release ownership for healing. An abruptly killed owner fails closed: setup children might still be running, so inspect and stop those children before removing the operation file named in the error and retrying. A running server is an advisory warning, not a failed workspace contract. Input staging establishes repository-local Git exclusions for Codecast's worktree and state directories, without editing the project's tracked ignore file.
 
@@ -45,11 +45,13 @@ The host was explicitly stopped at 01:40:26 UTC. Trigger tr-500 queued at 01:43:
 
 In the current local web build, the cloud toggle selects Cloud Linux and locks isolation on. A's header identifies the cloud host and worktree. This does not establish production rollout: the older production artifact lacked the toggle and failed opening A with `ChatOn is not defined`.
 
-## Explicit limitation: wake with the laptop closed
+## Server-side wake (deployment and live proof pending)
 
-The implemented trigger wake path is mediated by an online local Codecast daemon holding the AWS credentials and host registry. A stopped host cannot poll for its own wake request. **A cloud session cannot currently wake from a stopped host while all local daemons are offline.** Running sessions continue after the laptop closes; that is not the same guarantee as waking a sleeping host.
+The founder approved a dedicated server-side AWS identity. The backend now implements allowlisted wake requests and dispatches due triggers bound to those cloud conversations. `cloudWake` records a lease, bounded retries and the AWS request ID on the existing device row. An EC2 response means the instance is starting; a subsequent device heartbeat is required before the request is considered answered.
 
-Laptop-closed trigger wake was part of the original task, not a newly discovered extra. A server-side waker requires founder-approved production AWS credentials and a backend deployment. It remains explicitly outstanding; this change does not supply those credentials or claim that proof.
+For configured owner/device pairs, laptop wake responses and daemon trigger claims are suppressed. Non-cloud jobs keep the existing daemon scheduler. Removing the allowlist restores the old laptop-mediated behavior; no local daemon reload is required. New `--spawn` triggers still use the existing daemon path: this server dispatcher is for triggers bound to existing cloud sessions.
+
+AWS request signing and the queue have focused tests. The dedicated key passed real AWS DryRun authorization for the approved instance and was denied for another existing instance. **A stopped-host trigger run with all laptop mediators absent is not yet verified.** That proof requires the coordinated backend/config deployment; the earlier tr-500 evidence remains laptop-mediated only. See `infra/aws-cloud-waker/README.md` for rollout and rollback.
 
 ## Deferred storage optimization
 
