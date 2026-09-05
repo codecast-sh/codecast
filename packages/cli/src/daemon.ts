@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { TmuxSpawnRegistry } from "./tmuxSpawns.js";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
@@ -7321,11 +7322,37 @@ async function ancestorTranscriptSessionIds(pids: number[]): Promise<Map<number,
   return byPid;
 }
 
-async function resolveSpawnerConversation(
+function transcriptStartedAt(filePath: string): number {
+  const timestamp = readFileHead(filePath, 512).match(/"timestamp"\s*:\s*"([^"]+)"/)?.[1];
+  return timestamp ? Date.parse(timestamp) : NaN;
+}
+
+async function trackTmuxSpawns(
+  messages: ParsedMessage[],
+  parent: string,
+  syncService: SyncService,
+  conversationCache: ConversationCache,
+): Promise<void> {
+  const names = new Set(tmuxSpawnRegistry.record(messages, parent));
+  if (!names.size) return;
+  for (const [childSid, info] of sessionProcessCache) {
+    const name = info.tmuxTarget?.split(":")[0];
+    const child = conversationCache[childSid];
+    if (!name || !names.has(name) || !child || child === parent) continue;
+    const transcript = findSessionFile(childSid);
+    if (!transcript || tmuxSpawnRegistry.parent(name, transcriptStartedAt(transcript.path)) !== parent) continue;
+    await syncService.linkSessions(parent, child);
+    spawnLinkAttempts.delete(childSid);
+    log(`Linked tmux-spawned child ${childSid.slice(0, 8)} -> parent ${parent.slice(0, 12)}`);
+  }
+}
+
+export async function resolveSpawnerConversation(
   filePath: string,
   sessionId: string,
   agentType: AgentClientId,
   conversationCache: ConversationCache,
+  spawnRegistry: TmuxSpawnRegistry = tmuxSpawnRegistry,
 ): Promise<string | null> {
   let pids = await pidsWithFileOpen(filePath);
   if (pids.length === 0) {
@@ -7335,8 +7362,14 @@ async function resolveSpawnerConversation(
   if (pids.length === 0) return null;
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
+  const tmuxPanes = spawnRegistry.hasEntries()
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    : "";
+  const startedAt = transcriptStartedAt(filePath);
   for (const pid of pids) {
     const ancestors = collectAncestorPids(pidToPpid, pid);
+    const tmuxParent = spawnRegistry.parentForPanes(tmuxPanes, [pid, ...ancestors], startedAt);
+    if (tmuxParent && tmuxParent !== conversationCache[sessionId]) return tmuxParent;
     // Claude Code's pid registry first: a plain file read, no subprocess.
     const registrySessionId = resolveSpawnerSessionId(ancestors, readPidRegistrySessionId, sessionId);
     if (registrySessionId && conversationCache[registrySessionId]) {
@@ -7985,25 +8018,6 @@ export async function processSessionFile(
         }
       }
 
-      // Detect parent from tmux spawn tracking (agent-spawn.sh / tmux new-session called by another session)
-      if (!parentConversationId && tmuxSpawnedBySession.size > 0) {
-        const spawnProc = await findSessionProcess(sessionId, "claude").catch(() => null);
-        if (spawnProc) {
-          let childTmuxName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
-          if (!childTmuxName) {
-            const pane = await findTmuxPaneForTty(spawnProc.tty);
-            if (pane) {
-              childTmuxName = pane.split(":")[0];
-              cacheSessionProcess(sessionId, spawnProc, pane);
-            }
-          }
-          if (childTmuxName && tmuxSpawnedBySession.has(childTmuxName)) {
-            parentConversationId = tmuxSpawnedBySession.get(childTmuxName)!;
-            log(`Detected tmux-spawned parent for ${sessionId.slice(0, 8)}: ${parentConversationId.slice(0, 12)} via tmux session ${childTmuxName}`);
-          }
-        }
-      }
-
       if (!conversationId) {
         const freshCache = readConversationCache();
         if (freshCache[sessionId]) {
@@ -8411,43 +8425,7 @@ export async function processSessionFile(
     }
   }
 
-  // Detect tmux session spawns in bash tool calls (agent-spawn.sh, tmux new-session)
-  if (conversationId && (newContent.includes("agent-spawn") || newContent.includes("tmux new-session") || newContent.includes("new-session"))) {
-    const spawnLines = newContent.split("\n");
-    for (const spawnLine of spawnLines) {
-      if (!spawnLine.includes("agent-spawn") && !spawnLine.includes("new-session")) continue;
-      try {
-        const entry = JSON.parse(spawnLine);
-        const msg = entry.message || entry;
-        const blocks = Array.isArray(msg.content) ? msg.content : [];
-        for (const block of blocks) {
-          if (block.type !== "tool_use") continue;
-          const cmd = block.input?.command;
-          if (typeof cmd !== "string") continue;
-          let spawnMatch = cmd.match(/agent-spawn(?:\.sh)?\s+\S+\s+["']?([^\s"']+)["']?/);
-          if (!spawnMatch) {
-            spawnMatch = cmd.match(/tmux\s+new-session\s+(?:.*?\s)?-s\s+["']?([^\s"']+)["']?/);
-          }
-          if (spawnMatch) {
-            const tmuxName = spawnMatch[1];
-            tmuxSpawnedBySession.set(tmuxName, conversationId);
-            log(`Tracked tmux spawn: ${tmuxName} -> parent ${conversationId.slice(0, 12)}`);
-            // Retroactively link if child session was already created
-            for (const [childSid, info] of sessionProcessCache) {
-              if (info.tmuxTarget?.split(":")[0] === tmuxName && conversationCache[childSid]) {
-                const childConvId = conversationCache[childSid];
-                syncService.linkSessions(conversationId, childConvId).then(() => {
-                  log(`Retroactively linked tmux-spawned child ${childSid.slice(0, 8)} -> parent ${conversationId.slice(0, 12)}`);
-                }).catch(err => {
-                  log(`Failed retroactive tmux spawn link: ${err instanceof Error ? err.message : String(err)}`);
-                });
-              }
-            }
-          }
-        }
-      } catch {}
-    }
-  }
+  await trackTmuxSpawns(messages, conversationId, syncService, conversationCache);
 
   syncSkillsForConversation(conversationId, projectPath, syncService);
 
@@ -9257,7 +9235,7 @@ async function processCodexSession(
             startedAt: firstMessageTimestamp,
             parentMessageUuid: undefined,
             parentConversationId,
-            isSubagent: !!nativeParentSessionId || undefined,
+            isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
             gitInfo: undefined,
           });
           setConversationCache(conversationId);
@@ -9389,6 +9367,8 @@ async function processCodexSession(
         }
       }
     }
+
+    await trackTmuxSpawns(messages, conversationId, syncService, conversationCache);
 
     // Spawned-child link that failed at creation (child process not visible
     // yet) — bounded retries on later passes, no-op once resolved or exhausted.
@@ -17681,7 +17661,7 @@ const pendingSubagentParents = new Map<string, string>();
 // Track subagent descriptions read from .meta.json: sessionId -> description
 const subagentDescriptions = new Map<string, string>();
 // Track tmux sessions spawned by known parent sessions: tmuxSessionName -> parentConversationId
-const tmuxSpawnedBySession = new Map<string, string>();
+const tmuxSpawnRegistry = new TmuxSpawnRegistry(path.join(CONFIG_DIR, "tmux-spawns.json"));
 
 interface CachedProcessInfo {
   pid: number;
