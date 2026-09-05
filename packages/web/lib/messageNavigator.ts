@@ -4,13 +4,16 @@
 // the iOS session screen, so it must stay free of DOM and React imports. The
 // session title lookup is injected because each platform has its own store.
 
-import { isCommandMessage, cleanContent, isSystemMessage } from "./conversationProcessor";
+import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
+import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage } from "./conversationProcessor";
 import {
   parseMachineDeliveredMessage,
+  cleanUserMessage,
   isBareNudge,
-  stickyPromptContent,
+  isSpawnedTaskPrompt,
   type MachineDeliveredKind,
 } from "../components/sessionMessage";
+import type { PromptImage } from "./messagePreview";
 import { formatShortDate } from "./utils";
 
 // Row kinds hidden behind the "other" chip: machine-delivered messages plus
@@ -21,6 +24,7 @@ export type NavigatorRowKind = "user" | HiddenKind;
 export type NavigatorRow = {
   _id: string;
   display: string;
+  images?: PromptImage[];
   isCmd: boolean;
   timestamp: number;
   commentCount: number;
@@ -31,7 +35,7 @@ export type NavigatorRow = {
   originalIndex: number;
 };
 
-export type NavigatorSourceMessage = { _id: string; content?: string; timestamp: number };
+export type NavigatorSourceMessage = { _id: string; content?: string; timestamp: number; images?: PromptImage[] };
 
 export const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
   schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
@@ -122,6 +126,7 @@ export function buildNavigatorRows(
   const rows: NavigatorRow[] = [];
   for (const m of userMessages) {
     const content = m.content ?? "";
+    if (isTurnInterruptionNotice(content)) continue;
     const commentCount = commentCounts?.get(m._id) || 0;
     const machine = parseMachineDeliveredMessage(content);
     if (machine) {
@@ -134,7 +139,7 @@ export function buildNavigatorRows(
       // line would only repeat the body; drop it when the body already
       // carries it. Session sources are titles, never the body.
       const source = display.toLowerCase().startsWith(sourceText.toLowerCase()) ? undefined : sourceText;
-      rows.push({ _id: m._id, display, isCmd: false, timestamp: m.timestamp, commentCount, kind: machine.kind, source, originalIndex: -1 });
+      rows.push({ _id: m._id, ...(m.images?.length ? { images: m.images } : {}), display, isCmd: false, timestamp: m.timestamp, commentCount, kind: machine.kind, source, originalIndex: -1 });
       continue;
     }
     const user = processUserMessage(content);
@@ -142,8 +147,8 @@ export function buildNavigatorRows(
       rows.push({ _id: m._id, display: "", isCmd: false, timestamp: m.timestamp, commentCount, kind: "continue", originalIndex: -1 });
       continue;
     }
-    if (stripInvisible(user.display).trim().length === 0) continue;
-    rows.push({ _id: m._id, ...user, timestamp: m.timestamp, commentCount, kind: "user", originalIndex: humanOrdinal++ });
+    if (stripInvisible(user.display).trim().length === 0 && !m.images?.length) continue;
+    rows.push({ _id: m._id, ...(m.images?.length ? { images: m.images } : {}), ...user, timestamp: m.timestamp, commentCount, kind: "user", originalIndex: humanOrdinal++ });
   }
   return rows;
 }
@@ -246,9 +251,33 @@ export type StickySourceMessage = {
   from_user_id?: string;
 };
 
+// A slash command ("/model opus") and `!` bash mode are the human talking to
+// their client, not to the agent. Both are stored as tag soup
+// ("<command-name>/model</command-name>…<command-args>opus</command-args>"),
+// so a surface that only strips tags paints "/model model opus" as if it were
+// a prompt. The thread already renders them as command blocks.
+function isClientCommand(raw: string): boolean {
+  return isCommandMessage(raw)
+    || isStrippedCommand(raw.trim()) !== null
+    || parseBashInput(raw) !== null
+    || parseBashOutput(raw) !== null;
+}
+
+// The text a sticky prompt header may show for a user message, or null when
+// the message is not the human's own ask: anything machinery delivered (a
+// trigger run, a cast send, a teammate broadcast), a spawned run's opening
+// briefing, a bare nudge, or a command aimed at the client. Every sticky
+// source (timeline, cached user list, last-message fallback) must agree, so
+// they all go through here.
+export function stickyPromptContent(raw: string | null | undefined): string | null {
+  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw)) return null;
+  const display = cleanUserMessage(raw);
+  return display && !isBareNudge(display) ? display : null;
+}
+
 // A user message the sticky prompt may show: the human's own ask (not machine
-// delivered, not a spawned briefing, not a bare nudge), with visible text
-// that is not a system message.
+// delivered, not a spawned briefing, not a bare nudge, not a client command),
+// with visible text that is not a system message.
 export function isStickyEligible(content: string): boolean {
   if (stickyPromptContent(content) === null) return false;
   const display = cleanContent(content);

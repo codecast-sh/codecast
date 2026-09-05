@@ -17,7 +17,7 @@ import { callDockSurface, useWalkieStatus } from "../../hooks/useWalkie";
 import { CallSurfaceRoot, surfaceShape, useSurfaceHandles } from "./CallSurfaceRoot";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
-import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
+import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow, voiceHostElsewhere } from "../../lib/desktop";
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { useHandCallToPanel } from "../../hooks/useHandCallToPanel";
 import { popOutCall } from "../../lib/calls/popOutCall";
@@ -100,6 +100,12 @@ export function CallDock() {
   if (expanded && canPopOutCall()) setExpanded(false);
 
   if (surface === "none") return null;
+  // A voice host draws every one of these surfaces itself — the strip in the
+  // corner of the screen, the call in its own window. This window's walkie
+  // status is the host's, mirrored, and painting a second strip off it would
+  // be the two-surfaces bug in a new coat. The elsewhere pill says where to
+  // look.
+  if (voiceHostElsewhere()) return null;
   // A huddle on the desktop is a window of its own, like the palette — never
   // a card, pill or stage trapped in this window's edges. Walkie bursts stay:
   // they are a note over the work, not a huddle. The elsewhere pill is how

@@ -19,6 +19,7 @@ export function percentile(sortedAsc: number[], q: number): number | null {
 }
 
 export function summarizeLatency(samples: number[]): LatencySummary {
+  if (samples.some(value => !Number.isFinite(value) || value < 0)) throw new Error("invalid latency sample");
   const sorted = [...samples].sort((a, b) => a - b);
   return {
     n: sorted.length,
