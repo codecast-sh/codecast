@@ -26,6 +26,15 @@ export const oauthConnectorTables = {
      *  So access_token_enc is always present and refresh_token_enc is optional. */
     access_token_enc: v.string(),
     refresh_token_enc: v.optional(v.string()),
+    /** When the access token stops working, from the provider's expires_in.
+     *  Linear rotates 24h tokens (since 2026-04-01); getFreshAccessTokenForTeam
+     *  refreshes ahead of this. Absent with a refresh token present means
+     *  "unknown", which refreshes on first use. */
+    access_expires_at: v.optional(v.number()),
+    /** Single flight for the refresh: the caller that claimed it talks to the
+     *  provider, the rest wait for the row to change. Same lease shape as
+     *  agent task claims; a dead claimant's lease expires in seconds. */
+    refresh_lease_until: v.optional(v.number()),
     granted_scopes: v.array(v.string()),
     /** Same two-phase confirm as Google: the row is PENDING until the
      *  authenticated browser session confirms it owns the redirect. */

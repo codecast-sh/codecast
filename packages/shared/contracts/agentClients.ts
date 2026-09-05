@@ -959,3 +959,23 @@ export function modelOptionKey(model: string | undefined | null, agentType: stri
     cfg.models.find((m) => m.key !== "default" && bare.startsWith(`${m.key}-`));
   return hit?.key ?? "default";
 }
+
+/**
+ * True when `model` is a stamp for THIS agent — a catalog hit, a dynamic
+ * provider/model id, or an unknown id that doesn't belong to another agent's
+ * catalog. False for a leftover after an in-place agent switch (claude-fable-5
+ * still on the row after switching to Codex): the header chip must not keep
+ * showing the previous agent's model.
+ */
+export function modelFitsAgent(model: string | undefined | null, agentType: string | undefined): boolean {
+  if (!model) return false;
+  if (modelOptionKey(model, agentType) !== "default") return true;
+  const mine = modelAgentKey(agentType);
+  const cfg = AGENT_MODEL_CONFIG[mine];
+  if (cfg?.dynamic && isDynamicModelKey(model)) return true;
+  for (const other of Object.keys(AGENT_MODEL_CONFIG)) {
+    if (other === mine) continue;
+    if (modelOptionKey(model, other) !== "default") return false;
+  }
+  return true;
+}

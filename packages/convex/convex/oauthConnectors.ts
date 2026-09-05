@@ -13,7 +13,7 @@
 // providers (mail) stay on their own path.
 
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, query } from "./_generated/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -179,6 +179,67 @@ export const resolveTeam = internalQuery({
 });
 
 /* ==========================================================================
+ * Token endpoint + refresh
+ * ========================================================================== */
+
+/** One POST to the provider's token endpoint, in the shape it wants: Notion
+ *  takes JSON with HTTP basic auth, Linear takes a form with the client pair
+ *  in the body. Shared by the code exchange and the refresh. */
+async function tokenRequest(
+  p: ProviderConfig,
+  env: { clientId: string; clientSecret: string },
+  params: Record<string, string>,
+): Promise<{ ok: boolean; status: number; tok: any }> {
+  const signal = AbortSignal.timeout(15_000);
+  const resp =
+    p.tokenAuth === "basic"
+      ? await fetch(p.tokenUrl, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: `Basic ${btoa(`${env.clientId}:${env.clientSecret}`)}`,
+          },
+          body: JSON.stringify(params),
+          signal,
+        })
+      : await fetch(p.tokenUrl, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ ...params, client_id: env.clientId, client_secret: env.clientSecret }).toString(),
+          signal,
+        });
+  let tok: any = null;
+  try {
+    tok = await resp.json();
+  } catch {
+    tok = null;
+  }
+  return { ok: resp.ok, status: resp.status, tok };
+}
+
+/** Absolute expiry from a token response, or undefined when the provider
+ *  gave no expires_in (Notion: tokens do not expire). */
+export function accessExpiresAt(tok: any, now: number): number | undefined {
+  return typeof tok?.expires_in === "number" && tok.expires_in > 0 ? now + tok.expires_in * 1000 : undefined;
+}
+
+/** Refresh this far ahead of expiry so an in-flight sync never straddles it. */
+export const REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+/** A row refreshes when it CAN (has a refresh token) and its access token is
+ *  expiring, expired, or of unknown age. Rows without a refresh token never
+ *  refresh: their access token is the only credential there is. */
+export function needsRefresh(
+  row: { refresh_token_enc?: string; access_expires_at?: number },
+  now: number,
+): boolean {
+  if (!row.refresh_token_enc) return false;
+  if (row.access_expires_at === undefined) return true;
+  return row.access_expires_at - now < REFRESH_MARGIN_MS;
+}
+
+/* ==========================================================================
  * Callback — code exchange, encrypted store, PENDING until confirmed
  * ========================================================================== */
 
@@ -217,26 +278,9 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
   // Exchange the code.
   let tok: any;
   try {
-    const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
-    const body = new URLSearchParams({ code, redirect_uri: redirectUri(), grant_type: "authorization_code" });
-    if (p.tokenAuth === "basic") {
-      headers.Authorization = `Basic ${btoa(`${env.clientId}:${env.clientSecret}`)}`;
-      // Notion wants JSON, not form-encoded.
-      const resp = await fetch(p.tokenUrl, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ code, redirect_uri: redirectUri(), grant_type: "authorization_code" }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      tok = await resp.json();
-      if (!resp.ok) return errorRedirect(p.id, tok?.error ?? `token_${resp.status}`);
-    } else {
-      body.set("client_id", env.clientId);
-      body.set("client_secret", env.clientSecret);
-      const resp = await fetch(p.tokenUrl, { method: "POST", headers, body, signal: AbortSignal.timeout(15_000) });
-      tok = await resp.json();
-      if (!resp.ok) return errorRedirect(p.id, tok?.error ?? `token_${resp.status}`);
-    }
+    const res = await tokenRequest(p, env, { code, redirect_uri: redirectUri(), grant_type: "authorization_code" });
+    tok = res.tok;
+    if (!res.ok) return errorRedirect(p.id, tok?.error ?? `token_${res.status}`);
   } catch (err) {
     return errorRedirect(p.id, "token_exchange_failed");
   }
@@ -258,6 +302,7 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
     account_id: accountId,
     access_token_enc: await encryptRefreshToken(tok.access_token, env.clientSecret),
     refresh_token_enc: typeof tok.refresh_token === "string" ? await encryptRefreshToken(tok.refresh_token, env.clientSecret) : undefined,
+    access_expires_at: accessExpiresAt(tok, Date.now()),
     granted_scopes: scopes,
     pending_confirm_hash: confirmHash,
   });
@@ -288,6 +333,7 @@ export const storeConnection = internalMutation({
     account_id: v.optional(v.string()),
     access_token_enc: v.string(),
     refresh_token_enc: v.optional(v.string()),
+    access_expires_at: v.optional(v.number()),
     granted_scopes: v.array(v.string()),
     pending_confirm_hash: v.string(),
   },
@@ -305,6 +351,8 @@ export const storeConnection = internalMutation({
       await (ctx.db as any).patch(existing._id, {
         access_token_enc: args.access_token_enc,
         refresh_token_enc: args.refresh_token_enc ?? existing.refresh_token_enc,
+        access_expires_at: args.access_expires_at,
+        last_error: undefined,
         granted_scopes: args.granted_scopes,
         account_label: args.account_label ?? existing.account_label,
         account_id: args.account_id ?? existing.account_id,
@@ -323,6 +371,7 @@ export const storeConnection = internalMutation({
       account_id: args.account_id,
       access_token_enc: args.access_token_enc,
       refresh_token_enc: args.refresh_token_enc,
+      access_expires_at: args.access_expires_at,
       granted_scopes: args.granted_scopes,
       pending_confirm_hash: args.pending_confirm_hash,
       pending_expires_at: now + CONFIRM_TTL_MS,
@@ -441,21 +490,195 @@ export const deleteConnection = internalMutation({
   },
 });
 
-/** For a future agent verb: the decrypted access token, owner-checked. Not a
- *  public function — nothing hands a token to a client. */
-export const getAccessTokenForTeam = internalQuery({
+/** The connection row's credential fields, for the refresh action only.
+ *  Nothing hands a token to a client. */
+export const getConnectionForTeam = internalQuery({
   args: { provider: v.string(), team_id: v.id("teams") },
-  handler: async (ctx, args): Promise<{ token: string } | null> => {
+  handler: async (ctx, args) => {
     if (!isConnectorId(args.provider)) return null;
-    const p = PROVIDERS[args.provider];
-    const env = providerEnv(p);
-    if (!env) return null;
     const row = await (ctx.db as any)
       .query("app_installations")
-      .withIndex("by_provider_team", (q: any) => q.eq("provider", p.id).eq("team_id", args.team_id))
+      .withIndex("by_provider_team", (q: any) => q.eq("provider", args.provider).eq("team_id", args.team_id))
       .first();
     if (!row || row.pending_confirm_hash) return null;
-    const token = await decryptRefreshToken(row.access_token_enc, env.clientSecret);
-    return token ? { token } : null;
+    return {
+      _id: row._id,
+      access_token_enc: row.access_token_enc as string,
+      refresh_token_enc: row.refresh_token_enc as string | undefined,
+      access_expires_at: row.access_expires_at as number | undefined,
+      refresh_lease_until: row.refresh_lease_until as number | undefined,
+    };
+  },
+});
+
+/** How long one caller may hold the refresh; long enough for a slow token
+ *  endpoint, short enough that a crashed claimant does not block a team. */
+export const REFRESH_LEASE_MS = 30 * 1000;
+/** How long a waiter watches for the claimant's write before trying itself. */
+const REFRESH_WAIT_MS = 15 * 1000;
+const REFRESH_POLL_MS = 250;
+
+/**
+ * Claim the refresh for one row. Every concurrent caller that finds the
+ * token expiring lands here; exactly one gets `ok`, the rest are told the
+ * refresh is `held` and wait for the credentials to change. The claim is
+ * also a compare and swap on the ciphertext, so a caller holding a stale
+ * read cannot claim over credentials that already moved on.
+ */
+export const claimRefresh = internalMutation({
+  args: { installation_id: v.id("app_installations"), expected_enc: v.string(), now: v.number() },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: "gone" | "superseded" | "held" }> => {
+    const row = await (ctx.db as any).get(args.installation_id);
+    if (!row) return { ok: false, reason: "gone" };
+    if (row.access_token_enc !== args.expected_enc) return { ok: false, reason: "superseded" };
+    if (typeof row.refresh_lease_until === "number" && row.refresh_lease_until > args.now) return { ok: false, reason: "held" };
+    await (ctx.db as any).patch(args.installation_id, { refresh_lease_until: args.now + REFRESH_LEASE_MS });
+    return { ok: true };
+  },
+});
+
+/**
+ * Persist a refreshed token pair (the provider rotates the refresh token, so
+ * both must land together) or a refresh failure as S1.5 health.
+ *
+ * Compare and swap on the access ciphertext the caller read: every refresh
+ * and every reconnect writes a fresh ciphertext (random IV), so a mismatch
+ * means newer credentials landed while the caller awaited the provider. The
+ * older result is then discarded rather than overwriting them, and a late
+ * failure never stamps last_error over a reconnect that succeeded. A deleted
+ * row (disconnect during the await) is reported, not recreated.
+ */
+export const updateStoredTokens = internalMutation({
+  args: {
+    installation_id: v.id("app_installations"),
+    expected_enc: v.string(),
+    access_token_enc: v.optional(v.string()),
+    refresh_token_enc: v.optional(v.string()),
+    access_expires_at: v.optional(v.number()),
+    last_error: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: "gone" | "superseded" }> => {
+    const row = await (ctx.db as any).get(args.installation_id);
+    if (!row) return { ok: false, reason: "gone" };
+    if (row.access_token_enc !== args.expected_enc) return { ok: false, reason: "superseded" };
+    const patch: Record<string, any> = { updated_at: Date.now(), last_error: args.last_error, refresh_lease_until: undefined };
+    if (args.access_token_enc) {
+      patch.access_token_enc = args.access_token_enc;
+      patch.access_expires_at = args.access_expires_at;
+      if (args.refresh_token_enc) patch.refresh_token_enc = args.refresh_token_enc;
+    }
+    await (ctx.db as any).patch(args.installation_id, patch);
+    return { ok: true };
+  },
+});
+
+/**
+ * The access token for a team's connection, refreshed when it is expiring
+ * or of unknown age (see needsRefresh). Same shape as googleOAuth's
+ * getFreshAccessToken: a refusal is returned, not thrown, so callers can
+ * say "reconnect Linear" instead of "401". `force` refreshes regardless of
+ * the recorded expiry, for a caller that just got a 401 on a token this
+ * function considered fresh.
+ */
+export const getFreshAccessTokenForTeam = internalAction({
+  args: { provider: v.string(), team_id: v.id("teams"), force: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<{ ok: boolean; token?: string; error?: string }> => {
+    if (!isConnectorId(args.provider)) return { ok: false, error: "unknown provider" };
+    const p = PROVIDERS[args.provider];
+    const env = providerEnv(p);
+    if (!env) return { ok: false, error: notConfigured(p) };
+    const row = await ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, {
+      provider: p.id,
+      team_id: args.team_id,
+    });
+    if (!row) return { ok: false, error: `no_connection: ${p.name} is not connected for this team` };
+    const now = Date.now();
+    if (!args.force && !needsRefresh(row, now)) {
+      const token = await decryptRefreshToken(row.access_token_enc, env.clientSecret);
+      return token ? { ok: true, token } : { ok: false, error: `${p.name} token undecryptable (${p.env.clientSecret} rotated?): reconnect ${p.name}` };
+    }
+    // Single flight: the provider rotates the refresh token on the first
+    // grant, so a second concurrent grant with the same token is refused as
+    // invalid_grant. One caller claims, the others wait for its write.
+    const claim = await ctx.runMutation(internal.oauthConnectors.claimRefresh, {
+      installation_id: row._id,
+      expected_enc: row.access_token_enc,
+      now,
+    });
+    if (!claim.ok) {
+      if (claim.reason === "gone") return { ok: false, error: `no_connection: ${p.name} is not connected for this team` };
+      const deadline = Date.now() + REFRESH_WAIT_MS;
+      while (Date.now() < deadline) {
+        const current = await ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, { provider: p.id, team_id: args.team_id });
+        if (!current) return { ok: false, error: `no_connection: ${p.name} is not connected for this team` };
+        if (current.access_token_enc !== row.access_token_enc) {
+          // The claimant (or a reconnect) wrote new credentials: use them.
+          const token = await decryptRefreshToken(current.access_token_enc, env.clientSecret);
+          return token ? { ok: true, token } : { ok: false, error: `${p.name} token undecryptable: reconnect ${p.name}` };
+        }
+        if (typeof current.refresh_lease_until !== "number" || current.refresh_lease_until <= Date.now()) break;
+        await new Promise((r) => setTimeout(r, REFRESH_POLL_MS));
+      }
+      // The claimant gave up or died without writing: take the refresh
+      // ourselves, still gated by the claim so two waiters cannot both go.
+      const retry = await ctx.runMutation(internal.oauthConnectors.claimRefresh, {
+        installation_id: row._id,
+        expected_enc: row.access_token_enc,
+        now: Date.now(),
+      });
+      if (!retry.ok) {
+        const current = await ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, { provider: p.id, team_id: args.team_id });
+        const token = current ? await decryptRefreshToken(current.access_token_enc, env.clientSecret) : null;
+        return token ? { ok: true, token } : { ok: false, error: `${p.name} refresh is held by another caller; retry` };
+      }
+    }
+    const refreshToken = row.refresh_token_enc ? await decryptRefreshToken(row.refresh_token_enc, env.clientSecret) : null;
+    if (!refreshToken) {
+      // No refresh token (or undecryptable): the access token is all we have.
+      const token = await decryptRefreshToken(row.access_token_enc, env.clientSecret);
+      return token ? { ok: true, token } : { ok: false, error: `${p.name} token undecryptable: reconnect ${p.name}` };
+    }
+    // A failure is stamped only if nobody replaced the credentials meanwhile;
+    // when someone did (a reconnect, a concurrent refresh), theirs are the
+    // answer, so re-read and hand those back instead of a stale refusal.
+    const fail = async (error: string): Promise<{ ok: boolean; token?: string; error?: string }> => {
+      const stamped = await ctx.runMutation(internal.oauthConnectors.updateStoredTokens, {
+        installation_id: row._id,
+        expected_enc: row.access_token_enc,
+        last_error: error,
+      });
+      if (stamped.reason === "superseded") {
+        const current = await ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, { provider: p.id, team_id: args.team_id });
+        const token = current ? await decryptRefreshToken(current.access_token_enc, env.clientSecret) : null;
+        if (token) return { ok: true, token };
+      }
+      return { ok: false, error };
+    };
+    let res: { ok: boolean; status: number; tok: any };
+    try {
+      res = await tokenRequest(p, env, { grant_type: "refresh_token", refresh_token: refreshToken });
+    } catch {
+      return await fail(`${p.name} token endpoint unreachable; the next sync retries`);
+    }
+    const tok = res.tok;
+    if (!res.ok || typeof tok?.access_token !== "string") {
+      const code = tok?.error ?? `token_${res.status}`;
+      const revoked = code === "invalid_grant" || res.status === 400 || res.status === 401;
+      return await fail(
+        revoked
+          ? `${p.name} refresh refused (${code}): access was revoked or the refresh token expired; reconnect ${p.name} from Settings > Integrations`
+          : `${p.name} refresh failed (${code}); the next sync retries`,
+      );
+    }
+    // The write may be refused (superseded or gone); the token the provider
+    // just issued is still valid, so the caller gets it either way.
+    await ctx.runMutation(internal.oauthConnectors.updateStoredTokens, {
+      installation_id: row._id,
+      expected_enc: row.access_token_enc,
+      access_token_enc: await encryptRefreshToken(tok.access_token, env.clientSecret),
+      refresh_token_enc: typeof tok.refresh_token === "string" ? await encryptRefreshToken(tok.refresh_token, env.clientSecret) : undefined,
+      access_expires_at: accessExpiresAt(tok, now),
+    });
+    return { ok: true, token: tok.access_token };
   },
 });

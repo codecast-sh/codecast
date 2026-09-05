@@ -35,6 +35,7 @@ export interface AllocateOptions {
    * callers that want a stable mapping regardless of live port state.
    */
   noProbe?: boolean;
+  reservedPorts?: ReadonlySet<number>;
 }
 
 export class PortAllocationError extends Error {
@@ -88,10 +89,10 @@ export async function allocatePorts(
 
   for (let i = startIndex; i < startIndex + maxIndices; i++) {
     const ports = computePorts(manifest, i);
-    if (opts.noProbe) {
-      return { ports, env: portsToEnv(ports), resourceIndex: i };
-    }
-    const conflicts = await findConflicts(ports);
+    const reserved = Object.entries(ports)
+      .filter(([, port]) => opts.reservedPorts?.has(port))
+      .map(([name, port]) => ({ name, port }));
+    const conflicts = reserved.length > 0 || opts.noProbe ? reserved : await findConflicts(ports);
     if (conflicts.length === 0) {
       return { ports, env: portsToEnv(ports), resourceIndex: i };
     }

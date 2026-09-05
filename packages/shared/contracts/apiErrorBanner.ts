@@ -12,7 +12,31 @@
 // (e.g. "You've hit your usage limit on the free plan, so video generation is
 // paused…") from being mistaken for a banner.
 
-export type ApiErrorBannerKind = "auth" | "limit" | "throttle" | "error" | "connection" | "fatal";
+export type ApiErrorBannerKind = "auth" | "limit" | "throttle" | "error" | "connection" | "fatal" | "safety";
+
+export const SAFETY_BANNER_PREFIX = "Safety stop:";
+export const CODEX_SAFETY_ERROR_CODE = "misalignment_policy_violation";
+export const SAFETY_BLOCK_HINT = "OpenAI stopped this conversation for safety review. Review the recent actions and intended scope. Automatic retries and account switching cannot resolve this block.";
+
+export interface CodexTurnError {
+  message?: string;
+  code?: string;
+  codexErrorInfo?: string | Record<string, unknown>;
+  codex_error_info?: string | Record<string, unknown>;
+}
+
+export function isCodexSafetyError(error: CodexTurnError | null | undefined): boolean {
+  if (!error) return false;
+  const code = error.codexErrorInfo ?? error.codex_error_info ?? error.code;
+  if (code != null) return code === CODEX_SAFETY_ERROR_CODE || code === "misalignmentPolicyViolation";
+  return error.message?.trim() === "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+}
+
+export function withSafetyBlock<T extends { session_error?: string | null; pending_api_error?: boolean | null; pending_api_error_kind?: string | null }>(session: T): T {
+  if (!isCodexSafetyError({ message: session.session_error ?? undefined })) return session;
+  if (session.pending_api_error === true && session.pending_api_error_kind === "safety") return session;
+  return { ...session, pending_api_error: true, pending_api_error_kind: "safety" };
+}
 
 // The kinds that park a session — it won't heal itself, so the row earns the
 // amber badge, the fleet banner, and the revive actions. kind "error" is the
@@ -23,6 +47,7 @@ export const BLOCKED_BANNER_KINDS: ReadonlySet<string> = new Set([
   "throttle",
   "connection",
   "fatal",
+  "safety",
 ]);
 
 // The blocked subset a plain "continue" un-parks (auth needs /login or an
@@ -154,6 +179,8 @@ export function classifyApiErrorBanner(
 ): ApiErrorBannerKind | null {
   if (!content) return null;
   const trimmed = content.trim();
+  if (trimmed.startsWith(SAFETY_BANNER_PREFIX) || isCodexSafetyError({ message: trimmed })) return "safety";
+  if (/^api error:?\s*\(?403\b/i.test(trimmed) && /"code"\s*:\s*"misalignment_policy_violation"/.test(trimmed)) return "safety";
   // Marked client-error messages (opencode/pi) — gate on the exact marker, then
   // split auth vs generic by the provider text. Length-uncapped: provider errors
   // can be long, and the marker already guarantees it's a real error, not prose.
