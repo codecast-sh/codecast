@@ -123,3 +123,13 @@ describe("matchTaskTriggers team scoping", () => {
     expect(await run(ctx, { ...filter, pr_number: 12 })).toBe(1);
   });
 });
+
+describe("matchTaskTriggers repository case", () => {
+  test("a filter typed with capitals matches the canonical repository the webhook sends", async () => {
+    const ctx = context([
+      trigger("typed", { event_type: "pr_check_failed", repository: "Codecast-SH/Codecast" }),
+    ]);
+    expect(await run(ctx, { event_type: "pr_check_failed", repository: "codecast-sh/codecast", pr_number: 1 })).toBe(1);
+    expect(await run(ctx, { event_type: "pr_check_failed", repository: "codecast-sh/other", pr_number: 1 })).toBe(0);
+  });
+});

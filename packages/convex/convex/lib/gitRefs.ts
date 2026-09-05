@@ -159,18 +159,10 @@ export function foldShepherdState(pr: ShepherdPrState): string {
   return "ready";
 }
 
-/**
- * One spelling for a repository.
- *
- * GitHub treats an owner and a repository name as case insensitive, so the same
- * repository reaches us as "Codecast-SH/Codecast" from a person typing it and
- * "codecast-sh/codecast" from a webhook. Every index we look it up by is a byte
- * comparison, so both the value stored and the value searched for go through
- * here and one spelling wins.
- */
-export function normalizeRepository<T extends string | undefined | null>(repository: T): T {
-  return (typeof repository === "string" ? repository.toLowerCase() : repository) as T;
-}
+// One spelling for a repository. The rule lives beside the reference parser in
+// the shared contracts so the CLI, the web and this backend cannot drift; it is
+// re-exported here because every git module already imports from this file.
+export { normalizeRepository, repositoryOwner } from "@codecast/shared/contracts";
 
 export function prUrl(repository: string, number: number): string {
   return `https://github.com/${repository}/pull/${number}`;

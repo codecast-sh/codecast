@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getLog, getPulls, ttlFor } from "./repos";
+import { canBrowse, getLog, getPulls, ttlFor } from "./repos";
 import { makeFakeDb } from "./testDb";
 
 const sha = "a".repeat(40);
@@ -70,4 +70,21 @@ test("compare cache is immutable only when both refs are commits", () => {
   expect(ttlFor("compare", sha, "main")).toBe(600_000);
   expect(ttlFor("compare", "main", sha)).toBe(600_000);
   expect(ttlFor("compare", sha, "b".repeat(40))).toBe(Infinity);
+});
+
+describe("repository case", () => {
+  const mixed = (fn: any, extra: Record<string, any> = {}) =>
+    (fn as any)._handler(context({
+      github_app_installations: [{ _id: "install", account_login: "demo", team_id: "team", installation_id: 1,
+        repository_selection: "selected", repositories: [{ full_name: "Demo/Public" }] }],
+    }), { repository: "Demo/Public", ...extra });
+
+  test("browsing is granted whatever case the viewer typed, against a display-case installation list", async () => {
+    expect(await mixed(canBrowse)).toBe(true);
+  });
+
+  test("the cache is read under the canonical key", async () => {
+    const result = await mixed(getLog, { ref: "main" });
+    expect(result.commits.map((c: any) => c.message)).toEqual(["public commit"]);
+  });
 });
