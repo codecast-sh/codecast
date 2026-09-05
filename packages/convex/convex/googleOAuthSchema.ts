@@ -19,6 +19,14 @@ export const googleOAuthTables = {
     // AES-256-GCM under a key HKDF-derived from GOOGLE_OAUTH_CLIENT_SECRET
     // (googleOAuth.ts encryptRefreshToken). Plaintext never touches the db.
     refresh_token_enc: v.string(),
+    /** Cached access token and its expiry (lib/tokenRefresh): a Gmail call
+     *  no longer pays a token round trip, and concurrent refreshes no longer
+     *  race the rotation. Absent on rows from before caching: unknown age. */
+    access_token_enc: v.optional(v.string()),
+    access_expires_at: v.optional(v.number()),
+    refresh_lease_id: v.optional(v.string()),
+    refresh_lease_until: v.optional(v.number()),
+    last_error: v.optional(v.string()),
     // Every scope Google reports as granted for this token (the token response's
     // `scope` field — with include_granted_scopes it is the FULL accumulated
     // set, so incremental grants replace rather than append here).

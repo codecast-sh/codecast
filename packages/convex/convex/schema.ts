@@ -258,6 +258,7 @@ export default defineSchema({
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
+    request_id: v.optional(v.string()),
     command: daemonCommandValidator,
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -284,7 +285,8 @@ export default defineSchema({
     claimed_by: v.optional(v.string()),
     claimed_at: v.optional(v.number()),
     claimed_device: v.optional(v.string()),
-  }).index("by_user_pending", ["user_id", "executed_at"]),
+  }).index("by_user_pending", ["user_id", "executed_at"])
+    .index("by_user_request", ["user_id", "request_id"]),
 
   teams: defineTable({
     name: v.string(),
@@ -382,6 +384,11 @@ export default defineSchema({
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
     subtitle: v.optional(v.string()),
+    // One- or two-word NAME for the session ("Broker render"), generated with
+    // the title. Reference pills show it on repeat mentions so prose that
+    // names a session four times does not read as four titles. Follows the
+    // title's lifecycle: rewritten on every title pass, cleared for none.
+    short_title: v.optional(v.string()),
     title_embedding: v.optional(v.array(v.float64())),
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
@@ -522,6 +529,7 @@ export default defineSchema({
     // enqueuePendingMessage); unlike dismiss it never triggers a kill. A
     // dismiss clears it (the row moves to Dismissed).
     inbox_stashed_at: v.optional(v.number()),
+    inbox_snoozed_until: v.optional(v.number()),
     // "Stash and hide": the stash survives machine wakes. A trigger firing into
     // a plain stash pulls the row back into the inbox ("something happened,
     // show me"); into a hidden stash it keeps working out of sight. Asks still
@@ -531,11 +539,16 @@ export default defineSchema({
     inbox_stash_hidden: v.optional(v.boolean()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
-    // The user's "dormant" gesture: "a machine owns this, wake me when something
-    // happens". A stamp that any later activity silently expires — honored only
-    // while >= updated_at (see inboxFilters.isUserDormant), the same contract as
-    // inbox_deferred_at. Never cleared by hand; a wake, a message, or a new turn
-    // bumps updated_at past it and the row moves on.
+    // The user's own rest verdict — where they filed the row (Needs Input,
+    // Done or Dormant) by gesture or by dragging it into that section. A stamp
+    // that any later activity silently expires — honored only while
+    // inbox_rest_at >= updated_at (see inboxFilters.userRestOf), the same
+    // contract as inbox_deferred_at. Never cleared by hand; a wake, a message,
+    // or a new turn bumps updated_at past it and the row moves on.
+    inbox_rest: v.optional(v.union(v.literal("needs_input"), v.literal("done"), v.literal("dormant"))),
+    inbox_rest_at: v.optional(v.number()),
+    // Legacy dormant-only stamp from before inbox_rest; userRestOf still reads
+    // it so rows parked then keep their verdict. Nothing writes it any more.
     inbox_dormant_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
     // The settle classifier's verdict for the settle it last inspected: "done"
@@ -755,6 +768,7 @@ export default defineSchema({
     .index("by_spawned_by", ["spawned_by_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
+    .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
     // rows at the index so the scan never reads docs the inbox filter drops.
     .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
@@ -1307,6 +1321,30 @@ export default defineSchema({
     .index("by_nonce_hash", ["nonce_hash"])
     .index("by_created_at", ["created_at"]),
 
+  session_updates: defineTable({
+    conversation_id: v.id("conversations"),
+    owner_user_id: v.id("users"),
+    from_user_id: v.id("users"),
+    from_conversation_id: v.id("conversations"),
+    from_short_id: v.string(),
+    to_short_id: v.string(),
+    to_ref: v.string(),
+    from_ref: v.string(),
+    client_id: v.string(),
+    body: v.string(),
+    encoded_bytes: v.number(),
+    created_at: v.number(),
+    soft_deadline: v.number(),
+    hard_deadline: v.number(),
+    state: v.union(v.literal("queued"), v.literal("enqueued"), v.literal("cancelled"), v.literal("rejected")),
+    pending_message_id: v.optional(v.id("pending_messages")),
+    reason: v.optional(v.string()),
+  })
+    .index("by_user_client_id", ["from_user_id", "client_id"])
+    .index("by_conversation_state_created", ["conversation_id", "state", "created_at"])
+    .index("by_state_deadline", ["state", "hard_deadline"])
+    .index("by_pending_message", ["pending_message_id"]),
+
   pending_messages: defineTable({
     conversation_id: v.id("conversations"),
     from_user_id: v.id("users"),
@@ -1699,11 +1737,21 @@ export default defineSchema({
     pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     // Set when work was queued for a REMOTE device that is offline (a cloud
-    // host that put itself to sleep). Local daemons read it off the heartbeat
-    // (users.heartbeat → wake_devices) and boot the host; a heartbeat from the
-    // device itself clears it. Never set for a local device — nothing can wake
+    // host that put itself to sleep). The configured server waker or a local
+    // daemon boots the host; a heartbeat from the device itself clears it.
+    // Never set for a local device — nothing can wake
     // a closed laptop.
     wake_requested_at: v.optional(v.number()),
+    cloud_wake: v.optional(v.object({
+      request_at: v.number(),
+      attempt: v.number(),
+      next_attempt_at: v.number(),
+      status: v.union(v.literal("pending"), v.literal("starting"), v.literal("awake"), v.literal("failed")),
+      lease_token: v.optional(v.string()),
+      lease_until: v.optional(v.number()),
+      last_error: v.optional(v.string()),
+      aws_request_id: v.optional(v.string()),
+    })),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
@@ -1788,6 +1836,7 @@ export default defineSchema({
     last_heartbeat: v.number(),
     agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
+    agent_status_write_at: v.optional(v.number()),
     // When the daemon parked this session's pane to stay under the fleet cap.
     // Cleared when the session resumes. Separate from agent_status_updated_at
     // so a later status write does not lose when the park started.
@@ -1823,6 +1872,7 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
     .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
+    .index("by_user_status", ["user_id", "agent_status"])
     .index("by_heartbeat", ["last_heartbeat"]),
 
   session_metrics: defineTable({
@@ -1994,6 +2044,7 @@ export default defineSchema({
       external_id: v.optional(v.string()),
       suite_id: v.optional(v.string()),
       event: v.optional(v.string()),
+      app: v.optional(v.string()),
     }))),
     checks_state: v.optional(v.string()),
     // Reasons that piled up since the last wake was DELIVERED. Several events
@@ -2201,6 +2252,54 @@ export default defineSchema({
     // week. by_team_fetched cannot answer it without walking the teams, so the
     // sweep gets an index of its own and reads only rows it is going to delete.
     .index("by_fetched", ["fetched_at"]),
+
+  // A team member's local checkout that publishes a repository's git metadata
+  // into repo_cache through the daemon (repos.ingestLocal), which is what makes
+  // a repository browsable with no GitHub App installation at all. One row per
+  // person and checkout root. team_id comes from the directory mapping that
+  // already shares that person's sessions from this path: sharing the sessions
+  // is what shares the source. `enabled` is the person's own switch.
+  repo_sources: defineTable({
+    user_id: v.id("users"),
+    team_id: v.id("teams"),
+    repository: v.string(),
+    root: v.string(),
+    remote_url: v.optional(v.string()),
+    device_label: v.optional(v.string()),
+    default_branch: v.optional(v.string()),
+    head_sha: v.optional(v.string()),
+    enabled: v.boolean(),
+    last_synced_at: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_root", ["user_id", "root"])
+    .index("by_repository", ["repository"])
+    .index("by_team_id", ["team_id"]),
+
+  // A read the repo pages asked for that only a teammate's checkout can
+  // answer: no installation covers the repository and the daemon has not
+  // pushed this row yet (a file, a deeper tree, an older page of history, a
+  // commit's diff). The daemons publishing the repository subscribe to these
+  // (repos.pendingLocalReads), answer through repos.answerLocalRead — which
+  // writes the cache row and deletes the request — or leave it `failed` with
+  // the reason, so the page can say why. Keyed like repo_cache: one read, one
+  // row, however many pages ask.
+  repo_read_requests: defineTable({
+    team_id: v.id("teams"),
+    repository: v.string(),
+    kind: v.string(),
+    ref: v.string(),
+    path: v.string(),
+    params: v.optional(v.any()),
+    requested_by: v.id("users"),
+    status: v.union(v.literal("pending"), v.literal("failed")),
+    error: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_key", ["repository", "kind", "ref", "path"])
+    .index("by_repository", ["repository"]),
 
   team_activity_events: defineTable({
     team_id: v.id("teams"),
@@ -3008,6 +3107,11 @@ export default defineSchema({
     project_path: v.optional(v.string()),
     short_id: v.string(),
     title: v.string(),
+    // Generated 1-2 word NAME ("Auth redirect"), filled by the short-title
+    // cron (titleGeneration.fillShortTitles) for rows that lack one; cleared
+    // when the title changes so it regenerates. Reference pills show it on
+    // repeat mentions in prose.
+    short_title: v.optional(v.string()),
     description: v.optional(v.string()),
     goal: v.optional(v.string()),
     acceptance_criteria: v.optional(v.array(v.string())),
@@ -3145,6 +3249,7 @@ export default defineSchema({
     updated_at: v.number(),
   })
     .index("by_short_id", ["short_id"])
+    .index("by_short_title", ["short_title"])
     .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
@@ -3173,6 +3278,11 @@ export default defineSchema({
     short_id: v.string(),
 
     title: v.string(),
+    // Generated 1-2 word NAME ("Auth redirect"), filled by the short-title
+    // cron (titleGeneration.fillShortTitles) for rows that lack one; cleared
+    // when the title changes so it regenerates. Reference pills show it on
+    // repeat mentions in prose.
+    short_title: v.optional(v.string()),
     description: v.optional(v.string()),
     task_type: v.union(
       v.literal("feature"),
@@ -3320,6 +3430,7 @@ export default defineSchema({
     .index("by_project_status", ["project_id", "status"])
     .index("by_parent_id", ["parent_id"])
     .index("by_short_id", ["short_id"])
+    .index("by_short_title", ["short_title"])
     .index("by_client_key", ["user_id", "client_key"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])

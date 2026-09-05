@@ -1,3 +1,4 @@
+import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -11,7 +12,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPri
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { isStashHidden } from "@codecast/shared/contracts";
+import { formatUserMessage, isStashHidden } from "@codecast/shared/contracts";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -23,6 +24,7 @@ import {
 } from "./executionBindings";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
+import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -117,11 +119,13 @@ export function isTerminalPendingStatus(status: string): boolean {
 
 async function rependPendingMessage(
   ctx: { db: any },
-  message: { _id: Id<"pending_messages">; status: string; retry_count: number },
+  message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string; retry_count: number },
   retryCount: number
 ): Promise<boolean> {
   if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
+  const conversation = await ctx.db.get(message.conversation_id);
+  if (conversation && isConversationSafetyBlocked(conversation)) return false;
   await ctx.db.patch(message._id, {
     status: "pending" as const,
     retry_count: retryCount,
@@ -162,7 +166,7 @@ export function canDaemonSeePendingMessage(
     status: string;
     delivery_protocol_version?: number;
   },
-  conversation: {
+  conversation: ConversationSafetyState & {
     user_id: Id<"users">;
     owner_device_id?: string;
     execution_protocol_state?: string;
@@ -175,6 +179,7 @@ export function canDaemonSeePendingMessage(
   // any owner mismatch, exactly as before.
   allowOfflineOwnerTakeover?: boolean
 ): boolean {
+  if (isConversationSafetyBlocked(conversation)) return false;
   // Absence is the only legacy marker. Quiescing and fenced conversations are
   // never permissive fallbacks, and a stamped row can never leak back into the
   // legacy poll even if a conversation projection is stale.
@@ -239,7 +244,8 @@ export async function claimPendingMessageForDaemon(
   messageId: Id<"pending_messages">,
   userId: Id<"users">,
   deviceId: string,
-  now: number = Date.now()
+  now: number = Date.now(),
+  targetConversationId?: Id<"conversations">,
 ): Promise<any | null> {
   const message = await ctx.db.get(messageId);
   if (!message) return null;
@@ -249,6 +255,10 @@ export async function claimPendingMessageForDaemon(
     ? await resolveOfflineOwnerTakeover(ctx, userId, deviceId, conversation.owner_device_id, now)
     : false;
   if (!canDaemonSeePendingMessage(message, conversation, userId, deviceId, takeover)) return null;
+  if (targetConversationId && targetConversationId !== message.conversation_id) {
+    const target = await ctx.db.get(targetConversationId);
+    if (!target || target.user_id !== userId || isConversationSafetyBlocked(target)) return null;
+  }
   if (!conversation.owner_device_id || takeover) {
     await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
   }
@@ -401,7 +411,7 @@ export async function enqueuePendingMessage(
   });
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
-  await requestRemoteWake(ctx, conversation);
+  if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
   // stashed, and killed flags all clear ("I messaged it, show it to me").
@@ -423,6 +433,7 @@ export async function enqueuePendingMessage(
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
     ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
+    ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
   });
 
   return messageId;
@@ -617,10 +628,17 @@ export async function conversationHasLiveSession(
 // The send itself, factored out of the mutation so it can be driven in tests without the auth
 // wrapper. Resolves the target (own-or-team), attributes the sender, queues the message, and
 // reports whether the target currently has a live daemon.
+//
+// `direct` = a person typed this into the session from the dashboard (the web
+// CollabComposer). There is no sender session to attribute, and it must not
+// read as one: the agent attributes an unknown-session wrapper to a relay it
+// cannot verify. The text is wrapped as <user-message from="Name"> instead,
+// so the agent knows a human wrote it and who, and every surface renders it
+// as that person's own words.
 export async function performSessionSend(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -644,7 +662,7 @@ export async function performSessionSend(
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
-  const senderUser = isCrossUser ? await ctx.db.get(authUserId) : null;
+  const senderUser = isCrossUser || args.direct ? await ctx.db.get(authUserId) : null;
 
   // A raw send is the text as typed — the rail the web's model/effort picker
   // rides for `/model <alias>` — so it reads to the agent as its own user's
@@ -681,26 +699,38 @@ export async function performSessionSend(
   // an unresolvable/missing sender still delivers, just without a clickable pill.
   let fromShortId = "unknown";
   let fromConversationId: Id<"conversations"> | undefined;
-  if (args.from) {
-    const sender = await findConversationByAnyRef(ctx, args.from, authUserId);
+  const fromRef = args.from?.trim();
+  if (fromRef) {
+    const sender = await findConversationByAnyRef(ctx, fromRef, authUserId);
     if (sender) {
       fromShortId = sender.short_id ?? sender._id.toString().slice(0, 7);
       fromConversationId = sender._id;
-    } else if (/^jx[a-z0-9]{5,}$/i.test(args.from.trim())) {
-      fromShortId = args.from.trim().slice(0, 7);
+    } else if (/^jx[a-z0-9]{5,}$/i.test(fromRef)) {
+      fromShortId = fromRef.slice(0, 7);
+    } else {
+      // A sender that names itself but resolves to nothing is an agent whose
+      // identity is wrong (a Codex thread id, a session that never synced).
+      // Never deliver that as "unknown": the recipient cannot reply to it, and
+      // a human's instruction laundered through it reads as an unverifiable
+      // relay. Only a send with NO sender at all (browser, system relays,
+      // `direct`) takes the unattributed path.
+      throw new Error(`Sender session "${fromRef}" not found — pass --from <your session short id>`);
     }
   }
 
-  // Display name for the sender, shown when `from` has no clickable session (the
-  // common case for a link collaborator). Only needed cross-user — a self-send is
-  // already attributed by its own session pill.
-  let fromName: string | undefined;
-  if (isCrossUser) {
-    fromName = senderUser?.name || senderUser?.github_username || undefined;
-  }
+  // Display name for the sender: the direct wrapper always carries it, and a
+  // session wrapper carries it when `from` has no clickable session (the common
+  // case for a link collaborator). A self-send from a session is already
+  // attributed by its own session pill.
+  const senderName = senderUser?.name || senderUser?.github_username || senderUser?.email?.split("@")[0] || undefined;
+  const fromName = isCrossUser ? senderName : undefined;
 
   const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
-    content: args.raw ? body : formatSessionMessage(fromShortId, body, fromName),
+    content: args.raw
+      ? body
+      : args.direct
+      ? formatUserMessage(senderName ?? "a teammate", body)
+      : formatSessionMessage(fromShortId, body, fromName),
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
     // never-drop semantics (your own busy session will get it when it's idle).
@@ -729,6 +759,7 @@ export const sendSessionMessage = mutation({
     client_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
     raw: v.optional(v.boolean()),
+    direct: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1120,6 +1151,7 @@ export const getPendingMessagesForDaemon = query({
 export const claimPendingMessageForDelivery = mutation({
   args: {
     message_id: v.id("pending_messages"),
+    conversation_id: v.optional(v.id("conversations")),
     api_token: v.optional(v.string()),
     device_id: v.string(),
   },
@@ -1128,7 +1160,7 @@ export const claimPendingMessageForDelivery = mutation({
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
     }
-    return await claimPendingMessageForDaemon(ctx, args.message_id, authUserId, args.device_id);
+    return await claimPendingMessageForDaemon(ctx, args.message_id, authUserId, args.device_id, Date.now(), args.conversation_id);
   },
 });
 
@@ -1351,7 +1383,7 @@ async function notifyStuckCrossUserSend(
   if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
 }
 
-export const retryStuckMessages = internalMutation({
+export const retryStuckMessages: RegisteredMutation<"internal", Record<string, never>, Promise<void>> = internalMutation({
   handler: async (ctx) => {
     await healAndNotifyStuckMessages(ctx, Date.now());
   },
@@ -1394,10 +1426,20 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
     let waiting = 0;
     let notified = 0;
     const reflag = new Set<Id<"conversations">>();
+    const safetyBlocked = new Map<string, boolean>();
     for (const msg of candidates) {
       // Fenced rows use delivery attempts and permits; legacy elapsed-time
       // healing must never reinterpret their state or synthesize a retry.
       if (isFencedPendingMessage(msg)) continue;
+      const conversationId = String(msg.conversation_id);
+      if (!safetyBlocked.has(conversationId)) {
+        const conversation = await ctx.db.get(msg.conversation_id);
+        safetyBlocked.set(conversationId, !!conversation && isConversationSafetyBlocked(conversation));
+      }
+      if (safetyBlocked.get(conversationId)) {
+        waiting++;
+        continue;
+      }
       // Cross-user feedback runs regardless of the target's readiness: a teammate's message stuck
       // past the deadline should tell the sender whether it's merely delayed (target busy) or
       // failed (target offline). planCrossUserNotify no-ops on self-sends and already-notified rows.

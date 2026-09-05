@@ -15,7 +15,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isSessionUpdateBatch, parseSessionUpdateBatch, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -1795,13 +1795,28 @@ function CollapsibleBody({ fadeColor, children }: { fadeColor: string; children:
 // Mobile port of web's SessionMessageBlock: a cross-session `cast send` message
 // is machine-delivered, not typed by the human, so it renders as a cyan-accented
 // card naming the sender instead of a user bubble full of raw XML.
-function SessionMessageBlock({ from, name, body, timestamp }: { from: string; name?: string; body: string; timestamp?: number }) {
+function SessionUpdateBatchBlock({ batch, queued }: { batch: ReturnType<typeof parseSessionUpdateBatch>; queued?: boolean }) {
+  const count = batch?.members.length;
+  return (
+    <RNView accessibilityLabel="Session updates">
+      <RNView style={[styles.sessionMessageHeader, { paddingHorizontal: 16, paddingVertical: 6 }]}>
+        <RNText style={styles.sessionMessageLabel}>{count === undefined ? 'Session updates' : `${count} session update${count === 1 ? '' : 's'}`}</RNText>
+        {queued && <RNText style={styles.sessionMessageTime}>Queued for delivery</RNText>}
+      </RNView>
+      {batch ? batch.members.map(member => (
+        <SessionMessageBlock key={member.id} update from={member.from} body={member.body} timestamp={member.sent_at} />
+      )) : <RNText style={[styles.sessionMessageBody, { paddingHorizontal: 16 }]}>This update batch could not be read.</RNText>}
+    </RNView>
+  );
+}
+
+function SessionMessageBlock({ from, name, body, timestamp, update }: { from: string; name?: string; body: string; timestamp?: number; update?: boolean }) {
   const hasRealSender = !!from && from !== 'unknown';
   return (
     <RNView style={styles.sessionMessageBlock}>
       <RNView style={styles.sessionMessageHeader}>
         <Feather name="corner-down-right" size={13} color={Theme.cyan + 'b3'} />
-        <RNText style={styles.sessionMessageLabel}>Message from</RNText>
+        <RNText style={styles.sessionMessageLabel}>{update ? 'Update from' : 'Message from'}</RNText>
         {hasRealSender ? (
           // Resolves the sender's title server-side and taps through to the
           // session — same as web's EntityIdPill in this header.
@@ -4923,6 +4938,9 @@ export default function SessionDetailScreen() {
               break;
             }
             const showHeader = !prevNonToolResult || prevNonToolResult.role !== item.role;
+            // A person's direct send (<user-message from="Name">) is that person's
+            // own bubble: unwrap the body and name them — web's direct_user kind.
+            const directUser = item.role === 'user' ? parseUserMessage(item.content) : null;
 
             // Hide standalone tool result messages (they're shown inline with tool calls)
             if (item.role === 'user' && item.tool_results && item.tool_results.length > 0 && !item.content?.trim()) {
@@ -4954,6 +4972,9 @@ export default function SessionDetailScreen() {
                     <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
                   </RNView>
                 );
+              }
+              if (isSessionUpdateBatch(item.content)) {
+                return <SessionUpdateBatchBlock batch={parseSessionUpdateBatch(item.content)} queued={!!item._isQueued} />;
               }
               const sessionMsg = parseInboundSessionMessage(item.content);
               if (sessionMsg) {
@@ -5018,7 +5039,7 @@ export default function SessionDetailScreen() {
                   </Pressable>
                 )}
                 <MessageBubble
-                  message={item}
+                  message={directUser ? { ...item, content: directUser.body } : item}
                   agentType={conversation.agent_type}
                   model={conversation.model}
                   showHeader={showHeader}
@@ -5029,7 +5050,7 @@ export default function SessionDetailScreen() {
                   globalToolResultMap={globalToolResultMap}
                   globalImageMap={globalImageMap}
                   openGallery={openGallery}
-                  userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
+                  userName={directUser?.from || conversation.user?.name || conversation.user?.email?.split('@')[0]}
                   showToast={showToast}
                   collapsed={collapsed}
                   childConversationMap={conversation.child_conversation_map}

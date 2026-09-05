@@ -5,11 +5,11 @@
 // package; this file supplies what is codecast's: the catalog, the tips
 // milestone callback, and the surfaces with special keyboard ownership.
 
-import { createShortcutProvider } from "@platform/keys";
+import { createShortcutRuntime } from "./runtime";
 import { shortcutCatalog } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
 
-const kit = createShortcutProvider(shortcutCatalog, {
+const runtime = createShortcutRuntime(shortcutCatalog, {
   // Some regions own their own single-letter keys and must not leak them to the
   // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
   // deny a live permission prompt). A region opts in either with the inline
@@ -24,7 +24,11 @@ const kit = createShortcutProvider(shortcutCatalog, {
   // the shell. Only the panel toggle may act; everything else falls through.
   keyboardOwners: [{ selector: "[data-terminal-panel]", allow: ["terminal.toggle"] }],
   onShortcutUsed,
-});
+}, import.meta.hot?.data.shortcutRuntime);
+
+if (import.meta.hot) import.meta.hot.data.shortcutRuntime = runtime;
+
+const kit = runtime.kit;
 
 export const ShortcutProvider = kit.ShortcutProvider;
 export const useShortcuts = kit.useShortcuts;

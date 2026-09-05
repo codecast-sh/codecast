@@ -4,6 +4,7 @@ import {
   hasLiveDraft,
   shouldReapEmpty,
   conversationHasNoWork,
+  gcEmptyConversations,
   reapEmptyConversation,
   cascadeHideToNestedChildren,
   applyHideTransition,
@@ -84,6 +85,7 @@ describe("isGcableEmptyConversation", () => {
     expect(isGcableEmptyConversation({ draft_message: "half-typed thought" })).toBe(false);
     expect(isGcableEmptyConversation({ draft_message: "   " })).toBe(true); // whitespace ≠ intent
     expect(isGcableEmptyConversation({ inbox_pinned_at: 123 })).toBe(false);
+    expect(isGcableEmptyConversation({ inbox_snoozed_until: 123 })).toBe(false);
     expect(isGcableEmptyConversation({ is_favorite: true })).toBe(false);
     expect(isGcableEmptyConversation({ title_is_custom: true })).toBe(false);
     expect(isGcableEmptyConversation({ share_token: "tok" })).toBe(false);
@@ -200,6 +202,18 @@ describe("conversationHasNoWork", () => {
     const db = makeFakeDb({ messages: [], pending_messages: [{ _id: "p", conversation_id: "c1" }], client_state: [] });
     expect(await conversationHasNoWork({ db }, empty)).toBe(false);
   });
+  test("a queued update keeps it before a pending message exists", async () => {
+    const db = makeFakeDb({ session_updates: [{ _id: "up1", conversation_id: "c1", state: "queued" }] });
+    expect(await conversationHasNoWork({ db }, empty)).toBe(false);
+  });
+  test("another destination or a cancelled/rejected update does not protect an empty row", async () => {
+    const db = makeFakeDb({ session_updates: [
+      { _id: "up1", conversation_id: "c2", state: "queued" },
+      { _id: "up2", conversation_id: "c1", state: "cancelled" },
+      { _id: "up3", conversation_id: "c1", state: "rejected" },
+    ] });
+    expect(await conversationHasNoWork({ db }, empty)).toBe(true);
+  });
   test("a live per-user draft for this conversation keeps it", async () => {
     const db = makeFakeDb({ messages: [], pending_messages: [], client_state: [{ _id: "cs", user_id: "u1", drafts: { c1: { draft_message: "wip" } } }] });
     expect(await conversationHasNoWork({ db }, empty)).toBe(false);
@@ -208,6 +222,24 @@ describe("conversationHasNoWork", () => {
     const db = makeFakeDb({ messages: [], pending_messages: [], client_state: [] });
     expect(await conversationHasNoWork({ db }, { ...empty, title_is_custom: true })).toBe(false);
   });
+});
+
+describe("empty-conversation sweep with queued updates", () => {
+  for (const live of [false, true]) {
+    test(`queued update prevents ${live ? "kill" : "deletion"} of an empty dismissed destination`, async () => {
+      const tables: Record<string, any[]> = {
+        conversations: [{ _id: "c1", user_id: "u1", message_count: 0, inbox_dismissed_at: 1, _creationTime: Date.now() - 25 * 60 * 60 * 1000 }],
+        session_updates: [{ _id: "up1", conversation_id: "c1", state: "queued" }],
+        managed_sessions: live ? [{ _id: "m1", conversation_id: "c1", last_heartbeat: Date.now() }] : [],
+      };
+      const db = makeFakeDb(tables);
+      const result = await (gcEmptyConversations as any)._handler({ db }, {});
+      expect(result).toMatchObject({ scanned: 1, deleted: 0, killed: 0 });
+      expect(db._deleted).toEqual([]);
+      expect(db._inserted.filter((row: any) => row.table === "daemon_commands")).toEqual([]);
+      expect(tables.conversations).toHaveLength(1);
+    });
+  }
 });
 
 describe("hasLiveDraft", () => {
