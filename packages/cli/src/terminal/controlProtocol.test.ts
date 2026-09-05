@@ -26,6 +26,17 @@ describe("unescapeControlData", () => {
     expect(unescapeControlData("caf\\303\\251").toString("utf8")).toBe("café");
   });
 
+  test("preserves unescaped Unicode and the ANSI sequences following it", () => {
+    for (const text of ["▐▛███▜▌", "─".repeat(80), "╭─╮ café 🚀", "日本語 e\u0301"]) {
+      expect(unescapeControlData(`${text}\\033[0m`)).toEqual(Buffer.from(`${text}\x1b[0m`));
+    }
+  });
+
+  test("preserves raw UTF-8 bytes mixed with octal escapes", () => {
+    const input = Buffer.concat([Buffer.from("▐\\033[2m"), Buffer.from([0xf0, 0x9f])]);
+    expect(unescapeControlData(input)).toEqual(Buffer.concat([Buffer.from("▐\x1b[2m"), Buffer.from([0xf0, 0x9f])]));
+  });
+
   test("leaves non-octal backslash sequences alone", () => {
     expect(unescapeControlData("a\\9b").toString()).toBe("a\\9b");
   });
@@ -84,6 +95,34 @@ describe("ControlModeParser", () => {
     parser.feed(bytes.subarray(0, splitAt), (ev) => events.push(ev));
     parser.feed(bytes.subarray(splitAt), (ev) => events.push(ev));
     expect(events).toEqual([{ type: "reply", ok: true, lines: ["café line"] }]);
+  });
+
+  test("preserves Unicode output at every transport chunk boundary", () => {
+    for (const prefix of ["%output %5 ", "%extended-output %5 0 : "]) {
+      const output = Buffer.from("▐▛███▜▌ ── café 🚀\x1b[0m");
+      const protocol = Buffer.from(`${prefix}▐▛███▜▌ ── café 🚀\\033[0m\n`);
+      for (let at = 1; at < protocol.length; at++) {
+        const parser = new ControlModeParser();
+        const events: ControlEvent[] = [];
+        parser.feed(protocol.subarray(0, at), (ev) => events.push(ev));
+        parser.feed(protocol.subarray(at), (ev) => events.push(ev));
+        expect(events).toEqual([{ type: "output", paneId: "%5", data: output }]);
+      }
+    }
+  });
+
+  test("preserves UTF-8 sequences split between output messages", () => {
+    const output = Buffer.from("▐▛███▜▌ ── café 🚀\x1b[0m");
+    for (let at = 1; at < output.length; at++) {
+      const parser = new ControlModeParser();
+      const events: ControlEvent[] = [];
+      const protocol = Buffer.concat([
+        Buffer.from("%output %5 "), output.subarray(0, at), Buffer.from("\n%extended-output %5 0 : "),
+        output.subarray(at), Buffer.from("\n"),
+      ]);
+      for (const byte of protocol) parser.feed(Buffer.from([byte]), (ev) => events.push(ev));
+      expect(Buffer.concat(events.flatMap((ev) => ev.type === "output" ? [ev.data] : []))).toEqual(output);
+    }
   });
 
   test("parses exit with reason, pause and continue", () => {
