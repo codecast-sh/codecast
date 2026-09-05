@@ -7,13 +7,19 @@ const COMMAND_TIMEOUT_MS = 5000;
 // send-keys arg-list chunking: keeps each control-mode command line small.
 const INPUT_CHUNK_BYTES = 256;
 
-export function terminalColorReports(colors: unknown): string[] {
+function parseTerminalColors(colors: unknown) {
   if (!colors || typeof colors !== "object") return [];
-  return ([["foreground", 10], ["background", 11]] as const).flatMap(([key, code]) => {
+  return ([["foreground", 10, "fg"], ["background", 11, "bg"]] as const).flatMap(([key, code, style]) => {
     const value = (colors as Record<string, unknown>)[key];
     if (typeof value !== "string" || !/^#[\da-f]{6}$/i.test(value)) return [];
+    return [{ value, code, style }];
+  });
+}
+
+export function terminalColorReports(colors: unknown): string[] {
+  return parseTerminalColors(colors).map(({ value, code }) => {
     const rgb = value.slice(1).match(/../g)!.map((channel) => channel.repeat(2)).join("/");
-    return [`\\033]${code};rgb:${rgb}\\007`];
+    return `\\033]${code};rgb:${rgb}\\007`;
   });
 }
 
@@ -151,6 +157,7 @@ export class TmuxControlClient {
   /** Interactive attach only: the window's size before this viewer reshaped
    *  it, put back on detach (see close). */
   private restoreSize: string | null = null;
+  private colorReportSupport: Promise<boolean> | null = null;
 
   constructor(
     private mode: ControlClientMode,
@@ -370,8 +377,32 @@ export class TmuxControlClient {
   /** Report the viewer's default colours to tmux (startup and theme changes). */
   async setColors(colors: unknown): Promise<void> {
     if (this.closed || !this.paneId) return;
-    for (const cmd of colorReportCommands(this.paneId, colors)) {
-      await this.command(cmd);
+    let commands = colorReportCommands(this.paneId, colors);
+    if (commands.length === 0) return;
+    const supported = await (this.colorReportSupport ??= this.command("list-commands refresh-client").then((reply) => {
+      if (!reply.ok) throw new Error(`Could not detect tmux color support: ${reply.lines.join(" ") || "tmux did not respond"}`);
+      return reply.lines.some((line) => line.includes("[-r pane:report]"));
+    }));
+    if (!supported) {
+      if (this.mode.kind !== "create") {
+        throw new Error("Viewing an existing terminal with theme colors requires tmux 3.5 or newer. Upgrade tmux on the session's machine.");
+      }
+      const channels = parseTerminalColors(colors);
+      commands = channels.map(({ value, style }) =>
+        `set-option -p -t ${this.paneId} @codecast-terminal-${style} '${value}'`,
+      );
+      for (const option of ["window-style", "window-active-style"]) {
+        const reply = await this.command(`show-options -pAv -t ${this.paneId} ${option}`);
+        if (!reply.ok) throw new Error(`Could not read terminal colors: ${reply.lines.join(" ") || "tmux did not respond"}`);
+        const current = reply.lines.join("");
+        const additions = channels.map(({ style }) => `${style}=#{@codecast-terminal-${style}}`).filter((style) => !current.includes(style));
+        const style = [current, ...additions].filter(Boolean).join(",").replace(/[\\"$]/g, "\\$&");
+        commands.push(`set-option -p -t ${this.paneId} ${option} "${style}"`);
+      }
+    }
+    for (const cmd of commands) {
+      const reply = await this.command(cmd);
+      if (!reply.ok) throw new Error(`Could not set terminal colors: ${reply.lines.join(" ") || "tmux did not respond"}`);
     }
   }
 

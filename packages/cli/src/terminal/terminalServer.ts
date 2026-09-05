@@ -458,7 +458,12 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
             clampDim(msg.rows, 200, attach ? ATTACH_MIN_ROWS : 2),
           );
         } else if (msg.type === "colors") {
-          void client.setColors(msg.colors);
+          void client.setColors(msg.colors).catch((err) => {
+            const message = err instanceof Error ? err.message : "failed to update terminal colors";
+            opts.log(`[TERM] color update failed: ${message}`);
+            fail(message);
+            cleanup();
+          });
         } else if (msg.type === "kill") {
           void client.killSession().then(() => {
             sendJson({ type: "exit", reason: "killed" });

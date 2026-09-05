@@ -1,17 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { colorReportCommands, terminalColorReports, TmuxControlClient } from "./controlClient.js";
-import { hasTmux } from "../tmux.js";
-
-// Every tmux call below is ASYNC on purpose. Importing controlClient.js leaves
-// bun in a state where `spawnSync` deadlocks and is killed by its own timeout —
-// raw node:child_process too, so it is the runtime, not our wrapper. That is why
-// the sync helpers (tmuxExecSync/tmuxRun) report ETIMEDOUT here while the same
-// call succeeds from a file that does not import this module, and why a probe
-// built on them silently skipped this test forever. tmuxRunAsync spawns the same
-// commands off the loop and answers normally.
+import { hasTmux, tmuxRunAsync } from "../tmux.js";
 
 describe("terminal color reports", () => {
   it("encodes RGB colors for tmux without accepting command syntax", () => {
@@ -24,8 +16,6 @@ describe("terminal color reports", () => {
     }
   });
 
-  // The exact bytes handed to tmux, provable without a live server: the live
-  // test below needs a tmux that answers, and a loaded machine has none.
   it("builds the refresh-client reports tmux answers OSC 10/11 with", () => {
     expect(colorReportCommands("%286", { foreground: "#073642", background: "#fdf6e3" })).toEqual([
       'refresh-client -r "%286:\\033]10;rgb:0707/3636/4242\\007"',
@@ -33,8 +23,6 @@ describe("terminal color reports", () => {
     ]);
   });
 
-  // The pane id is interpolated into a command line. tmux mints it, but a
-  // caller that ever hands us anything else must not reach the command.
   it("refuses a pane id that is not tmux's own", () => {
     for (const pane of ["", "cast-term-x", '%1" ; kill-server ; "', "%1a", "1"]) {
       expect(colorReportCommands(pane, { background: "#ffffff" })).toEqual([]);
@@ -42,12 +30,34 @@ describe("terminal color reports", () => {
     expect(colorReportCommands("%0", { background: "#ffffff" })).toHaveLength(1);
   });
 
-  // End to end through the real transport: a control client creates the pane,
-  // reports the viewer's colours, and a program inside the pane asks the
-  // terminal what its default colours are. Everything here goes through the
-  // control-mode pipe the product uses — the sync/exec tmux helpers cannot be
-  // used from this file (see the note above), and the panel creates its shells
-  // exactly this way, so the fixture is the real flow rather than a stand in.
+  it.each(["capability", "report", "style-probe", "@codecast-terminal-fg", "@codecast-terminal-bg", "window-style", "window-active-style"])("surfaces a failed %s command", async (failure) => {
+    const client = new TmuxControlClient(
+      { kind: "create", sessionName: "cast-term-error", fresh: true },
+      { onOutput() {}, onExit() {} },
+    );
+    const transport = client as unknown as {
+      paneId: string;
+      command: (command: string) => Promise<{ ok: boolean; lines: string[] }>;
+    };
+    transport.paneId = "%0";
+    const command = spyOn(transport, "command").mockImplementation(async (cmd) => {
+      if (cmd === "list-commands refresh-client") {
+        if (failure === "capability") return { ok: false, lines: ["test command refused"] };
+        return { ok: true, lines: [failure === "report" ? "refresh-client [-r pane:report]" : "refresh-client [-C XxY]"] };
+      }
+      if (cmd.startsWith("refresh-client -r") || (failure === "style-probe" && cmd.startsWith("show-options")) || cmd.includes(` ${failure} `)) {
+        return { ok: false, lines: ["test command refused"] };
+      }
+      return { ok: true, lines: [] };
+    });
+    try {
+      await expect(client.setColors({ foreground: "#073642", background: "#fdf6e3" })).rejects.toThrow("test command refused");
+    } finally {
+      command.mockRestore();
+      client.close();
+    }
+  });
+
   it.skipIf(!hasTmux())("answers an application's colour query with the viewer's colours, before and after a theme change", async () => {
     const dir = mkdtempSync(join(tmpdir(), "terminal-colors-"));
     const script = join(dir, "probe.js");
@@ -81,25 +91,54 @@ describe("terminal color reports", () => {
     };
 
     try {
-      try {
-        await client.start(100, 24, { foreground: "#073642", background: "#fdf6e3" });
-      } catch (err) {
-        // The transport, not the feature. A tmux control child spawned from a
-        // test FILE UNDER packages/cli/ produces no output at all under `bun
-        // test` — a raw node:child_process spawn of the same command is silent
-        // here and prints the usual %begin/%end from a file outside the package,
-        // which is why every tmux-backed test in this directory times out. Say
-        // so out loud: a silent pass would read as proof this feature works.
-        console.warn(`[SKIPPED] ${name}: tmux control transport unavailable under this runner — ${(err as Error).message}`);
-        return;
-      }
+      await client.start(100, 24, { foreground: "#073642", background: "#fdf6e3" });
       // Exactly one answer per query, carrying the colours the browser sent.
       // Before the fix tmux answered black first and xterm answered again a
       // moment later, and Codex believed the first reply.
       expect(await askTerminal()).toBe("\x1b]10;rgb:0707/3636/4242\x07\x1b]11;rgb:fdfd/f6f6/e3e3\x07");
 
+      const run = async (...args: string[]) => {
+        const result = await tmuxRunAsync(args);
+        expect(result.status).toBe(0);
+        return result.stdout;
+      };
+      const globalStyles = await run("show-options", "-gw");
+      const neighbor = (await run("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", client.pane!, "sleep 30")).trim();
+      const neighborStyles = await run("show-options", "-p", "-t", neighbor);
+      await run("set-option", "-p", "-t", client.pane!, "window-style", "bold");
+      await run("set-option", "-p", "-t", client.pane!, "window-active-style", "underscore");
       await client.setColors({ foreground: "#ececec", background: "#212121" });
+      expect(await run("show-options", "-gw")).toBe(globalStyles);
+      expect(await run("show-options", "-p", "-t", neighbor)).toBe(neighborStyles);
+      expect(await run("show-options", "-pv", "-t", client.pane!, "window-style")).toContain("bold");
+      expect(await run("show-options", "-pv", "-t", client.pane!, "window-active-style")).toContain("underscore");
       expect(await askTerminal()).toBe("\x1b]10;rgb:ecec/ecec/ecec\x07\x1b]11;rgb:2121/2121/2121\x07");
+      await client.setColors({ foreground: "#073642" });
+      await client.setColors({ background: "#ffffff'; kill-server", foreground: 123 });
+      expect(await askTerminal()).toBe("\x1b]10;rgb:0707/3636/4242\x07\x1b]11;rgb:2121/2121/2121\x07");
+
+      const supportsReports = (await run("list-commands", "refresh-client")).includes("[-r pane:report]");
+      const paneStyles = await run("show-options", "-p", "-t", client.pane!);
+      for (let i = 0; i < 5; i++) {
+        await client.setColors({ foreground: "#ececec", background: "#fdf6e3" });
+        await client.setColors({ foreground: "#073642", background: "#212121" });
+      }
+      expect(await run("show-options", "-p", "-t", client.pane!)).toBe(paneStyles);
+      expect(await askTerminal()).toBe("\x1b]10;rgb:0707/3636/4242\x07\x1b]11;rgb:2121/2121/2121\x07");
+      for (const readOnly of [true, false]) {
+        const viewer = new TmuxControlClient(
+          { kind: "attach", target: name, readOnly },
+          { onOutput() {}, onExit() {} },
+        );
+        try {
+          const start = viewer.start(100, 24, { foreground: "#ffffff", background: "#000000" });
+          if (supportsReports) await start;
+          else await expect(start).rejects.toThrow("requires tmux 3.5 or newer");
+          expect(await run("show-options", "-p", "-t", client.pane!)).toBe(paneStyles);
+        } finally {
+          viewer.close();
+        }
+      }
     } finally {
       await client.killSession();
       client.close();
