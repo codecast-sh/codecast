@@ -182,9 +182,15 @@ Tokens: Linear via `oauthConnectors.getFreshAccessTokenForTeam`, which
 refreshes the 24 hour access token ahead of `access_expires_at` and stores
 the rotated refresh token in the same write; a refused refresh lands on the
 connection's `last_error` and parks the source with a "reconnect" message.
+The protocol lives in `convex/lib/tokenRefresh.ts` and serves every
+connector that stores a refresh token (Linear and Notion through
+`oauthConnectors`, Gmail through `googleOAuth`, which caches the access
+token with its expiry for the same reason).
 The refresh is single flight: a caller claims a lease (`refresh_lease_id`
 plus `refresh_lease_until`, the agent task lease shape; the claim itself is
-a compare and swap on the access ciphertext) before talking to the provider,
+a compare and swap on the credential identity, both ciphertexts, so a
+reconnect that only replaced the refresh grant refuses a stale claim before
+any provider request) before talking to the provider,
 and concurrent callers wait for the row to change instead of spending the
 same refresh token twice. Every outcome write, success or failure, is
 fenced by exact lease ownership and by the credentials the writer read, and
