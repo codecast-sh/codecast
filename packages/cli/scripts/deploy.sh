@@ -100,7 +100,7 @@ echo "Building binaries..."
 # Upload binaries
 echo ""
 echo "Uploading binaries to R2..."
-for filename in "${ARTIFACTS[@]}" index.js.map; do
+for filename in "${ARTIFACTS[@]}" main.js.map; do
   echo "  $filename"
   aws s3 cp "$BINARIES_DIR/$filename" "s3://$R2_BUCKET/$filename" \
     --endpoint-url "$R2_ENDPOINT" \
@@ -198,7 +198,7 @@ fi
 # exists, so just refresh its assets.
 echo ""
 echo "Publishing GitHub release v$VERSION..."
-RELEASE_FILES=("${ARTIFACTS[@]/#/$BINARIES_DIR/}" "$BINARIES_DIR/index.js.map")
+RELEASE_FILES=("${ARTIFACTS[@]/#/$BINARIES_DIR/}" "$BINARIES_DIR/main.js.map")
 if gh release view "v$VERSION" >/dev/null 2>&1; then
   # A --no-bump rerun after a failed partial deploy refreshes these assets
   # while R2 may still hold the old bytes; R2 is authoritative mid-incident.
