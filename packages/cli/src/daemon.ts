@@ -9,7 +9,7 @@ import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
-import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
@@ -101,6 +101,7 @@ import {
   threadForkTimeoutMsForBytes,
   threadItemsToMessages,
   type ApprovalPolicy,
+  type SandboxPolicy,
   type SandboxMode,
   type ApprovalRequest,
   type ThreadItem,
@@ -15333,7 +15334,9 @@ async function syncAppServerTurnMessagesIfChanged(
   }
 }
 
-function persistAppServerThreadRegistrations(): void {
+/** Returns false when the record could not be written, so a caller that needs
+ *  the write to be durable (policy invalidation) can refuse to proceed. */
+function persistAppServerThreadRegistrations(): boolean {
   try {
     const data: Record<string, PersistedAppServerThreadRecord> = {};
     const now = Date.now();
@@ -15345,7 +15348,29 @@ function persistAppServerThreadRegistrations(): void {
     const temp = `${APP_SERVER_THREADS_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(data), "utf-8");
     fs.renameSync(temp, APP_SERVER_THREADS_FILE);
-  } catch {}
+    return true;
+  } catch (err) {
+    logError("[codex-app-server] could not persist thread registrations", err instanceof Error ? err : new Error(String(err)));
+    return false;
+  }
+}
+
+/**
+ * The policy the live client recorded for a thread, falling back to whatever the
+ * record already held. Read at persist time rather than threaded through every
+ * registration call site, because the client learns it from the server's own
+ * start, resume and fork responses.
+ */
+function policyForPersist(
+  threadId: string,
+  previous?: PersistedCodexThread,
+): SandboxPolicy | undefined {
+  return persistedPolicyFor({
+    pending: !!codexAppServerInstance?.hasPendingPolicyChange(threadId),
+    invalidated: !!codexAppServerInstance?.isPolicyInvalidated(threadId),
+    live: codexAppServerInstance?.policyForThread(threadId),
+    previous: previous?.sandboxPolicy,
+  });
 }
 
 function registerAppServerConversation(
@@ -15369,6 +15394,7 @@ function registerAppServerConversation(
   persistedAppServerThreads.set(conversationId, {
     ...(previous?.threadId === threadId ? previous : {}),
     threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
+    sandboxPolicy: policyForPersist(threadId, previous?.threadId === threadId ? previous : undefined),
   });
   persistAppServerThreadRegistrations();
 }
@@ -15379,13 +15405,25 @@ function forgetPersistedAppServerConversation(conversationId: string): void {
   persistAppServerThreadRegistrations();
 }
 
+/**
+ * Persists a policy change and NOTHING else. Deliberately not
+ * markAppServerConversationResumable, which writes a fresh lifecycle record: the
+ * rehydrate loop detects a replaced conversation by object identity, so a policy
+ * refresh has to leave the record it updates in place.
+ */
+function persistThreadPolicyOnly(conversationId: string, threadId: string): boolean {
+  const record = persistedAppServerThreads.get(conversationId);
+  if (!applyPolicyInPlace(record, threadId, policyForPersist(threadId, record))) return true;
+  return persistAppServerThreadRegistrations();
+}
+
 function markAppServerConversationResumable(
   conversationId: string,
   threadId?: string,
   updatedAt: number = Date.now(),
-): void {
+): boolean {
   const resolvedThreadId = threadId ?? appServerConversations.get(conversationId);
-  if (!resolvedThreadId) return;
+  if (!resolvedThreadId) return false;
   const liveEntry = appServerThreads.get(resolvedThreadId);
   const previous = persistedAppServerThreads.get(conversationId);
   // A thread the live map has forgotten still has a saved cwd and approval
@@ -15398,8 +15436,9 @@ function markAppServerConversationResumable(
     updatedAt,
     cwd: liveEntry?.cwd ?? carried?.cwd,
     approvalPolicy: liveEntry?.approvalPolicy ?? carried?.approvalPolicy,
+    sandboxPolicy: policyForPersist(resolvedThreadId, carried),
   });
-  persistAppServerThreadRegistrations();
+  return persistAppServerThreadRegistrations();
 }
 
 async function rehydratePersistedAppServerThreads(): Promise<void> {
@@ -15432,11 +15471,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
         if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
       const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
-      const response = await server.threadResume({
-        threadId: record.threadId,
-        ...(record.cwd ? { cwd: record.cwd } : {}),
-        approvalPolicy: policy,
-      });
+      const response = await server.threadResume(codexResumeParams(record, policy));
       if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
@@ -15509,6 +15544,7 @@ function loadPersistedAppServerThreadRegistrations(): void {
         updatedAt,
         cwd: record.cwd,
         approvalPolicy: record.approvalPolicy,
+        sandboxPolicy: record.sandboxPolicy,
         activeTurnId: record.activeTurnId,
         recoveryAttempts: record.recoveryAttempts,
       });
@@ -23790,6 +23826,18 @@ async function main(): Promise<void> {
     }
   });
 
+  // turn/started fires before the turn/start response resolves, so the record
+  // written there cannot yet know an override was accepted. This closes the gap:
+  // once the server confirms a policy, persist it.
+  // Policy persistence, including the invalidation barrier: a clear that cannot
+  // be written refuses the request rather than letting a narrowing fly against a
+  // record that still grants the old access.
+  registerPolicyPersistenceHandlers({
+    client: codexAppServerInstance,
+    conversationForThread: (threadId) => appServerThreads.get(threadId)?.conversationId,
+    persist: persistThreadPolicyOnly,
+  });
+
   codexAppServerInstance.on("turnStarted", (threadId: string, turnId: string, model?: string) => {
     const entry = appServerThreads.get(threadId);
     appServerTurnProgress.set(turnId, makeAppServerTurnProgress(threadId, model));
@@ -23799,6 +23847,7 @@ async function main(): Promise<void> {
         threadId,
         cwd: entry.cwd,
         approvalPolicy: entry.approvalPolicy,
+        sandboxPolicy: policyForPersist(threadId, previous),
         updatedAt: Date.now(),
         activeTurnId: turnId,
         recoveryAttempts: appServerRecoveringThreads.has(threadId) ? previous?.recoveryAttempts : 0,
