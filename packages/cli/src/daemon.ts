@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
+import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
 import {
@@ -5103,80 +5104,85 @@ async function executeRemoteCommand(
           break;
         }
 
-        let switched: string | null = null;
-        if (profile) {
-          try {
-            const switchResult = useProfile(profile);
-            switched = switchResult.to;
-            log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
-            // Remotes run on a pushed COPY of this credential — refresh them now
-            // instead of waiting for the 30-min loop.
-            pushCredentialToRemoteHosts("account_switch").catch(() => {});
-            // Surface the new active account in Settings without waiting a beat.
-            sendHeartbeat().catch(() => {});
-            // Probe the new account's meters now, not at the next 5-minute
-            // tick: the server's auto-switch loop holds off judging this
-            // account until a snapshot fetched after the switch lands.
-            maintainCcUsageSnapshots("account_switch")
-              .then(() => sendHeartbeat())
-              .catch(() => {});
-          } catch (err) {
-            // Don't tear anything down if the swap itself failed.
-            error = `Account switch failed: ${err instanceof Error ? err.message : String(err)}`;
-            break;
-          }
-        }
-
-        let killed = 0;
-        let continued = 0;
-        for (const convId of conversationIds) {
-          try {
-            const out = await killConversationBackends(convId, sessionIds[convId]);
-            if (out.result && out.result !== "no_process" && out.result !== "no_session") killed++;
-          } catch (err) {
-            log(`[ACCOUNTS] Teardown failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-        if (sendContinue && syncServiceRef) {
-          // Paced, not fired at once: each continue resumes a process whose
-          // first request carries the whole context, and twenty of those in
-          // the same half-minute trip the provider's per-minute cap — the
-          // fleet then parks on a 429 the CLI renders as a limit, and the
-          // loop rotates to the next account to do it again (2026-09-04).
-          // The spacing keeps the revive under the cap; the enqueue runs on
-          // after the command reports so the ack isn't held for minutes.
-          const sync = syncServiceRef;
-          const enqueueContinue = async (convId: string) => {
+        const releaseAccountSwitch = await accountLifecycleGate.acquireSwitch();
+        try {
+          let switched: string | null = null;
+          if (profile) {
             try {
-              // client_id keyed by command id: re-running the command can't
-              // double-queue, but a deliberate second switch still can.
-              await sync.enqueueUserMessage(
-                convId,
-                "continue",
-                continueClientIds[convId] || `acct-switch-${commandId}-${convId}`,
-              );
-              return true;
+              const switchResult = useProfile(profile);
+              switched = switchResult.to;
+              log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
+              // Remotes run on a pushed COPY of this credential — refresh them now
+              // instead of waiting for the 30-min loop.
+              pushCredentialToRemoteHosts("account_switch").catch(() => {});
+              // Surface the new active account in Settings without waiting a beat.
+              sendHeartbeat().catch(() => {});
+              // Probe the new account's meters now, not at the next 5-minute
+              // tick: the server's auto-switch loop holds off judging this
+              // account until a snapshot fetched after the switch lands.
+              maintainCcUsageSnapshots("account_switch")
+                .then(() => sendHeartbeat())
+                .catch(() => {});
             } catch (err) {
-              log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
-              return false;
+              // Don't tear anything down if the swap itself failed.
+              error = `Account switch failed: ${err instanceof Error ? err.message : String(err)}`;
+              break;
             }
-          };
-          const [first, ...rest] = conversationIds;
-          if (first && (await enqueueContinue(first))) continued++;
-          if (rest.length > 0) {
-            continued += rest.length;
-            void (async () => {
-              let sent = 0;
-              for (const convId of rest) {
-                await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
-                if (await enqueueContinue(convId)) sent++;
-              }
-              log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
-            })();
           }
+
+          let killed = 0;
+          let continued = 0;
+          for (const convId of conversationIds) {
+            try {
+              const out = await killConversationBackends(convId, sessionIds[convId]);
+              if (out.result && out.result !== "no_process" && out.result !== "no_session") killed++;
+            } catch (err) {
+              log(`[ACCOUNTS] Teardown failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          if (sendContinue && syncServiceRef) {
+            // Paced, not fired at once: each continue resumes a process whose
+            // first request carries the whole context, and twenty of those in
+            // the same half-minute trip the provider's per-minute cap — the
+            // fleet then parks on a 429 the CLI renders as a limit, and the
+            // loop rotates to the next account to do it again (2026-09-04).
+            // The spacing keeps the revive under the cap; the enqueue runs on
+            // after the command reports so the ack isn't held for minutes.
+            const sync = syncServiceRef;
+            const enqueueContinue = async (convId: string) => {
+              try {
+                // client_id keyed by command id: re-running the command can't
+                // double-queue, but a deliberate second switch still can.
+                await sync.enqueueUserMessage(
+                  convId,
+                  "continue",
+                  continueClientIds[convId] || `acct-switch-${commandId}-${convId}`,
+                );
+                return true;
+              } catch (err) {
+                log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+                return false;
+              }
+            };
+            const [first, ...rest] = conversationIds;
+            if (first && (await enqueueContinue(first))) continued++;
+            if (rest.length > 0) {
+              continued += rest.length;
+              void (async () => {
+                let sent = 0;
+                for (const convId of rest) {
+                  await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
+                  if (await enqueueContinue(convId)) sent++;
+                }
+                log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
+              })();
+            }
+          }
+          result = JSON.stringify({ switched, killed, continued });
+          log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}${conversationIds.length > 1 ? ` (paced ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart)` : ""}`);
+        } finally {
+          releaseAccountSwitch();
         }
-        result = JSON.stringify({ switched, killed, continued });
-        log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}${conversationIds.length > 1 ? ` (paced ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart)` : ""}`);
         break;
       }
       // Web sign-in CTA: run the browser OAuth flow via `claude auth login` and
@@ -15691,6 +15697,7 @@ export const MAX_RESUME_READINESS_POLL_MS = 120_000;
 // session, six seconds apart stays under the provider's per-minute cap that
 // a same-second burst of eighteen tripped.
 const SWITCH_CONTINUE_SPACING_MS = 6_000;
+const accountLifecycleGate = new AccountLifecycleGate();
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
 // Must stay STRICTLY LARGER than the longest a single resume can legitimately
@@ -18190,82 +18197,85 @@ async function resolveLiveTmuxTarget(
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
-  // Lifecycle gate: a killed/completed conversation must never come back on its
-  // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
-  // (the health check's reconstitution, message-delivery resume, the warm pool,
-  // repairAndResumeSession), so the check lives here rather than at each caller.
-  // Fails OPEN on a lookup error.
-  if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
-    return false;
-  }
-
-  // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
-  // together. One owner lookup serves both.
-  const ownerInfo = conversationId && syncServiceRef
-    ? await syncServiceRef.getConversationOwnerInfo(conversationId)
-    : null;
-  const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
-  if (verdict === "owned_by_live_device") {
-    log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by live device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
-    return false;
-  }
-  if (verdict === "remote_no_conversation") {
-    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
-    return false;
-  }
-  if (verdict === "remote_unowned") {
-    const owner = ownerInfo?.ownerDeviceId;
-    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
-    return false;
-  }
-  // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
-    const startedAt = resumeInFlightStarted.get(sessionId) ?? 0;
-    const age = Date.now() - startedAt;
-    if (age > RESUME_IN_FLIGHT_TIMEOUT_MS) {
-      logDelivery(`Resume in-flight for ${sessionId.slice(0, 8)} is stale (${Math.round(age / 1000)}s), clearing and retrying`);
-      resumeInFlight.delete(sessionId);
-      resumeInFlightStarted.delete(sessionId);
-    } else {
-      logDelivery(`Resume already in flight for ${sessionId.slice(0, 8)}, waiting (age=${Math.round(age / 1000)}s)...`);
+    const age = Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
+    if (age < RESUME_IN_FLIGHT_TIMEOUT_MS) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const result = await Promise.race([
           existing,
-          new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error("resume_timeout")), RESUME_IN_FLIGHT_TIMEOUT_MS - age)),
+          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), RESUME_IN_FLIGHT_TIMEOUT_MS - age); }),
         ]);
-        if (result && content) {
-          const tmuxSession = resumeSessionCache.get(sessionId);
-          if (tmuxSession) {
-            await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint);
-            log(`Injected message to already-resumed session ${sessionId.slice(0, 8)}`);
+        if (result !== null) {
+          if (result && content) {
+            const tmuxSession = resumeSessionCache.get(sessionId);
+            if (tmuxSession) await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint);
           }
+          return result;
         }
-        return result;
-      } catch (err) {
-        if (err instanceof Error && err.message === "resume_timeout") {
-          logDelivery(`Resume in-flight timed out for ${sessionId.slice(0, 8)}, clearing and retrying`);
-          resumeInFlight.delete(sessionId);
-          resumeInFlightStarted.delete(sessionId);
-        } else {
-          throw err;
-        }
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
+    if (resumeInFlight.get(sessionId) === existing) {
+      resumeInFlight.delete(sessionId);
+      resumeInFlightStarted.delete(sessionId);
+    }
+    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
   }
-  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
+  let releaseAccountResume: (() => void) | undefined;
+  const promise = Promise.resolve().then(async () => {
+    const canResume = async (): Promise<boolean> => {
+      // Lifecycle gate: a killed/completed conversation must never come back on its
+      // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
+      // (the health check's reconstitution, message-delivery resume, the warm pool,
+      // repairAndResumeSession), so the check lives here rather than at each caller.
+      // Fails OPEN on a lookup error.
+      if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
+        return false;
+      }
+
+      // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
+      // together. One owner lookup serves both.
+      const ownerInfo = conversationId && syncServiceRef
+        ? await syncServiceRef.getConversationOwnerInfo(conversationId)
+        : null;
+      const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
+      if (verdict === "owned_by_live_device") {
+        log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by live device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+        return false;
+      }
+      if (verdict === "remote_no_conversation") {
+        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
+        return false;
+      }
+      if (verdict === "remote_unowned") {
+        const owner = ownerInfo?.ownerDeviceId;
+        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
+        return false;
+      }
+      return true;
+    };
+    if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
+    releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
+    if (resumeInFlight.get(sessionId) !== promise) return false;
+    if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
+    const resumed = await autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
+    if (resumed && resumeInFlight.get(sessionId) === promise) clearHibernationPark(sessionId, conversationId);
+    return resumed;
+  });
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
   try {
-    const resumed = await promise;
-    // Every automatic and user-driven resume path funnels through here, so this
-    // is the one place that has to know the park is over.
-    if (resumed) clearHibernationPark(sessionId, conversationId);
-    return resumed;
+    return await promise;
   } finally {
-    lastResumeAt.set(sessionId, Date.now());
-    resumeInFlight.delete(sessionId);
-    resumeInFlightStarted.delete(sessionId);
+    if (resumeInFlight.get(sessionId) === promise) {
+      lastResumeAt.set(sessionId, Date.now());
+      resumeInFlight.delete(sessionId);
+      resumeInFlightStarted.delete(sessionId);
+    }
+    releaseAccountResume?.();
   }
 }
 
