@@ -1,4 +1,4 @@
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -32,6 +32,49 @@ async function rels(root: string, opts: Parameters<typeof walkFiles>[1]): Promis
 }
 
 describe("walkFiles", () => {
+  test.each(["flat", "nested"])("yields during a %s tree scan even when filesystem promises are already fulfilled", async (shape) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "fswalk-yield-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    let dir = root;
+    for (let i = 0; i < 64; i++) {
+      if (shape === "nested") dir = path.join(dir, "d");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${i}.jsonl`), "{}");
+    }
+    const readdir = spyOn(fs.promises, "readdir").mockImplementation((...args) =>
+      Promise.resolve(Reflect.apply(fs.readdirSync, fs, args)),
+    );
+    const stat = spyOn(fs.promises, "stat").mockImplementation((...args) =>
+      Promise.resolve(Reflect.apply(fs.statSync, fs, args)),
+    );
+    const observeYield = async (walk: (visit: () => void) => Promise<void>) => {
+      let visited = 0;
+      let visitedAtYield = -1;
+      let probe: ReturnType<typeof setImmediate> | undefined;
+      try {
+        await walk(() => {
+          if (++visited === 1) probe = setImmediate(() => { visitedAtYield = visited; });
+        });
+        return { visited, visitedAtYield };
+      } finally {
+        if (probe) clearImmediate(probe);
+      }
+    };
+    try {
+      const blocking = await observeYield(async (visit) => {
+        walkDirsSync(root, {}, (files) => files.forEach(visit));
+      });
+      expect(blocking).toEqual({ visited: 64, visitedAtYield: -1 });
+      const yielding = await observeYield((visit) => walkFiles(root, {}, visit));
+      expect(yielding.visited).toBe(64);
+      expect(yielding.visitedAtYield).toBeGreaterThan(0);
+      expect(yielding.visitedAtYield).toBeLessThan(64);
+    } finally {
+      readdir.mockRestore();
+      stat.mockRestore();
+    }
+  });
+
   test("reports every file with a stat and its depth", async () => {
     const root = scaffold();
     const depths = new Map<string, number>();
