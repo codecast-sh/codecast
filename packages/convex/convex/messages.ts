@@ -22,6 +22,7 @@ import {
   unauthenticatedView,
 } from "./smallViewContracts";
 import { onFreshApiErrorPark } from "./accountSwitch";
+import { safetyBlockPatch } from "./conversationSafety";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, newestSignificantMessage, isBannerTurn, isRealTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import {
@@ -1383,7 +1384,8 @@ export const addMessage = mutation({
     if (msgEffort && msgEffort !== conversation.effort) {
       convPatch.effort = msgEffort;
     }
-    const nextPending = nextPendingApiError({
+    const safetyPatch = safetyBlockPatch(conversation, [{ role: args.role, content: contentToStore, timestamp: msgTimestamp }], now);
+    const nextPending = safetyPatch ? true : nextPendingApiError({
       newestIsBanner: msgIsBanner,
       batchHasRealTurn: msgIsRealTurn,
       conversationPending: wasPendingApiError,
@@ -1392,11 +1394,11 @@ export const addMessage = mutation({
       convPatch.pending_api_error = nextPending;
     }
     // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
-    const nextBannerKind = msgIsBanner ? msgBannerKind : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined;
+    const nextBannerKind = safetyPatch?.pending_api_error_kind ?? (msgIsBanner ? msgBannerKind : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined);
     if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
       convPatch.pending_api_error_kind = nextBannerKind;
     }
-    const nextBannerAt = msgIsBanner ? msgTimestamp : nextPending ? conversation.pending_api_error_at ?? undefined : undefined;
+    const nextBannerAt = safetyPatch?.pending_api_error_at ?? (msgIsBanner ? msgTimestamp : nextPending ? conversation.pending_api_error_at ?? undefined : undefined);
     if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
       convPatch.pending_api_error_at = nextBannerAt;
     }
@@ -1406,11 +1408,12 @@ export const addMessage = mutation({
     // and never notify.
     if (
       msgIsBanner &&
-      msgBannerKind !== "error" &&
-      (!wasPendingApiError || conversation.pending_api_error_kind !== msgBannerKind)
+      nextBannerKind && nextBannerKind !== "error" &&
+      (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
     ) {
-      await onFreshApiErrorPark(ctx, conversation.user_id, msgBannerKind);
+      await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
     }
+    if (safetyPatch) Object.assign(convPatch, safetyPatch);
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -1533,7 +1536,7 @@ export async function supersedeApiErrorBanners(
     .take(12);
   let deleted = 0;
   for (const r of recent) {
-    if (r.timestamp < beforeTs && isBannerTurn(r)) {
+    if (r.timestamp < beforeTs && isBannerTurn(r) && classifyApiErrorBanner(r.content) !== "safety") {
       await ctx.db.delete(r._id);
       deleted++;
     }
@@ -1935,7 +1938,8 @@ export const addMessages = mutation({
       }
       // Keep the gate flag in lockstep with "newest banner-or-turn is a banner".
       const newestIsBanner = newestSignificant != null && isBannerTurn(newestSignificant);
-      const nextPending = nextPendingApiError({
+      const safetyPatch = safetyBlockPatch(conversation, args.messages, Date.now());
+      const nextPending = safetyPatch ? true : nextPendingApiError({
         newestIsBanner,
         batchHasRealTurn,
         conversationPending: wasPendingApiError,
@@ -1944,28 +1948,29 @@ export const addMessages = mutation({
         convPatch.pending_api_error = nextPending;
       }
       // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
-      const nextBannerKind = newestIsBanner
+      const nextBannerKind = safetyPatch?.pending_api_error_kind ?? (newestIsBanner
         ? classifyApiErrorBanner(newestSignificant!.content) ?? undefined
-        : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined;
+        : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined);
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
       }
-      const nextBannerAt = newestIsBanner
+      const nextBannerAt = safetyPatch?.pending_api_error_at ?? (newestIsBanner
         ? newestSignificant!.timestamp || Date.now()
-        : nextPending ? conversation.pending_api_error_at ?? undefined : undefined;
+        : nextPending ? conversation.pending_api_error_at ?? undefined : undefined);
       if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
         convPatch.pending_api_error_at = nextBannerAt;
       }
       // A fresh blocked-kind park triggers the debounced reactions (see
       // addMessage): auto-switch check + aggregated incident notification.
       if (
-        newestIsBanner &&
+        (newestIsBanner || safetyPatch) &&
         nextBannerKind &&
         nextBannerKind !== "error" &&
         (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
       ) {
         await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
       }
+      if (safetyPatch) Object.assign(convPatch, safetyPatch);
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
         const lastUserMsg = userMsgs[userMsgs.length - 1];
@@ -2477,10 +2482,13 @@ export const getSharedMessage = query({
  * own rule, so a teammate who cannot read the session sees no message either.
  */
 export const webGet = query({
-  args: { id: v.string() },
+  // Same admission as listMessages / getUserMessages: owner, team, or a
+  // PRESENTED share token, so a guest reading a shared transcript can open
+  // the same message the navigator lists for them.
+  args: { id: v.string(), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
+    if (!userId && !args.share_token) return null;
     let message: Doc<"messages"> | null = null;
     try {
       message = await ctx.db.get(args.id as Id<"messages">);
@@ -2488,7 +2496,7 @@ export const webGet = query({
     if (!message) return null;
     const conversation = await ctx.db.get(message.conversation_id);
     if (!conversation) return null;
-    if ((await checkConversationAccess(ctx, userId, conversation)) === "denied") return null;
+    if ((await checkConversationAccess(ctx, userId, conversation, args.share_token)) === "denied") return null;
     const user = await ctx.db.get(conversation.user_id);
     return {
       message,

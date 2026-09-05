@@ -13,7 +13,7 @@
  * 32-char ids: their table was simply never registered here.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "trigger";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "trigger" | "pr" | "commit";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -37,6 +37,11 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   doc: "/docs",
   project: "/projects",
   trigger: "/triggers",
+  // Repository objects are addressed by repository plus number or sha, so
+  // these prefixes are completed by `entityRoute` (see repoObjectRoute), not by
+  // appending the id.
+  pr: "/pr",
+  commit: "/commit",
 };
 
 /**
@@ -99,6 +104,7 @@ export function normalizeEntityType(type: string): EntityType | null {
 export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
+  if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
   return `${ENTITY_ROUTE[norm]}/${id}`;
 }
 
@@ -137,7 +143,159 @@ export function entityTypeFromId(id: string): EntityType | null {
   if (/^doc:/i.test(s)) return "doc";
   if (isConvexId(s.toLowerCase())) return null;
   if (/^jx[a-z0-9]{5,}$/i.test(s)) return "session";
+  const repoObject = parseRepoObjectId(s);
+  if (repoObject) return repoObject.type;
   return inferEntityTypeFromShortId(s);
+}
+
+// ---------------------------------------------------------------------------
+// Repository objects: pull requests and commits
+//
+// Neither has a short id of its own. A pull request is named the way GitHub
+// and `cast task show` already print it, `owner/repo#482`, and a commit by its
+// repository and sha, `owner/repo@1a2b3c4`. Those strings are the reference
+// carried through markdown, the id half of `{ type, id }` from parseEntityUrl,
+// and what entityRoute turns back into a page. The repository part is always
+// canonical (lowercase), the same key the pull_requests and commits tables use.
+// ---------------------------------------------------------------------------
+
+const REPOSITORY_SOURCE = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\/[a-z0-9_.-]*[a-z0-9_-]";
+export const PR_REF_SOURCE = `${REPOSITORY_SOURCE}#\\d+`;
+export const COMMIT_REF_SOURCE = `${REPOSITORY_SOURCE}@[0-9a-f]{7,40}`;
+
+export type RepoObjectRef =
+  | { type: "pr"; repository: string; number: number }
+  | { type: "commit"; repository: string; sha: string };
+
+/** `owner/repo#482` or `owner/repo@<sha>`, or null for anything else. */
+export function parseRepoObjectId(id: string | undefined | null): RepoObjectRef | null {
+  const s = (id || "").trim();
+  const pr = new RegExp(`^(${REPOSITORY_SOURCE})#(\\d+)$`, "i").exec(s);
+  if (pr) return { type: "pr", repository: pr[1].toLowerCase(), number: Number(pr[2]) };
+  const commit = new RegExp(`^(${REPOSITORY_SOURCE})@([0-9a-f]{7,40})$`, "i").exec(s);
+  if (commit) return { type: "commit", repository: commit[1].toLowerCase(), sha: commit[2].toLowerCase() };
+  return null;
+}
+
+/** The reference string for a repository object — the inverse of parseRepoObjectId. */
+export function repoObjectId(ref: RepoObjectRef): string {
+  const repository = ref.repository.trim().toLowerCase();
+  return ref.type === "pr" ? `${repository}#${ref.number}` : `${repository}@${ref.sha.toLowerCase()}`;
+}
+
+/**
+ * The in-app page for a repository object reference. A raw Convex id names
+ * the row but not its repository, so it cannot be routed from here — the
+ * caller resolves the row first and routes by its repository and number.
+ */
+export function repoObjectRoute(id: string): string | null {
+  const ref = parseRepoObjectId(id);
+  if (!ref) return null;
+  return ref.type === "pr" ? `${ENTITY_ROUTE.pr}/${ref.repository}/${ref.number}` : `${ENTITY_ROUTE.commit}/${ref.repository}/${ref.sha}`;
+}
+
+function isGitHubHost(host: string): boolean {
+  return /^(www\.)?github\.com$/i.test(host);
+}
+
+function stripGitSuffix(name: string): string {
+  return name.replace(/\.git$/i, "");
+}
+
+/**
+ * A repository object named by a URL: a GitHub pull request or commit page, or
+ * the codecast page for one in either family (app `/pr/o/r/482`,
+ * `/commit/o/r/<sha>`; standalone `/r/o/r/pull/482`, `/r/o/r/commit/<sha>`).
+ * Anything after the object (`/files`, `/checks`, a fragment) is dropped: it
+ * addresses a view of the object, and the object is what the reference names.
+ */
+function parseRepoObjectPath(segs: string[], github: boolean): RepoObjectRef | null {
+  const object = (owner: string, name: string, kind: string, value: string): RepoObjectRef | null => {
+    const repository = `${owner}/${stripGitSuffix(name)}`.toLowerCase();
+    if (!new RegExp(`^${REPOSITORY_SOURCE}$`, "i").test(repository)) return null;
+    if ((kind === "pull" || kind === "pr") && /^\d+$/.test(value)) return { type: "pr", repository, number: Number(value) };
+    if (kind === "commit" && /^[0-9a-f]{7,40}$/i.test(value)) return { type: "commit", repository, sha: value.toLowerCase() };
+    return null;
+  };
+  if (github) {
+    // github.com/<owner>/<repo>/pull/<n>, github.com/<owner>/<repo>/commit/<sha>
+    return segs.length >= 4 ? object(segs[0], segs[1], segs[2], segs[3]) : null;
+  }
+  const head = segs[0]?.toLowerCase();
+  // /pr/<owner>/<repo>/<n>, /commit/<owner>/<repo>/<sha>
+  if ((head === "pr" || head === "commit") && segs.length >= 4) return object(segs[1], segs[2], head, segs[3]);
+  // /r/<owner>/<repo>/pull/<n>, /r/<owner>/<repo>/commit/<sha>
+  if (head === "r" && segs.length >= 5) return object(segs[1], segs[2], segs[3].toLowerCase(), segs[4]);
+  return null;
+}
+
+export type GitHubLocation = {
+  repository: string;
+  kind: "repo" | "tree" | "blob" | "commits" | "compare" | "branches" | "tags" | "pulls";
+  /** A branch, tag or sha. GitHub URLs do not delimit a ref from the path, so the first segment is taken as the ref. */
+  ref?: string;
+  path?: string;
+  /** Line range from a `#L10` or `#L10-L20` fragment on a blob. */
+  line?: number;
+  endLine?: number;
+  /** The two sides of a compare range. */
+  base?: string;
+  head?: string;
+};
+
+/**
+ * A GitHub URL that names a PLACE in a repository rather than an object: the
+ * repository itself, a tree or file at a ref, a commit list, a compare range,
+ * or the branches, tags and pulls lists. Pull request and commit URLs are
+ * objects and parse through parseEntityUrl instead; this returns null for them
+ * and for every URL off github.com.
+ */
+export function parseGitHubLocationUrl(href: string | undefined | null): GitHubLocation | null {
+  if (!href || typeof href !== "string" || !/^https?:\/\//i.test(href.trim())) return null;
+  let u: URL;
+  try {
+    u = new URL(href.trim());
+  } catch {
+    return null;
+  }
+  if (!isGitHubHost(u.host)) return null;
+  const segs = u.pathname.split("/").filter(Boolean).map((s) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  });
+  if (segs.length < 2) return null;
+  const repository = `${segs[0]}/${stripGitSuffix(segs[1])}`.toLowerCase();
+  if (!new RegExp(`^${REPOSITORY_SOURCE}$`, "i").test(repository)) return null;
+  if (segs.length === 2) return { repository, kind: "repo" };
+  const kind = segs[2].toLowerCase();
+  const rest = segs.slice(3);
+  if (kind === "tree" && rest.length >= 1) {
+    return { repository, kind: "tree", ref: rest[0], ...(rest.length > 1 ? { path: rest.slice(1).join("/") } : {}) };
+  }
+  if (kind === "blob" && rest.length >= 2) {
+    const lines = /^#L(\d+)(?:-L?(\d+))?$/.exec(u.hash);
+    return {
+      repository,
+      kind: "blob",
+      ref: rest[0],
+      path: rest.slice(1).join("/"),
+      ...(lines ? { line: Number(lines[1]), ...(lines[2] ? { endLine: Number(lines[2]) } : {}) } : {}),
+    };
+  }
+  if (kind === "commits") {
+    return { repository, kind: "commits", ...(rest.length >= 1 ? { ref: rest[0] } : {}), ...(rest.length > 1 ? { path: rest.slice(1).join("/") } : {}) };
+  }
+  if (kind === "compare" && rest.length >= 1) {
+    const range = rest.join("/");
+    const at = range.indexOf("...");
+    if (at <= 0 || at + 3 >= range.length) return null;
+    return { repository, kind: "compare", base: range.slice(0, at), head: range.slice(at + 3) };
+  }
+  if (kind === "branches" || kind === "tags" || kind === "pulls") return { repository, kind };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +323,10 @@ const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
  * alternation — mobile's markdown tokenizer scans every inline form in one
  * pass, so it needs the branch, not a standalone matcher.
  */
-export const BARE_ID_SOURCE = `(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
 export function bareEntityIdRegex(): RegExp {
@@ -239,6 +397,72 @@ export function entityReferenceLabel(args: {
   return args.rawId;
 }
 
+// ---------------------------------------------------------------------------
+// The SHORT name of a reference
+//
+// A title is a sentence ("Broker context render unification"); a name is what
+// a teammate says out loud ("Broker render"). Prose that mentions the same
+// object again and again reads as a wall of titles, so a repeat mention shows
+// the short name instead. Sessions carry a generated one (`short_title`,
+// written by title generation); every other object derives one from its
+// title here, so the rule stays the same on every platform.
+// ---------------------------------------------------------------------------
+
+/** Longest short name a compact reference shows. */
+export const ENTITY_SHORT_LABEL_MAX = 22;
+
+// Function words that carry no identity. A derived short name skips them so
+// "Unify the AI's context" becomes "Unify AI's context", not "Unify the".
+const SHORT_LABEL_STOPWORDS = new Set([
+  "a", "an", "the", "of", "to", "for", "in", "on", "at", "by", "and", "or",
+  "its", "with", "from", "into", "over", "via", "vs", "is", "are", "be",
+]);
+
+/**
+ * Derive a short name from a title: the first two words that carry identity,
+ * clipped to the short budget, trailing punctuation dropped. Deterministic —
+ * the same title always yields the same name, so a reader learns it once.
+ */
+export function deriveShortLabel(title: string, max: number = ENTITY_SHORT_LABEL_MAX): string {
+  const words = title
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .filter(Boolean);
+  if (words.length === 0) return "";
+  const content = words.filter((w) => !SHORT_LABEL_STOPWORDS.has(w.toLowerCase()));
+  const picked = (content.length ? content : words).slice(0, 2);
+  let out = picked.join(" ");
+  if (out.length > max) {
+    // Two words overran the budget: fall back to the first alone, clipped.
+    out = picked[0].length <= max ? picked[0] : picked[0].slice(0, max - 1) + "…";
+  }
+  return out;
+}
+
+/**
+ * The text a COMPACT reference shows — a repeat mention inside one message,
+ * or any surface where the full title would drown the line. The stored short
+ * title wins; otherwise the name is derived from the title; otherwise the
+ * same degradations as the full label.
+ */
+export function entityShortLabel(args: {
+  shortTitle?: string | null;
+  title?: string | null;
+  shortId?: string | null;
+  rawId: string;
+  typeLabel?: string | null;
+}): string {
+  const stored = args.shortTitle?.trim();
+  if (stored) return truncateEntityLabel(stored, ENTITY_SHORT_LABEL_MAX);
+  const title = args.title?.trim();
+  if (title) {
+    const derived = deriveShortLabel(title);
+    if (derived) return derived;
+  }
+  return entityReferenceLabel(args);
+}
+
 /**
  * True for hosts we treat as "ours" — production, the dev origins, and
  * localhost. Only links on these hosts (or path-only links) are eligible to
@@ -273,6 +497,13 @@ export function parseEntityUrl(
     } catch {
       return null;
     }
+    if (isGitHubHost(u.host)) {
+      // A GitHub pull request or commit page names the same object codecast
+      // has a page for, so it becomes that reference; every other GitHub URL
+      // is a place (see parseGitHubLocationUrl) or foreign.
+      const ref = parseRepoObjectPath(u.pathname.split("/").filter(Boolean), true);
+      return ref ? { type: ref.type, id: repoObjectId(ref) } : null;
+    }
     if (!isAppHost(u.host)) return null;
     path = u.pathname;
     search = u.search;
@@ -292,6 +523,8 @@ export function parseEntityUrl(
 
   const segs = path.split("/").filter(Boolean);
   if (segs.length < 1) return null;
+  const repoObject = parseRepoObjectPath(segs, false);
+  if (repoObject) return { type: repoObject.type, id: repoObjectId(repoObject) };
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
 

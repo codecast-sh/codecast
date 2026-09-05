@@ -8,6 +8,8 @@ import {
   FileText,
   Folder,
   Zap,
+  GitPullRequest,
+  GitCommitHorizontal,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
@@ -23,6 +25,7 @@ import {
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
 import {
   AuthorAvatar,
+  DiffStat,
   PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
@@ -31,6 +34,8 @@ import {
   taskPeople,
   useEntityResolution,
 } from "./entityDisplay";
+import { prState, repoObjectRefOf } from "../lib/repoObjects";
+import { githubLocationHref } from "../lib/repoNavigation";
 import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
@@ -38,8 +43,11 @@ import { FilePathLink } from "./FilePathLink";
 import { filePathMention, parseFilePathHref } from "../lib/filePathLinks";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
+import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
+import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { SessionHoverContent } from "./SessionHoverContent";
+import { DocDates } from "./DocDates";
 
 export { SessionHoverContent };
 
@@ -251,6 +259,118 @@ function TriggerHoverContent({ trigger }: { trigger: any }) {
   );
 }
 
+// A pull request reference answers: what it is, whether it is open, merged or
+// closed, who opened it, which branch goes where, and how big it is.
+function PullRequestHoverContent({ pr }: { pr: any }) {
+  const state = prState(pr.state);
+  const when = relativeTime(pr.merged_at ?? pr.updated_at);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <GitPullRequest className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{pr.title || `#${pr.number}`}</div>
+          <div className="flex items-center gap-2 mt-1 text-[10px]">
+            <span className={`font-medium ${state.color}`}>{state.label}</span>
+            {pr.author_github_username && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-gray-400 truncate">{pr.author_github_username}</span>
+              </>
+            )}
+            {when && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-gray-400">{when}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {pr.body && (
+        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+          {stripMarkdown(pr.body).slice(0, 200)}
+        </p>
+      )}
+
+      {(pr.head_ref || pr.additions != null || pr.changed_files != null) && (
+        <div className="flex items-center gap-2 pl-[22px] text-[10px] font-mono text-gray-500 min-w-0">
+          {pr.head_ref && (
+            <span className="truncate">
+              <span className="text-sol-green">{pr.head_ref}</span>
+              {pr.base_ref && (
+                <>
+                  <span className="text-gray-600"> → </span>
+                  <span className="text-sol-blue">{pr.base_ref}</span>
+                </>
+              )}
+            </span>
+          )}
+          <DiffStat additions={pr.additions} deletions={pr.deletions} files={pr.changed_files} className="ml-auto" />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 font-mono truncate">{repoObjectRefOf("pr", pr)}</span>
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5 flex-shrink-0">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// A commit reference answers: its subject, who wrote it and when, the branch
+// it landed on, and the body when the message has one.
+function CommitHoverContent({ commit }: { commit: any }) {
+  const lines = String(commit.message ?? "").split("\n");
+  const subject = lines[0]?.trim();
+  const body = lines.slice(1).join("\n").trim();
+  const when = relativeTime(commit.timestamp);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <GitCommitHorizontal className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-yellow" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{subject || commit.sha.slice(0, 7)}</div>
+          <div className="flex items-center gap-2 mt-1 text-[10px] min-w-0">
+            {commit.author_name && <span className="text-gray-400 truncate">{commit.author_name}</span>}
+            {when && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-gray-400">{when}</span>
+              </>
+            )}
+            {commit.branch && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-gray-400 font-mono truncate">{commit.branch}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {body && (
+        <p className="text-[11px] text-gray-400 line-clamp-3 leading-relaxed pl-[22px] whitespace-pre-line">
+          {body.slice(0, 220)}
+        </p>
+      )}
+
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 font-mono inline-flex items-center gap-2 min-w-0">
+          <span className="truncate">{commit.repository ? `${commit.repository}@` : ""}{commit.sha.slice(0, 7)}</span>
+          <DiffStat additions={commit.insertions} deletions={commit.deletions} files={commit.files_changed} />
+        </span>
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5 flex-shrink-0">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
 const MENTION_RE = entityMentionRegex();
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
@@ -299,12 +419,25 @@ export function TextWithMentions({ text }: { text: string }) {
   return <>{parts.length > 0 ? parts : [text]}</>;
 }
 
-export function EntityAwareCode({ children, className, ...props }: any) {
+// The remark plugin numbers each mention within one markdown body
+// (`data-ref-nth`) and marks the ones the author spelled out as
+// `@[Title id]` (`data-ref-named`). Read them off the element props here, and
+// strip them so the plain-element fallbacks do not leak them into the DOM.
+function takeMentionProps(props: any): { mention: MentionInfo; rest: any } {
+  const { [REF_NTH_ATTR]: nth, [REF_NAMED_ATTR]: named, [REF_SUFFIX_ATTR]: suffix, ...rest } = props ?? {};
+  return {
+    mention: { nth: Number(nth) || undefined, named: named != null && named !== false, suffix: typeof suffix === "string" ? suffix : undefined },
+    rest,
+  };
+}
+
+export function EntityAwareCode({ children, className, ...allProps }: any) {
   const text = String(children);
+  const { mention: mentionInfo, rest: props } = takeMentionProps(allProps);
   // The fallback keeps a non-entity Convex-shaped string (message id, hash)
   // rendered as the inline code it was written as.
   if (!className && isEntityId(text)) {
-    return <EntityIdPill shortId={text} fallback={<code className={className} {...props}>{children}</code>} />;
+    return <EntityIdPill shortId={text} mention={mentionInfo} fallback={<code className={className} {...props}>{children}</code>} />;
   }
   const code = <code className={className} {...props}>{children}</code>;
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
@@ -314,7 +447,8 @@ export function EntityAwareCode({ children, className, ...props }: any) {
   return code;
 }
 
-export function EntityAwareLink({ href, children, ...props }: any) {
+export function EntityAwareLink({ href, children, ...allProps }: any) {
+  const { mention, rest: props } = takeMentionProps(allProps);
   {
     // Transclusion: ![[doc:<id>]] arrives as a link whose TEXT is
     // "embed:doc:<id>" (the embed:// href is dropped by react-markdown's url
@@ -353,11 +487,11 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   }
   if (href?.startsWith("entity://")) {
     const ref = href.slice(9);
-    if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
+    if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} mention={mention} />;
     if (ref.startsWith(MESSAGE_REF_PREFIX)) return <SharedMessagePill refId={ref} />;
     const date = parseDateRef(ref);
     if (date) return <DatePill iso={date.iso} label={date.label} />;
-    return <EntityIdPill shortId={ref} />;
+    return <EntityIdPill shortId={ref} mention={mention} />;
   }
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
   // it here, where the conversation's working directory is in context.
@@ -376,7 +510,7 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   // link text (the entity:// href is stripped by react-markdown's url
   // sanitizer). This is the markdown twin of the entity:// branch above.
   if (text.startsWith("doc:") && text.length > 4) {
-    return <EntityIdPill type="doc" id={text.slice(4)} />;
+    return <EntityIdPill type="doc" id={text.slice(4)} mention={mention} />;
   }
   // A message reference's text payload (`msg:<token or id>`), same convention.
   if (text.startsWith(MESSAGE_REF_PREFIX) && text.length > MESSAGE_REF_PREFIX.length) {
@@ -390,12 +524,14 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   }
   if (isEntityId(text)) {
     // Fallback preserves the original link for a Convex-shaped id that turns
-    // out not to be one of our entities (entity:// hrefs arrive stripped, so
-    // this degrades to plain text for those).
+    // out not to be one of our entities. An entity:// href arrives stripped
+    // (empty), and an anchor with no href opens a blank tab, so that case
+    // degrades to the plain text instead.
     return (
       <EntityIdPill
         shortId={text}
-        fallback={<a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>}
+        mention={mention}
+        fallback={href ? <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a> : <>{children}</>}
       />
     );
   }
@@ -403,7 +539,18 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   // becomes a rich, in-app pill instead of an external link.
   const entityRef = parseEntityUrl(href);
   if (entityRef) {
-    return <EntityIdPill type={entityRef.type} id={entityRef.id} />;
+    // A GitHub pull request or commit URL is the same object as its codecast
+    // page, so it renders as that pill. One codecast does not know yet (no
+    // installation, not synced) stays the GitHub link it was — never bare text.
+    const github = /^https?:\/\/(www\.)?github\.com\//i.test(href ?? "");
+    return (
+      <EntityIdPill
+        type={entityRef.type}
+        id={entityRef.id}
+        mention={mention}
+        fallback={github ? <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a> : undefined}
+      />
+    );
   }
   // A publish URL inside a sentence: a compact titled pill. The block-embed
   // case (URL alone on its line) never reaches here — remarkEntityIds hoists
@@ -411,6 +558,12 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   const page = parsePublishedPageUrl(href);
   if (page) {
     return <PublishedPagePill slug={page.slug} href={href} label={text && text !== href ? text : undefined} />;
+  }
+  // A GitHub link to a place in a repository — a file, a tree, a compare, the
+  // repository itself — opens the codecast page for it, in this window.
+  const internal = githubLocationHref(href);
+  if (internal) {
+    return <Link href={internal} className={(props as any).className}>{children}</Link>;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }
@@ -424,7 +577,6 @@ function genericTitle(entity: any): string {
 function DocHoverContent({ doc }: { doc: any }) {
   const preview = docContentPreview(doc.content);
   const typeLabel = doc.doc_type ? doc.doc_type.charAt(0).toUpperCase() + doc.doc_type.slice(1) : "Doc";
-  const timeAgo = relativeTime(doc.updated_at);
 
   return (
     <div className="space-y-2">
@@ -434,10 +586,10 @@ function DocHoverContent({ doc }: { doc: any }) {
           <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(doc)}</div>
           <div className="flex items-center gap-2 mt-1">
             <span className="text-[10px] font-medium text-sol-green">{typeLabel}</span>
-            {timeAgo && (
+            {doc.created_at && (
               <>
                 <span className="text-gray-600">·</span>
-                <span className="text-[10px] text-gray-400">{timeAgo}</span>
+                <DocDates doc={doc} variant="full" className="text-[10px] text-gray-400" />
               </>
             )}
           </div>
@@ -487,15 +639,48 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
 }
 
 
-export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
+/** Where a mention sits in its message: its ordinal, whether the author
+ *  wrote the name out (`@[Title id]`), and a possessive glued to it.
+ *  Stamped by remarkEntityIds. */
+export type MentionInfo = { nth?: number; named?: boolean; suffix?: string };
+
+export function EntityIdPill({
+  shortId,
+  type: typeProp,
+  id: idProp,
+  fallback,
+  mention,
+  compact: compactProp,
+}: {
+  shortId?: string;
+  type?: EntityType;
+  id?: string;
+  fallback?: React.ReactNode;
+  mention?: MentionInfo;
+  /** Force the short-name form (a surface too narrow for a title). */
+  compact?: boolean;
+}) {
   // All resolution — type sniffing/server resolve, webGet queries, the
   // local-first store seed, label and route — is the shared hook.
   const rawRef = (idProp ?? shortId ?? "").trim();
-  const { rawId, type, entity, status, label: pillLabel, href } = useEntityResolution(rawRef, typeProp);
+  const { rawId, type, entity, status, label: fullLabel, shortLabel, href } = useEntityResolution(rawRef, typeProp);
+  // A reader needs the title once. A repeat mention in the same message — or
+  // a mention of an object the surrounding chrome already named (the sender
+  // of a "message from" card) — shows the object's short NAME instead, so
+  // prose that names one session four times reads as a sentence, not a wall
+  // of titles. An author who spelled the name out (`@[Title id]`) always gets
+  // the full form: they asked for the name in the sentence.
+  const establishedByRaw = useIsEstablishedRef(rawId);
+  const establishedByShortId = useIsEstablishedRef(entity?.short_id);
+  const established = establishedByRaw || establishedByShortId;
+  const compact = compactProp ?? (!mention?.named && ((mention?.nth ?? 1) > 1 || established));
+  const pillLabel = compact ? shortLabel : fullLabel;
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
   const isTrigger = type === "trigger";
+  const isPr = type === "pr";
+  const isCommit = type === "commit";
 
   const [hoverOpen, setHoverOpen] = useState(false);
   const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -521,19 +706,27 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ? FileText
           : type === "project"
             ? Folder
-            : taskV.icon;
+            : isPr
+              ? GitPullRequest
+              : isCommit
+                ? GitCommitHorizontal
+                : taskV.icon;
 
   const colors = isSession
-    ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
+    ? "bg-sol-blue/[0.08] text-sol-blue hover:bg-sol-blue/[0.16]"
     : isPlan
-      ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
+      ? "bg-sol-cyan/[0.08] text-sol-cyan hover:bg-sol-cyan/[0.16]"
       : isTrigger
-        ? "bg-sol-orange/10 text-sol-orange border-sol-orange/20 hover:bg-sol-orange/20"
+        ? "bg-sol-orange/[0.08] text-sol-orange hover:bg-sol-orange/[0.16]"
         : type === "doc"
-          ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
+          ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
           : type === "project"
-            ? "bg-sol-text-dim/10 text-sol-text-muted border-sol-text-dim/20 hover:bg-sol-text-dim/20"
-            : "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20";
+            ? "bg-sol-text-dim/[0.08] text-sol-text-muted hover:bg-sol-text-dim/[0.16]"
+            : isPr
+              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              : isCommit
+                ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
+                : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
 
   const cancelHover = useCallback(() => {
     if (hoverTimeout.current) {
@@ -583,9 +776,21 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   // Unknown id shape, or a Convex id that resolved to no entity table (message
   // id, random hash) — render the caller's original element, or the raw text.
   // Also the transient state while resolveIdType is in flight.
-  if (!type) return fallback !== undefined ? <>{fallback}</> : <span>{rawId}</span>;
+  const suffix = mention?.suffix;
+  if (!type) return fallback !== undefined ? <>{fallback}{suffix}</> : <span>{rawId}{suffix}</span>;
+  // A pull request or commit reference wears a pill only once its row is in
+  // hand. `owner/repo#12` is also the shape of a file path with a line hash,
+  // and `owner/repo@1234567` of a version pin, so one that names nothing
+  // codecast knows stays the text (or the GitHub link) it was written as.
+  if ((isPr || isCommit) && !entity) return fallback !== undefined ? <>{fallback}</> : <span>{rawId}</span>;
 
+  // Quiet chrome: the reference sits IN the sentence — same size as the
+  // prose, no border, a faint tint of the type's color, the way a mention
+  // reads in chat. The icon and the color say "this is an object"; the box
+  // that used to say it was what turned a paragraph with four references
+  // into a row of stamps.
   return (
+    <>
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
       <PopoverAnchor asChild>
         <Link
@@ -593,13 +798,14 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           onClick={handleClick}
           onMouseEnter={openSoon}
           onMouseLeave={closeSoon}
-          className={`not-prose inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[3px] px-[3px] rounded-[3px] text-[0.94em] font-medium leading-[1.3] no-underline ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          title={compact && fullLabel !== pillLabel ? fullLabel : undefined}
         >
-          <span className="relative flex-shrink-0">
+          <span className="relative flex-shrink-0 opacity-80">
             {isSession && (entity?.author_name || entity?.author_avatar) ? (
-              <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={14} />
+              <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={12} />
             ) : (
-              <Icon className={`w-3 h-3 ${isTask ? taskV.color : ""}`} />
+              <Icon className={`w-[0.85em] h-[0.85em] ${isTask ? taskV.color : ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
@@ -609,7 +815,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         </Link>
       </PopoverAnchor>
       <PopoverContent
-        className={`${type === "doc" ? "w-80" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        className={`${type === "doc" ? "w-80" : isPr || isCommit ? "w-72" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
@@ -632,6 +838,8 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             : isSession ? <SessionHoverContent session={entity} />
             : isTrigger ? <TriggerHoverContent trigger={entity} />
             : type === "doc" ? <DocHoverContent doc={entity} />
+            : isPr ? <PullRequestHoverContent pr={entity} />
+            : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />
           ) : (
             <div className="text-[11px] text-gray-500">{pillLabel}</div>
@@ -639,5 +847,8 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         </Link>
       </PopoverContent>
     </Popover>
+    {/* The possessive sits against the label, not a padding-width away. */}
+    {suffix && <span className="-ml-[3px]">{suffix}</span>}
+    </>
   );
 }

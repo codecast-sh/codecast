@@ -59,10 +59,24 @@ const LONG_TITLE_TASK = {
 // hands back a fresh object, so `===` on it never matches.)
 const { getFunctionName } = await import("convex/server");
 
+// A session with a generated short name — the form a repeat mention takes.
+const SESSION_CONVEX_ID = "qx72qtvpbmmrmwcjqmhzawejsx8bq9gm";
+const FAKE_SESSION = {
+  _id: SESSION_CONVEX_ID,
+  short_id: "jx7b7mx",
+  session_id: "sess-1",
+  title: "Broker context render unification",
+  short_title: "Broker render",
+  status: "active",
+  updated_at: Date.now(),
+  is_own: true,
+};
+
 const ROWS: Record<string, any[]> = {
   "agentTasks:webGet": [FAKE_TRIGGER],
   "tasks:webGet": [FAKE_TASK, LONG_TITLE_TASK],
   "plans:webGet": [FAKE_PLAN],
+  "conversations:webGet": [FAKE_SESSION],
 };
 
 const TYPE_OF_CONVEX_ID: Record<string, string> = {
@@ -157,6 +171,27 @@ function pillText(html: string): string {
   return m ? m[1] : "";
 }
 
+// Every pill's visible text, in reading order.
+function pillTexts(html: string): string[] {
+  return [...html.matchAll(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span>([^<]*)<\/span><\/a>/g)].map((m) => m[1]);
+}
+
+const { EstablishedRefsProvider } = await import("../hooks/entityMentionScope");
+
+// The same pipeline inside a "message from <sender>" card: the header already
+// named the sender, and the body renders under that knowledge.
+function renderFrom(sender: string, markdown: string): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <EstablishedRefsProvider ids={[sender]}>
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
+          {markdown}
+        </ReactMarkdown>
+      </EstablishedRefsProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("inline trigger references", () => {
   test("a bare short id renders the trigger's name, not its id", () => {
     const html = render("Trigger tr-42 marked complete.");
@@ -246,6 +281,59 @@ describe("inline task and plan references", () => {
     // must not go blank or claim a title it never got — it falls back to the id.
     const html = render("Ask them about ct-99999.");
     expect(html).toContain("ct-99999");
+  });
+});
+
+describe("first mention vs. repeat", () => {
+  // The symptom: an agent's reply named the same session four times and the
+  // paragraph rendered as four full-title pills — a wall of titles, not a
+  // sentence. A reader needs the title ONCE; after that the short name is
+  // enough, and the title stays one hover away.
+  test("the first mention shows the title, every repeat shows the short name", () => {
+    const html = render("jx7b7mx flagged the checks. jx7b7mx's owner replied, so it goes back to jx7b7mx.");
+    expect(pillTexts(html)).toEqual(["Broker context render unification", "Broker render", "Broker render"]);
+    // The repeat still carries the full title for a reader who hovers.
+    expect(html).toContain('title="Broker context render unification"');
+  });
+
+  test("an object without a stored short name derives one from its title", () => {
+    const html = render("Blocked on ct-77; ct-77 needs the restart first.");
+    expect(pillTexts(html)).toEqual(["Rewrite the delivery pipeline so queued…", "Rewrite delivery"]);
+  });
+
+  test("a mention the author spelled out (@[Title id]) always renders in full", () => {
+    const html = render("ct-38940 is close. Ship @[Retry queue ct-38940] today.");
+    expect(pillTexts(html)).toEqual(["Retry queue for failed webhooks", "Retry queue for failed webhooks"]);
+  });
+
+  test("different objects are counted apart", () => {
+    const html = render("pl-88 covers ct-38940; ct-38940 lands under pl-88.");
+    // A two-word title already IS a name, so its repeat reads the same.
+    expect(pillTexts(html)).toEqual(["Billing migration", "Retry queue for failed webhooks", "Retry queue", "Billing migration"]);
+  });
+
+  test("a backticked repeat is a repeat too", () => {
+    const html = render("Filed ct-38940. Ticks up on `ct-38940` now.");
+    expect(pillTexts(html)).toEqual(["Retry queue for failed webhooks", "Retry queue"]);
+  });
+
+  test("inside a message-from card, the sender is already introduced", () => {
+    const html = renderFrom("jx7b7mx", "I am jx7b7mx and ct-38940 is mine.");
+    expect(pillTexts(html)).toEqual(["Broker render", "Retry queue for failed webhooks"]);
+  });
+
+  test("a possessive glued to a reference rides on the pill", () => {
+    const html = render("Check jx7b7mx's owner and ct-38940’s plan.");
+    expect(pillTexts(html)).toEqual(["Broker context render unification", "Retry queue for failed webhooks"]);
+    // The apostrophe-s leaves the prose text node and renders against the pill.
+    expect(html).toContain("</a><span class=\"-ml-[3px]\">&#x27;s</span> owner");
+    expect(html).toContain("</a><span class=\"-ml-[3px]\">’s</span> plan.");
+  });
+
+  test("each message body counts from one", () => {
+    // Two bodies, two parses: the second is a new reader context.
+    expect(pillText(render("First: ct-38940."))).toBe("Retry queue for failed webhooks");
+    expect(pillText(render("Again: ct-38940."))).toBe("Retry queue for failed webhooks");
   });
 });
 
@@ -349,12 +437,12 @@ describe("pill chrome", () => {
     // ct-38940 is in_progress → the yellow disc.
     const html = render("Ticks up on ct-38940 now.");
     expect(html).toContain("text-sol-yellow");
-    expect(html).toContain("bg-sol-violet/10");
+    expect(html).toContain("bg-sol-violet/[0.08]");
   });
 
   test("a plan pill carries no task status colour", () => {
     const html = render("Rolled into pl-88 this week.");
-    expect(html).toContain("bg-sol-cyan/10");
+    expect(html).toContain("bg-sol-cyan/[0.08]");
     expect(html).not.toContain("text-sol-yellow");
   });
 });

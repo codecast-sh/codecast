@@ -169,6 +169,40 @@ async function recordRestartIntent(
 }
 
 describe("fenced execution startup authority", () => {
+  test("safety holds queued delivery without consuming its message or creating an attempt", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    await db.patch(CONVERSATION, { pending_api_error: true, pending_api_error_kind: "safety" });
+    const id = await enqueue(ctx, "safety-queued", "Preserve this update");
+    expect(await claimDelivery(ctx)).toEqual({ state: "busy", reason: "safety" });
+    expect(db._tables.delivery_attempts).toHaveLength(0);
+    expect(await db.get(id)).toMatchObject({ content: "Preserve this update", status: "pending" });
+  });
+
+  test("safety arriving after a claim prevents the delivery effect", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const id = await enqueue(ctx, "safety-race");
+    const claim = await claimDelivery(ctx);
+    await db.patch(CONVERSATION, { pending_api_error_kind: "safety" });
+    await expect(startDeliveryInDb(ctx, USER, { ...fence(claim.permit), now: 21 }))
+      .rejects.toThrow("CONVERSATION_SAFETY_BLOCKED");
+    expect(await db.get(id)).toMatchObject({ delivery_status: "claimed", content: "safety-race" });
+    expect(db._tables.delivery_attempts[0].state).toBe("claimed");
+  });
+
+  test("a safety stop still permits recording an effect that already happened", async () => {
+    const db = makeFakeDb(tables());
+    const ctx = await initializeAndReady(db);
+    const id = await enqueue(ctx, "safety-after-effect");
+    const claim = await claimDelivery(ctx);
+    const started = await startDeliveryInDb(ctx, USER, { ...fence(claim.permit), now: 21 });
+    await db.patch(CONVERSATION, { pending_api_error_kind: "safety" });
+    expect(await completeDeliveryInDb(ctx, USER, { ...fence(started), externalDeliveryId: "turn-1", now: 22 }))
+      .toEqual({ accepted: true });
+    expect((await db.get(id)).delivery_status).toBe("delivered");
+  });
+
   test("ambient browser auth cannot enter the daemon effect authority", async () => {
     const browserOnlyCtx = {
       auth: { getUserIdentity: async () => ({ subject: String(USER) }) },

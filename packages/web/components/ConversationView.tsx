@@ -1,4 +1,5 @@
-import { sessionRepository } from "../lib/repoNavigation";
+import { HibernatedMarker } from "./HibernatedMarker";
+import { sessionRepository, githubRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import { captureException } from "@sentry/react";
@@ -33,9 +34,9 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -134,9 +135,9 @@ import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
-import { GrokIcon as GrokMark } from "./BrandIcons";
+import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
-import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { HeaderModelControl, LaunchModelPill, useLiveSessionMeta } from "./ModelEffortPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -162,7 +163,8 @@ import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./br
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { DecisionStepperContext, usePendingDecisionItem } from "../hooks/useDecisionQueue";
-import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, type ProjectPathOption } from "../lib/utils";
+import { createProjectFolder, useDirListing } from "../lib/fsBrowse";
 import { findEntityInStore } from "../lib/liveEntities";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
 import { usePendingMessageStatus, usePendingPermissions } from "../hooks/useSyncPendingPermissions";
@@ -172,10 +174,12 @@ import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
+import { MessagePromptPreview } from "./MessagePromptPreview";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, TextWithMentions } from "./EntityIdPill";
+import { EstablishedRefsProvider } from "../hooks/entityMentionScope";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { THREAD_STATE_STATUS_META } from "../lib/threadState";
@@ -184,14 +188,15 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
-import { isStickyEligible, pickStickyFallbackFromLoaded } from "../lib/messageNavigator";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, stickyPromptContent, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent } from "../lib/messageNavigator";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
+import { DocDates } from "./DocDates";
 
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
@@ -231,7 +236,7 @@ import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../li
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -1108,6 +1113,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   }));
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
   const cloudMode = useInboxStore((s) => s.cloudSessionMode);
+  const convex = useConvex();
   // A cloud session always runs in its own worktree — on the HOST. So the
   // isolated toggle reads as on while cloud mode is, but the flag itself is
   // never written from here: turning cloud off must not strand the user with an
@@ -1264,8 +1270,8 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
   // Home dir inferred from real local roots, so "~/…" resolves to the same place
-  // the daemon would cd to.
-  const homeDir = useMemo(
+  // the daemon would cd to — until the daemon's own listing says for sure.
+  const inferredHome = useMemo(
     () => inferHomeDir([currentPath, ...recentProjects.map((p: { path: string }) => p.path)]),
     [currentPath, recentProjects],
   );
@@ -1274,9 +1280,18 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // project (its parent dir), so typing "weekend-hack" means the folder next to
   // the one you're in, not a dead end.
   const projectBase = useMemo(
-    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), homeDir),
-    [currentPath, recentProjects, homeDir],
+    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), inferredHome),
+    [currentPath, recentProjects, inferredHome],
   );
+
+  // The machine's real folders behind the typed text (shell-completion style),
+  // from the daemon on THIS machine — and only while the session routes here:
+  // a cloud session's folders live on the host, another machine's on it.
+  const { listing: diskListing, home: diskHome } = useDirListing(convex, filter, inferredHome, projectBase, {
+    enabled: picking && !cloudMode,
+    deviceId: scopedDeviceId,
+  });
+  const homeDir = diskHome ?? inferredHome;
 
   // While navigating with the keyboard: ALL recent projects (current first —
   // the full fetched list, not just the 6 default chips), or — once the user
@@ -1288,7 +1303,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // (so plain filtering — "co" → codecast — stays clean). The daemon's
   // start_session takes the cwd verbatim, so the fully-resolved path is all it
   // needs, and the chip shows that path so a wrong base guess is visible first.
-  const pickList = useMemo<{ path: string; custom?: boolean; extra?: boolean }[]>(() => {
+  const pickList = useMemo<(ProjectPathOption & { extra?: boolean })[]>(() => {
     if (filter.trim()) {
       return buildProjectPathOptions({
         query: filter,
@@ -1296,6 +1311,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         home: homeDir,
         base: projectBase,
         currentPath,
+        listing: diskListing,
       });
     }
     // Unfiltered browse opens on EXACTLY the resting row — same chips, same
@@ -1311,7 +1327,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       .filter((p) => !shown.has(p.path))
       .map((p) => ({ path: p.path, extra: true }));
     return base.concat(head, rest);
-  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, showSuggested]);
+  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, showSuggested, diskListing]);
 
   // How many folders the collapsed picker is holding back (rarely-used ones
   // plus the machine's never-used roots) — the expander's count.
@@ -1386,6 +1402,25 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     });
   }, [storeSession, conversation._id, convCommand, currentPath, isolated, cloudMode, scopedDeviceId]);
 
+  // A picker row: a folder to switch to, or one to CREATE first. Creation is
+  // optimistic — the switch goes out on the assumption the daemon's mkdir
+  // lands (it's one syscall away); a refusal surfaces as a toast.
+  const pickOption = useCallback((p: ProjectPathOption) => {
+    if (p.create) {
+      createProjectFolder(convex, p.path, scopedDeviceId).catch((err) => {
+        toast.error(err instanceof Error ? err.message : "Couldn't create folder");
+      });
+    }
+    handleSwitch(p.path);
+  }, [convex, scopedDeviceId, handleSwitch]);
+
+  // Tab descends into the highlighted folder: the text becomes that path with
+  // a trailing slash, which lists its children.
+  const descendInto = useCallback((p: ProjectPathOption) => {
+    setFilter(displayPath(p.path, homeDir) + "/");
+    setHi(0);
+  }, [homeDir]);
+
   // Picking a machine moves the (still blank) session there right away rather
   // than waiting on a folder pick the user may never make. That reconfigure only
   // bites when the conversation already exists server-side; every new-session
@@ -1454,7 +1489,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       },
       commitAndClose: () => {
         const sel = pickList[clampedHi];
-        if (sel) handleSwitch(sel.path);
+        if (sel) pickOption(sel);
         exitPicker(false);
       },
     };
@@ -1477,21 +1512,28 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       setHi((i) => (pickList.length ? (i - 1 + pickList.length) % pickList.length : 0));
       return;
     }
+    const sel = pickList[Math.min(hi, Math.max(0, pickList.length - 1))];
     if (e.key === "Enter") {
       e.preventDefault();
-      const sel = pickList[Math.min(hi, Math.max(0, pickList.length - 1))];
-      if (sel) handleSwitch(sel.path);
+      if (sel) pickOption(sel);
       exitPicker();
       return;
     }
-    // ↓/Esc/Tab drop back to the message box (⌥↓ — handled by the chord
-    // router before we see it — commits and moves on to the agent row).
+    // Tab while typing completes into the highlighted folder (shell-style);
+    // with nothing typed it drops back to the message box like ↓/Esc do
+    // (⌥↓ — handled by the chord router before we see it — commits and
+    // moves on to the agent row).
+    if (e.key === "Tab" && !e.shiftKey && filter.trim() && sel && !sel.custom) {
+      e.preventDefault();
+      descendInto(sel);
+      return;
+    }
     if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
       e.preventDefault();
       e.stopPropagation();
       exitPicker();
     }
-  }, [pickList, hi, handleSwitch, exitPicker]);
+  }, [pickList, hi, filter, pickOption, descendInto, exitPicker]);
 
   // Mouse-first, and hidden entirely for the single-machine case so that
   // experience is untouched. Offline machines stay pickable: routing falls
@@ -1569,7 +1611,10 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
             />
             <span className="inline-flex items-center gap-2 text-[11px] font-mono">
               <HintKeys keys={["←", "→"]} label="move" />
-              <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
+              <HintKeys keys={["↵"]} label={pickList[clampedHi]?.create ? "create" : pickList[clampedHi]?.custom ? "open" : "select"} />
+              {filter.trim() && pickList[clampedHi] && !pickList[clampedHi].custom && (
+                <HintKeys keys={["Tab"]} label="into" />
+              )}
               <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
               <HintKeys keys={["Esc"]} label="back" />
             </span>
@@ -1598,7 +1643,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                   <button
                     // onMouseDown (not onClick) + preventDefault keeps the filter
                     // input focused so the click isn't lost to an onBlur teardown.
-                    onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
+                    onMouseDown={(e) => { e.preventDefault(); pickOption(p); exitPicker(); }}
                     onMouseEnter={() => setHi(i)}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
                       isHi
@@ -1608,13 +1653,13 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                           : isCurrent
                             ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
                             : "border-sol-border/40 text-sol-text-dim"
-                    } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
-                    title={p.path}
+                    } ${!isHi && (suggestedPaths.has(p.path) || (p.disk && !p.repo)) ? "opacity-60" : ""}`}
+                    title={p.disk ? `${p.path}${p.repo ? " (git repository)" : ""}` : p.path}
                   >
                     {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
                     {p.custom ? (
                       <span className="truncate">
-                        <span className="opacity-60">open </span>
+                        <span className="opacity-60">{p.create ? "create " : "open "}</span>
                         <span className="font-mono">{displayPath(p.path, homeDir)}</span>
                       </span>
                     ) : (
@@ -2282,6 +2327,7 @@ function cleanStickyContent(content: string): string {
 }
 
 type ParsedApiError = {
+  isSafety?: boolean;
   statusCode?: number;
   message: string;
   errorType?: string;
@@ -2330,6 +2376,10 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
+
+  if (classifyApiErrorBanner(trimmed) === "safety") {
+    return { message: trimmed.replace(/^Safety stop:\s*(?:misalignment_policy_violation\s*·\s*)?/, ""), errorType: "misalignment_policy_violation", isSafety: true };
+  }
 
   // Marked opencode/pi provider error: strip the marker, classify (auth vs
   // generic), and show the provider's own text. classifyApiErrorBanner keys on the
@@ -2464,7 +2514,7 @@ function useApiErrorLive(conversationId?: string): boolean {
     if (!conversationId) return true;
     const row = s.sessions[conversationId];
     if (!row) return true;
-    return row.pending_api_error === true;
+    return withSafetyBlock(row).pending_api_error === true;
   });
 }
 
@@ -2482,13 +2532,17 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
     ? { border: "border-sol-border/40 bg-sol-bg-alt/30", fg: "text-sol-text-muted", badge: "border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-muted", icon: "bg-sol-bg-alt text-sol-text-muted" }
     : isServerError
       ? { border: "border-sol-red/40 bg-sol-red/10", fg: "text-sol-red", badge: "border-sol-red/40 bg-sol-red/10 text-sol-red", icon: "bg-sol-red/20 text-sol-red" }
-      : { border: "border-amber-500/40 bg-amber-500/10", fg: "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
+      : { border: "border-amber-500/40 bg-amber-500/10", fg: error.isSafety ? "text-amber-700 dark:text-amber-500" : "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
 
   let heading: string;
   let icon: ReactNode;
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
-  if (error.isAuth) {
+  if (error.isSafety) {
+    heading = "Safety review required";
+    icon = <span className="text-[10px] font-semibold">!</span>;
+    hint = <p className="mt-1.5 text-xs text-sol-text-dim">{SAFETY_BLOCK_HINT}</p>;
+  } else if (error.isAuth) {
     heading = "Authentication required";
     icon = (
       <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -2989,7 +3043,9 @@ function classifyUserMessage(
   // Legacy stored form: command tags were stripped at sync time, leaving "name\n/name\nargs".
   // isCommandMessage misses it (no leading tag/slash), so catch it explicitly.
   if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
-  if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
+  // Only Codex emits <turn_aborted>; classify by the message, not the conversation's
+  // CURRENT agent_type, which changes when the conversation is switched to another agent.
+  if (isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
   if (isAgentSwitchNotice(tNoReminders) || msg.subtype === "agent_switch") {
     const parsed = parseAgentSwitchNotice(tNoReminders);
@@ -3093,13 +3149,7 @@ function ClaudeIcon() {
 }
 
 function CodexIcon() {
-  return (
-    <div className="w-6 h-6 rounded bg-[#0f0f0f] flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729z" fill="white"/>
-      </svg>
-    </div>
-  );
+  return <CodexMark className="w-6 h-6" />;
 }
 
 function CursorIcon() {
@@ -3191,23 +3241,26 @@ function ConversationMetadata({
   conversationId?: string;
   canEditModel?: boolean;
 }) {
-  if (!agentType && !model && !startedAt && !messageCount) return null;
+  const live = useLiveSessionMeta(conversationId);
+  const resolvedAgent = live?.agentType ?? agentType;
+  const resolvedModel = live ? (live.model ?? undefined) : model;
+  if (!resolvedAgent && !resolvedModel && !startedAt && !messageCount) return null;
 
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim min-w-0 overflow-hidden">
-      {agentType && (
+      {resolvedAgent && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
-          title={formatAgentType(agentType)}
+          title={formatAgentType(resolvedAgent)}
         >
-          <AgentTypeIcon agentType={agentType} />
+          <AgentTypeIcon agentType={resolvedAgent} />
         </div>
       )}
       <HeaderModelControl
         conversationId={conversationId}
-        agentType={agentType}
-        model={model}
-        effort={effort}
+        agentType={resolvedAgent}
+        model={resolvedModel}
+        effort={live ? (live.effort ?? undefined) : effort}
         messageCount={messageCount}
         canEdit={!!canEditModel}
       />
@@ -4965,7 +5018,11 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
           <span className="flex-1 text-sm text-sol-text truncate">
             {(entity as any).display_title || entity.title}
           </span>
-          <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+          {type === "doc" && (entity as any).created_at ? (
+            <DocDates doc={entity as any} className="text-[10px] text-sol-text-dim flex-shrink-0" />
+          ) : (
+            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+          )}
         </div>
         {type === "plan" && (entity as any).progress && (
           <div className="flex items-center gap-2 mt-1.5">
@@ -6633,16 +6690,8 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
 //   tagged    "<command-message>x</command-message>\n<command-name>/x</command-name>\n<command-args>a</command-args>"
 //   slash     "/x a"                                   (user-typed, single line)
 //   stripped  "x\n/x\na"                               (legacy: tags removed, values kept on lines)
-// The stripped form is what older sync versions persisted; isStrippedCommand below
-// recognizes it (line 2 is "/" + line 1) so it still classifies + renders as a command.
-function isStrippedCommand(content: string): { cmdName: string; rest: string } | null {
-  const lines = content.split("\n");
-  const first = lines[0]?.trim() ?? "";
-  if (lines.length >= 2 && /^[A-Za-z][\w-]*$/.test(first) && lines[1].trim() === "/" + first) {
-    return { cmdName: first, rest: lines.slice(2).join("\n") };
-  }
-  return null;
-}
+// The stripped form is what older sync versions persisted; isStrippedCommand
+// (conversationProcessor) recognizes it so it still classifies + renders as a command.
 
 function parseCommandInvocation(raw: string): { cmdName: string; args: string } {
   const stripImages = (s: string) =>
@@ -6911,16 +6960,6 @@ function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { conte
 function isInterruptMessage(content: string): boolean {
   const trimmed = content.trim();
   return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
-}
-
-function isCodexTurnAbortedMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return trimmed.startsWith("<turn_aborted>") && trimmed.includes("</turn_aborted>");
-}
-
-function isInterruptLikeMessage(content: string, agentType?: string): boolean {
-  if (isInterruptMessage(content)) return true;
-  return agentType === "codex" && isCodexTurnAbortedMessage(content);
 }
 
 function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { label?: string; tone?: "sky" | "amber" }) {
@@ -7387,9 +7426,13 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
           thread's — it starts clipped so a long handoff doesn't bury the reply. */}
       <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
         <div className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-            components={MESSAGE_MD_COMPONENTS}
-          >{body}</ReactMarkdown>
+          {/* The header just named the sender, so its mentions in the body are
+              repeats and render as the short name. */}
+          <EstablishedRefsProvider ids={[isTeammate ? null : from]}>
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+              components={MESSAGE_MD_COMPONENTS}
+            >{body}</ReactMarkdown>
+          </EstablishedRefsProvider>
         </div>
       </CollapsibleBody>
     </div>
@@ -8549,10 +8592,11 @@ type ReceiptEntry = { messageId: string; messageUuid?: string; timestamp: number
 type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: () => void };
 
 // One distinct receipt standing in for a segment's tool activity in the
-// condensed feed. Closed, it is a faint inset chip, clearly NOT prose: a busy
+// condensed feed. Closed, it is a faint footnote under the prose, with no box
+// of its own so the eye reads the agent's text and skips the receipts: a busy
 // segment counts ("read 3 files · ran 2 commands · 1 search"); one or two
 // tools fit their real subject in the same space, so they say it ("ran npm
-// test"). Screenshots taken by the folded tools ride along as clickable
+// test", "read lib/foo.ts"). Screenshots taken by the folded tools ride along as clickable
 // thumbnails, so images stay reachable without opening the group — which is
 // why the root is a div, not a button (thumbnails are interactive, and
 // buttons can't nest).
@@ -8605,20 +8649,19 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-      className={`flex items-center flex-wrap gap-x-2 gap-y-1 max-w-full cursor-pointer pl-2 pr-2.5 py-0.5 text-[11px] transition-colors ${
+      className={`flex items-center flex-wrap gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer -ml-1 pl-1 pr-2 py-0.5 rounded-md text-[11px] transition-colors ${
         expanded
-          ? "w-fit rounded-md text-sol-text-secondary hover:bg-sol-bg-alt/70"
-          : "w-fit rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
+          ? "text-sol-text-secondary hover:bg-sol-bg-alt/70"
+          : "text-sol-text-dim/70 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
       }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
-      <ChevronRight className={`w-3 h-3 shrink-0 opacity-70 transition-transform ${expanded ? "rotate-90 text-sol-cyan" : ""}`} />
-      <Wrench className="w-3 h-3 shrink-0 opacity-70" />
-      <span className="truncate font-medium tracking-tight">{expanded ? counted : summary}</span>
+      <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90 text-sol-cyan opacity-100" : ""}`} />
+      <span className="truncate tracking-tight">{expanded ? counted : summary}</span>
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
     </div>
   );
-  if (!expanded) return <div className="not-prose mt-1 flex">{header}</div>;
+  if (!expanded) return <div className="not-prose mt-2 flex">{header}</div>;
   return (
     <div className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
       {header}
@@ -8926,7 +8969,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -9705,15 +9748,9 @@ function GitBranchBadge({
 }) {
   const isClean = gitStatus === "(clean)" || gitStatus === "clean" || !gitStatus;
 
-  const githubUrl = gitRemoteUrl
-    ? (() => {
-        const match = gitRemoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
-        if (match) {
-          return `https://github.com/${match[1]}/tree/${gitBranch}`;
-        }
-        return null;
-      })()
-    : null;
+  // The branch opens the repository's tree at that branch inside the app.
+  const repository = githubRepository(gitRemoteUrl);
+  const branchHref = repository && gitBranch ? repoTreeHref(repository, gitBranch) : null;
 
   return (
     <button
@@ -9722,16 +9759,14 @@ function GitBranchBadge({
       title={hasDiff ? (diffExpanded ? "hide diff" : "show diff") : undefined}
     >
       (
-      {githubUrl ? (
-        <a
-          href={githubUrl}
-          target="_blank"
-          rel="noopener noreferrer"
+      {branchHref ? (
+        <Link
+          href={branchHref}
           className="text-sol-green hover:underline"
           onClick={(e) => e.stopPropagation()}
         >
           {gitBranch}
-        </a>
+        </Link>
       ) : (
         <span className="text-sol-green">{gitBranch}</span>
       )}
@@ -12942,8 +12977,8 @@ const ConversationViewInner = (
     // Context-only import truncation notices are never user-facing. Rows synced by
     // older CLIs still carry them; drop here (some() guard keeps the common-case
     // array identity stable).
-    const base = messagesFromConv.some(m => m.role === "user" && isImportNotice(m.content))
-      ? messagesFromConv.filter(m => !(m.role === "user" && isImportNotice(m.content)))
+    const base = messagesFromConv.some(m => m.role === "user" && isContextOnlyUserMessage(m.content))
+      ? messagesFromConv.filter(m => !(m.role === "user" && isContextOnlyUserMessage(m.content)))
       : messagesFromConv;
     // A real (JSONL) AskUserQuestion tool call carries full fidelity. During the
     // brief race before its tool_use is detected, the daemon may also emit a
@@ -13661,6 +13696,7 @@ const ConversationViewInner = (
 
   const userMsgKindMap = useMemo(() => {
     const map = new Map<string, UserMessageKind>();
+    const initialPromptId = initialSubagentPromptId(messages, conversation?.parent_conversation_id, hasMoreAbove);
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
@@ -13680,10 +13716,13 @@ const ConversationViewInner = (
         contextPrev = pm;
         break;
       }
-      map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
+      const kind = classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev);
+      map.set(msg._id, msg._id === initialPromptId && kind.kind === "normal"
+        ? { kind: "session_message", from: conversation!.parent_conversation_id!.slice(0, 7), body: msg.content || "" }
+        : kind);
     }
     return map;
-  }, [timeline, conversation?.agent_type]);
+  }, [timeline, messages, conversation?.agent_type, conversation?.parent_conversation_id, hasMoreAbove]);
 
   // Aggregation for the condensed/compact feeds. Built once per timeline; O(n).
   //
@@ -13929,6 +13968,13 @@ const ConversationViewInner = (
       return val;
     });
   }, []);
+
+  const stickyMessageId = activeStickyMsg?.id;
+  const stickyImages = useMemo(() => {
+    if (!stickyMessageId) return undefined;
+    return messages.find(message => message._id === stickyMessageId)?.images
+      ?? serverUserMessages?.find(message => message._id === stickyMessageId)?.images;
+  }, [stickyMessageId, messages, serverUserMessages]);
 
   // Collapse and re-measure clamping whenever the sticky switches to a different message.
   useWatchEffect(() => {
@@ -15590,13 +15636,13 @@ const ConversationViewInner = (
     { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("codex"); } },
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
-    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, available: hasAnyThinking, run: () => setShowThinking(s => !s) },
+    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, shortcutAction: "conv.toggleThinking", available: hasAnyThinking, run: () => setShowThinking(s => !s) },
     { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
     { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_diff", label: diffExpanded ? "Hide git diff" : "Show git diff", icon: PaletteBranch, available: !!conversation?.git_branch, run: () => setDiffExpanded(s => !s) },
-    { key: "view_branches", label: "Branch map", icon: PaletteBranch, available: !!isOwner, run: toggleMap },
-    { key: "view_density", label: "Cycle message density", icon: PaletteRows, run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
+    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner, run: toggleMap },
+    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
 
   useWatchEffect(() => {
@@ -15937,6 +15983,21 @@ const ConversationViewInner = (
     return fn;
   };
 
+  // A client that forks natively copies its whole context (grok), so its fork
+  // control is offered on the latest message only; rebuild/API clients fork
+  // from any message. The tip is the last timeline message carrying a uuid.
+  const forkAnyMessage = agentForksFromAnyMessage(conversation?.agent_type);
+  const forkTipUuid = useMemo(() => {
+    if (forkAnyMessage) return undefined;
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const it = timeline[i];
+      if (it.type === 'message' && it.data.message_uuid) return it.data.message_uuid;
+    }
+    return undefined;
+  }, [forkAnyMessage, timeline]);
+  const forkHandlerFor = (messageUuid: string | undefined) =>
+    forkHandler && (forkAnyMessage || (!!messageUuid && messageUuid === forkTipUuid)) ? forkHandler : undefined;
+
   const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
@@ -16065,7 +16126,7 @@ const ConversationViewInner = (
           // A decision answer is a normal user bubble whose body is the chosen
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
-          return <UserPrompt key={msg._id} content={decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -16165,7 +16226,7 @@ const ConversationViewInner = (
           agentType={messageAuthors.get(msg._id)}
           taskSubjectMap={taskSubjectMap}
           taskRecordMap={taskRecordMap}
-          onForkFromMessage={forkHandler}
+          onForkFromMessage={forkHandlerFor(msg.message_uuid)}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
           onBranchSwitch={handleBranchSwitch}
           activeBranchId={activeBranchId}
@@ -16311,7 +16372,7 @@ const ConversationViewInner = (
             )}
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
 
-            {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
+            {managedSession?.agent_status === "hibernated" ? <HibernatedMarker status={managedSession.agent_status} /> : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
               <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
@@ -16797,7 +16858,7 @@ const ConversationViewInner = (
                           <DropdownMenuSubContent>
                             {AGENT_LAUNCH_OPTIONS
                               .map((a) => a.convexType)
-                              .filter((t) => t !== conversation.agent_type)
+                              .filter((t) => t !== conversation.agent_type && canSessionBecomeAgent(t, conversation.message_count))
                               .map((t) => (
                                 <DropdownMenuItem
                                   key={`switch-${t}`}
@@ -16982,6 +17043,10 @@ const ConversationViewInner = (
               </div>
               <div className="flex items-center gap-2 mb-1">
                 {(() => {
+                  const kind = userMsgKindMap.get(activeStickyMsg.id);
+                  if (kind?.kind === "session_message") {
+                    return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
+                  }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
                   return (
                     <>
@@ -16991,11 +17056,16 @@ const ConversationViewInner = (
                   );
                 })()}
               </div>
-              <div
-                ref={stickyTextRef}
-                className={`text-sm text-sol-text whitespace-pre-wrap break-words pl-8 pr-4 ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
-                onClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
-              >{cleanStickyContent(activeStickyMsg.content)}</div>
+              <div className="pl-8 pr-4">
+                <MessagePromptPreview
+                  content={cleanStickyContent(activeStickyMsg.content)}
+                  images={stickyImages}
+                  variant="sticky"
+                  textRef={stickyTextRef}
+                  textClassName={`text-sm text-sol-text whitespace-pre-wrap ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
+                  onTextClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -17026,7 +17096,7 @@ const ConversationViewInner = (
           </div>
         </div>
       )}
-      <div ref={containerRef} data-sv-feed className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
+      <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
@@ -17224,6 +17294,7 @@ const ConversationViewInner = (
           onClose={() => setTreePopoverOpen(false)}
           onSwitchToConversation={handleTreeSwitchConversation}
           onForkFromBranch={handleForkFromBranch}
+          forkAnyMessage={forkAnyMessage}
           onRewindCurrent={handleRewindCurrent}
         />
       )}
@@ -17291,6 +17362,7 @@ const ConversationViewInner = (
                   onClose={() => setTreePopoverOpen(false)}
                   onSwitchToConversation={handleTreeSwitchConversation}
                   onForkFromBranch={handleForkFromBranch}
+                  forkAnyMessage={forkAnyMessage}
                   onRewindCurrent={handleRewindCurrent}
                 />
               ) : null} />

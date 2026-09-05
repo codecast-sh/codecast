@@ -206,14 +206,27 @@ function stampPath(): string {
   return path.join(engineHome(), "reap.stamp");
 }
 
+export interface SessionTarget {
+  targetId: string;
+  /** When the daemon last (re)pinned it — the tie-break between a session's
+   *  clone tab and its real-Chrome tab (watchSource.ts). */
+  mtimeMs: number;
+}
+
 /** The tab a session's daemon is pinned to, from the file it keeps. */
-export function sessionTargetId(key: string, stateDir = engineStateDir()): string | null {
+export function sessionTarget(key: string, stateDir = engineStateDir()): SessionTarget | null {
   try {
-    const t = JSON.parse(fs.readFileSync(path.join(stateDir, `${key}.target`), "utf-8"));
-    return typeof t?.targetId === "string" ? t.targetId : null;
+    const file = path.join(stateDir, `${key}.target`);
+    const t = JSON.parse(fs.readFileSync(file, "utf-8"));
+    if (typeof t?.targetId !== "string") return null;
+    return { targetId: t.targetId, mtimeMs: fs.statSync(file).mtimeMs };
   } catch {
     return null;
   }
+}
+
+export function sessionTargetId(key: string, stateDir = engineStateDir()): string | null {
+  return sessionTarget(key, stateDir)?.targetId ?? null;
 }
 
 /**

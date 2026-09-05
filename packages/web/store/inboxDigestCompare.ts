@@ -252,7 +252,7 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
       diff.bucket_deltas.push(id);
       if (process.env.SIM_TRACE) {
         const a: any = adapted.get(id) ?? {};
-        console.info("[inboxDigest] delta", JSON.stringify({ id: id.slice(0, 8), stamp: stamp.bucket, stamp_ws: stamp.work_state, local: local.bucket, local_ws: local.work_state, asking: stamp.asking, epoch: slot.epoch, adapted: { agent_status: a.agent_status, is_idle: a.is_idle, awaiting: a.awaiting_input, verdict: a.settle_verdict, thread: a.thread_state_status, killed: a.inbox_killed_at, pinned: a.inbox_pinned_at, dormant_at: a.inbox_dormant_at, armed: a.armed_trigger_kind, has_pending: a.has_pending_messages, updated_at: a.updated_at, msgs: a.message_count } }));
+        console.info("[inboxDigest] delta", JSON.stringify({ id: id.slice(0, 8), stamp: stamp.bucket, stamp_ws: stamp.work_state, local: local.bucket, local_ws: local.work_state, asking: stamp.asking, epoch: slot.epoch, adapted: { agent_status: a.agent_status, is_idle: a.is_idle, awaiting: a.awaiting_input, verdict: a.settle_verdict, thread: a.thread_state_status, killed: a.inbox_killed_at, pinned: a.inbox_pinned_at, rest: a.inbox_rest, rest_at: a.inbox_rest_at, armed: a.armed_trigger_kind, has_pending: a.has_pending_messages, updated_at: a.updated_at, msgs: a.message_count } }));
       }
     }
     else if (local.below_fold !== stamp.below_fold) diff.fold_deltas.push(id);
@@ -569,8 +569,8 @@ export function createInboxDigestDevHandle(
       const a: any = rep.adapted.get(id) ?? {};
       deltas.push({
         id: id.slice(0, 7), stamp: stamp.bucket, render: p.bucket, replica: rep.proj.placements.get(id)?.bucket ?? null,
-        row: { agent_status: r.agent_status, is_idle: r.is_idle, awaiting: r.awaiting_input, thread: r.thread_state_status, verdict: r.settle_verdict, updated_at: r.updated_at, msgs: r.message_count, allows_park: r.last_turn_allows_park, dormant_at: r.inbox_dormant_at, is_dormant: r.is_dormant, armed: r.armed_trigger_kind, has_pending: r.has_pending_messages, api_err: r.pending_api_error },
-        adapted: { agent_status: a.agent_status, is_idle: a.is_idle, verdict: a.settle_verdict, verdict_at: a.settle_verdict_at, dormant_at: a.inbox_dormant_at, has_pending: a.has_pending_messages },
+        row: { agent_status: r.agent_status, is_idle: r.is_idle, awaiting: r.awaiting_input, thread: r.thread_state_status, verdict: r.settle_verdict, updated_at: r.updated_at, msgs: r.message_count, allows_park: r.last_turn_allows_park, rest: r.inbox_rest, rest_at: r.inbox_rest_at, user_rest: r.user_rest, armed: r.armed_trigger_kind, has_pending: r.has_pending_messages, api_err: r.pending_api_error },
+        adapted: { agent_status: a.agent_status, is_idle: a.is_idle, verdict: a.settle_verdict, verdict_at: a.settle_verdict_at, rest: a.inbox_rest, rest_at: a.inbox_rest_at, has_pending: a.has_pending_messages },
       });
     }
     return deltas;

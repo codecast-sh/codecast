@@ -11,6 +11,7 @@
 //
 // This module is a LEAF: it must not import from inboxStore (the store
 // imports it), only types and pure helpers.
+import { TRIAGE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 
 // The exact overlay alphabet, per the pinned contract:
@@ -56,17 +57,7 @@ export const HIDDEN_OVERRIDE_SETTLE_MS = 5 * 60 * 1000;
 // exactly the coupled set the hide/pin gestures stamp (hideSessionInDraft and
 // the gesture bridge), plus the park/defer twins that move a row between rest
 // buckets.
-export const TRIAGE_PENDING_FIELDS = [
-  "inbox_dismissed_at",
-  "inbox_stashed_at",
-  "inbox_pinned_at",
-  "is_pinned",
-  "inbox_killed_at",
-  "inbox_dormant_at",
-  "is_dormant",
-  "inbox_deferred_at",
-  "is_deferred",
-] as const;
+export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIELDS;
 
 // A queued/optimistic outbound message is a "pending send" until the server
 // echoes it back (which prunes it) or it fails. This is the durable,

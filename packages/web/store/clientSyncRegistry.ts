@@ -1,3 +1,5 @@
+import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
 export type HydrationPhase = "critical" | "deferred";
@@ -128,16 +130,9 @@ export const CLIENT_SYNC_REGISTRY = {
     dispatchTable: {
       table: "conversations",
       kind: "collection",
-      fields: [
-        "inbox_dismissed_at",
-        "inbox_stashed_at",
-        "inbox_stash_hidden",
-        "inbox_pinned_at",
-        "inbox_deferred_at",
-        "inbox_dormant_at",
-        "title",
-        "is_favorite",
-      ],
+      // The manifest is the single source shared with the server's patch gate
+      // (contracts/conversationFields), so the two allowlists cannot disagree.
+      fields: [...DISPATCHABLE_CONVERSATION_FIELDS],
     },
   },
   conversations: {
@@ -522,6 +517,11 @@ export const CLIENT_SYNC_REGISTRY = {
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
   // stops heartbeating leaves. Readers additionally hide rows whose
   // last_heartbeat is stale, so a persisted row can't outlive its window.
+  sessionCommands: {
+    persistence: { kind: "collection", key: "sessionCommands", perWindow: true },
+    sync: { isDelta: true },
+    feeds: ["sessionCommands.results"],
+  },
   managedSessions: {
     persistence: { kind: "collection", key: "managedSessions" },
     hydration: { phase: "deferred" },
@@ -918,6 +918,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   codeComments: "shared",
   externalEvents: "shared",
   managedSessions: "shared",
+  sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
   pendingMessageStatus: "shared",
