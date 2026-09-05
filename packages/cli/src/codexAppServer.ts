@@ -1,7 +1,8 @@
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
-import { STABLE_ENV_MODE } from "@codecast/shared/contracts";
+import { STABLE_ENV_MODE, type CodexTurnError } from "@codecast/shared/contracts";
+import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { withWorktreeConfig } from "./worktreeEnv.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
@@ -73,7 +74,7 @@ export interface Turn {
   id: string;
   items: ThreadItem[];
   status: TurnStatus;
-  error?: { message?: string } | null;
+  error?: CodexTurnError | null;
 }
 
 export interface ThreadStartResponse {
@@ -622,7 +623,11 @@ export class CodexAppServer extends EventEmitter {
         const acc = this.turnAccumulators.get(turn.id);
         const items = acc?.items || [];
         this.turnAccumulators.delete(turn.id);
-        const messages = threadItemsToMessages(items).map(message => ({ ...message, model: acc?.model }));
+        const messages: ParsedMessage[] = threadItemsToMessages(items).map(message => ({ ...message, model: acc?.model }));
+        if (turn.status === "failed") {
+          const timestamp = Math.max(Date.now(), ...messages.map(message => message.timestamp + 1));
+          messages.push(codexTurnErrorMessage(turn.id, turn.error ?? {}, timestamp, acc?.model));
+        }
         this.emit("turnCompleted", threadId, turn.id, messages, turn.status, turn.error);
         break;
       }

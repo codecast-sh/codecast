@@ -35,7 +35,7 @@ import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } fr
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -2283,6 +2283,7 @@ function cleanStickyContent(content: string): string {
 }
 
 type ParsedApiError = {
+  isSafety?: boolean;
   statusCode?: number;
   message: string;
   errorType?: string;
@@ -2331,6 +2332,10 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
+
+  if (classifyApiErrorBanner(trimmed) === "safety") {
+    return { message: trimmed.replace(/^Safety stop:\s*(?:misalignment_policy_violation\s*·\s*)?/, ""), errorType: "misalignment_policy_violation", isSafety: true };
+  }
 
   // Marked opencode/pi provider error: strip the marker, classify (auth vs
   // generic), and show the provider's own text. classifyApiErrorBanner keys on the
@@ -2465,7 +2470,7 @@ function useApiErrorLive(conversationId?: string): boolean {
     if (!conversationId) return true;
     const row = s.sessions[conversationId];
     if (!row) return true;
-    return row.pending_api_error === true;
+    return withSafetyBlock(row).pending_api_error === true;
   });
 }
 
@@ -2483,13 +2488,17 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
     ? { border: "border-sol-border/40 bg-sol-bg-alt/30", fg: "text-sol-text-muted", badge: "border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-muted", icon: "bg-sol-bg-alt text-sol-text-muted" }
     : isServerError
       ? { border: "border-sol-red/40 bg-sol-red/10", fg: "text-sol-red", badge: "border-sol-red/40 bg-sol-red/10 text-sol-red", icon: "bg-sol-red/20 text-sol-red" }
-      : { border: "border-amber-500/40 bg-amber-500/10", fg: "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
+      : { border: "border-amber-500/40 bg-amber-500/10", fg: error.isSafety ? "text-amber-700 dark:text-amber-500" : "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
 
   let heading: string;
   let icon: ReactNode;
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
-  if (error.isAuth) {
+  if (error.isSafety) {
+    heading = "Safety review required";
+    icon = <span className="text-[10px] font-semibold">!</span>;
+    hint = <p className="mt-1.5 text-xs text-sol-text-dim">{SAFETY_BLOCK_HINT}</p>;
+  } else if (error.isAuth) {
     heading = "Authentication required";
     icon = (
       <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

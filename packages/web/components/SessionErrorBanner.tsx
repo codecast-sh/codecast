@@ -16,6 +16,7 @@ import { useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { deviceSeesPath } from "../lib/machinePicker";
+import { classifyApiErrorBanner, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
 
 /**
  * The transient resume-lifecycle banners (resuming, reconstituting, timed out,
@@ -83,6 +84,7 @@ export function SessionErrorBanner({
   const [dismissedError, setDismissedError] = useState<string | null>(null);
 
   if (!error || dismissedError === error) return null;
+  const safety = classifyApiErrorBanner(error) === "safety";
 
   // Only offer the move when another online machine actually has this checkout —
   // otherwise it's advice that leads to the same error on a second box.
@@ -96,15 +98,17 @@ export function SessionErrorBanner({
     );
 
   return (
-    <div className="shrink-0 flex items-start gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
+    <div role="alert" className={`shrink-0 flex items-start gap-2 px-4 py-1.5 text-xs ${safety ? "border-b border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-500" : "bg-sol-red/90 text-sol-bg backdrop-blur-sm"}`}>
       <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
       <div className="min-w-0 flex-1">
+        {safety && <div className="font-semibold">Safety review required</div>}
         <span className="break-words">{error}</span>
-        {canMoveElsewhere && (
+        {safety && <p className="mt-1 text-sol-text-dim">{SAFETY_BLOCK_HINT}</p>}
+        {canMoveElsewhere && !safety && (
           <span className="opacity-80"> — or move this session to another machine from the header chip.</span>
         )}
       </div>
-      {onResume && (
+      {onResume && !safety && (
         <button onClick={onResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
           Resume
         </button>
