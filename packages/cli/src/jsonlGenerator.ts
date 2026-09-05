@@ -10,6 +10,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
 import { claudeProjectDirName } from "./projectPathResolver.js";
+import { buildCodexImportContext, type CodexImportItem } from "./codexImportContext.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -802,6 +803,16 @@ export function generateCodexJsonl(
       }));
     }
   }
+
+  const responseItems = lines.flatMap(line => {
+    const entry = JSON.parse(line);
+    return entry.type === "response_item" ? [entry.payload as CodexImportItem] : [];
+  });
+  const replacementHistory = buildCodexImportContext(responseItems, data.conversation.id);
+  if (replacementHistory) lines.push(JSON.stringify({
+    timestamp: data.conversation.updated_at, type: "compacted",
+    payload: { message: "", replacement_history: replacementHistory },
+  }));
 
   return { jsonl: lines.join("\n") + "\n", sessionId };
 }
