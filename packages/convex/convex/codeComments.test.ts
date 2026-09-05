@@ -331,3 +331,30 @@ describe("mirrorToGitHub", () => {
     expect(sent[0].body).toMatchObject({ side: "LEFT", start_side: "LEFT" });
   });
 });
+
+describe("repository case", () => {
+  test("a comment created with capitals is stored under the canonical repository", async () => {
+    const ctx = context(USER);
+    await (create as any)._handler(ctx, {
+      repository: "Codecast-SH/Codecast",
+      ref: HEAD,
+      file_path: "src/foo.ts",
+      line_number: 1,
+      content: "case",
+      conversation_ref: "sess-1",
+    });
+    expect(ctx.db._tables.review_comments[0].repository).toBe("codecast-sh/codecast");
+    expect(ctx.db._tables.review_comments[0].pull_request_id).toBe(PR);
+  });
+
+  test("listForFile finds canonical rows when asked with capitals", async () => {
+    const ctx = context(USER, {
+      review_comments: [{
+        _id: "rc_1", team_id: TEAM, repository: "codecast-sh/codecast", file_path: "src/foo.ts", ref: HEAD,
+        content: "x", user_id: USER, author_kind: "user", created_at: 1, updated_at: 1,
+      }],
+    });
+    const rows = await (listForFile as any)._handler(ctx, { repository: "Codecast-SH/Codecast", file_path: "src/foo.ts" });
+    expect(rows.map((r: any) => r._id)).toEqual(["rc_1"]);
+  });
+});

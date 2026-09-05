@@ -22,7 +22,7 @@ import {
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
-import { commitUrl } from "./lib/gitRefs";
+import { commitUrl, normalizeRepository } from "./lib/gitRefs";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const SUMMARY_LENGTH = 140;
@@ -92,7 +92,7 @@ async function openPRsTouchingFile(
   if (!filePath) return [];
   const prs: Doc<"pull_requests">[] = await ctx.db
     .query("pull_requests")
-    .withIndex("by_repository", (q: any) => q.eq("repository", repository))
+    .withIndex("by_repository", (q: any) => q.eq("repository", normalizeRepository(repository)))
     .collect();
   return prs.filter(
     (pr) => pr.state === "open" && (pr.files ?? []).some((f: any) => f.filename === filePath),
@@ -123,7 +123,9 @@ export const create = mutation({
     author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
     mirror: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, rawArgs) => {
+    // The row is keyed by the canonical spelling whatever the caller typed.
+    const args = { ...rawArgs, repository: normalizeRepository(rawArgs.repository) };
     const userId = await requireUserOrToken(ctx, args.api_token);
     const teamId = await requireRepositoryTeam(ctx, userId, args.repository);
 
@@ -321,7 +323,7 @@ export const listForFile = query({
     const rows = await ctx.db
       .query("review_comments")
       .withIndex("by_repository_file", (q) =>
-        q.eq("repository", args.repository).eq("file_path", args.file_path))
+        q.eq("repository", normalizeRepository(args.repository)).eq("file_path", args.file_path))
       .collect();
     const matching = args.ref ? rows.filter((c) => c.ref === args.ref) : rows;
     return await filterAccessible(ctx, userId, matching);
@@ -338,7 +340,7 @@ export const listForRef = query({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const rows = await ctx.db
       .query("review_comments")
-      .withIndex("by_repository_file", (q) => q.eq("repository", args.repository))
+      .withIndex("by_repository_file", (q) => q.eq("repository", normalizeRepository(args.repository)))
       .collect();
     return await filterAccessible(ctx, userId, rows.filter((c) => c.ref === args.ref));
   },

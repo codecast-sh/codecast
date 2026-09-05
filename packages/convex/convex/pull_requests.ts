@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { requireUser } from "./lib/auth";
+import { normalizeRepository } from "./lib/gitRefs";
 import {
   canAccessConversation,
   canAccessPullRequest,
@@ -85,7 +86,7 @@ export const create = internalMutation({
     const prId = await ctx.db.insert("pull_requests", {
       team_id: args.team_id,
       github_pr_id: args.github_pr_id,
-      repository: args.repository,
+      repository: normalizeRepository(args.repository),
       number: args.number,
       title: args.title,
       body: args.body,
@@ -148,7 +149,7 @@ export const syncPRFromGitHub = internalMutation({
     const prId = await ctx.db.insert("pull_requests", {
       team_id: args.team_id,
       github_pr_id: args.github_pr_id,
-      repository: args.repository,
+      repository: normalizeRepository(args.repository),
       number: args.number,
       title: args.title,
       body: args.body,
@@ -237,7 +238,8 @@ export const listPRsForTeam = query({
       .collect();
 
     if (args.repository) {
-      prs = prs.filter((pr) => pr.repository === args.repository);
+      const repository = normalizeRepository(args.repository);
+      prs = prs.filter((pr) => pr.repository === repository);
     }
 
     if (args.state) {
@@ -268,7 +270,7 @@ export const getPRByNumber = query({
     const allowedTeams = new Set(memberships.map((m) => String(m.team_id)));
     const prs = await ctx.db
       .query("pull_requests")
-      .withIndex("by_repository", (q) => q.eq("repository", args.repository))
+      .withIndex("by_repository", (q) => q.eq("repository", normalizeRepository(args.repository)))
       .collect();
 
     return prs.find((pr) => pr.number === args.number && allowedTeams.has(String(pr.team_id)));
@@ -443,7 +445,8 @@ export const getPRsForTimeline = query({
     ))).flat();
 
     if (args.repository) {
-      prs = prs.filter((pr) => pr.repository === args.repository);
+      const repository = normalizeRepository(args.repository);
+      prs = prs.filter((pr) => pr.repository === repository);
     }
 
     prs.sort((a, b) => b.updated_at - a.updated_at);

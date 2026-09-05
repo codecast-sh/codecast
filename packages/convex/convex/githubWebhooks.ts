@@ -23,7 +23,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
 import { recordPRMergedActivity } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
-import { checkLabel } from "@codecast/shared/contracts";
+import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
 import {
   patchPullRequest,
   firePrTrigger as fireTrigger,
@@ -89,10 +89,9 @@ export async function resolveTeamForRepository(
   ctx: { db: any },
   repository: string,
 ): Promise<Id<"teams"> | null> {
-  const [owner] = repository.split("/");
   const installation = await ctx.db
     .query("github_app_installations")
-    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
+    .withIndex("by_account_login", (q: any) => q.eq("account_login", repositoryOwner(repository)))
     .first();
   return installation?.team_id ?? null;
 }

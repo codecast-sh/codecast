@@ -18,6 +18,7 @@ import { v } from "convex/values";
 import { internalMutation, query } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
+import { normalizeRepository } from "./lib/gitRefs";
 import {
   canAccessConversation,
   canAccessPlan,
@@ -129,7 +130,7 @@ export async function recordExternalEvent(ctx: { db: any }, args: RecordArgs): P
   return await ctx.db.insert("external_events", {
     team_id: args.team_id,
     source: args.source,
-    repository: args.repository,
+    repository: normalizeRepository(args.repository),
     kind: args.kind,
     actor_login: args.actor_login,
     actor_avatar_url: args.actor_avatar_url,
@@ -344,7 +345,7 @@ export const listForRepository = query({
     const limit = args.limit ?? DEFAULT_LIMIT;
     const recent = await ctx.db
       .query("external_events")
-      .withIndex("by_repository_created", (q) => q.eq("repository", args.repository))
+      .withIndex("by_repository_created", (q) => q.eq("repository", normalizeRepository(args.repository)))
       .order("desc")
       .take(SCAN_LIMIT);
     const matching = args.branch ? recent.filter((e) => e.branch === args.branch) : recent;

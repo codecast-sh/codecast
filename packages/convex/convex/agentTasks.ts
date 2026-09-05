@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { normalizeRepository } from "./lib/gitRefs";
 import { mutation, query, internalMutation, internalAction, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
@@ -1651,7 +1652,8 @@ export const matchTaskTriggers = internalMutation({
       if (!task.event_filter) continue;
       if (task.event_filter.event_type !== args.event_type) continue;
       if (task.event_filter.action && task.event_filter.action !== args.action) continue;
-      if (task.event_filter.repository && task.event_filter.repository !== args.repository) continue;
+      // Both sides canonical: the filter is what a person typed, the event is what GitHub sent.
+      if (task.event_filter.repository && normalizeRepository(task.event_filter.repository) !== normalizeRepository(args.repository)) continue;
       if (task.event_filter.pr_number != null && task.event_filter.pr_number !== args.pr_number) continue;
       // Last, because it is the only check that reads the database.
       if (!(await ownerIsInTeam(task.user_id))) continue;
