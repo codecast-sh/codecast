@@ -180,6 +180,17 @@ export function clearRepoScopeCache(): void {
  */
 export function isVaultPathIgnored(root: string, relPath: string): boolean {
   if (isVaultIgnoredPath(relPath)) return true;
+  return isVaultPathRepoIgnored(root, relPath);
+}
+
+/**
+ * The repo half of the rule on its own: build output, tool dot-directories and
+ * the root .gitignore's names. This is what "show ignored files" lifts — the
+ * always-ignored set (isVaultIgnoredPath) is never lifted, because .git and
+ * node_modules are not files anyone browses, and listing them would blow the
+ * scan cap before the tree reached anything the user asked for.
+ */
+export function isVaultPathRepoIgnored(root: string, relPath: string): boolean {
   // path.resolve, not realVaultRoot: this runs once per entry of every scan,
   // and a realpathSync per entry would be twenty thousand syscalls on a large
   // tree. A symlinked root just gets its own cache entry, which is harmless —
@@ -335,11 +346,19 @@ export function realVaultRoot(root: string): string {
  *
  * Existence is NOT checked; callers decide whether a missing file is a 404 or a
  * file to create.
+ *
+ * `allowIgnored` admits what the repo rules hide (a listing from
+ * `scanVault(root, { includeIgnored: true })`), for READS only. The always-
+ * ignored set and every traversal/symlink rule still apply.
  */
-export function resolveVaultPath(root: string, relPath: string): string | null {
+export function resolveVaultPath(
+  root: string,
+  relPath: string,
+  opts: { allowIgnored?: boolean } = {},
+): string | null {
   const rel = normalizeVaultPath(relPath);
   if (rel === null) return null;
-  if (rel !== "" && isVaultPathIgnored(root, rel)) return null;
+  if (rel !== "" && (opts.allowIgnored ? isVaultIgnoredPath(rel) : isVaultPathIgnored(root, rel))) return null;
 
   const realRoot = realVaultRoot(root);
   const target = rel === "" ? realRoot : path.join(realRoot, ...rel.split("/"));
@@ -398,11 +417,23 @@ export function vaultContentType(relPath: string): string {
  * directory (so empty folders render), sorted by path. Symlinks are skipped — the same rule
  * resolveVaultPath enforces, so nothing appears in a scan that a fetch would
  * then refuse.
+ *
+ * `includeIgnored` lists what the repo rules hide as well, each such entry
+ * flagged `ignored: true` so the browser can dim it and keep it out of the
+ * notes layer. A flag on the entry rather than a second list: the tree is one
+ * tree, and the reader decides what an ignored row means. Once a directory is
+ * ignored everything under it is (the rule is on segments), so the flag is
+ * inherited down the walk rather than recomputed per entry.
  */
-export async function scanVault(root: string): Promise<VaultFileEntry[]> {
+export async function scanVault(
+  root: string,
+  opts: { includeIgnored?: boolean } = {},
+): Promise<VaultFileEntry[]> {
   const realRoot = realVaultRoot(root);
   const out: VaultFileEntry[] = [];
-  let queue: { abs: string; rel: string; depth: number }[] = [{ abs: realRoot, rel: "", depth: 0 }];
+  let queue: { abs: string; rel: string; depth: number; ignored: boolean }[] = [
+    { abs: realRoot, rel: "", depth: 0, ignored: false },
+  ];
 
   while (queue.length > 0 && out.length < MAX_ENTRIES) {
     const batch = queue.splice(0, SCAN_CONCURRENCY);
@@ -417,17 +448,20 @@ export async function scanVault(root: string): Promise<VaultFileEntry[]> {
       for (const entry of entries) {
         if (entry.isSymbolicLink()) continue;
         const rel = dir.rel === "" ? entry.name : `${dir.rel}/${entry.name}`;
-        if (isVaultPathIgnored(realRoot, rel)) continue;
+        if (isVaultIgnoredPath(rel)) continue;
+        const ignored = dir.ignored || isVaultPathRepoIgnored(realRoot, rel);
+        if (ignored && !opts.includeIgnored) continue;
+        const flag = ignored ? { ignored: true as const } : {};
         const abs = path.join(dir.abs, entry.name);
         if (entry.isDirectory()) {
           const stat = await fsp.stat(abs).catch(() => null);
           if (!stat) continue;
-          out.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: 0, dir: true });
-          if (dir.depth + 1 < MAX_DEPTH) next.push({ abs, rel, depth: dir.depth + 1 });
+          out.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: 0, dir: true, ...flag });
+          if (dir.depth + 1 < MAX_DEPTH) next.push({ abs, rel, depth: dir.depth + 1, ignored });
         } else if (entry.isFile()) {
           const stat = await fsp.stat(abs).catch(() => null);
           if (!stat) continue;
-          out.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size });
+          out.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size, ...flag });
         }
       }
     }));

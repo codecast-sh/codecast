@@ -4,6 +4,7 @@ import {
   resolveLocalProjectPath,
   resolveLocalRepoPath,
   resolveResumeCwd,
+  isResumableCwd,
   pickProjectPath,
   claudeProjectDirName,
   chooseSessionTranscript,
@@ -463,5 +464,37 @@ describe("conventionSeed", () => {
     expect(resolve("/Users/ashot/src/conv")).toBe("/Users/ashot/src/conv");
     // Guarded behavior: the foreign task path seeds the walk and lands in the task's repo.
     expect(resolve(conventionSeed(RAW, "/Users/ashot/src/conv"))).toBe("/Users/ashot/src/union-mobile/outreach");
+  });
+});
+
+describe("isResumableCwd / root is never a resume cwd", () => {
+  test("the filesystem root is refused even though it exists everywhere", () => {
+    expect(isResumableCwd("/")).toBe(false);
+    expect(isResumableCwd(" / ")).toBe(false);
+    expect(isResumableCwd("")).toBe(false);
+    expect(isResumableCwd(undefined)).toBe(false);
+    expect(isResumableCwd("/Users/ashot/src/codecast")).toBe(true);
+  });
+
+  test("a rollout regenerated under the daemon (cwd `/`) does not resume in `/`", async () => {
+    // 2026-09-05: repair wrote session_meta.cwd="/" and the resume took it
+    // because `/` exists, landing every delivery in Codex's directory picker.
+    const cwd = await resolveResumeCwd({
+      recordedCwd: "/",
+      resolveLocalRepo: () => null,
+      remapViaRemote: async () => "/Users/ashot/src/codecast",
+      exists: () => true,
+    });
+    expect(cwd).toBe("/Users/ashot/src/codecast");
+  });
+
+  test("a root override is ignored the same way", async () => {
+    const cwd = await resolveResumeCwd({
+      cwdOverride: "/",
+      recordedCwd: "/Users/ashot/src/codecast",
+      resolveLocalRepo: () => null,
+      exists: () => true,
+    });
+    expect(cwd).toBe("/Users/ashot/src/codecast");
   });
 });

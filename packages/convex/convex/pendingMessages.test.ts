@@ -425,6 +425,7 @@ const createCollectCtx = (messages: Array<Record<string, any>>) => {
   const patches: Array<{ id: string; patch: Record<string, unknown> }> = [];
   const ctx = {
     db: {
+      async get() { return { _id: "c1" }; },
       query() {
         return {
           withIndex(_index: string, builder: (q: any) => unknown) {

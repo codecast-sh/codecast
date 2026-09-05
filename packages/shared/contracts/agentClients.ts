@@ -203,6 +203,16 @@ export interface AgentClientCapabilities {
    *  server the client simply can't fork here (honest degradation), NOT a fallback
    *  to claude-style transcript-file copying. */
   forkApi?: boolean;
+  /** codecast can WRITE this client's transcript from the server's message copy
+   *  and resume it (claude/codex JSONL writers, grok's session bundle; gemini
+   *  rides claude's). This is
+   *  what lets the daemon rebuild history it does not hold locally: a fork from
+   *  any earlier message, a switch INTO this client mid-session, and a resume on
+   *  a device that never ran the session. Absent for clients whose session state
+   *  codecast cannot fabricate (cursor/opencode SQLite, pi) — there a mid-history
+   *  fork or a switch into the client is refused up front, never stamped on the
+   *  row and left for the daemon to fail. */
+  reconstitute?: boolean;
   /** The client can stream live structured events (state / permissions) over a
    *  richer transport the daemon attaches to, accelerating work-state past DB/tail
    *  polling. Opt-in and additive: the plain transcript path stays authoritative for
@@ -374,6 +384,14 @@ export interface AgentClientDescriptor {
   /** Base command that resumes an existing session — the daemon appends
    *  model / permission / effort flags around it. */
   resumeCmd(sessionId: string): string;
+  /** Native fork: the client's own resume flags copy the parent's session state
+   *  under a new id (`--resume <parent> --fork-session --session-id <new>`), so
+   *  the daemon launches this instead of writing a transcript. The copy is the
+   *  client's, whole and byte-exact, which is why it forks only at the TIP —
+   *  there is no way to cut the copied context at an earlier message. Pairs
+   *  with `capabilities.fork`; a client that also `reconstitute`s takes this at
+   *  the tip and the rebuild path for a mid-history fork. */
+  forkCmd?(parentSessionId: string, newSessionId: string): string;
   /** Home-relative roots the client writes transcripts under. */
   transcriptRoots: string[];
   /** How the daemon tails this client's transcripts. */
@@ -474,7 +492,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: /❯|⏵/,
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
-    capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
+    capabilities: { panePromptMonitoring: true, fork: true, reconstitute: true, bracketedPaste: true },
     // All verified by driving the real CLI in a sandbox HOME (2026-08-12/13).
     // Plugins live in settings.json; MCP lives in ~/.claude.json (`enabledPlugins`
     // read back null there) — the two files must not be conflated. `~/.agents/skills`
@@ -512,7 +530,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: />\s*$/,
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
-    capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
+    capabilities: { panePromptMonitoring: true, fork: true, reconstitute: true, bracketedPaste: true },
     // Codex's documented user skills path IS the cross-client dir (`$HOME/.agents/
     // skills` in its lookup order), so `user` and `shared` are the same string —
     // `~/.codex/skills` exists on real machines but is undocumented legacy, treated
@@ -601,7 +619,10 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // per-client code actually uses at launch.
     promptReadyPattern: />\s*$|gemini/i,
     tmuxPrefix: "gm",
-    capabilities: { panePromptMonitoring: false },
+    // reconstitute: the daemon has always rebuilt a missing gemini session through
+    // the claude JSONL writer + `gemini --resume latest` (a sanctioned oddity, not
+    // a fork mechanism — `fork` stays absent).
+    capabilities: { panePromptMonitoring: false, reconstitute: true },
   },
   opencode: {
     id: "opencode",
@@ -707,6 +728,14 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // title resume is banned. `-c` (most recent) is deliberately unused — we
     // always target a specific id.
     resumeCmd: (sessionId) => `grok --resume ${sessionId}`,
+    // Native fork (source: session/fork.rs; live-verified headless 2026-09-05):
+    // grok copies the parent's whole session bundle under the new uuid, stamps
+    // `parent_session_id` in the child's summary.json, leaves the parent
+    // untouched, and starts the child's updates.jsonl FRESH — only the new
+    // turn lands there, so the watcher ingests nothing the server copy already
+    // holds. `--session-id` must be a UUID that does not yet exist.
+    forkCmd: (parentSessionId, newSessionId) =>
+      `grok --resume ${parentSessionId} --fork-session --session-id ${newSessionId}`,
     // ~/.grok/sessions/{url-encoded cwd}/{session uuid}/updates.jsonl — the
     // append-only durable transcript. chat_history.jsonl in the same dir is a
     // rewriteable model-context cache (compaction replaces it wholesale) and is
@@ -735,11 +764,14 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
       // views/turn_status.rs); nobody has built or verified a pane-prompt
       // matcher for it — off.
       panePromptMonitoring: false,
-      // fork: ABSENT in phase 1. `--resume <id> --fork-session --session-id
-      // <new>` is a real fork (session/fork.rs), but the daemon has no
-      // resume-flag fork branch yet; setting fork:true now would show a fork UI
-      // whose generic path fabricates a context-less spawn. Flipped in the same
-      // change that adds the branch (work item B7).
+      // fork at the tip rides `forkCmd` (byte-exact copy, cache-warm); every
+      // other rebuild — a mid-history fork, a switch INTO grok on a session
+      // with history, a resume on a device that never ran it — goes through
+      // `reconstitute`: the daemon writes chat_history.jsonl + summary.json
+      // under the cwd's session directory and `grok --resume` answers from it
+      // (live-verified 2026-09-05; grok regenerates the rest of the bundle).
+      fork: true,
+      reconstitute: true,
       //
       // bracketedPaste — source-verified: crossterm EnableBracketedPaste on boot
       // AND re-entry (app/mod.rs:1472, event_loop.rs:489); wrap_restore tracks
@@ -843,6 +875,38 @@ export function modelAgentKey(agentType: string | undefined): AgentClientId {
  *  or a registry id. */
 export function agentSupportsFork(agentType: string | undefined): boolean {
   return AGENT_CLIENTS[fromConvexAgentType(agentType)].capabilities.fork === true;
+}
+
+/** Whether codecast can rebuild this client's transcript from the server copy
+ *  (`capabilities.reconstitute`). A switch INTO the client on a session that
+ *  already has history, a cross-agent fork into it, and a resume on a device
+ *  that never ran it all need this; refusing early keeps the row's agent_type
+ *  truthful instead of stamping an agent the daemon then cannot launch. */
+export function agentReconstitutes(agentType: string | undefined): boolean {
+  return AGENT_CLIENTS[fromConvexAgentType(agentType)].capabilities.reconstitute === true;
+}
+
+/** Whether a fork can start from ANY message rather than only the tip. A rebuild
+ *  (`reconstitute`) or a fork API that cuts at a message (`forkApi`) honors an
+ *  earlier fork point; a native resume-flag fork (`forkCmd`) copies the client's
+ *  whole context and so is offered only on the last message. */
+export function agentForksFromAnyMessage(agentType: string | undefined): boolean {
+  const caps = AGENT_CLIENTS[fromConvexAgentType(agentType)].capabilities;
+  return caps.fork === true && (caps.reconstitute === true || caps.forkApi === true);
+}
+
+/** Whether a session can be switched to, or forked as, `targetAgentType`. A
+ *  blank session is simply relaunched and can become anything; one with history
+ *  needs the target to rebuild that history (`reconstitute`). One predicate for
+ *  the switch menu, the palette, and the mutations behind them. */
+export function canSessionBecomeAgent(targetAgentType: string | undefined, messageCount: number | null | undefined): boolean {
+  return (messageCount ?? 0) === 0 || agentReconstitutes(targetAgentType);
+}
+
+/** Whether the daemon forks this client through its own resume flags. */
+export function agentForksNatively(agentType: string | undefined): boolean {
+  const d = AGENT_CLIENTS[fromConvexAgentType(agentType)];
+  return d.capabilities.fork === true && typeof d.forkCmd === "function";
 }
 
 /**
@@ -958,4 +1022,24 @@ export function modelOptionKey(model: string | undefined | null, agentType: stri
     cfg.models.find((m) => m.key !== "default" && bare === m.key) ??
     cfg.models.find((m) => m.key !== "default" && bare.startsWith(`${m.key}-`));
   return hit?.key ?? "default";
+}
+
+/**
+ * True when `model` is a stamp for THIS agent — a catalog hit, a dynamic
+ * provider/model id, or an unknown id that doesn't belong to another agent's
+ * catalog. False for a leftover after an in-place agent switch (claude-fable-5
+ * still on the row after switching to Codex): the header chip must not keep
+ * showing the previous agent's model.
+ */
+export function modelFitsAgent(model: string | undefined | null, agentType: string | undefined): boolean {
+  if (!model) return false;
+  if (modelOptionKey(model, agentType) !== "default") return true;
+  const mine = modelAgentKey(agentType);
+  const cfg = AGENT_MODEL_CONFIG[mine];
+  if (cfg?.dynamic && isDynamicModelKey(model)) return true;
+  for (const other of Object.keys(AGENT_MODEL_CONFIG)) {
+    if (other === mine) continue;
+    if (modelOptionKey(model, other) !== "default") return false;
+  }
+  return true;
 }

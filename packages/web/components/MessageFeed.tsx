@@ -8,6 +8,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { EntityIdPill } from "./EntityIdPill";
+import { EstablishedRefsProvider } from "./entityMentionScope";
 import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
 import { classifyFeedMessage } from "../lib/conversationProcessor";
 
@@ -101,10 +102,12 @@ function SessionMessageCard({ message }: { message: FeedMessage }) {
         </span>
       </div>
       <div className="line-clamp-4 overflow-hidden">
-        <MarkdownRenderer
-          content={body}
-          className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
-        />
+        <EstablishedRefsProvider ids={[from]}>
+          <MarkdownRenderer
+            content={body}
+            className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+          />
+        </EstablishedRefsProvider>
       </div>
     </div>
   );

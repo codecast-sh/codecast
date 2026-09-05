@@ -3654,12 +3654,16 @@ pre[class*="language-"] {
   background: color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
 }
 
-.minimal-style [data-cc-tool-receipt],
 .minimal-style [data-cc-compact-turn] {
   border-style: solid;
   border-color: var(--cc-panel-rule);
   border-radius: 8px;
   background: var(--sol-bg-alt);
+  box-shadow: none;
+}
+
+.minimal-style [data-cc-tool-receipt] {
+  border-radius: 8px;
   box-shadow: none;
 }
 

@@ -528,9 +528,13 @@ const workflowRunPayload = (over: Record<string, any> = {}) => ({
   },
 });
 
-/** A check_run belonging to a suite, as GitHub Actions reports it. */
+/** A check_run belonging to a suite, as GitHub Actions reports it (app.slug is on every delivery). */
 const suiteRun = (suiteId: number, over: Record<string, any> = {}) =>
-  checkRunPayload({ check_suite: { id: suiteId, head_branch: "ct-48298-git-backend" }, ...over });
+  checkRunPayload({
+    check_suite: { id: suiteId, head_branch: "ct-48298-git-backend" },
+    app: { id: 15368, slug: "github-actions", name: "GitHub Actions" },
+    ...over,
+  });
 
 /** Seed the suite → event mapping the workflow_run deliveries write. */
 const suites = (rows: Array<{ suite_id: string; event: string }>) => ({
@@ -685,7 +689,11 @@ describe("a job that runs on both push and pull_request", () => {
   test("a check that is not GitHub Actions keeps the by name behaviour", async () => {
     // Another app's check_run carries a suite but never a workflow_run, so no
     // event is ever learned: a re-run replaces by name even across suites.
-    const ctx = context(suiteRun(7777, { id: 2002, name: "buildkite/build", conclusion: "success" }), "completed", "check_run", {
+    const ctx = context(
+      suiteRun(7777, { id: 2002, name: "buildkite/build", conclusion: "success", app: { slug: "buildkite", name: "Buildkite" } }),
+      "completed",
+      "check_run",
+      {
       github_check_suites: [],
       pull_requests: [
         pullRequest({
@@ -700,9 +708,115 @@ describe("a job that runs on both push and pull_request", () => {
 
     const pr = ctx.db._tables.pull_requests[0];
     expect(pr.checks).toHaveLength(1);
-    expect(pr.checks[0]).toMatchObject({ name: "buildkite/build", external_id: "2002", conclusion: "success" });
+    expect(pr.checks[0]).toMatchObject({ name: "buildkite/build", external_id: "2002", conclusion: "success", app: "buildkite" });
     expect(pr.checks[0].event).toBeUndefined();
     expect(pr.checks_state).toBe("success");
+  });
+
+  test("two Actions suites arriving before either workflow_run keep the failure", async () => {
+    // Regression: both suites' check_runs landed before either workflow_run,
+    // so neither knew its event. Keyed by name alone the success (suite 9002)
+    // replaced the failure (suite 9001) and the green wake fired out of order.
+    // The app slug on the check_run payload says these are Actions runs, so
+    // the suite keeps them apart until the events are learned.
+    const ctx = context(suiteRun(9002, { id: 1002, conclusion: "success" }), "completed", "check_run", {
+      github_check_suites: [],
+      pull_requests: [
+        pullRequest({
+          checks_state: "failure",
+          checks: [
+            { name: "test (ubuntu)", status: "completed", conclusion: "failure", updated_at: 1, external_id: "991", suite_id: "9001", app: "github-actions" },
+          ],
+        }),
+      ],
+    });
+    await (processCheckRunEvent as any)._handler(ctx, { event_id: "event_1" });
+
+    const pr = ctx.db._tables.pull_requests[0];
+    expect(pr.checks).toHaveLength(2);
+    expect(pr.checks.map((c: any) => [c.suite_id, c.conclusion, c.event])).toEqual([
+      ["9001", "failure", undefined],
+      ["9002", "success", undefined],
+    ]);
+    expect(pr.checks_state).toBe("failure");
+    expect(ctx._scheduled.some((s: any) => s.args?.event_type === "pr_checks_green")).toBe(false);
+  });
+
+  test("the workflow_run deliveries that land later attach to the right suite without re-keying", async () => {
+    // Continues the case above: both entries sit without an event. Each
+    // workflow_run then names its suite's event, and the next check_run for
+    // each suite replaces its own entry by suite, never the other one.
+    const events = (payloads: Array<[string, string, any]>) => ({
+      github_webhook_events: payloads.map(([type, action, payload], i) => ({
+        _id: `event_${i + 1}`, delivery_id: `d${i + 1}`, event_type: type, action, processed: false, created_at: i, payload: JSON.stringify(payload),
+      })),
+    });
+    const ctx = context({}, "", "", {
+      github_check_suites: [],
+      ...events([
+        ["workflow_run", "completed", workflowRunPayload({ id: 700, event: "push", check_suite_id: 9001 })],
+        ["workflow_run", "completed", workflowRunPayload({ id: 701, event: "pull_request", check_suite_id: 9002 })],
+        ["check_run", "completed", suiteRun(9001, { id: 1003, conclusion: "success" })],
+        ["check_run", "completed", suiteRun(9002, { id: 1004, conclusion: "failure" })],
+      ]),
+      pull_requests: [
+        pullRequest({
+          checks_state: "failure",
+          checks: [
+            { name: "test (ubuntu)", status: "completed", conclusion: "failure", updated_at: 1, external_id: "991", suite_id: "9001", app: "github-actions" },
+            { name: "test (ubuntu)", status: "completed", conclusion: "success", updated_at: 2, external_id: "1002", suite_id: "9002", app: "github-actions" },
+          ],
+        }),
+      ],
+    });
+
+    await (processWorkflowRunEvent as any)._handler(ctx, { event_id: "event_1" });
+    await (processWorkflowRunEvent as any)._handler(ctx, { event_id: "event_2" });
+    // Learning the events touched the suite table only; the entries are as they were.
+    let pr = ctx.db._tables.pull_requests[0];
+    expect(pr.checks.map((c: any) => c.external_id)).toEqual(["991", "1002"]);
+
+    // The push job re-runs green: it replaces the 9001 failure and only that.
+    await (processCheckRunEvent as any)._handler(ctx, { event_id: "event_3" });
+    pr = ctx.db._tables.pull_requests[0];
+    expect(pr.checks).toHaveLength(2);
+    expect(pr.checks.map((c: any) => [c.suite_id, c.event, c.external_id, c.conclusion])).toEqual([
+      ["9002", undefined, "1002", "success"],
+      ["9001", "push", "1003", "success"],
+    ]);
+    expect(pr.checks_state).toBe("success");
+    expect(ctx._scheduled.some((s: any) => s.args?.event_type === "pr_checks_green")).toBe(true);
+
+    // The pull_request job re-runs red: it replaces the 9002 entry and only that.
+    await (processCheckRunEvent as any)._handler(ctx, { event_id: "event_4" });
+    pr = ctx.db._tables.pull_requests[0];
+    expect(pr.checks).toHaveLength(2);
+    expect(pr.checks.map((c: any) => [c.suite_id, c.event, c.external_id, c.conclusion])).toEqual([
+      ["9001", "push", "1003", "success"],
+      ["9002", "pull_request", "1004", "failure"],
+    ]);
+    expect(pr.checks_state).toBe("failure");
+  });
+
+  test("a commit status does not replace an Actions job of the same name", async () => {
+    // GitHub shows a status context and an Actions job as two checks even when
+    // they share a name; the Actions entry knows its app, so they stay two.
+    const ctx = context(
+      { repository: { full_name: "codecast-sh/codecast" }, sha: HEAD, state: "success", context: "build" },
+      undefined as any,
+      "status",
+      {
+        pull_requests: [
+          pullRequest({
+            checks_state: "failure",
+            checks: [{ name: "build", status: "completed", conclusion: "failure", updated_at: 1, external_id: "3001", suite_id: "9001", app: "github-actions" }],
+          }),
+        ],
+      },
+    );
+    await (processStatusEvent as any)._handler(ctx, { event_id: "event_1" });
+    expect(ctx.db._tables.pull_requests[0].checks).toHaveLength(2);
+    expect(ctx.db._tables.pull_requests[0].checks_state).toBe("failure");
   });
 
   test("a commit status with the same name as an Actions job with no known event replaces it by name", async () => {
