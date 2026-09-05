@@ -166,7 +166,7 @@ describe("placeInboxRow — bucket precedence", () => {
   test("every bucket the function can produce is in the alphabet", () => {
     const seen = new Set<string>();
     for (const i of [
-      input({ dismissed: true }), input({ stashed: true }), input({ isAnchor: true }), input({ asking: true }),
+      input({ dismissed: true }), input({ stashed: true }), input({ snoozed: true }), input({ isAnchor: true }), input({ asking: true }),
       input({ pinned: true }), input({ messageCount: 0 }), input({}), input({ agentStatus: "done" }),
       input({ agentStatus: "dormant" }), input({ agentStatus: "working", isIdle: false }), input({ killed: true }),
     ]) seen.add(placeInboxRow(i).bucket);
@@ -463,7 +463,7 @@ describe("field ownership constants", () => {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
-      "agent_status_updated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
+      "agent_status_updated_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -471,9 +471,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 4", () => {
-    expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(4);
+  test("the caps are the single source and the version is 6", () => {
+    expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
+    expect(INBOX_PROJECTION_VERSION).toBe(6);
   });
 });
 

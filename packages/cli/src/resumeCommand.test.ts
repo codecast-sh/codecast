@@ -524,3 +524,32 @@ describe("model choices on native resume", () => {
     expect(buildNonClaudeResumeCommand("pi", "session123", { model: "openai/gpt;touch /tmp/injected" })).toBe("pi --session session123");
   });
 });
+
+// A native fork is the registry forkCmd with the same trailing flags a plain
+// resume gets (args, permission flags, model/effort) — grok's `--fork-session`
+// copies the parent's session bundle under the new uuid (live-verified).
+describe("buildNonClaudeResumeCommand native fork", () => {
+  const parent = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+  const child = "e1d4009c-ee25-4e8e-9090-5671b3a134e6";
+
+  test("grok forks through --resume <parent> --fork-session --session-id <child>", () => {
+    expect(buildNonClaudeResumeCommand("grok", child, { forkFromSessionId: parent })).toBe(
+      `grok --resume ${parent} --fork-session --session-id ${child}`,
+    );
+  });
+
+  test("grok fork keeps the resume flag tail (args + permission mode)", () => {
+    expect(
+      buildNonClaudeResumeCommand("grok", child, {
+        forkFromSessionId: parent,
+        grokArgs: "--fullscreen",
+        grokPermFlags: "--permission-mode bypassPermissions",
+      }),
+    ).toBe(`grok --resume ${parent} --fork-session --session-id ${child} --fullscreen --permission-mode bypassPermissions`);
+  });
+
+  test("a client without forkCmd refuses a native fork instead of resuming the parent", () => {
+    expect(() => buildNonClaudeResumeCommand("pi", child, { forkFromSessionId: parent })).toThrow(/native fork/);
+    expect(() => buildNonClaudeResumeCommand("codex", child, { forkFromSessionId: parent })).toThrow(/native fork/);
+  });
+});

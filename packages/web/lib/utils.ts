@@ -154,11 +154,63 @@ export function displayPath(abs: string, home: string | undefined): string {
   return abs;
 }
 
+// One directory entry as the daemon's /fs/dirs route reports it.
+export type DiskDir = { name: string; path: string; repo: boolean };
+
+// What the picker knows about one directory on the machine's disk: the folders
+// directly inside it, or that it doesn't exist. `home` is the daemon's real
+// home, which replaces the inferred one the moment it's known.
+export type DiskListing = { home: string; path: string; exists: boolean; dirs: DiskDir[] };
+
+// Split a picker query into the directory to LIST and the name prefix to match
+// inside it, shell-completion style: "~/src/co" lists ~/src and matches "co";
+// "~/src/" lists ~/src and matches everything; a bare "co" resolves against
+// `base` first. With no home known yet, a ~-relative directory is returned as
+// typed — the daemon expands it, and the listing then brings the real home
+// back. Returns undefined when the text names nothing listable.
+export function splitDirQuery(
+  raw: string,
+  home: string | undefined,
+  base: string | undefined,
+): { dir: string; prefix: string; hidden: boolean } | undefined {
+  const s = raw.trim();
+  if (!s) return undefined;
+  const browsing = s.endsWith("/");
+  const tildeNoHome = !home && (s === "~" || s.startsWith("~/"));
+  let dir: string | undefined;
+  let prefix: string;
+  if (browsing) {
+    dir = tildeNoHome ? s.replace(/\/+$/, "") || "~" : resolveCustomPath(s, home, base);
+    prefix = "";
+  } else {
+    const cut = s.lastIndexOf("/");
+    prefix = cut >= 0 ? s.slice(cut + 1) : s;
+    if (tildeNoHome) dir = cut > 0 ? s.slice(0, cut) : "~";
+    else if (cut >= 0) dir = resolveCustomPath(s.slice(0, cut) || "/", home, base);
+    else dir = base;
+  }
+  if (!dir) return undefined;
+  return { dir, prefix, hidden: prefix.startsWith(".") };
+}
+
+export type ProjectPathOption = {
+  path: string;
+  /** A row the text NAMED rather than one that was found: open (or create) this folder. */
+  custom?: boolean;
+  /** The custom folder is known not to exist; picking it creates it. */
+  create?: boolean;
+  /** Found on the machine's disk (not in recents). `repo` = has a .git inside. */
+  disk?: boolean;
+  repo?: boolean;
+};
+
 // The option list a project-path picker offers for a query: matching recents,
-// plus a synthetic "use this folder" row when the text NAMES a directory, so
+// then folders found on disk in the directory the query browses (repos first),
+// then a synthetic "open this folder" row when the text NAMES a directory, so
 // any path stays reachable — not just previously-used ones. An explicit path
 // (absolute or ~/…) always offers it; a bare name resolves against `base` and
-// offers it only when nothing in recents matches (plain filtering stays clean).
+// offers it only when nothing else matches (plain filtering stays clean). When
+// the listing proves the named folder is absent, that row becomes "create".
 // With no query: the first `defaultLimit` recents.
 export function buildProjectPathOptions(opts: {
   query: string;
@@ -168,23 +220,55 @@ export function buildProjectPathOptions(opts: {
   /** Excluded from the custom offer — "open the folder you're already in" is a no-op. */
   currentPath?: string;
   defaultLimit?: number;
-}): Array<{ path: string; custom?: boolean }> {
-  const { query, recentPaths, home, base, currentPath, defaultLimit = 8 } = opts;
+  /** The daemon's listing of the directory splitDirQuery(query) names, when it has answered. */
+  listing?: DiskListing | null;
+  diskLimit?: number;
+}): ProjectPathOption[] {
+  const { query, recentPaths, home, base, currentPath, defaultLimit = 8, listing, diskLimit = 12 } = opts;
   if (!query.trim()) return recentPaths.slice(0, defaultLimit).map((path) => ({ path }));
   const explicit = isExplicitPath(query);
   const custom = resolveCustomPath(query, home, base);
   // Explicit paths match recents by their resolved absolute form (so "~/…"
   // still filters previously-used folders); bare names match by name.
   const matchQuery = explicit ? (custom ?? query) : query;
-  const matches = recentPaths
+  const matches: ProjectPathOption[] = recentPaths
     .filter((p) => matchesProjectQuery(p, matchQuery))
     .map((path) => ({ path }));
+
+  // Disk entries only count when the listing is of the directory THIS query
+  // browses — a stale answer for the previous keystroke's directory would
+  // otherwise offer folders from the wrong place.
+  const split = splitDirQuery(query, home, base);
+  const listed = !!split && !!listing && listing.path === split.dir;
+  const shown = new Set(matches.map((m) => m.path));
+  if (currentPath) shown.add(currentPath);
+  const disk: ProjectPathOption[] = listed
+    ? listing!.dirs
+        .filter((d) => !shown.has(d.path) && (!split!.prefix || matchesProjectQuery(d.path, split!.prefix)))
+        // A name that STARTS with the prefix outranks a segment match
+        // ("codex" before "claude-code" for "co"); repos outrank plain folders.
+        .sort((a, b) => {
+          const pre = split!.prefix.toLowerCase();
+          const ap = Number(a.name.toLowerCase().startsWith(pre));
+          const bp = Number(b.name.toLowerCase().startsWith(pre));
+          return bp - ap || Number(b.repo) - Number(a.repo) || a.name.localeCompare(b.name);
+        })
+        .slice(0, diskLimit)
+        .map((d) => ({ path: d.path, disk: true, repo: d.repo }))
+    : [];
+  for (const d of disk) shown.add(d.path);
+
   const offerCustom =
     !!custom &&
     custom !== currentPath &&
-    !matches.some((m) => m.path === custom) &&
-    (explicit || matches.length === 0);
-  return offerCustom ? [...matches, { path: custom!, custom: true }] : matches;
+    !shown.has(custom) &&
+    (explicit || (matches.length === 0 && disk.length === 0));
+  if (!offerCustom) return [...matches, ...disk];
+  // Absent from a directory we listed (or under a directory that doesn't
+  // exist) → the folder isn't there; picking it creates it.
+  const absent =
+    listed && !!split!.prefix && (!listing!.exists || !listing!.dirs.some((d) => d.path === custom));
+  return [...matches, ...disk, { path: custom!, custom: true, ...(absent ? { create: true } : {}) }];
 }
 
 export async function copyToClipboard(text: string): Promise<void> {

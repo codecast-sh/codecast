@@ -18,6 +18,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessCommit, canAccessConversation, canAccessPullRequest, canAccessTask, isTeamMember } from "./lib/access";
+import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
+import { installationCoversRepo } from "./githubApp";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -66,22 +68,20 @@ async function installationForUser(
   userId: Id<"users">,
   repository: string,
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
-  const [owner] = repository.split("/");
-  const installations = await ctx.db
-    .query("github_app_installations")
-    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
-    .collect();
-
-  for (const candidate of installations) {
-    if (candidate.suspended_at) continue;
-    if (
-      candidate.repository_selection === "selected" &&
-      !candidate.repositories?.some((r: any) => r.full_name === repository)
-    ) continue;
+  for (const candidate of await installationsForOwner(ctx, repository)) {
+    if (!installationCoversRepo(candidate, repository)) continue;
     if (!(await isTeamMember(ctx, userId, candidate.team_id))) continue;
     return { team_id: candidate.team_id, installation_id: candidate.installation_id };
   }
   return null;
+}
+
+/** The installations under a repository's owner, by the canonical owner spelling. */
+async function installationsForOwner(ctx: { db: any }, repository: string) {
+  return await ctx.db
+    .query("github_app_installations")
+    .withIndex("by_account_login", (q: any) => q.eq("account_login", repositoryOwner(repository)))
+    .collect();
 }
 
 /**
@@ -96,18 +96,8 @@ async function installationForRepository(
   ctx: { db: any },
   repository: string,
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
-  const [owner] = repository.split("/");
-  const installations = await ctx.db
-    .query("github_app_installations")
-    .withIndex("by_account_login", (q: any) => q.eq("account_login", owner))
-    .collect();
-
-  for (const candidate of installations) {
-    if (candidate.suspended_at) continue;
-    if (
-      candidate.repository_selection === "selected" &&
-      !candidate.repositories?.some((r: any) => r.full_name === repository)
-    ) continue;
+  for (const candidate of await installationsForOwner(ctx, repository)) {
+    if (!installationCoversRepo(candidate, repository)) continue;
     return { team_id: candidate.team_id, installation_id: candidate.installation_id };
   }
   return null;
@@ -128,8 +118,10 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
 
     for (const installation of installations) {
       if (installation.suspended_at) continue;
+      // Keyed by the canonical spelling so a display-case entry and the rows
+      // activity wrote are one repository; the display name is what is shown.
       for (const repo of installation.repositories ?? []) {
-        found.set(repo.full_name, { repository: repo.full_name, team_id: membership.team_id, installed: true });
+        found.set(normalizeRepository(repo.full_name), { repository: repo.full_name, team_id: membership.team_id, installed: true });
       }
     }
 
@@ -146,8 +138,9 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
       .take(500);
 
     for (const row of [...prs, ...commits]) {
-      if (!row.repository || found.has(row.repository)) continue;
-      found.set(row.repository, { repository: row.repository, team_id: membership.team_id, installed: false });
+      const key = normalizeRepository(row.repository);
+      if (!key || found.has(key)) continue;
+      found.set(key, { repository: row.repository, team_id: membership.team_id, installed: false });
     }
   }
   return [...found.values()].sort((a, b) => a.repository.localeCompare(b.repository));
@@ -200,13 +193,18 @@ export const getCacheRow = internalQuery({
     path: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-      .first();
+    return await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
   },
 });
+
+/** The one cache lookup: the key's repository is the canonical spelling. */
+async function cacheRowByKey(ctx: { db: any }, repository: string, kind: string, ref: string, path: string) {
+  return await ctx.db
+    .query("repo_cache")
+    .withIndex("by_key", (q: any) =>
+      q.eq("repository", normalizeRepository(repository)).eq("kind", kind).eq("ref", ref).eq("path", path))
+    .first();
+}
 
 export const upsertCache = internalMutation({
   args: {
@@ -221,15 +219,11 @@ export const upsertCache = internalMutation({
     truncated: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-      .first();
+    const existing = await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
 
     const row = {
       team_id: args.team_id,
-      repository: args.repository,
+      repository: normalizeRepository(args.repository),
       kind: args.kind,
       ref: args.ref,
       path: args.path,
@@ -607,11 +601,7 @@ export const ensureCachedPublic = internalAction({
 export const repoVisibility = internalQuery({
   args: { repository: v.string() },
   handler: async (ctx, args): Promise<{ known: boolean; private: boolean; stale: boolean }> => {
-    const row = await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", "meta").eq("ref", "-").eq("path", ""))
-      .first();
+    const row = await cacheRowByKey(ctx, args.repository, "meta", "-", "");
     if (!row) return { known: false, private: true, stale: true };
 
     const meta = JSON.parse(row.content);
@@ -633,11 +623,7 @@ export const repoVisibility = internalQuery({
 export const publicRead = internalQuery({
   args: { repository: v.string(), kind: v.string(), ref: v.string(), path: v.string() },
   handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("repo_cache")
-      .withIndex("by_key", (q) =>
-        q.eq("repository", args.repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-      .first();
+    const row = await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
     if (!row) return null;
     return { ...JSON.parse(row.content), _fetched_at: row.fetched_at, _stale: !isFresh(row, Date.now()) };
   },
@@ -663,11 +649,7 @@ async function readCache(ctx: any, repository: string, kind: string, ref: string
   const userId = await requireUser(ctx);
   if (!(await installationForUser(ctx, userId, repository))) return null;
 
-  const row = await ctx.db
-    .query("repo_cache")
-    .withIndex("by_key", (q: any) =>
-      q.eq("repository", repository).eq("kind", kind).eq("ref", ref).eq("path", path))
-    .first();
+  const row = await cacheRowByKey(ctx, repository, kind, ref, path);
   if (!row) return null;
 
   return {
@@ -766,6 +748,7 @@ export const getLog = query({
     if (!cached) return null;
     const userId = await requireUser(ctx);
 
+    const repository = normalizeRepository(args.repository);
     const commits = [];
     for (const commit of cached.commits ?? []) {
       const candidates = await ctx.db
@@ -774,7 +757,7 @@ export const getLog = query({
         .collect();
       let row = null;
       for (const candidate of candidates) {
-        if (candidate.repository === args.repository && await canAccessCommit(ctx, userId, candidate)) {
+        if (candidate.repository === repository && await canAccessCommit(ctx, userId, candidate)) {
           row = candidate;
           break;
         }
@@ -831,7 +814,7 @@ export const getPulls = query({
       const candidates = await ctx.db
         .query("pull_requests")
         .withIndex("by_repository_number", (q) =>
-          q.eq("repository", args.repository).eq("number", pull.number))
+          q.eq("repository", normalizeRepository(args.repository)).eq("number", pull.number))
         .collect();
       let row = null;
       for (const candidate of candidates) {

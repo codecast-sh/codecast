@@ -2477,10 +2477,13 @@ export const getSharedMessage = query({
  * own rule, so a teammate who cannot read the session sees no message either.
  */
 export const webGet = query({
-  args: { id: v.string() },
+  // Same admission as listMessages / getUserMessages: owner, team, or a
+  // PRESENTED share token, so a guest reading a shared transcript can open
+  // the same message the navigator lists for them.
+  args: { id: v.string(), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
+    if (!userId && !args.share_token) return null;
     let message: Doc<"messages"> | null = null;
     try {
       message = await ctx.db.get(args.id as Id<"messages">);
@@ -2488,7 +2491,7 @@ export const webGet = query({
     if (!message) return null;
     const conversation = await ctx.db.get(message.conversation_id);
     if (!conversation) return null;
-    if ((await checkConversationAccess(ctx, userId, conversation)) === "denied") return null;
+    if ((await checkConversationAccess(ctx, userId, conversation, args.share_token)) === "denied") return null;
     const user = await ctx.db.get(conversation.user_id);
     return {
       message,

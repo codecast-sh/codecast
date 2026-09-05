@@ -161,7 +161,9 @@ function MessageRow({
   isSelected: boolean;
   isCurrentBranch: boolean;
   onClick: () => void;
-  onFork: () => void;
+  // Absent when this message is not a fork point for the branch's client
+  // (a native-fork client forks only from its tip).
+  onFork?: () => void;
   onMouseEnter: () => void;
   rowRef?: React.Ref<HTMLDivElement>;
 }) {
@@ -177,13 +179,13 @@ function MessageRow({
       {isSelected && <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-sol-cyan" />}
       <span className={`font-mono text-[9px] mt-0.5 w-5 text-right flex-shrink-0 tabular-nums ${isSelected ? "text-sol-cyan" : "text-sol-text-dim/50"}`}>{num}</span>
       <span className="flex-1 min-w-0 line-clamp-2 leading-snug">{msg.content}</span>
-      <button
+      {onFork && <button
         onClick={(e) => { e.stopPropagation(); onFork(); }}
         title="Fork from this message"
         className={`self-center flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
       >
         <GitFork className="w-3 h-3" />fork
-      </button>
+      </button>}
     </div>
   );
 }
@@ -191,7 +193,7 @@ function MessageRow({
 type Mode = "branches" | "messages";
 
 function ForkTreeContent({
-  conversation, conversationId, currentBranchId, open, initialDrillId, containerRef, onClose, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+  conversation, conversationId, currentBranchId, open, initialDrillId, containerRef, onClose, onSwitchToConversation, onForkFromBranch, forkAnyMessage, onRewindCurrent,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
@@ -206,6 +208,10 @@ function ForkTreeContent({
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  // Whether the client forks from any message (rebuild/API fork) or only from a
+  // branch's latest message (native fork). Same registry fact the transcript
+  // uses for its per-message fork control.
+  forkAnyMessage: boolean;
   onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
 }) {
   const flat = useForkTree(conversation, open);
@@ -516,7 +522,7 @@ function ForkTreeContent({
               isSelected={idx === msgSel}
               isCurrentBranch={drillId === currentBranchId}
               onClick={() => setMsgSel(idx)}
-              onFork={() => drillId && forkFromMsg(drillId, m)}
+              onFork={forkAnyMessage || m === drillMsgs[drillMsgs.length - 1] ? () => drillId && forkFromMsg(drillId, m) : undefined}
               onMouseEnter={() => setMsgSel(idx)}
               rowRef={idx === msgSel ? rowRef : undefined}
             />
@@ -555,7 +561,7 @@ function ForkTreeContent({
 //    fallback when there's no composer to meld into.
 export function ForkMapBox({
   conversation, conversationId, currentBranchId, open, initialDrillId, className, getIgnore, onClose,
-  onSwitchToConversation, onForkFromBranch, onRewindCurrent, tray,
+  onSwitchToConversation, onForkFromBranch, forkAnyMessage, onRewindCurrent, tray,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
@@ -568,6 +574,7 @@ export function ForkMapBox({
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  forkAnyMessage: boolean;
   onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -629,6 +636,7 @@ export function ForkMapBox({
         onClose={onClose}
         onSwitchToConversation={onSwitchToConversation}
         onForkFromBranch={onForkFromBranch}
+        forkAnyMessage={forkAnyMessage}
         onRewindCurrent={onRewindCurrent}
       />
     </div>
@@ -646,6 +654,7 @@ export function ForkMapFallback(props: {
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  forkAnyMessage: boolean;
   onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
 }) {
   if (!props.open) return null;

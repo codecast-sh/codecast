@@ -3,6 +3,7 @@
 // the browser. PURE isomorphic data only — no Node or DOM APIs — so the Convex
 // runtime can import them.
 export * from "./agentStatus";
+export * from "./hibernation";
 export * from "./openTasks";
 export * from "./pendingStatus";
 export * from "./daemonCommands";
@@ -62,8 +63,11 @@ export * from "./inboxProjection";
 export * from "./appSurfaces";
 // How a pull request is named: one parser for the reference forms people type
 // and one builder for the codecast page link, shared by the CLI, Convex and web.
+export * from "./conversationFields";
 export * from "./prRefs";
 // The `--on <event>` vocabulary: which events a trigger can wait for, the
 // filter each name arms, and the labels the web renders. Shared because the
 // CLI and the two web trigger pages each held a copy, and they had drifted.
 export * from "./triggerEvents";
+
+export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "./sessionSnooze";
