@@ -84,6 +84,7 @@ describe("isGcableEmptyConversation", () => {
     expect(isGcableEmptyConversation({ draft_message: "half-typed thought" })).toBe(false);
     expect(isGcableEmptyConversation({ draft_message: "   " })).toBe(true); // whitespace ≠ intent
     expect(isGcableEmptyConversation({ inbox_pinned_at: 123 })).toBe(false);
+    expect(isGcableEmptyConversation({ inbox_snoozed_until: 123 })).toBe(false);
     expect(isGcableEmptyConversation({ is_favorite: true })).toBe(false);
     expect(isGcableEmptyConversation({ title_is_custom: true })).toBe(false);
     expect(isGcableEmptyConversation({ share_token: "tok" })).toBe(false);

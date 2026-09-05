@@ -4,6 +4,13 @@ import { internal } from "./_generated/api";
 const crons = cronJobs();
 
 crons.interval(
+  "fill short titles for tasks and plans",
+  { minutes: 2 },
+  internal.titleGeneration.fillShortTitles,
+  {}
+);
+
+crons.interval(
   "process github comment webhooks",
   { minutes: 1 },
   internal.githubWebhooks.processCommentWebhooks,
@@ -14,6 +21,20 @@ crons.interval(
   "reclaim stale agent tasks",
   { minutes: 5 },
   internal.agentTasks.reclaimStaleTasks
+);
+
+crons.interval(
+  "reconcile cloud wake requests",
+  { seconds: 60 },
+  (internal as any).cloudWake.reconcile,
+  {}
+);
+
+crons.interval(
+  "dispatch due cloud triggers",
+  { seconds: 60 },
+  internal.agentTasks.dispatchCloudTriggers,
+  {}
 );
 
 crons.interval(

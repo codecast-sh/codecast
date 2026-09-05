@@ -38,6 +38,8 @@ import {
   isAppHost,
   isConvexId,
   parseEntityUrl,
+  PR_REF_SOURCE,
+  COMMIT_REF_SOURCE,
   type EntityType,
 } from "../entities";
 
@@ -92,6 +94,9 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   // Docs and projects have no short id; only a Convex id addresses them.
   doc: null,
   project: null,
+  // Repository objects: `owner/repo#482`, `owner/repo@sha`.
+  pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
+  commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
   person: USERNAME,
 };
 
@@ -289,5 +294,7 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   doc: "--sol-green",
   project: "--sol-violet",
   trigger: "--sol-orange",
+  pr: "--sol-green",
+  commit: "--sol-yellow",
   person: "--sol-blue",
 };

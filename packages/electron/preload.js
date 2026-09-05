@@ -38,6 +38,20 @@ const onCallPanelHandback = bufferedChannel(ipcRenderer, "call-panel-handback");
 // would have pressed Join on a huddle nobody joined.
 const onCallRingAccept = bufferedChannel(ipcRenderer, "call-ring-accept");
 
+// A room for the voice window to join, and a command from another window
+// (press, join, hang up) for the host to carry out. Both buffered: the host is
+// persistent, but a request that lands in the second between its page loading
+// and its listener mounting is somebody's Talk press, and it must not vanish.
+const onCallPanelOpen = bufferedChannel(ipcRenderer, "call-panel-open");
+const onVoiceCommand = bufferedChannel(ipcRenderer, "voice-command");
+// Another window asked for the call to be shown: the host stops hiding it.
+const onCallPanelShow = bufferedChannel(ipcRenderer, "call-panel-show", { latest: true });
+
+// What the host is doing — its walkie and call facts — for every other
+// window's talk keys. Latest only: a window that subscribes late wants the
+// truth now, not a replay of every partial transcript on the way to it.
+const onVoiceMirror = bufferedChannel(ipcRenderer, "voice-mirror", { latest: true });
+
 // A meeting app started on this machine and the shell is offering to record
 // it. Buffered like a deep link: the offer is about something happening NOW,
 // and one that lands while the renderer is still booting would otherwise be
@@ -62,15 +76,21 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // persists across launches.
   isPeopleWindow: process.argv.includes("--people-window"),
   openPeopleWindow: () => ipcRenderer.invoke("open-people-window"),
+  // With a voice host the buddy list is the WALL, a shape of that window;
+  // opening it is a standing arrangement the host takes up, and this puts it
+  // away again. On an older arrangement it closes the people window.
+  closePeopleWindow: () => ipcRenderer.invoke("close-people-window"),
   setAlwaysOnTop: (on) => ipcRenderer.invoke("set-always-on-top", on),
   getAlwaysOnTop: () => ipcRenderer.invoke("get-always-on-top"),
-  // The call panel: a huddle in a window of its own (route /call-panel). One
-  // per app, because one call at a time. `isCallPanelWindow` tells this
-  // renderer it IS that window, so it takes the call over on load.
+  // The voice window (route /call-panel): ONE persistent see-through window
+  // that holds everything with a microphone in it — the walkie's ear and its
+  // strip, the idle team as circles, and the call in all four of its sizes.
+  // `isCallPanelWindow` tells this renderer it IS that window.
   //
-  // `closeCallPanel({ended})` is hang-up: destroy the window. Any other close
-  // — the X, the OS close box — HIDES it, like the palette. The huddle stays
-  // here. `showCallPanel` raises it again from the rest of the app.
+  // `closeCallPanel` hides it, like the palette; the huddle stays here.
+  // `showCallPanel` raises it again from the rest of the app. `openCallPanel`
+  // hands it a room — as a command when the renderer has declared itself the
+  // host (`voiceHostReady`), in its URL otherwise.
   isCallPanelWindow: process.argv.includes("--call-panel-window"),
   openCallPanel: (roomKey, opts) => ipcRenderer.invoke("open-call-panel", roomKey, opts ?? {}),
   showCallPanel: () => ipcRenderer.invoke("show-call-panel"),
@@ -78,43 +98,60 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
   onCallPanelHandback,
   onCallRingAccept,
-  // The four sizes. One window, because `transparent` and `frame` are decided
-  // when a window is CONSTRUCTED: the call window is born see-through and
-  // frameless, and changing size reshapes it in place rather than handing the
-  // call to another window — a call changing shape must never be a call
+  onCallPanelOpen,
+  onCallPanelShow,
+  // The host declares itself once its page is up: from then on rooms arrive
+  // as commands, a hang-up is a hide, and every other window is a remote.
+  voiceHostReady: () => ipcRenderer.send("voice-host-ready"),
+  // Remotes. A press on a talk key, a join, an answered ring or a hang-up in
+  // any other window is sent here and carried out by the host, which holds
+  // the only microphone. Resolves false when no host took it, so the caller
+  // can act locally on a shell (or in a moment) without one.
+  voiceCommand: (cmd, args) => ipcRenderer.invoke("voice-command", cmd, args ?? []),
+  onVoiceCommand,
+  // The host mirrors its walkie and call facts to every other window, and
+  // every other window reads them off this.
+  voiceMirror: (payload) => ipcRenderer.send("voice-mirror", payload),
+  onVoiceMirror,
+  // The shapes. One window, because `transparent` and `frame` are decided
+  // when a window is CONSTRUCTED: the voice window is born see-through and
+  // frameless, and changing shape reshapes it in place rather than handing
+  // the call to another window — a call changing shape must never be a call
   // re-joining a room.
   //
   //   panel     the stage, a card the person resizes by its edges
   //   circles   everybody, as a row of face circles over the work
   //   speaker   one circle, whoever is talking
   //   tiny      the same circle at the size of a menu bar icon
+  //   walkie    the burst strip, in the bottom-right corner of the screen
+  //   faces     the idle team as photo circles, at the call circles' spot
+  //   idle      nothing: hidden
   //
-  // The last three setters are what the see-through sizes need and the stage
+  // The three setters are what the see-through shapes need and the stage
   // does not: `setCallWindowInteractive` decides whether the window takes the
   // mouse at all (off except over a circle, so a click on the desktop behind
   // reaches the desktop), `setCallWindowContentSize` keeps the window exactly
-  // as big as its circles, and `setCallWindowDragging` has the shell follow the
-  // cursor while a circle is held — a drag region would eat the mouse events
-  // the renderer needs to know the pointer left. The stage drags by a real
-  // drag region instead, since nothing there is competing for those events.
+  // as big as its circles or its card, and `setCallWindowDragging` has the
+  // shell follow the cursor while a circle is held — a drag region would eat
+  // the mouse events the renderer needs to know the pointer left. The stage
+  // and the strip drag by a real drag region instead, since nothing there is
+  // competing for those events.
   setCallWindowSize: (size) => ipcRenderer.invoke("set-call-window-size", size),
   getCallWindowSize: () => ipcRenderer.invoke("get-call-window-size"),
+  getVoiceWindowState: () => ipcRenderer.invoke("get-voice-window-state"),
   setCallWindowInteractive: (on) => ipcRenderer.send("set-call-window-interactive", on === true),
   setCallWindowContentSize: (size) => ipcRenderer.send("set-call-window-content-size", size),
   setCallWindowDragging: (on) => ipcRenderer.send("set-call-window-dragging", on === true),
-  // The faces overlay: the team as circles floating over the work (route
-  // /faces) when there is no call. Born see-through like the call window's
-  // circle sizes, sharing their saved spot — it yields while a call is
-  // minimized to circles and returns when the call ends. Its open state
-  // persists across launches; the three see-through setters are the same
-  // switches the call circles use, addressed to this window.
-  isFacesWindow: process.argv.includes("--faces-window"),
+  // A ring is up in the host: the dock bounces until the app is activated.
+  // The host says when it stops.
+  setRingAttention: (on) => ipcRenderer.send("ring-attention", on === true),
+  // The idle faces: the team as circles floating over the work when there is
+  // no call — a shape of the voice window, at the call circles' spot. Opening
+  // is a standing arrangement that persists across launches; the host reads
+  // the flag off its window role and takes the shape itself.
   openFacesWindow: () => ipcRenderer.invoke("open-faces-window"),
   closeFacesWindow: () => ipcRenderer.invoke("close-faces-window"),
   getFacesWindowOpen: () => ipcRenderer.invoke("get-faces-window-open"),
-  setFacesWindowInteractive: (on) => ipcRenderer.send("set-faces-window-interactive", on === true),
-  setFacesWindowContentSize: (size) => ipcRenderer.send("set-faces-window-content-size", size),
-  setFacesWindowDragging: (on) => ipcRenderer.send("set-faces-window-dragging", on === true),
   // Meeting detection: the shell polls the names of running programs (and
   // nothing else) while the setting is on, and offers to record when a meeting
   // app starts. The ANSWER lives here in the web layer — main never starts a
