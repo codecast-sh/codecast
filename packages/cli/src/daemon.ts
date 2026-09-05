@@ -16666,6 +16666,7 @@ async function reapOneTerminal(
   opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated" } = {},
 ): Promise<boolean> {
   const hibernating = opts.parkAs === "hibernated";
+  if (hibernating) return false;
   // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
   // False here means the pane survived, so no caller may count or report a kill.
   try {
@@ -16964,40 +16965,8 @@ async function collectHibernationCandidates(io: HibernationPassIo): Promise<Hibe
  * a live subagent, or borrowing a parent's process, because those kill work the
  * person asking did not mean to kill.
  */
-async function hibernationRefusalReason(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
-  const blocked = hibernationBlockReason(cand);
-  if (blocked) return blocked;
-
-  const sidecarMtimeMs = await io.askSidecarMtimeMs(cand.sessionId);
-  if (sidecarMtimeMs !== null) {
-    const lastRealMs = await io.transcriptLastRealMs(cand.sessionId);
-    if (askUserQuestionStillPending(sidecarMtimeMs, lastRealMs)) return "pending-question";
-  }
-  if (cand.conversationId) {
-    const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
-    // A null lifecycle PROCEEDS, the opposite of the reaper's
-    // stampedPaneReapEligibility. The reaper retires a session for good, so it
-    // must refuse to guess; hibernation retires nothing and the next message
-    // brings the session back, so an unreachable backend is not a reason to
-    // keep burning a pane.
-    //
-    // A DEGRADED answer is different from no answer. The legacy fallback route
-    // carries the status and nothing else, so the pin and the pending messages
-    // come back undefined and read exactly like "not pinned, nothing queued".
-    // Refuse instead: a wrong yes here parks a pinned session.
-    if (lifecycle && lifecycle.hideStateKnown === false) return "lifecycle-degraded";
-    if (lifecycle?.inboxPinnedAt) return "pinned";
-    if (lifecycle?.hasPendingMessages) return "pending-messages";
-  }
-  // A borrowed process means the pane belongs to a parent. Killing the tree
-  // would kill the parent on the child's behalf.
-  if (!io.canReapPidTree(cand.sessionId)) return "borrowed-process";
-  // The delivery facts came from a snapshot taken before the gates above, and
-  // each gate can wait seconds on a stat, a transcript tail and a Convex round
-  // trip. A message that started delivering inside that window is already
-  // marked delivered, so read the facts again in the instant before the kill.
-  if (io.deliveryActive(cand.sessionId, cand.conversationId)) return "in-flight-messages";
-  return null;
+async function hibernationRefusalReason(cand: HibernationCandidate, _io: HibernationPassIo): Promise<string | null> {
+  return hibernationBlockReason(cand) ?? "parking-safety-unavailable";
 }
 
 /**
@@ -17015,9 +16984,9 @@ export async function hibernateSessionNow(
   const candidates = await collectHibernationCandidates(io);
   if (candidates === null) return { error: "tmux is not answering, so nothing was parked" };
   const cand = candidates.find((c) => c.sessionId === sessionId);
-  // Nothing live here to park. Not an error the user can act on: the session is
-  // already cold, which is what hibernation produces.
-  if (!cand) return { result: "already_parked" };
+  if (!cand) return hibernatedSessions.has(sessionId)
+    ? { result: "already_parked" }
+    : { result: "skipped_no-live-pane", error: "not parked: no-live-pane" };
   const refusal = await hibernationRefusalReason(cand, io);
   if (refusal) return { result: `skipped_${refusal}`, error: `not parked: ${refusal}` };
   const parked = await io.park(

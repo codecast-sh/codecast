@@ -1,19 +1,20 @@
 // The hibernation wiring: which facts the pass gathers, which refusals it
-// applies, and what it hands to the teardown. The verdict itself is tested in
+// applies, and why it refuses the teardown. The verdict itself is tested in
 // hibernation.test.ts; this is about the gates too expensive to run fleet-wide,
 // about the pass never parking a session the policy did not pick, and about
 // `cast hibernate` refusing for exactly the same reasons the pass does.
 //
-// Every dependency comes through the injected io (the TmuxSubmitVerifyIO
-// pattern from daemon.inject-submit-verify.test.ts), so no tmux, no Convex and
-// no transcript is needed here.
+
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentStatus } from "@codecast/shared/contracts";
-import {
+import { createHibernationHarness } from "./test-helpers/hibernationHarness.js";
+import type { HibernationPassIo } from "./daemon.js";
+
+const {
   clearHibernationPark,
   clearSessionTrackingForKill,
   hibernateSessionNow,
@@ -26,8 +27,7 @@ import {
   subagentParentSessionFromPath,
   trackSessionPaneForTests,
   wakeStatusAfterPark,
-  type HibernationPassIo,
-} from "./daemon.js";
+} = createHibernationHarness();
 import { HIBERNATE_SUBAGENT_QUIET_MS, HIBERNATE_RESUME_GRACE_MS } from "./hibernation.js";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
 import type { ConversationLifecycle } from "./syncService.js";
@@ -120,20 +120,17 @@ describe("runHibernationPass", () => {
     expect(asked).toBe(false);
   });
 
-  test("parks exactly the sessions the policy picked, longest idle first", async () => {
-    // Ten live, cap of seven: the three longest idle go.
+  test("the enabled cap refuses every selected session without safety closure", async () => {
     const f = fixture({ count: 10, maxLive: 7, awakeIdleMs: (i) => i * 1000 });
-    expect(await runHibernationPass(f.io)).toBe(3);
-    expect(f.parked).toEqual([f.sessions[9], f.sessions[8], f.sessions[7]]);
+    expect(await runHibernationPass(f.io)).toBe(0);
+    expect(f.parked).toEqual([]);
   });
 
   test("a session with no live pane is not a candidate", async () => {
     const f = fixture({ count: 4, maxLive: 1 });
-    // tmux lists only the first two panes: the other two are already gone, so
-    // the fleet is two sessions against a cap of one.
     const io = { ...f.io, tmuxSessions: async () => new Map([[`cc-resume-${f.sessions[0]}`, 0], [`cc-resume-${f.sessions[1]}`, 0]]) };
-    expect(await runHibernationPass(io)).toBe(1);
-    expect(f.parked.every((id) => id === f.sessions[0] || id === f.sessions[1])).toBe(true);
+    expect(await runHibernationPass(io)).toBe(0);
+    expect(f.parked).toEqual([]);
   });
 
   test("tmux unreachable parks nothing", async () => {
@@ -143,7 +140,7 @@ describe("runHibernationPass", () => {
     expect(f.parked).toEqual([]);
   });
 
-  test("an answered question does not skip: the sidecar predates the last message", async () => {
+  test("an answered question cannot bypass the unavailable safety closure", async () => {
     const f = fixture({
       count: 3,
       maxLive: 2,
@@ -152,26 +149,25 @@ describe("runHibernationPass", () => {
       transcriptLastRealMs: () => 2000,
     });
     await runHibernationPass(f.io);
-    expect(f.parked).toEqual([f.sessions[2]]);
+    expect(f.parked).toEqual([]);
   });
 
-  test("a null lifecycle PROCEEDS — the opposite of the reaper, on purpose", async () => {
-    // Hibernation retires nothing, so an unreachable backend is not a reason to
-    // keep burning a pane. stampedPaneReapEligibility fails closed because a
-    // reap is permanent; this one is undone by the next message.
+  test("a null lifecycle refuses parking", async () => {
     const f = fixture({ count: 3, maxLive: 2, awakeIdleMs: (i) => i * 1000, lifecycle: () => null });
-    expect(await runHibernationPass(f.io)).toBe(1);
+    expect(await runHibernationPass(f.io)).toBe(0);
+    expect(f.parked).toEqual([]);
   });
 
-  test("a pane that goes busy at kill time is not counted as parked", async () => {
+  test("the park callback is never reached", async () => {
     const f = fixture({ count: 3, maxLive: 2, awakeIdleMs: (i) => i * 1000 });
     const io = { ...f.io, park: async () => false };
     expect(await runHibernationPass(io)).toBe(0);
   });
 
-  test("never more than maxPerPass, however far over the cap the fleet is", async () => {
+  test("a large configured overage still parks nothing", async () => {
     const f = fixture({ count: 40, maxLive: 1, maxPerPass: 5 });
-    expect(await runHibernationPass(f.io)).toBe(5);
+    expect(await runHibernationPass(f.io)).toBe(0);
+    expect(f.parked).toEqual([]);
   });
 
   test("a skipped pick does not promote the next candidate in the same pass", async () => {
@@ -188,18 +184,16 @@ describe("runHibernationPass", () => {
 });
 
 describe("cast hibernate", () => {
-  test("parks the session it names, whatever the fleet size", async () => {
-    // No cap and no idle bar: the pass would park nobody, and the command still
-    // parks the one session a person asked for.
+  test("the manual command refuses even when both automatic knobs are off", async () => {
     const f = fixture({ count: 3 });
     expect(await runHibernationPass(f.io)).toBe(0);
-    expect(await f.hibernate(f.sessions[1])).toEqual({ result: "hibernated" });
-    expect(f.parked).toEqual([f.sessions[1]]);
+    expect(await f.hibernate(f.sessions[1])).toEqual({ result: "skipped_parking-safety-unavailable", error: "not parked: parking-safety-unavailable" });
+    expect(f.parked).toEqual([]);
   });
 
-  test("a session with no live pane reads as already parked", async () => {
+  test("a missing pane does not claim an unobserved park", async () => {
     const f = fixture({ count: 1 });
-    expect(await f.hibernate("nobody-here")).toEqual({ result: "already_parked" });
+    expect(await f.hibernate("nobody-here")).toEqual({ result: "skipped_no-live-pane", error: "not parked: no-live-pane" });
     expect(f.parked).toEqual([]);
   });
 
@@ -212,12 +206,12 @@ describe("cast hibernate", () => {
     expect(f.parked).toEqual([]);
   });
 
-  test("a pane that goes busy at kill time reports skipped, not parked", async () => {
+  test("a manual refusal never depends on a park callback result", async () => {
     const f = fixture({ count: 2 });
     const io = { ...f.io, park: async () => false };
     expect(await hibernateSessionNow(f.sessions[0], undefined, io)).toEqual({
-      result: "skipped_busy",
-      error: "the pane went busy at kill time",
+      result: "skipped_parking-safety-unavailable",
+      error: "not parked: parking-safety-unavailable",
     });
   });
 });
@@ -272,7 +266,7 @@ describe("a live session is refused by both the pass and the command", () => {
     },
     {
       name: "a question is still waiting for its answer",
-      reason: "pending-question",
+      reason: "parking-safety-unavailable",
       opts: {
         sidecarMtimeMs: (id: string) => (id === target ? 2000 : null),
         transcriptLastRealMs: () => 1000,
@@ -280,22 +274,22 @@ describe("a live session is refused by both the pass and the command", () => {
     },
     {
       name: "the conversation is pinned",
-      reason: "pinned",
+      reason: "parking-safety-unavailable",
       opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ inboxPinnedAt: 123 }) : lifecycleOf({})) },
     },
     {
       name: "the conversation has undelivered messages",
-      reason: "pending-messages",
+      reason: "parking-safety-unavailable",
       opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ hasPendingMessages: true }) : lifecycleOf({})) },
     },
     {
       name: "the lifecycle answer is degraded, so the pin cannot be believed",
-      reason: "lifecycle-degraded",
+      reason: "parking-safety-unavailable",
       opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ hideStateKnown: false }) : lifecycleOf({})) },
     },
     {
       name: "the session borrows its parent's process",
-      reason: "borrowed-process",
+      reason: "parking-safety-unavailable",
       opts: { canReapPidTree: (id: string) => id !== target },
     },
     {
