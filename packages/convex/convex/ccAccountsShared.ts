@@ -614,7 +614,7 @@ export function isBlockedConversation(conv: {
   return (
     conv.pending_api_error === true &&
     BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind ?? "") &&
-    conv.agent_type === "claude_code" &&
+    (conv.agent_type === "claude_code" || (conv.agent_type === "codex" && conv.pending_api_error_kind === "safety")) &&
     !conv.inbox_dismissed_at
   );
 }
@@ -656,11 +656,13 @@ export function isSubagentConversation(conv: {
 // brief again with nobody collecting the result. Shared by the server
 // selection and the web banner so the acted count is one number.
 export function actedBlockedConversations<T extends {
+  pending_api_error_kind?: string | null;
   is_subagent?: boolean;
   parent_conversation_id?: string | null;
 }>(blocked: T[], includeSubagents: boolean): T[] {
-  const topLevel = blocked.filter((c) => !isSubagentConversation(c));
-  return includeSubagents ? [...topLevel, ...blocked.filter(isSubagentConversation)] : topLevel;
+  const recoverable = blocked.filter((c) => c.pending_api_error_kind !== "safety");
+  const topLevel = recoverable.filter((c) => !isSubagentConversation(c));
+  return includeSubagents ? [...topLevel, ...recoverable.filter(isSubagentConversation)] : topLevel;
 }
 
 // The parent-link fields every inbox session row MUST carry so the client can
