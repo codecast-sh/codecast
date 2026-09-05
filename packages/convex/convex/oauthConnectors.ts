@@ -25,6 +25,7 @@ import {
   signStateWith,
   verifyStateWith,
 } from "./googleOAuth";
+import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh } from "./lib/tokenRefresh";
 
 /* ==========================================================================
  * The provider table
@@ -218,26 +219,8 @@ async function tokenRequest(
   return { ok: resp.ok, status: resp.status, tok };
 }
 
-/** Absolute expiry from a token response, or undefined when the provider
- *  gave no expires_in (Notion: tokens do not expire). */
-export function accessExpiresAt(tok: any, now: number): number | undefined {
-  return typeof tok?.expires_in === "number" && tok.expires_in > 0 ? now + tok.expires_in * 1000 : undefined;
-}
-
-/** Refresh this far ahead of expiry so an in-flight sync never straddles it. */
-export const REFRESH_MARGIN_MS = 5 * 60 * 1000;
-
-/** A row refreshes when it CAN (has a refresh token) and its access token is
- *  expiring, expired, or of unknown age. Rows without a refresh token never
- *  refresh: their access token is the only credential there is. */
-export function needsRefresh(
-  row: { refresh_token_enc?: string; access_expires_at?: number },
-  now: number,
-): boolean {
-  if (!row.refresh_token_enc) return false;
-  if (row.access_expires_at === undefined) return true;
-  return row.access_expires_at - now < REFRESH_MARGIN_MS;
-}
+import { accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS, REFRESH_LEASE_MS } from "./lib/tokenRefresh";
+export { accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS, REFRESH_LEASE_MS };
 
 /* ==========================================================================
  * Callback — code exchange, encrypted store, PENDING until confirmed
@@ -514,44 +497,19 @@ export const getConnectionForTeam = internalQuery({
   },
 });
 
-/** How long one caller may hold the refresh; long enough for a slow token
- *  endpoint, short enough that a crashed claimant does not block a team. */
-export const REFRESH_LEASE_MS = 30 * 1000;
-/** How long a waiter watches for the claimant's write before trying itself. */
-const REFRESH_WAIT_MS = 15 * 1000;
-const REFRESH_POLL_MS = 250;
+/** Transition: accept the released action's access-only stamp on this table
+ *  only; remove in the release after the two-ciphertext stamp ships. */
+const LEGACY_STAMP = { acceptLegacyAccessStamp: true } as const;
 
-/**
- * Claim the refresh for one row. Every concurrent caller that finds the
- * token expiring lands here; exactly one gets `ok`, the rest are told the
- * refresh is `held` and wait for the credentials to change. The claim is
- * also a compare and swap on the ciphertext, so a caller holding a stale
- * read cannot claim over credentials that already moved on.
- */
+/** Claim the refresh for one row (lib/tokenRefresh.claimRefreshOn). */
 export const claimRefresh = internalMutation({
   args: { installation_id: v.id("app_installations"), expected_enc: v.string(), now: v.number() },
-  handler: async (ctx, args): Promise<{ ok: boolean; lease?: string; reason?: "gone" | "superseded" | "held" }> => {
-    const row = await (ctx.db as any).get(args.installation_id);
-    if (!row) return { ok: false, reason: "gone" };
-    if (row.access_token_enc !== args.expected_enc) return { ok: false, reason: "superseded" };
-    if (typeof row.refresh_lease_until === "number" && row.refresh_lease_until > args.now) return { ok: false, reason: "held" };
-    const lease = crypto.randomUUID();
-    await (ctx.db as any).patch(args.installation_id, { refresh_lease_id: lease, refresh_lease_until: args.now + REFRESH_LEASE_MS });
-    return { ok: true, lease };
-  },
+  // Linear rows always cache an access ciphertext, so the released action's
+  // access-only stamp is still a proof here (lib/tokenRefresh.StampOptions).
+  handler: async (ctx, args) => await claimRefreshOn(ctx.db, args.installation_id, args.expected_enc, args.now, LEGACY_STAMP),
 });
 
-/**
- * Persist the outcome of one refresh. Both outcomes are fenced the same way:
- * the writer must still own the lease it claimed AND the credentials must be
- * the ones it read. Nothing about the order in which provider responses
- * arrive says whose pair is newer, so an expired claimant's late success is
- * refused like its late failure would be; the caller then defers to the
- * current owner's write (see getFreshAccessTokenForTeam). A reconnect
- * clears the lease and rewrites the ciphertext, so anything in flight
- * before it is refused on both counts. A deleted row is reported, never
- * recreated. The one write that passes releases the lease.
- */
+/** Persist one refresh outcome, fenced (lib/tokenRefresh.writeRefreshOutcomeOn). */
 export const updateStoredTokens = internalMutation({
   args: {
     installation_id: v.id("app_installations"),
@@ -562,43 +520,17 @@ export const updateStoredTokens = internalMutation({
     access_expires_at: v.optional(v.number()),
     last_error: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ ok: boolean; reason?: "gone" | "superseded" }> => {
-    const row = await (ctx.db as any).get(args.installation_id);
-    if (!row) return { ok: false, reason: "gone" };
-    const release = { refresh_lease_id: undefined, refresh_lease_until: undefined, updated_at: Date.now() };
-    if (row.refresh_lease_id !== args.lease || row.access_token_enc !== args.expected_enc) return { ok: false, reason: "superseded" };
-    if (args.access_token_enc) {
-      await (ctx.db as any).patch(args.installation_id, {
-        ...release,
-        access_token_enc: args.access_token_enc,
-        access_expires_at: args.access_expires_at,
-        last_error: undefined,
-        ...(args.refresh_token_enc ? { refresh_token_enc: args.refresh_token_enc } : {}),
-      });
-      return { ok: true };
-    }
-    await (ctx.db as any).patch(args.installation_id, { ...release, last_error: args.last_error });
-    return { ok: true };
+  handler: async (ctx, args) => {
+    const { installation_id, ...outcome } = args;
+    return await writeRefreshOutcomeOn(ctx.db, installation_id, outcome, LEGACY_STAMP);
   },
 });
 
 /**
- * The access token for a team's connection, refreshed when it is expiring
- * or of unknown age (see needsRefresh). Same shape as googleOAuth's
- * getFreshAccessToken: a refusal is returned, not thrown, so callers can
- * say "reconnect Linear" instead of "401". `force` refreshes regardless of
- * the recorded expiry, for a caller that just got a 401 on a token this
- * function considered fresh.
- *
- * Single flight: the provider rotates the refresh token on the first grant,
- * so a second concurrent grant with the same token is refused. One caller
- * claims the lease and talks to the provider; the others wait for the row
- * to change and return the pair that landed. Every outcome write is a
- * fenced by lease ownership and credential compare and swap
- * (updateStoredTokens); when a write is refused the caller waits for the
- * current owner's write and returns what the row holds then, never the pair
- * it fetched: a disconnected connection yields no credentials, a superseded
- * refresh yields the owner's.
+ * The access token for a team's connection, refreshed single flight when it
+ * is expiring or of unknown age (lib/tokenRefresh.singleFlightRefresh).
+ * `force` refreshes regardless of the recorded expiry, for a caller that
+ * just got a 401 on a token this function considered fresh.
  */
 export const getFreshAccessTokenForTeam = internalAction({
   args: { provider: v.string(), team_id: v.id("teams"), force: v.optional(v.boolean()) },
@@ -607,111 +539,23 @@ export const getFreshAccessTokenForTeam = internalAction({
     const p = PROVIDERS[args.provider];
     const env = providerEnv(p);
     if (!env) return { ok: false, error: notConfigured(p) };
-    type Row = { _id: any; access_token_enc: string; refresh_token_enc?: string; access_expires_at?: number; refresh_lease_until?: number; refresh_lease_id?: string };
-    const noConnection = { ok: false, error: `no_connection: ${p.name} is not connected for this team` };
-    const read = (): Promise<Row | null> =>
-      ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, { provider: p.id, team_id: args.team_id });
-    const tokenOf = async (row: Row) => {
-      const token = await decryptRefreshToken(row.access_token_enc, env.clientSecret);
-      return token ? { ok: true, token } : { ok: false, error: `${p.name} token undecryptable (${p.env.clientSecret} rotated?): reconnect ${p.name}` };
-    };
-    /** Current credentials, as the row holds them now. */
-    const current = async () => {
-      const row = await read();
-      return row ? await tokenOf(row) : noConnection;
-    };
-    /** Wait for another claimant's write. Resolves with the new credentials,
-     *  or null once the lease lapsed with nothing written. */
-    const waitForOther = async (seenEnc: string) => {
-      const deadline = Date.now() + REFRESH_WAIT_MS;
-      while (Date.now() < deadline) {
-        const row = await read();
-        if (!row) return noConnection;
-        if (row.access_token_enc !== seenEnc) return await tokenOf(row);
-        if (typeof row.refresh_lease_until !== "number" || row.refresh_lease_until <= Date.now()) return null;
-        await new Promise((r) => setTimeout(r, REFRESH_POLL_MS));
-      }
-      return null;
-    };
-
-    let row = await read();
-    if (!row) return noConnection;
-    const now = Date.now();
-    if (!args.force && !needsRefresh(row, now)) return await tokenOf(row);
-
-    // Claim, or wait for whoever holds the claim.
-    let lease: string | undefined;
-    for (let attempt = 0; attempt < 3 && !lease; attempt++) {
-      const claim = await ctx.runMutation(internal.oauthConnectors.claimRefresh, {
-        installation_id: row._id,
-        expected_enc: row.access_token_enc,
-        now: Date.now(),
-      });
-      if (claim.ok) { lease = claim.lease; break; }
-      if (claim.reason === "gone") return noConnection;
-      const landed = await waitForOther(row.access_token_enc);
-      if (landed) return landed;
-      const again = await read();
-      if (!again) return noConnection;
-      row = again;
-      if (!needsRefresh(row, Date.now())) return await tokenOf(row);
-    }
-    if (!lease) return { ok: false, error: `${p.name} refresh is held by another caller; retry` };
-
-    const refreshToken = row.refresh_token_enc ? await decryptRefreshToken(row.refresh_token_enc, env.clientSecret) : null;
-    /** A refused write means the row is no longer ours: a reconnect landed
-     *  or a newer claimant holds the lease. Their write is the answer, so
-     *  wait for it; the pair we fetched is never handed out. */
-    const deferToOwner = async (reason: "gone" | "superseded" | undefined) => {
-      if (reason === "gone") return noConnection;
-      const landed = await waitForOther(row!.access_token_enc);
-      return landed ?? await current();
-    };
-    if (!refreshToken) {
-      // No refresh token (or undecryptable): the access token is all we
-      // have. Releasing the lease is an outcome write like any other, so a
-      // reconnect or disconnect that landed meanwhile refuses it, and the
-      // captured row's token is then not the answer.
-      const released = await ctx.runMutation(internal.oauthConnectors.updateStoredTokens, {
-        installation_id: row._id,
-        expected_enc: row.access_token_enc,
-        lease,
-      });
-      return released.ok ? await tokenOf(row) : await deferToOwner(released.reason);
-    }
-    const fail = async (error: string) => {
-      const stamped = await ctx.runMutation(internal.oauthConnectors.updateStoredTokens, {
-        installation_id: row!._id,
-        expected_enc: row!.access_token_enc,
-        lease: lease!,
-        last_error: error,
-      });
-      return stamped.ok ? { ok: false, error } : await deferToOwner(stamped.reason);
-    };
-    let res: { ok: boolean; status: number; tok: any };
-    try {
-      res = await tokenRequest(p, env, { grant_type: "refresh_token", refresh_token: refreshToken });
-    } catch {
-      return await fail(`${p.name} token endpoint unreachable; the next sync retries`);
-    }
-    const tok = res.tok;
-    if (!res.ok || typeof tok?.access_token !== "string") {
-      const code = tok?.error ?? `token_${res.status}`;
-      const revoked = code === "invalid_grant" || res.status === 400 || res.status === 401;
-      return await fail(
-        revoked
-          ? `${p.name} refresh refused (${code}): access was revoked or the refresh token expired; reconnect ${p.name} from Settings > Integrations`
-          : `${p.name} refresh failed (${code}); the next sync retries`,
-      );
-    }
-    const written = await ctx.runMutation(internal.oauthConnectors.updateStoredTokens, {
-      installation_id: row._id,
-      expected_enc: row.access_token_enc,
-      lease,
-      access_token_enc: await encryptRefreshToken(tok.access_token, env.clientSecret),
-      refresh_token_enc: typeof tok.refresh_token === "string" ? await encryptRefreshToken(tok.refresh_token, env.clientSecret) : undefined,
-      access_expires_at: accessExpiresAt(tok, now),
+    const res = await singleFlightRefresh({
+      provider: p.name,
+      read: () => ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, { provider: p.id, team_id: args.team_id }),
+      claim: (installation_id, expected_enc, now) =>
+        ctx.runMutation(internal.oauthConnectors.claimRefresh, { installation_id, expected_enc, now }),
+      write: (installation_id, outcome) =>
+        ctx.runMutation(internal.oauthConnectors.updateStoredTokens, { installation_id, ...outcome }),
+      decrypt: (enc) => decryptRefreshToken(enc, env.clientSecret),
+      encrypt: (plain) => encryptRefreshToken(plain, env.clientSecret),
+      request: (refreshToken) => tokenRequest(p, env, { grant_type: "refresh_token", refresh_token: refreshToken }),
+      force: args.force,
+      errors: {
+        noConnection: `no_connection: ${p.name} is not connected for this team`,
+        undecryptable: `${p.name} token undecryptable (${p.env.clientSecret} rotated?): reconnect ${p.name}`,
+        reconnect: `reconnect ${p.name} from Settings > Integrations`,
+      },
     });
-    return written.ok ? { ok: true, token: tok.access_token } : await deferToOwner(written.reason);
+    return res.ok ? { ok: true, token: res.token } : { ok: false, error: res.error };
   },
 });

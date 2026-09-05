@@ -117,6 +117,7 @@ import type * as lib_liveSessions from "../lib/liveSessions.js";
 import type * as lib_openTasksValidator from "../lib/openTasksValidator.js";
 import type * as lib_repoSearch from "../lib/repoSearch.js";
 import type * as lib_sanitize from "../lib/sanitize.js";
+import type * as lib_tokenRefresh from "../lib/tokenRefresh.js";
 import type * as lib_userSend from "../lib/userSend.js";
 import type * as lib_viewWriters from "../lib/viewWriters.js";
 import type * as linearApi from "../linearApi.js";
@@ -314,6 +315,7 @@ declare const fullApi: ApiFromModules<{
   "lib/openTasksValidator": typeof lib_openTasksValidator;
   "lib/repoSearch": typeof lib_repoSearch;
   "lib/sanitize": typeof lib_sanitize;
+  "lib/tokenRefresh": typeof lib_tokenRefresh;
   "lib/userSend": typeof lib_userSend;
   "lib/viewWriters": typeof lib_viewWriters;
   linearApi: typeof linearApi;

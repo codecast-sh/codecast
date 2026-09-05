@@ -5,6 +5,7 @@ import {
   PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl, accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS,
   getConnectionForTeam, updateStoredTokens, getFreshAccessTokenForTeam, claimRefresh, REFRESH_LEASE_MS,
 } from "./oauthConnectors";
+import { stampOf, stampMatches } from "./lib/tokenRefresh";
 import { signStateWith, verifyStateWith, encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
 
 // The generic connector shares Google's security design; these tests pin the
@@ -463,6 +464,51 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
     expect(linear.pending).toHaveLength(0);
   });
 
+  test("a reconnect that lands between the read and the claim: the stale claim is refused and the reconnect's token is returned with no provider call", async () => {
+    const linear = stubLinear();
+    const t = await tables();
+    const g = gate();
+    const a = run(t, { "oauthConnectors:claimRefresh": g });
+    await g.reached;                          // A has read the old row, not yet claimed
+    await reconnect(t);
+    g.open();
+    expect(await a).toEqual({ ok: true, token: "access-re" });
+    expect(linear.pending).toHaveLength(0);   // the old grant was never sent
+    const s = await stored(t);
+    expect([s.access, s.refresh]).toEqual(["access-re", "refresh-re"]);
+  });
+
+  test("transition: an action started under the access-only stamp (Linear v5 in flight) still claims and lands; the empty legacy stamp never matches", async () => {
+    const t = await tables();
+    const row = t.app_installations[0];
+    const legacy = row.access_token_enc;                       // what the v5 action sends
+    const claim = await (claimRefresh as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: legacy, now: Date.now() });
+    expect(claim.ok).toBe(true);
+    const ok = await (updateStoredTokens as any)._handler(ctx(t), {
+      installation_id: "inst_1", expected_enc: legacy, lease: claim.lease,
+      access_token_enc: "v5-access-enc", refresh_token_enc: "v5-refresh-enc", access_expires_at: Date.now() + 1000,
+    });
+    expect(ok).toEqual({ ok: true });                          // the rotated pair is not discarded
+    expect(t.app_installations[0].refresh_token_enc).toBe("v5-refresh-enc");
+    // A reconnect that only changed the refresh ciphertext is visible to the new form...
+    expect(stampMatches({ access_token_enc: "a", refresh_token_enc: "r2" }, stampOf({ access_token_enc: "a", refresh_token_enc: "r1" }))).toBe(false);
+    // ...the legacy form is refused when empty (row without cache) or wrong, and
+    // accepted only where a table opts in.
+    const optIn = { acceptLegacyAccessStamp: true };
+    expect(stampMatches({ refresh_token_enc: "r2" }, "", optIn)).toBe(false);
+    expect(stampMatches({ access_token_enc: "a", refresh_token_enc: "r" }, "b", optIn)).toBe(false);
+    expect(stampMatches({ access_token_enc: "a", refresh_token_enc: "r" }, "a", optIn)).toBe(true);
+    expect(stampMatches({ access_token_enc: "a", refresh_token_enc: "r" }, "a")).toBe(false);   // generic path
+  });
+
+  test("invariant the legacy discrimination rests on: a ciphertext never contains the stamp separator", async () => {
+    for (const plain of ["a", "refresh-0", "x".repeat(300), "|pipe|inside|"]) {
+      const enc = await encryptRefreshToken(plain, SECRET);
+      expect(enc).toMatch(/^v1\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/);
+      expect(enc.includes("|")).toBe(false);
+    }
+  });
+
   test("a lease left by a dead claimant expires and the next caller refreshes", async () => {
     const linear = stubLinear();
     const t = await tables();
@@ -476,7 +522,7 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
 
   test("claimRefresh: a stale read cannot claim, a second claim is held, each claim has its own id", async () => {
     const t = await tables();
-    const enc = t.app_installations[0].access_token_enc;
+    const enc = stampOf(t.app_installations[0]);
     expect(await (claimRefresh as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: "not-the-row's", now: Date.now() })).toEqual({ ok: false, reason: "superseded" });
     const first = await (claimRefresh as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: enc, now: Date.now() });
     expect(first.ok).toBe(true);
@@ -489,9 +535,10 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
     expect(t.app_installations[0].refresh_lease_until).toBeLessThanOrEqual(Date.now() + REFRESH_LEASE_MS);
   });
 
-  test("updateStoredTokens: both outcomes need the exact lease AND the read ciphertext; the passing write releases the lease", async () => {
+  test("updateStoredTokens: both outcomes need the exact lease AND the read credentials; the passing write releases the lease", async () => {
     const t = await tables();
-    const enc = t.app_installations[0].access_token_enc;
+    const accessEnc = t.app_installations[0].access_token_enc;
+    const enc = stampOf(t.app_installations[0]);
     t.app_installations[0].refresh_lease_id = "current";
     const staleFail = await (updateStoredTokens as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: enc, lease: "old", last_error: "late" });
     expect(staleFail).toEqual({ ok: false, reason: "superseded" });
@@ -500,7 +547,7 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
     const movedOn = await (updateStoredTokens as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: "other-enc", lease: "current", access_token_enc: "x", access_expires_at: 5 });
     expect(movedOn).toEqual({ ok: false, reason: "superseded" });
     expect(t.app_installations[0].last_error).toBeUndefined();
-    expect(t.app_installations[0].access_token_enc).toBe(enc);
+    expect(t.app_installations[0].access_token_enc).toBe(accessEnc);
     expect(t.app_installations[0].refresh_lease_id).toBe("current");
     const ok = await (updateStoredTokens as any)._handler(ctx(t), { installation_id: "inst_1", expected_enc: enc, lease: "current", access_token_enc: "new-enc", access_expires_at: 5 });
     expect(ok).toEqual({ ok: true });

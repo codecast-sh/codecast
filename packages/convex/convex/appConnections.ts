@@ -111,6 +111,7 @@ export const listConnections = query({
             by_me: true,
             at: install.created_at,
             detail: install.email ?? undefined,
+            health: healthOf(install),
             disconnect_id: String(install._id),
           });
         }
