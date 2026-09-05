@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { TmuxSpawnRegistry } from "./tmuxSpawns.js";
+import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.js";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
@@ -23860,6 +23860,13 @@ async function main(): Promise<void> {
       markAppServerConversationResumable(entry.conversationId, threadId);
     }
   });
+
+  registerAppServerSpawnTracking(
+    codexAppServerInstance,
+    threadId => appServerThreads.get(threadId)?.conversationId,
+    (messages, parent) => trackTmuxSpawns(messages, parent, syncService, conversationCache),
+    err => logError("[codex-app-server] could not track spawned session", err instanceof Error ? err : new Error(String(err))),
+  );
 
   codexAppServerInstance.on("itemStarted", (threadId: string, turnId: string, item: ThreadItem) => {
     const entry = appServerThreads.get(threadId);

@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { extractNestedActions, isShellTool } from "@codecast/shared/render";
 import { atomicWriteFile } from "./atomicWrite.js";
 import type { ParsedMessage } from "./parser.js";
+import type { EventEmitter } from "node:events";
+import { threadItemToMessage, type ThreadItem } from "./codexAppServer.js";
 
-function shellCommands(source: string): string[][] {
+function shellCommands(source: string, depth = 0): string[][] {
   const commands: string[][] = [];
   let words: string[] = [];
   let word = "";
@@ -58,7 +60,45 @@ function shellCommands(source: string): string[][] {
   }
   flushWord();
   if (words.length) commands.push(words);
-  return commands;
+  return commands.flatMap(words => {
+    if (depth >= 4 || !/^(?:.*\/)?(?:ba|z|da|k)?sh$/.test(words[0])) return [words];
+    for (let at = 1; at < words.length; at++) {
+      if (/^-[ceiluvx]+$/.test(words[at]) && words[at].includes("c")) {
+        return words[at + 1] ? shellCommands(words[at + 1], depth + 1) : [words];
+      }
+      if (!/^-[eiluvx]+$|^--(?:noprofile|norc|login)$/.test(words[at])) break;
+    }
+    return [words];
+  });
+}
+
+function agentSpawnName(words: string[]): string | undefined {
+  let at = 1;
+  for (; at < words.length && words[at].startsWith("-"); at++) {
+    const option = words[at];
+    if (option === "--") { at++; break; }
+    if (option === "--codex" || option === "--claude" || /^--(?:runtime|model)=.+/.test(option)) continue;
+    if (option === "--runtime" || option === "--model") {
+      if (!words[++at] || words[at].startsWith("--")) return undefined;
+      continue;
+    }
+    return undefined;
+  }
+  return words[at + 1];
+}
+
+export function registerAppServerSpawnTracking(
+  server: EventEmitter,
+  parentForThread: (threadId: string) => string | undefined,
+  track: (messages: ParsedMessage[], parent: string) => Promise<void>,
+  onError: (err: unknown) => void,
+): void {
+  server.on("itemStarted", (threadId: string, _turnId: string, item: ThreadItem) => {
+    const parent = parentForThread(threadId);
+    if (!parent) return;
+    const message = threadItemToMessage(item);
+    if (message) void track([message], parent).catch(onError);
+  });
 }
 
 export function tmuxSpawns(messages: readonly ParsedMessage[]): Array<{ name: string; timestamp: number }> {
@@ -75,7 +115,7 @@ export function tmuxSpawns(messages: readonly ParsedMessage[]): Array<{ name: st
         if (typeof source !== "string") continue;
         for (const words of shellCommands(source)) {
           let name: string | undefined;
-          if (/^(?:.*\/)?agent-spawn(?:\.sh)?$/.test(words[0])) name = words[2];
+          if (/^(?:.*\/)?agent-spawn(?:\.sh)?$/.test(words[0])) name = agentSpawnName(words);
           if (words[0] === "tmux" && (words[1] === "new-session" || words[1] === "new")) {
             const at = words.indexOf("-s", 2);
             if (at >= 0) name = words[at + 1];
