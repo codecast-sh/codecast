@@ -1994,6 +1994,7 @@ export default defineSchema({
       external_id: v.optional(v.string()),
       suite_id: v.optional(v.string()),
       event: v.optional(v.string()),
+      app: v.optional(v.string()),
     }))),
     checks_state: v.optional(v.string()),
     // Reasons that piled up since the last wake was DELIVERED. Several events
