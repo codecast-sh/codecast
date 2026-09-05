@@ -2346,7 +2346,8 @@ export function sessionStructuralSig(s: InboxSession): string {
     sessionSortRank(s).join(","),
     isSessionHidden(s) ? 1 : 0,
     isSessionDismissed(s) ? 1 : 0,
-    isSessionStashed(s) ? 1 : 0,
+    s.inbox_stashed_at ? 1 : 0,
+    isSessionKilled(s) ? 1 : 0,
     nestParentIdOf(s) || "",
     s.forked_from || "",
     orchestrationGroupLabelOf(s) || "",
@@ -2900,10 +2901,12 @@ export function placeInboxRows(
     // A placed row files by its placement; a stub or child row by its own
     // stamps. An anchor's standing thread lives in its own space unless hard
     // blocked — the shared `hidden` bucket, never rendered here.
-    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "hidden" : isSessionHidden(s);
+    const subagent = isOrphanOrSubagent(s);
+    const hidden = subagent ? !!s.inbox_killed_at || !!s.inbox_stashed_at : isSessionHidden(s);
+    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "hidden" : hidden;
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
     if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
-    if (p ? p.bucket === "dismissed" : isSessionDismissed(s)) dismissed.push(s);
+    if (p ? p.bucket === "dismissed" : !subagent && isSessionDismissed(s)) dismissed.push(s);
     if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
   }
   activeKeyed.sort(compareRankedSessions);
@@ -3074,7 +3077,7 @@ export function placeInboxRows(
     tally: tallyOut,
     truncated: reuseArray(prev?.truncated, membership?.truncated ?? EMPTY_TRUNCATED),
     set_digest,
-    sorted: reuseArray(prev?.sorted, sorted),
+    sorted: reuseArray(prev?.sorted, sorted.filter(s => !isOrphanSubagent(s))),
     questions: reuseArray(prev?.questions, questions),
     pinned: reuseArray(prev?.pinned, pinned),
     newSessions: reuseArray(prev?.newSessions, newSessions),
