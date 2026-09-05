@@ -4,12 +4,44 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../atomicWrite.js";
-import { acquireLock, releaseLock } from "../capabilities/lock.js";
 import { listStates, type PersistedWorkspaceState } from "./contract.js";
 
 interface PortReservation {
   repoRoot: string;
   workspace: PersistedWorkspaceState;
+}
+
+interface ReservationLockOwner {
+  pid: number;
+  token: string;
+  acquired_at: string;
+}
+
+function readReservationLock(file: string): Partial<ReservationLockOwner> & { pid: number } | undefined {
+  try {
+    const owner = JSON.parse(fs.readFileSync(file, "utf8"));
+    const validToken = typeof owner?.token === "string" && owner.token.length > 0;
+    const legacy = owner?.token === undefined && typeof owner?.acquired_at === "string" && Number.isFinite(Date.parse(owner.acquired_at));
+    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0 && (validToken || legacy)) return owner;
+  } catch {
+    return undefined;
+  }
+}
+
+function tryReservationLock(file: string, owner: ReservationLockOwner): boolean {
+  const temp = `${file}.${owner.token}.tmp`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+    try {
+      fs.linkSync(temp, file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return false;
+    }
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
 }
 
 export async function withWorkspaceOperation<T>(repoRoot: string, name: string, fn: () => Promise<T>): Promise<T> {
@@ -48,9 +80,24 @@ export async function withPortReservations<T>(
 ): Promise<T> {
   const root = fs.realpathSync(repoRoot);
   const directory = path.join(process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast"), "workspace-ports");
+  fs.mkdirSync(directory, { recursive: true });
+  const lock = path.join(directory, ".codecast-capability.lock");
+  const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
   const deadline = Date.now() + 30_000;
-  while (!acquireLock(directory).acquired) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for workspace port reservations");
+  while (!tryReservationLock(lock, owner)) {
+    const holder = readReservationLock(lock);
+    if (holder) {
+      try {
+        process.kill(holder.pid, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+          throw new Error(`Workspace port reservations have an interrupted owner (pid ${holder.pid}); inspect remaining child processes before manually removing ${lock}`);
+        }
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for workspace port reservations (${holder ? `pid ${holder.pid}` : "unreadable owner"}); inspect ${lock} before manual recovery`);
+    }
     await sleep(25);
   }
 
@@ -68,6 +115,6 @@ export async function withPortReservations<T>(
     atomicWriteFile(file, JSON.stringify(roots.filter((repo) => listStates(repo).length > 0)));
     return result;
   } finally {
-    releaseLock(directory);
+    if (readReservationLock(lock)?.token === owner.token) fs.unlinkSync(lock);
   }
 }
