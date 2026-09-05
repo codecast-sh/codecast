@@ -178,8 +178,30 @@ Both write `external.synced_at`, `external.field_ts`, and `last_error` on
 failure. Failures are logged, never retried in a loop: the 15 minute reconcile
 (S6) is the retry.
 
-Tokens: Linear via `oauthConnectors.getAccessTokenForTeam`; GitHub via
-`githubApp.getInstallationToken` for the installation covering the repo.
+Tokens: Linear via `oauthConnectors.getFreshAccessTokenForTeam`, which
+refreshes the 24 hour access token ahead of `access_expires_at` and stores
+the rotated refresh token in the same write; a refused refresh lands on the
+connection's `last_error` and parks the source with a "reconnect" message.
+The protocol lives in `convex/lib/tokenRefresh.ts` and serves every
+connector that stores a refresh token (Linear and Notion through
+`oauthConnectors`, Gmail through `googleOAuth`, which caches the access
+token with its expiry for the same reason).
+The refresh is single flight: a caller claims a lease (`refresh_lease_id`
+plus `refresh_lease_until`, the agent task lease shape; the claim itself is
+a compare and swap on the credential identity, both ciphertexts, so a
+reconnect that only replaced the refresh grant refuses a stale claim before
+any provider request) before talking to the provider,
+and concurrent callers wait for the row to change instead of spending the
+same refresh token twice. Every outcome write, success or failure, is
+fenced by exact lease ownership and by the credentials the writer read, and
+the one write that passes releases the lease. Response arrival order says
+nothing about whose pair is newer, so an expired claimant's late success is
+refused like its late failure. A refused write never hands out the pair it
+fetched: the caller waits for the current owner's write and returns what the
+row holds then, and a disconnected connection yields no credentials at all.
+GitHub via `githubApp.getInstallationToken` for the installation covering
+the repo. The reconcile retries parked sources every tick, and a successful
+sync flips a parked source back to active.
 
 ## S6. Inbound
 

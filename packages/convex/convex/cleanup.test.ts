@@ -4,11 +4,12 @@ import {
   hasLiveDraft,
   shouldReapEmpty,
   conversationHasNoWork,
+  gcEmptyConversations,
   reapEmptyConversation,
   cascadeHideToNestedChildren,
   applyHideTransition,
 } from "./cleanup";
-import { enqueuePendingMessage } from "./pendingMessages";
+import { continueKillCancellation, enqueuePendingMessage } from "./pendingMessages";
 
 // Minimal in-memory ctx.db honoring the .withIndex(name, q => q.eq(field,val))
 // chains the cleanup helpers use, so the reap logic is testable without the full
@@ -21,15 +22,20 @@ function makeFakeDb(tables: Record<string, any[]>) {
     _deleted: deleted,
     query(table: string) {
       const filters: Array<[string, any]> = [];
+      const upperBounds: Array<[string, any]> = [];
       // Copies, matching Convex semantics: a fetched row is a snapshot that a
       // later patch never mutates (applyHideTransition's transition gate needs
       // the PRE-patch flags on the row it was handed).
-      const apply = () => (tables[table] ?? []).filter((r) => filters.every(([f, v]) => r[f] === v)).map((r) => ({ ...r }));
+      const apply = () => (tables[table] ?? [])
+        .filter((r) => filters.every(([f, v]) => r[f] === v))
+        .filter((r) => upperBounds.every(([f, v]) => r[f] === undefined || (v !== undefined && r[f] <= v)))
+        .map((r) => ({ ...r }));
       const builder: any = {
         withIndex(_name: string, fn?: (q: any) => any) {
           if (fn) {
             const q: any = {
               eq(field: string, val: any) { filters.push([field, val]); return q; },
+              lte(field: string, val: any) { upperBounds.push([field, val]); return q; },
               gte() { return q; }, gt() { return q; }, lt() { return q; },
             };
             fn(q);
@@ -84,6 +90,7 @@ describe("isGcableEmptyConversation", () => {
     expect(isGcableEmptyConversation({ draft_message: "half-typed thought" })).toBe(false);
     expect(isGcableEmptyConversation({ draft_message: "   " })).toBe(true); // whitespace ≠ intent
     expect(isGcableEmptyConversation({ inbox_pinned_at: 123 })).toBe(false);
+    expect(isGcableEmptyConversation({ inbox_snoozed_until: 123 })).toBe(false);
     expect(isGcableEmptyConversation({ is_favorite: true })).toBe(false);
     expect(isGcableEmptyConversation({ title_is_custom: true })).toBe(false);
     expect(isGcableEmptyConversation({ share_token: "tok" })).toBe(false);
@@ -200,6 +207,18 @@ describe("conversationHasNoWork", () => {
     const db = makeFakeDb({ messages: [], pending_messages: [{ _id: "p", conversation_id: "c1" }], client_state: [] });
     expect(await conversationHasNoWork({ db }, empty)).toBe(false);
   });
+  test("a queued update keeps it before a pending message exists", async () => {
+    const db = makeFakeDb({ session_updates: [{ _id: "up1", conversation_id: "c1", state: "queued" }] });
+    expect(await conversationHasNoWork({ db }, empty)).toBe(false);
+  });
+  test("another destination or a cancelled/rejected update does not protect an empty row", async () => {
+    const db = makeFakeDb({ session_updates: [
+      { _id: "up1", conversation_id: "c2", state: "queued" },
+      { _id: "up2", conversation_id: "c1", state: "cancelled" },
+      { _id: "up3", conversation_id: "c1", state: "rejected" },
+    ] });
+    expect(await conversationHasNoWork({ db }, empty)).toBe(true);
+  });
   test("a live per-user draft for this conversation keeps it", async () => {
     const db = makeFakeDb({ messages: [], pending_messages: [], client_state: [{ _id: "cs", user_id: "u1", drafts: { c1: { draft_message: "wip" } } }] });
     expect(await conversationHasNoWork({ db }, empty)).toBe(false);
@@ -208,6 +227,24 @@ describe("conversationHasNoWork", () => {
     const db = makeFakeDb({ messages: [], pending_messages: [], client_state: [] });
     expect(await conversationHasNoWork({ db }, { ...empty, title_is_custom: true })).toBe(false);
   });
+});
+
+describe("empty-conversation sweep with queued updates", () => {
+  for (const live of [false, true]) {
+    test(`queued update prevents ${live ? "kill" : "deletion"} of an empty dismissed destination`, async () => {
+      const tables: Record<string, any[]> = {
+        conversations: [{ _id: "c1", user_id: "u1", message_count: 0, inbox_dismissed_at: 1, _creationTime: Date.now() - 25 * 60 * 60 * 1000 }],
+        session_updates: [{ _id: "up1", conversation_id: "c1", state: "queued" }],
+        managed_sessions: live ? [{ _id: "m1", conversation_id: "c1", last_heartbeat: Date.now() }] : [],
+      };
+      const db = makeFakeDb(tables);
+      const result = await (gcEmptyConversations as any)._handler({ db }, {});
+      expect(result).toMatchObject({ scanned: 1, deleted: 0, killed: 0 });
+      expect(db._deleted).toEqual([]);
+      expect(db._inserted.filter((row: any) => row.table === "daemon_commands")).toEqual([]);
+      expect(tables.conversations).toHaveLength(1);
+    });
+  }
 });
 
 describe("hasLiveDraft", () => {
@@ -392,6 +429,28 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
   });
   const prePatch = (tables: Record<string, any[]>) => ({ ...tables.conversations[0] });
   const kills = (db: any) => db._inserted.filter((i: any) => i.table === "daemon_commands");
+
+  test("a cutoff continuation cancels old generations and preserves later queued intent", async () => {
+    const tables = mkTables({ pending_kill_generation: 2, has_pending_messages: true });
+    tables.pending_messages.push(
+      { _id: "later", conversation_id: CONV, status: "pending", kill_generation: 2 },
+      { _id: "legacy", conversation_id: CONV, status: "pending" },
+      { _id: "zero", conversation_id: CONV, status: "pending", kill_generation: 0 },
+      { _id: "one", conversation_id: CONV, status: "pending", kill_generation: 1 },
+      { _id: "foreign", conversation_id: "other", status: "pending", kill_generation: 0 },
+    );
+    const db = makeFakeDb(tables);
+    expect(await (continueKillCancellation as any)._handler({ db }, {
+      conversation_id: CONV, cutoff_generation: 1,
+    })).toEqual({ cancelled: 3 });
+    for (const id of ["legacy", "zero", "one"]) {
+      expect(tables.pending_messages.find((row) => row._id === id)?.status).toBe("cancelled");
+    }
+    for (const id of ["later", "foreign"]) {
+      expect(tables.pending_messages.find((row) => row._id === id)?.status).toBe("pending");
+    }
+    expect(tables.conversations[0]).toMatchObject({ pending_kill_generation: 2, has_pending_messages: true, inbox_killed_at: 111 });
+  });
 
   test("a re-asserted EXPLICIT kill enqueues teardown again", async () => {
     const tables = mkTables();

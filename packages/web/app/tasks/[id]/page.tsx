@@ -70,6 +70,7 @@ import { useTeamFeature } from "../../../lib/teamFeatures";
 import { MAX_TASK_DEPTH, directChildren, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, createTaskAndAdopt, setTaskParent } from "../../../lib/taskActions";
 import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
+import { DocDates } from "../../../components/DocDates";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -90,9 +91,11 @@ const PRIORITY_OPTIONS = [
 
 const STATUS_MAP: Record<string, typeof STATUS_OPTIONS[number]> = Object.fromEntries(STATUS_OPTIONS.map((s) => [s.key, s]));
 
-// The doc fields the related-docs list renders; a body edit must not wake it.
+// The doc fields the related-docs list renders or filters on; a body edit
+// must not wake it (updated_at is left out on purpose: the server snapshot
+// supersedes this fallback as soon as it lands).
 function docOriginSig(d: any): string {
-  return `${d.conversation_id}:${d.archived_at ?? ""}:${d.display_title ?? d.title}:${d.doc_type}`;
+  return `${d.conversation_id}:${d.archived_at ?? ""}:${d.created_at ?? ""}:${d.display_title ?? d.title}:${d.doc_type}`;
 }
 
 function formatDate(ts: number) {
@@ -611,7 +614,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     const docs: Record<string, any> = {};
     for (const d of wsDocs) docs[d._id] = d;
     return resolveTaskRelatedDocs(data, docs);
-  }, [data?.related_docs, data?.created_from_conversation, wsDocs]);
+  }, [data?.related_docs, data?.created_from_conversation, data?.short_id, data?.created_at, wsDocs]);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -1131,7 +1134,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   <Link key={doc._id} href={`/docs/${doc._id}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors">
                     <FileText className="w-4 h-4 text-sol-violet flex-shrink-0" />
                     <span className="text-sm text-sol-text truncate">{doc.title}</span>
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-violet border-sol-violet/30 ml-auto">{doc.doc_type}</Badge>
+                    <DocDates doc={doc} className="text-[10px] text-sol-text-dim ml-auto" />
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-violet border-sol-violet/30">{doc.doc_type}</Badge>
                   </Link>
                 ))}
               </div>

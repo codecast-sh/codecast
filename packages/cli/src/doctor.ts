@@ -42,7 +42,7 @@ import { getMachineKey, hardwareId } from "./machineKey.js";
 import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
-import { findStaleTmuxServers, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
+import { staleTmuxServerKillPlan, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -218,6 +218,35 @@ export function exportHasToken(
   role?: "user" | "assistant",
 ): boolean {
   return messages.some((m) => (!role || m.role === role) && typeof m.content === "string" && m.content.includes(token));
+}
+
+export async function checkDoctorTmuxServers(
+  opts: { reapTmux?: boolean },
+  cleanup: string[],
+  io = { snapshotProcessTable, liveTmuxServerPid, killProcessTree, uid: () => process.getuid?.(), selfPid: process.pid },
+) {
+  const procs = io.snapshotProcessTable();
+  // This check kills process trees under --reap-tmux, so it looks at the
+  // servers this user owns and nothing else — the same list the daemon's
+  // hourly sweep acts on.
+  const plan = staleTmuxServerKillPlan(procs, await io.liveTmuxServerPid(), io.uid(), io.selfPid);
+  if (plan.refused) return { ok: false, warn: true, skip: true, detail: `tmux reap skipped: ${plan.refused}` };
+  const stale = plan.kill;
+  const spared = plan.selfHosted.length ? `; skipped self-hosting server(s) ${plan.selfHosted.map(s => s.pid).join(", ")}` : "";
+  if (stale.length === 0) return { ok: !spared, warn: !!spared, skip: !!spared, detail: `no safely reapable stale servers${spared}` };
+  const trees = stale.reduce((n, s) => n + s.tree.length, 0);
+  const agents = stale.reduce((n, s) => n + s.agents, 0);
+  const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux${spared}`;
+  if (!opts.reapTmux) {
+    return { ok: false, warn: true, detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` };
+  }
+  let killed = 0;
+  for (const s of stale) {
+    const r = await io.killProcessTree([...s.tree, s.pid]);
+    killed += r.terminated + r.killed;
+  }
+  cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
+  return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)` };
 }
 
 export async function doctorPost(siteUrl: string, apiToken: string, urlPath: string, body: Record<string, unknown>): Promise<any> {
@@ -446,27 +475,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   if (hasBin("tmux")) {
     passive.push({
       name: "tmux servers",
-      run: async () => {
-        const procs = snapshotProcessTable();
-        // This check kills process trees under --reap-tmux, so it looks at the
-        // servers this user owns and nothing else — the same list the daemon's
-        // hourly sweep acts on.
-        const stale = findStaleTmuxServers(procs, await liveTmuxServerPid(), process.getuid?.());
-        if (stale.length === 0) return { ok: true, detail: "one server on the default socket" };
-        const trees = stale.reduce((n, s) => n + s.tree.length, 0);
-        const agents = stale.reduce((n, s) => n + s.agents, 0);
-        const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux`;
-        if (!opts.reapTmux) {
-          return { ok: false, warn: true, detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` };
-        }
-        let killed = 0;
-        for (const s of stale) {
-          const r = await killProcessTree([...s.tree, s.pid]);
-          killed += r.terminated + r.killed;
-        }
-        cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
-        return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)` };
-      },
+      run: () => checkDoctorTmuxServers(opts, cleanup),
     });
   }
 

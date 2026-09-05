@@ -173,6 +173,7 @@ const convex = {
     actions.push({ name: getFunctionName(fn), args });
     return { url: "wss://sfu.example", token: "tok" };
   },
+  query: async () => ({}),
 };
 
 const named = (log: Array<{ name: string }>, suffix: string) =>

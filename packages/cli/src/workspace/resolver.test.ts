@@ -176,6 +176,33 @@ describe("resolveManifest", () => {
     expect(m.setup.install).toEqual(["bun install"]);
   });
 
+  test("staged manifest and copy list override inputs while real repo drives toolchain detection", () => {
+    write("package.json", '{"scripts":{"codegen":"true"}}');
+    write("bun.lock", "");
+    write(".env", "base-only");
+    write(MANIFEST_REL_PATH, '[setup]\ninstall = ["exit 99"]\n');
+    write("inputs/package-lock.json", "{}");
+    write("inputs/.wt-setup-files", "secrets/key\n");
+    write(`inputs/${MANIFEST_REL_PATH}`, '[env]\nSNAPSHOT = "local"\n');
+    const m = resolveManifest(tmpDir, path.join(tmpDir, "inputs"));
+    expect(m.detected).toBe("bun");
+    expect(m.setup.install).toEqual(["bun install"]);
+    expect(m.setup.generate).toEqual(["bun run codegen"]);
+    expect(m.setup.copy).toEqual(["secrets/key"]);
+    expect(m.env.SNAPSHOT).toBe("local");
+  });
+
+  test("staged env defaults do not pick up base secrets or base manifest when no override exists", () => {
+    write("package.json", "{}");
+    write("bun.lock", "");
+    write(".env", "base-only");
+    write(MANIFEST_REL_PATH, '[setup]\ninstall = ["exit 99"]\n');
+    write("inputs/.env.local", "snapshot-only");
+    const m = resolveManifest(tmpDir, path.join(tmpDir, "inputs"));
+    expect(m.setup.copy).toEqual([".env.local"]);
+    expect(m.setup.install).toEqual(["bun install"]);
+  });
+
   test("manifest file overrides install command", () => {
     write("package.json", "{}");
     write("bun.lock", "");

@@ -11,25 +11,33 @@ import {
   type OfflineTier,
 } from "../hooks/useDaemonHealth";
 import { useAppOffline } from "../hooks/useAppOffline";
+import { useStatusToast } from "../hooks/useStatusToast";
 
 const DISMISS_DURATION_MS = 30 * 60 * 1000;
 
 const TIER_STYLES: Record<OfflineTier, { wrap: string; icon: string }> = {
   warn: {
-    wrap: "bg-gradient-to-r from-sol-yellow/10 via-sol-yellow/5 to-sol-yellow/10 border-b border-sol-yellow/30",
+    wrap: "bg-gradient-to-r from-sol-yellow/10 via-sol-yellow/5 to-sol-yellow/10 border border-sol-yellow/30 rounded-lg",
     icon: "text-sol-yellow",
   },
   alert: {
-    wrap: "bg-gradient-to-r from-sol-orange/10 via-sol-orange/10 to-sol-orange/10 border-b border-sol-orange/30",
+    wrap: "bg-gradient-to-r from-sol-orange/10 via-sol-orange/10 to-sol-orange/10 border border-sol-orange/30 rounded-lg",
     icon: "text-sol-orange",
   },
   severe: {
-    wrap: "bg-gradient-to-r from-sol-orange/10 via-sol-red/10 to-sol-orange/10 border-b border-sol-red/40",
+    wrap: "bg-gradient-to-r from-sol-orange/10 via-sol-red/10 to-sol-orange/10 border border-sol-red/40 rounded-lg",
     icon: "text-sol-red",
   },
 };
 
 export function CliOfflineBanner() {
+  useStatusToast("cli-offline", useCliOfflineNotice());
+  return null;
+}
+
+// Every hook runs before the first early return, so the notice can bail out
+// in whatever order reads best.
+function useCliOfflineNotice() {
   const dismissedTs = useInboxStore(s => s.clientState.dismissed?.cli_offline ?? 0);
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
@@ -87,10 +95,10 @@ export function CliOfflineBanner() {
 
   return (
     <div className={styles.wrap}>
-      <div className="px-4 py-2 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <Terminal className={`w-4 h-4 ${styles.icon} flex-shrink-0`} />
-          <span className="text-sm text-sol-text truncate">
+      <div className="px-4 py-2 flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <Terminal className={`w-4 h-4 mt-0.5 ${styles.icon} flex-shrink-0`} />
+          <span className="text-sm text-sol-text leading-snug">
             {message}
             {" "}{action}
             <button
