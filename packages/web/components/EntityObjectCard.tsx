@@ -7,6 +7,8 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
   MessageSquare,
   Target,
   Zap,
@@ -39,7 +41,11 @@ import {
   relativeTime,
   taskPeople,
   useEntityResolution,
+  DiffStat,
 } from "./entityDisplay";
+import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
+import { DocDates } from "./DocDates";
+import { FileDiffList } from "./FileDiffView";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -60,7 +66,14 @@ const TYPE_ICON: Record<EntityType, any> = {
   doc: FileText,
   trigger: Zap,
   project: Folder,
+  pr: GitPullRequest,
+  commit: GitCommitHorizontal,
 };
+
+/** The message body under a commit's subject line, or "" when it is a one-liner. */
+function commitBody(commit: any): string {
+  return String(commit?.message ?? "").split("\n").slice(1).join("\n").trim();
+}
 
 function MetaDot() {
   return <span className="text-[color-mix(in_srgb,var(--sol-text-dim)_60%,transparent)]">·</span>;
@@ -120,11 +133,40 @@ function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
   } else if (type === "doc") {
     const typeLabel = entity.doc_type ? entity.doc_type.charAt(0).toUpperCase() + entity.doc_type.slice(1) : "Doc";
     push(<span className="font-medium text-sol-green">{typeLabel}</span>, "type");
+    if (entity.created_at) push(<DocDates doc={entity} className="whitespace-nowrap" />, "dates");
   } else if (type === "trigger") {
     const failing = entity.last_run_failed || entity.last_run_needs_attention;
     const color = entity.status === "paused" ? "text-sol-yellow" : failing ? "text-sol-red" : "text-sol-orange";
     push(<span className={`whitespace-nowrap font-medium ${color}`}>{describeTaskCadence(entity)}</span>, "cadence");
     push(<span className="whitespace-nowrap">{taskStateLabel(entity, Date.now())}</span>, "state");
+  } else if (type === "pr") {
+    const state = prState(entity.state);
+    push(<span className={`whitespace-nowrap font-medium ${state.color}`}>{state.label}</span>, "state");
+    if (entity.author_github_username) push(<span className="truncate">{entity.author_github_username}</span>, "author", true);
+    if (entity.head_ref) {
+      push(
+        <span className="inline-flex min-w-0 items-center gap-1 font-mono">
+          <span className="truncate text-sol-green">{entity.head_ref}</span>
+          {entity.base_ref && (
+            <>
+              <span className="text-sol-text-dim">→</span>
+              <span className="truncate text-sol-blue">{entity.base_ref}</span>
+            </>
+          )}
+        </span>,
+        "refs",
+        true,
+      );
+    }
+    if (entity.additions != null || entity.deletions != null || entity.changed_files != null) {
+      push(<DiffStat additions={entity.additions} deletions={entity.deletions} files={entity.changed_files} />, "stat");
+    }
+  } else if (type === "commit") {
+    if (entity.author_name) push(<span className="truncate">{entity.author_name}</span>, "author", true);
+    if (entity.branch) push(<span className="whitespace-nowrap font-mono">{entity.branch}</span>, "branch");
+    if (entity.insertions != null || entity.deletions != null || entity.files_changed != null) {
+      push(<DiffStat additions={entity.insertions} deletions={entity.deletions} files={entity.files_changed} />, "stat");
+    }
   } else {
     push(<span className="font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>, "type");
   }
@@ -295,6 +337,15 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
       </p>
     );
   }
+  if (type === "pr") {
+    if (!entity.body) return null;
+    return <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>{stripMarkdown(entity.body).slice(0, 400)}</p>;
+  }
+  if (type === "commit") {
+    const body = commitBody(entity);
+    if (!body) return null;
+    return <p className={`whitespace-pre-line text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>{body.slice(0, 400)}</p>;
+  }
   const summary = entity.description || entity.goal || entity.summary;
   if (!summary) return null;
   return <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>{stripMarkdown(summary).slice(0, 400)}</p>;
@@ -443,6 +494,23 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
             {entity.run_count > 0 && <span className="font-mono">{entity.run_count} runs</span>}
           </div>
         )}
+      </div>
+    );
+  }
+  if (type === "pr") {
+    return (
+      <div className="space-y-2.5">
+        {entity.body ? <CardMarkdown content={entity.body} /> : <p className="text-[11px] italic text-sol-text-dim">No description.</p>}
+        <FileDiffList files={entity.files} emptyText="No file changes synced yet" className="overflow-hidden rounded border border-sol-border/40" />
+      </div>
+    );
+  }
+  if (type === "commit") {
+    const body = commitBody(entity);
+    return (
+      <div className="space-y-2.5">
+        {body && <pre className="whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-sol-text-muted">{body}</pre>}
+        <FileDiffList files={entity.files} emptyText="No file changes synced" className="overflow-hidden rounded border border-sol-border/40" />
       </div>
     );
   }
@@ -689,21 +757,28 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
   // Same degrade rule as the pill: an id that resolves to no entity table (or
   // is still resolving) renders back as the text that was typed.
   if (!type) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+  const isRepoObject = type === "pr" || type === "commit";
+  // Same rule as the pill: a repository reference that names nothing codecast
+  // knows is the text it was written as, not a "not available" card.
+  if (isRepoObject && served && !entity) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
 
   const isSession = type === "session";
   const Icon = TYPE_ICON[type];
   const taskV = type === "task" ? taskVisual(entity?.status) : null;
   const openLabel = `Open ${TYPE_LABEL[type].toLowerCase()}`;
+  const title = entity
+    ? (type === "trigger" ? entity.display_title : undefined) || (isRepoObject ? repoObjectTitle(type, entity) : undefined) || entity.title || entity.display_title || entity.name || label
+    : null;
 
   return (
     <ObjectCardFrame
       accent={ACCENT[type]}
       count={count}
-      ariaLabel={`${TYPE_LABEL[type]}: ${entity ? (type === "trigger" ? entity.display_title : undefined) || entity.title || entity.display_title || entity.name || label : rawId}`}
+      ariaLabel={`${TYPE_LABEL[type]}: ${title ?? rawId}`}
       href={href}
       onOpen={openObject}
       openLabel={openLabel}
-      footerId={entity?.short_id ?? rawId}
+      footerId={(isRepoObject ? repoObjectRefOf(type, entity) : null) ?? entity?.short_id ?? rawId}
       resolved={!!entity}
       served={served}
       // A session reads as its inbox card — flat, no header strip.
@@ -715,13 +790,11 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
           ) : taskV ? (
             <taskV.icon className={`h-3.5 w-3.5 ${taskV.color}`} />
           ) : (
-            <Icon className={`h-3.5 w-3.5 ${ACCENT[type].text}`} />
+            <Icon className={`h-3.5 w-3.5 ${type === "pr" ? prState(entity?.state).color : ACCENT[type].text}`} />
           ),
-        title: entity
-          ? (type === "trigger" ? entity.display_title : undefined) || entity.title || entity.display_title || entity.name || label
-          : <span className="font-mono text-sol-text-dim">{rawId}</span>,
+        title: title ?? <span className="font-mono text-sol-text-dim">{rawId}</span>,
         meta: entity ? <CardMetaLine type={type} entity={entity} /> : undefined,
-        timeAgo: relativeTime(entity?.updated_at),
+        timeAgo: relativeTime(entity?.updated_at ?? entity?.timestamp),
         live: (isSession && entity?.status === "active") || (type === "trigger" && entity?.status === "running"),
       }}
       snippet={entity ? <CardSnippet type={type} entity={entity} compact={count > 1} /> : undefined}

@@ -25,6 +25,7 @@ export type ShortcutAction =
   | 'session.kill'
   | 'session.deferAdvance'
   | 'session.dormantAdvance'
+  | 'session.snooze'
   | 'session.create'
   | 'session.compose'
   | 'session.rename'
@@ -46,6 +47,8 @@ export type ShortcutAction =
   | 'inbox.toggleFlatView'
   | 'inbox.toggleTriageBar'
   | 'nav.inbox'
+  | 'nav.back'
+  | 'nav.forward'
   | 'search.open'
   | 'chat.search'
   | 'chat.pushToTalk'
@@ -160,6 +163,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Shift: ⌥⇧⌫ is only ever a deliberate press, so it is as safe as
   // Shift+Backspace itself. Non-destructive: the row moves to the Dormant
   // section and comes back on its own at the next wake.
+  { key: 'alt+z', action: 'session.snooze', skipInputCheck: true, description: 'Snooze session…' },
   { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Dormant and advance (a machine wakes it)' },
   { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
@@ -239,6 +243,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   // in reading mode.
   { key: 'ctrl+f', mac: 'meta+f', action: 'vault.find', skipInputCheck: true, description: 'Find in note' },
   { key: 'meta+f', action: 'find.toggle', when: 'desktop', skipInputCheck: true, description: 'Find in page' },
+  // History back/forward, desktop only: in a browser tab these chords belong
+  // to the browser, which walks its own history. Mac takes the browser
+  // convention (Cmd+[ / Cmd+]); elsewhere Ctrl+[ is the sidebar toggle, so the
+  // other browser convention (Alt+Arrow) applies. Each window runs its own
+  // listener, so the chord walks the history of the window that has focus.
+  // The app menu ("Go" in packages/electron/main.js) carries the same
+  // accelerators as the fallback for a window without this handler.
+  { key: 'alt+arrowleft', mac: 'meta+[', action: 'nav.back', when: 'desktop', skipInputCheck: true, description: 'Back' },
+  { key: 'alt+arrowright', mac: 'meta+]', action: 'nav.forward', when: 'desktop', skipInputCheck: true, description: 'Forward' },
 
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
   { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle branch map' },

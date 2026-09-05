@@ -77,6 +77,65 @@ describe("inboxStore.setConversationAgent", () => {
     expect(state.currentConversation.source).toBe("sessions");
   });
 
+  it("clears the previous agent's model so the header chip cannot keep it", () => {
+    useInboxStore.setState({
+      sessions: {
+        conv1: { ...baseSession, model: "claude-fable-5", effort: "high" },
+      },
+      conversations: {
+        conv1: { _id: "conv1", agent_type: "claude_code", model: "claude-fable-5", effort: "high" },
+      },
+      currentConversation: { conversationId: "conv1", agentType: "claude_code", source: "sessions" },
+      pending: {},
+    });
+
+    useInboxStore.getState().setConversationAgent("conv1", "codex");
+
+    const state = useInboxStore.getState();
+    expect(state.sessions.conv1?.agent_type).toBe("codex");
+    expect(state.sessions.conv1?.model).toBeUndefined();
+    expect(state.sessions.conv1?.effort).toBeUndefined();
+    expect(state.conversations.conv1?.model).toBeUndefined();
+    expect(state.conversations.conv1?.effort).toBeUndefined();
+
+    // A stale meta echo that still carries the Claude model must not restore it.
+    useInboxStore.getState().syncRecord("conversations", "conv1", {
+      _id: "conv1",
+      agent_type: "codex",
+      model: "claude-fable-5",
+      effort: "high",
+    });
+    expect(useInboxStore.getState().conversations.conv1?.model).toBeUndefined();
+    expect(useInboxStore.getState().conversations.conv1?.agent_type).toBe("codex");
+  });
+
+  it("accepts the new agent's model after the leftover stamp has been cleared", () => {
+    useInboxStore.setState({
+      sessions: {
+        conv1: { ...baseSession, model: "claude-fable-5" },
+      },
+      conversations: {
+        conv1: { _id: "conv1", agent_type: "claude_code", model: "claude-fable-5" },
+      },
+      currentConversation: { conversationId: "conv1", agentType: "claude_code", source: "sessions" },
+      pending: {},
+    });
+
+    useInboxStore.getState().setConversationAgent("conv1", "codex");
+    // Server unset: getConversationWithMeta omits model.
+    useInboxStore.getState().syncRecord("conversations", "conv1", {
+      _id: "conv1",
+      agent_type: "codex",
+    });
+    useInboxStore.getState().syncRecord("conversations", "conv1", {
+      _id: "conv1",
+      agent_type: "codex",
+      model: "gpt-6-astra",
+    });
+    expect(useInboxStore.getState().conversations.conv1?.model).toBe("gpt-6-astra");
+    expect(useInboxStore.getState().conversations.conv1?.agent_type).toBe("codex");
+  });
+
   it("still updates sessions-page state when there is no inbox session entry", () => {
     useInboxStore.setState({
       conversations: {

@@ -17,6 +17,7 @@ import {
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { insertRiskResendPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { isConversationSafetyBlocked } from "./conversationSafety";
 
 export const EXECUTION_PROTOCOL_VERSION = 1 as const;
 
@@ -1525,7 +1526,8 @@ export async function claimNextDeliveryInDb(
     now: number;
   },
 ): Promise<any> {
-  await requireOwnedConversation(ctx, args.conversationId, userId);
+  const conversation = await requireOwnedConversation(ctx, args.conversationId, userId);
+  if (isConversationSafetyBlocked(conversation)) return { state: "busy", reason: "safety" };
   const head = await executionHead(ctx, args.conversationId);
   const binding = await executionBinding(ctx, args.conversationId, args.executionEpoch);
   if (!head) fail("EXECUTION_HEAD_MISSING", "conversation has no execution head");
@@ -1737,10 +1739,11 @@ export async function startDeliveryInDb(
   userId: Id<"users">,
   fence: PermitFence & { now: number },
 ): Promise<any> {
-  const { head, message, attempt } = await verifyAttemptFence(ctx, userId, fence, [
+  const { conversation, head, message, attempt } = await verifyAttemptFence(ctx, userId, fence, [
     "claimed",
     "delivery-started",
   ]);
+  if (isConversationSafetyBlocked(conversation)) fail("CONVERSATION_SAFETY_BLOCKED", "Delivery is held for safety review");
   if (
     attempt.state === "delivery-started" &&
     head.active_delivery_state === "delivery-started" &&
@@ -3173,6 +3176,8 @@ export const listExecutionWork = query({
       .collect();
     const work: any[] = [];
     for (const head of heads) {
+      const conversation = await ctx.db.get(head.conversation_id as Id<"conversations">);
+      if (conversation && isConversationSafetyBlocked(conversation)) continue;
       if (head.protocol_version !== args.protocol_version) {
         fail("EXECUTION_PROTOCOL_VERSION_MISMATCH", "stored head differs from daemon handshake");
       }

@@ -117,6 +117,51 @@ function world(opts: { bobLive?: boolean; bobIdle?: boolean; now: number } = { n
   });
 }
 
+describe("direct send — a person typing into a session", () => {
+  test("wraps as <user-message from=Name>, never an unknown-session wrapper", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await ctx.db.patch("uAlice", { name: "Alice" });
+    const res = await performSessionSend(ctx as any, "uAlice" as any, {
+      to: "jxbob01",
+      body: "its me - you can proceed",
+      direct: true,
+    });
+
+    expect(res.cross_user).toBe(true);
+    const row = tables.pending_messages[0];
+    expect(row.from_user_id).toBe("uAlice");
+    expect(row.owner_user_id).toBe("uBob");
+    expect(row.content).toBe('<user-message from="Alice">\nits me - you can proceed\n</user-message>');
+    expect(row.content).not.toContain("<session-message");
+    expect(row.content).not.toContain("unknown");
+  });
+
+  test("a direct send into your own session still names you", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await ctx.db.patch("uAlice", { name: "Alice" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxalice", body: "hi", direct: true });
+    expect(tables.pending_messages[0].content).toBe('<user-message from="Alice">\nhi\n</user-message>');
+  });
+});
+
+describe("send with a sender that resolves to nothing", () => {
+  test("is rejected before enqueue — never delivered as from=unknown", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await expect(
+      performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "0199c3ab-1234-4d8f-9c1e-not-a-session", body: "ship it" })
+    ).rejects.toThrow(/not found/);
+    expect(tables.pending_messages.length).toBe(0);
+  });
+
+  test("an explicit jx short id still attributes without a row, and no sender still delivers", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxghost", body: "a" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", body: "b" });
+    expect(tables.pending_messages[0].content).toContain('<session-message from="jxghost"');
+    expect(tables.pending_messages[1].content).toContain('<session-message from="unknown"');
+  });
+});
+
 describe("team send — authorization", () => {
   test("Alice can send to Bob's team-shared session; row is owned by Bob, attributed to Alice", async () => {
     // target_live is computed against real Date.now() in the send path, so seed near real time.
