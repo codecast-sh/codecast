@@ -74,9 +74,8 @@ export async function requestRemoteWake(ctx: { db: any }, conversation: any): Pr
     .first();
   if (!device?.is_remote) return false;
   const now = Date.now();
-  if (now - device.last_seen < DEVICE_ONLINE_MS) return false;
   if (typeof device.wake_requested_at === "number" && device.wake_requested_at > device.last_seen) return true;
-  await ctx.db.patch(device._id, { wake_requested_at: now });
+  await ctx.db.patch(device._id, { wake_requested_at: Math.max(now, device.last_seen + 1) });
   return true;
 }
 

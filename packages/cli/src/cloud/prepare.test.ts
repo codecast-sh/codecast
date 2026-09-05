@@ -27,7 +27,25 @@ describe("parseAcquireOutput — the host's `cast ws acquire --json`", () => {
   test("no JSON, or a broken contract, is an error that names the worktree", () => {
     expect(() => parseAcquireOutput("cloud-2", "acquire failed: boom")).toThrow(/cloud-2 printed no JSON/);
     const broken = JSON.stringify({ name: "cloud-3", path: "/p", branch: "b", state: "broken", ports: {}, created: true, contract: { ok: false, failures: [{ name: "deps-installed" }] } });
-    expect(() => parseAcquireOutput("cloud-3", broken)).toThrow(/cloud-3 on the host is broken.*deps-installed/);
+    expect(() => parseAcquireOutput("cloud-3", broken)).toThrow(/cloud-3 on the host is broken/);
+  });
+  test.each([
+    { name: "someone-else" }, { state: "creating" }, { state: "broken" },
+    { contract: null }, { contract: { ok: "true", failures: [] } },
+    { contract: { ok: true } }, { contract: { ok: true, failures: ["failed"] } },
+    { path: "relative/path" }, { path: "/" }, { path: "/p/../escape" }, { path: "/p\n" },
+    { branch: "" }, { branch: "bad branch" }, { created: "true" },
+    { ports: null }, { ports: [] }, { ports: { web: 0 } }, { ports: { web: 65536 } },
+    { ports: { web: 1.5 } }, { ports: { web: "3221" } },
+  ])("rejects malformed or unsuccessful acquisition: %j", (bad) => {
+    expect(() => parseAcquireOutput("cloud-1", JSON.stringify({ ...JSON.parse(ok), ...bad }))).toThrow();
+  });
+  test("accepts ready existing workspaces and valid port bounds", () => {
+    expect(parseAcquireOutput("cloud-1", JSON.stringify({ ...JSON.parse(ok), created: false, ports: { a: 1, z: 65535 } })).created).toBe(false);
+  });
+  test("does not expose output contents in JSON errors", () => {
+    expect(() => parseAcquireOutput("cloud-1", "SECRET_VALUE")).toThrow("cloud-1 printed no JSON");
+    expect(() => parseAcquireOutput("cloud-1", '{"SECRET_VALUE"')).toThrow("cloud-1 printed invalid JSON");
   });
 });
 

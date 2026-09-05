@@ -33,9 +33,10 @@ export const MANIFEST_REL_PATH = ".codecast/workspace.toml";
  * Resolve the merged workspace manifest for a repo.
  * Reads detection + .codecast/workspace.toml; returns the merged result.
  */
-export function resolveManifest(repoRoot: string): WorkspaceManifest {
+export function resolveManifest(repoRoot: string, inputRoot = repoRoot): WorkspaceManifest {
   const detected = detectProject(repoRoot);
-  const file = parseManifest(path.join(repoRoot, MANIFEST_REL_PATH));
+  if (inputRoot !== repoRoot) detected.setup.copy = detectProject(inputRoot).setup.copy;
+  const file = parseManifest(path.join(inputRoot, MANIFEST_REL_PATH));
   return mergeManifests(detected, file);
 }
 

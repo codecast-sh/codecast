@@ -38,15 +38,16 @@ describe("requestRemoteWake — stamping the device when work queues for a sleep
     expect(await requestRemoteWake({ db: d } as any, conv)).toBe(true);
     expect((await d.get("dev1")).wake_requested_at).toBe(stampedAt);
   });
-  test("an online remote, a local owner, or no owner is left alone", async () => {
+  test("a just-stopped remote retains wake intent until its heartbeat expires", async () => {
     const d = db([
       { _id: "dev1", user_id: user, device_id: "box", is_remote: true, last_seen: Date.now() },
       { _id: "dev2", user_id: user, device_id: "laptop", is_remote: false, last_seen: asleep },
     ]);
-    expect(await requestRemoteWake({ db: d } as any, { user_id: user, owner_device_id: "box" })).toBe(false);
+    expect(await requestRemoteWake({ db: d } as any, { user_id: user, owner_device_id: "box" })).toBe(true);
     expect(await requestRemoteWake({ db: d } as any, { user_id: user, owner_device_id: "laptop" })).toBe(false);
     expect(await requestRemoteWake({ db: d } as any, { user_id: user })).toBe(false);
-    expect((await d.get("dev1")).wake_requested_at).toBeUndefined();
+    const remote = await d.get("dev1");
+    expect(wakeDevicesFor([remote], remote.last_seen + DEVICE_ONLINE_MS)).toEqual([{ device_id: "box", label: null }]);
     expect((await d.get("dev2")).wake_requested_at).toBeUndefined();
   });
 });

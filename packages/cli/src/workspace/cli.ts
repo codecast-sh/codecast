@@ -68,6 +68,7 @@ export function registerWorkspaceCommand(program: Command): void {
   ws.command("acquire <name>")
     .description("Create or attach to a workspace by name")
     .option("--branch <branch>", "Override branch name")
+    .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot")
     .option("--backend <name>", "Sandbox backend to use (default: local)")
     .option("--skip-setup", "Skip install/generate/migrate commands")
     .option("--skip-hooks", "Skip before-create/after-create hooks")
@@ -78,6 +79,7 @@ export function registerWorkspaceCommand(program: Command): void {
         name: string,
         opts: {
           branch?: string;
+          inputRoot?: string;
           backend?: string;
           skipSetup?: boolean;
           skipHooks?: boolean;
@@ -96,6 +98,7 @@ export function registerWorkspaceCommand(program: Command): void {
         try {
           const r = await acquireWorkspace(repoRoot, name, {
             branch: opts.branch,
+            inputRoot: opts.inputRoot,
             skipSetup: opts.skipSetup,
             skipHooks: opts.skipHooks,
             skipPool: opts.skipPool,
@@ -106,7 +109,11 @@ export function registerWorkspaceCommand(program: Command): void {
             console.log(JSON.stringify({
               name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
               ports: ws.ports, created: r.created,
-              contract: ws.contract ? { ok: ws.contract.ok, failures: ws.contract.checks.filter((c) => !c.ok) } : null,
+              contract: ws.contract ? {
+                ok: ws.contract.ok,
+                failures: ws.contract.checks.filter((c) => !c.ok && !c.name.startsWith("port-free:")),
+                warnings: ws.contract.checks.filter((c) => !c.ok && c.name.startsWith("port-free:")),
+              } : null,
             }));
             if (ws.contract && !ws.contract.ok) process.exit(2);
             return;

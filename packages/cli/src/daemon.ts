@@ -31,7 +31,7 @@ import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
 import { hostForDevice, listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
-import { releaseSessionWorktree } from "./worktreeGc.js";
+import { hasActiveCloudWork } from "./cloud/activity.js";import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
@@ -3332,7 +3332,7 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  const config = readConfig();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();  const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
   }
@@ -3822,8 +3822,8 @@ export async function killLocalPanesForConversation(
 // account credential. Extracted verbatim from the kill_session command body.
 async function killConversationBackends(
   conversationId: string,
-  sessionIdHint?: string
-): Promise<{ result?: string; error?: string }> {
+  sessionIdHint?: string,
+  retireWorkspace = false,): Promise<{ result?: string; error?: string }> {
   let result: string | undefined;
   let error: string | undefined;
 
@@ -3832,8 +3832,8 @@ async function killConversationBackends(
   // Released at the end when it is a codecast worktree holding no work
   // (worktreeGc.ts) — killing a session is the one moment a worktree stops
   // being anybody's.
-  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath;
-
+  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath
+    ?? persistedAppServerThreads.get(conversationId)?.cwd;
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
   // start_session so "one backend per conversation" is enforced identically
@@ -3846,8 +3846,7 @@ async function killConversationBackends(
       sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
     }
     log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
-    return { result: "killed_app_server" };
-  }
+    result = "killed_app_server";  }
   if (teardown.killedTmux) {
     result = "killed_tmux";
   }
@@ -3946,8 +3945,12 @@ async function killConversationBackends(
   // injected message.
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
-  if (gcCwd) void releaseSessionWorktree(gcCwd, log).catch((err) => log(`[WORKTREE-GC] ${String(err).slice(0, 160)}`));
-
+  if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree) && !error) {
+    const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
+      ? syncServiceRef.isWorktreeShared(conversationId, p)
+      : Promise.reject(new Error("No session roster")));
+    log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
+  }
   if (!result) result = sessionId ? "no_process" : "no_session";
   return { result, error };
 }
@@ -4975,8 +4978,7 @@ async function executeRemoteCommand(
         const sessionIdHint = typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined;
         const killed = pendingAgentSwitches.has(conversationId)
           ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
-          : await killConversationBackends(conversationId, sessionIdHint);
-        result = killed.result;
+          : await killConversationBackends(conversationId, sessionIdHint, true);        result = killed.result;
         error = killed.error;
         break;
       }
@@ -16709,8 +16711,9 @@ async function reapOneTerminal(
     reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
   }
   if (gcCwd) {
-    const verdict = await releaseSessionWorktree(gcCwd, log).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
-    reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
+    const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
+      ? syncServiceRef.isWorktreeShared(convId, p)
+      : Promise.reject(new Error("No session roster"))).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));    reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
   }
   return true;
 }
@@ -18037,11 +18040,11 @@ export function resumeReuseCandidates(
 // but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
-export function buildResumeEnvPrefix(agentType: string): string {
-  return agentType === "claude"
-    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
+  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : AGENT_ENV_SCRUB;
-}
+  const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
+  return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;}
 
 // The settings-level transcript pin (agentEnv.ts): idempotent, respects an
 // authored value, logs only when it actually writes.
@@ -18697,8 +18700,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
-    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
     // disclaimPrefix: resumed agents carry their own TCC identity, same as a
