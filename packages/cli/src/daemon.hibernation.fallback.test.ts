@@ -128,7 +128,7 @@ describe("parking fallback executes production bodies without daemon initializat
       const { h, io } = fixture();
       h.trackSessionPaneForTests("session", "pane", { status: status as AgentStatus });
       expect(await h.hibernateSessionNow("session", undefined, io)).toMatchObject({ result: `skipped_${reason}` });
-      expect(h.sessionParkStateForTests("session")).toEqual({ parked: false, beating: true, paneTracked: true, status });
+      expect(h.sessionParkStateForTests("session")).toEqual({ parked: false, beating: true, paneTracked: true, status: status as AgentStatus });
       expect(nonLogEffects(h)).toEqual([]);
     }
   });
