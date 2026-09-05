@@ -17,6 +17,20 @@ crons.interval(
 );
 
 crons.interval(
+  "reconcile cloud wake requests",
+  { seconds: 60 },
+  (internal as any).cloudWake.reconcile,
+  {}
+);
+
+crons.interval(
+  "dispatch due cloud triggers",
+  { seconds: 60 },
+  internal.agentTasks.dispatchCloudTriggers,
+  {}
+);
+
+crons.interval(
   "retry stuck pending messages",
   // Backstop only — the daemon drives live delivery via getPendingMessages. 30s was
   // needlessly aggressive and (with the old full-table scan) drove a scheduler

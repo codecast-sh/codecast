@@ -1,0 +1,9 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "ec2:StartInstances",
+    "Resource": "arn:aws:ec2:us-west-2:045275879943:instance/i-084309c56a91e15ff",
+    "Condition": { "StringEquals": { "aws:RequestedRegion": "us-west-2" } }
+  }]
+}

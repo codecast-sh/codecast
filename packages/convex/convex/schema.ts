@@ -1699,11 +1699,21 @@ export default defineSchema({
     pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     // Set when work was queued for a REMOTE device that is offline (a cloud
-    // host that put itself to sleep). Local daemons read it off the heartbeat
-    // (users.heartbeat → wake_devices) and boot the host; a heartbeat from the
-    // device itself clears it. Never set for a local device — nothing can wake
+    // host that put itself to sleep). The configured server waker or a local
+    // daemon boots the host; a heartbeat from the device itself clears it.
+    // Never set for a local device — nothing can wake
     // a closed laptop.
     wake_requested_at: v.optional(v.number()),
+    cloud_wake: v.optional(v.object({
+      request_at: v.number(),
+      attempt: v.number(),
+      next_attempt_at: v.number(),
+      status: v.union(v.literal("pending"), v.literal("starting"), v.literal("awake"), v.literal("failed")),
+      lease_token: v.optional(v.string()),
+      lease_until: v.optional(v.number()),
+      last_error: v.optional(v.string()),
+      aws_request_id: v.optional(v.string()),
+    })),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
