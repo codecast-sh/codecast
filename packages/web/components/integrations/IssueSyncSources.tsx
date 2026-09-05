@@ -15,7 +15,7 @@
 import { useCallback, useState } from "react";
 import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link } from "react-router";
+import Link from "next/link";
 import { toast } from "sonner";
 import { ChevronDown, Loader2, Plus, RefreshCw } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -155,7 +155,15 @@ function SourceRow({ source }: { source: any }) {
             className="mt-0.5 pl-[18px]"
             parts={[
               source.project_id ? (
-                <Link to={`/projects/${source.project_id}`} className="hover:text-sol-cyan hover:underline">
+                <Link
+                  href={`/projects/${source.project_id}`}
+                  onClick={(event) => {
+                    if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                      useInboxStore.getState().closeSettingsModal();
+                    }
+                  }}
+                  className="hover:text-sol-cyan hover:underline"
+                >
                   {source.project_title ?? source.project_name ?? "project"}
                 </Link>
               ) : (
