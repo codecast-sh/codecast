@@ -32,6 +32,7 @@ export default [
     ignores: [
       "node_modules/**",
       "dist/**",
+      "dist-ssr/**",
       ".next/**",
       "build/**",
       "out/**",
