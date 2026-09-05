@@ -1,5 +1,6 @@
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
+import { EventEmitter } from "node:events";
 import * as os from "os";
 import * as path from "path";
 import { watch as chokidarWatch } from "chokidar";
@@ -440,29 +441,104 @@ describe("RecursiveWatcher native event cost", () => {
     expect(events).toContain(files[3]);
   });
 
-  test.skipIf(!isNative)("a burst of events runs at most one rescan per interval", async () => {
+  test("a burst of file events paces rescans from the previous walk's end and recovers missing events", async () => {
     const { root, files } = scaffold("rw-throttle");
-    let walks = 0;
+    const epoch = Date.now() + 10_000;
+    let now = epoch;
+    let timerId = 0;
+    const timers = new Map<number, { at: number; callback: () => void }>();
+    const pending = new Set<Promise<unknown>>();
+    const walks: Array<{ start: number; end: number }> = [];
+    const events: string[] = [];
+    let nativeEvent!: (type: string, filename: string | null) => void;
     const watcher = new RecursiveWatcher({
       path: root,
-      filter: (rel) => { if (rel.endsWith(path.join("proj-c", "two.jsonl"))) walks++; return rel.endsWith(".jsonl"); },
-      callback: () => {},
+      mode: "native",
+      filter: rel => rel.endsWith(".jsonl"),
+      callback: file => events.push(file),
       debounceMs: 20,
       rescanIntervalMs: 800,
     });
-    cleanups.push(() => watcher.stop());
-    watcher.start();
-    await watcher.whenPrimed();
-    walks = 0;
-
-    for (let i = 0; i < 20; i++) {
-      fs.appendFileSync(files[i % 2], `{"i": ${i}}\n`);
-      await new Promise((r) => setTimeout(r, 25));
+    const internal = watcher as any;
+    const runRescan = internal.runRescan.bind(watcher);
+    const probe = internal.probe.bind(watcher);
+    const walkTree = internal.walkTree.bind(watcher);
+    const track = (promise: Promise<unknown>) => {
+      pending.add(promise);
+      return promise.finally(() => pending.delete(promise));
+    };
+    const spies = [
+      spyOn(Date, "now").mockImplementation(() => now),
+      spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms = 0) => {
+        const id = ++timerId;
+        timers.set(id, { at: now + ms, callback });
+        return id;
+      }) as typeof setTimeout),
+      spyOn(globalThis, "clearTimeout").mockImplementation(((id: number) => { timers.delete(id); }) as typeof clearTimeout),
+      spyOn(fs, "watch").mockImplementation(((_root: string, _opts: unknown, callback: typeof nativeEvent) => {
+        nativeEvent = callback;
+        return Object.assign(new EventEmitter(), { close() {} });
+      }) as typeof fs.watch),
+      spyOn(internal, "runRescan").mockImplementation(() => track(runRescan())),
+      spyOn(internal, "probe").mockImplementation((...args: unknown[]) => track(probe(...args))),
+      spyOn(internal, "walkTree").mockImplementation(async (...args: unknown[]) => {
+        const timing = { start: now - epoch, end: 0 };
+        await walkTree(...args);
+        if (args[1]) now += 125;
+        timing.end = now - epoch;
+        walks.push(timing);
+      }),
+    ];
+    const advanceTo = async (elapsed: number) => {
+      const target = epoch + elapsed;
+      for (;;) {
+        const next = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next || next[1].at > target) break;
+        now = Math.max(now, next[1].at);
+        timers.delete(next[0]);
+        next[1].callback();
+        await Promise.all([...pending]);
+      }
+      now = Math.max(now, target);
+    };
+    try {
+      watcher.start();
+      await watcher.whenPrimed();
+      for (let i = 0; i < 20; i++) {
+        const file = files[i % 2];
+        fs.appendFileSync(file, `{"i": ${i}}\n`);
+        const stamp = new Date(epoch + i + 1);
+        fs.utimesSync(file, stamp, stamp);
+        nativeEvent("change", path.relative(root, file));
+        await advanceTo((i + 1) * 25);
+      }
+      expect(events).toContain(files[0]);
+      expect(events).toContain(files[1]);
+      expect(walks).toEqual([{ start: 0, end: 0 }]);
+      nativeEvent("rename", null);
+      const missed = files[3];
+      const stamp = new Date(epoch + 5_000);
+      fs.utimesSync(missed, stamp, stamp);
+      await advanceTo(799);
+      expect(events).not.toContain(missed);
+      expect(walks).toHaveLength(1);
+      await advanceTo(800);
+      expect(events).toContain(missed);
+      expect(walks).toEqual([{ start: 0, end: 0 }, { start: 800, end: 925 }]);
+      const secondMissed = files[4];
+      const secondStamp = new Date(epoch + 6_000);
+      fs.utimesSync(secondMissed, secondStamp, secondStamp);
+      await advanceTo(1_724);
+      expect(events).not.toContain(secondMissed);
+      expect(walks).toHaveLength(2);
+      await advanceTo(1_725);
+      expect(events).toContain(secondMissed);
+      expect(walks).toEqual([{ start: 0, end: 0 }, { start: 800, end: 925 }, { start: 1_725, end: 1_850 }]);
+      expect(walks.slice(1).map((walk, i) => walk.start - walks[i].end)).toEqual([800, 800]);
+    } finally {
+      watcher.stop();
+      for (const spy of spies.reverse()) spy.mockRestore();
     }
-    await new Promise((r) => setTimeout(r, 1_200));
-    // ~500ms of events + 1.2s of settle spans at most two interval boundaries.
-    expect(walks).toBeGreaterThanOrEqual(1);
-    expect(walks).toBeLessThanOrEqual(2);
   });
 
   test.skipIf(!isNative)("a write that lands while priming is still walking is not lost", async () => {

@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from "chokidar";
 import { walkFiles, type WalkFile } from "./fsWalk.js";
+import type { ScanPolicy } from "./workers/scanTypes.js";
 
 type WatcherCallback = (filePath: string, eventType: "add" | "change") => void;
 
@@ -65,16 +66,22 @@ export class RecursiveWatcher extends EventEmitter {
   private generation = 0;
   private primed: Promise<void> = Promise.resolve();
   private isPrimed = false;
+  private primingStartedAt = 0;
   private watchPath: string;
   private filter: (relativePath: string) => boolean;
   private dirFilter: (relativeDirPath: string) => boolean;
   private callback: WatcherCallback;
-  private onExisting: ((files: WalkFile[]) => void) | null;
+  private onExisting: ((files: WalkFile[]) => void | Promise<void>) | null;
+  private scanPolicy?: ScanPolicy;
+  private scanController = new AbortController();
+  private mode: "native" | "chokidar";
   private maxDepth: number;
   private debounceMs: number;
   private rescanIntervalMs: number;
 
   constructor(opts: {
+    scanPolicy?: ScanPolicy;
+    mode?: "native" | "chokidar";
     path: string;
     filter: (relativePath: string) => boolean;
     /**
@@ -94,12 +101,14 @@ export class RecursiveWatcher extends EventEmitter {
      * files, sorted) can take them from this one walk instead of running a
      * second one over the same tens of thousands of files. Native path only.
      */
-    onExisting?: (files: WalkFile[]) => void;
+    onExisting?: (files: WalkFile[]) => void | Promise<void>;
     maxDepth?: number;
     debounceMs?: number;
     rescanIntervalMs?: number;
   }) {
     super();
+    this.scanPolicy = opts.scanPolicy;
+    this.mode = opts.mode ?? (supportsRecursiveWatch ? "native" : "chokidar");
     this.watchPath = opts.path;
     this.filter = opts.filter;
     this.dirFilter = opts.dirFilter ?? (() => true);
@@ -117,7 +126,9 @@ export class RecursiveWatcher extends EventEmitter {
       fs.mkdirSync(this.watchPath, { recursive: true });
     }
 
-    if (supportsRecursiveWatch) {
+    this.scanController = new AbortController();
+    this.primingStartedAt = Date.now();
+    if (this.mode === "native") {
       this.startFsWatch();
     } else {
       this.startChokidar();
@@ -144,11 +155,11 @@ export class RecursiveWatcher extends EventEmitter {
     // Open the watch BEFORE priming, so nothing written during the walk is
     // missed; the probe path below is correct for an unprimed file (it emits).
     this.fsWatcher = fs.watch(this.watchPath, { recursive: true }, (_eventType, filename) => {
-      this.onNativeEvent(filename == null ? null : String(filename));
+      if (gen === this.generation) this.onNativeEvent(filename == null ? null : String(filename));
     });
 
     this.fsWatcher.on("error", (err: Error) => {
-      this.emit("error", err);
+      if (gen === this.generation) this.emit("error", err);
     });
 
     // Prime known mtimes so pre-existing files don't flood as "add" on the first
@@ -157,14 +168,16 @@ export class RecursiveWatcher extends EventEmitter {
     // files, and this also runs on every wake-from-sleep restart.
     const existing: WalkFile[] = [];
     this.primed = this.walkTree(gen, false, this.onExisting ? (f) => existing.push(f) : undefined)
-      .then(() => {
+      .then(async () => {
         if (gen !== this.generation) return;
         this.isPrimed = true;
         // Priming IS a walk: pace the first rescan from it.
         this.lastRescanEndedAt = Date.now();
-        this.onExisting?.(existing);
+        await this.onExisting?.(existing);
+        if (gen !== this.generation) return;
         this.emit("ready");
-      });
+        this.requestRescan();
+      }).catch(error => { if (gen === this.generation) this.emit("error", error); });
   }
 
   // One native event. Bun's fs.watch coalesces a same-tick burst of filesystem
@@ -185,6 +198,7 @@ export class RecursiveWatcher extends EventEmitter {
       const full = path.join(this.watchPath, filename);
       const rel = path.relative(this.watchPath, full);
       const depth = rel.split(path.sep).length;
+      if (rel.startsWith("..") || !this.isDirAllowed(path.dirname(rel))) return;
       if (depth <= this.maxDepth && this.filter(rel) && this.isDirAllowed(path.dirname(rel))) {
         this.scheduleProbe(full);
       } else {
@@ -193,8 +207,9 @@ export class RecursiveWatcher extends EventEmitter {
         // of its own, so don't make it wait out the throttle.
         const gen = this.generation;
         fs.promises.stat(full)
-          .then((st) => { if (gen === this.generation && st.isDirectory()) this.requestRescan(true); })
+          .then((st) => { if (gen === this.generation && st.isDirectory() && depth < this.maxDepth && this.isDirAllowed(rel)) this.requestRescan(true); })
           .catch(() => {});
+        return;
       }
     }
     this.requestRescan();
@@ -235,6 +250,7 @@ export class RecursiveWatcher extends EventEmitter {
   // after the previous one ENDED — so a walk that is slow because the disk is
   // busy paces the next one instead of stacking behind it.
   private requestRescan(urgent = false): void {
+    if (!this.isPrimed) return;
     if (this.rescanRunning) {
       this.rescanRequested = true;
       return;
@@ -248,7 +264,8 @@ export class RecursiveWatcher extends EventEmitter {
     }
     this.rescanTimer = setTimeout(() => {
       this.rescanTimer = null;
-      void this.runRescan();
+      const gen = this.generation;
+      void this.runRescan().catch(error => { if (gen === this.generation) this.emit("error", error); });
     }, wait);
   }
 
@@ -260,10 +277,12 @@ export class RecursiveWatcher extends EventEmitter {
       await this.primed;
       if (gen === this.generation) await this.walkTree(gen, true);
     } finally {
-      this.rescanRunning = false;
-      this.lastRescanEndedAt = Date.now();
+      if (gen === this.generation) {
+        this.rescanRunning = false;
+        this.lastRescanEndedAt = Date.now();
+        if (this.fsWatcher) this.requestRescan();
+      }
     }
-    if (this.rescanRequested && gen === this.generation) this.requestRescan();
   }
 
   // Walk the tree, recording each filter-matching file's mtime. With emit=true,
@@ -272,18 +291,18 @@ export class RecursiveWatcher extends EventEmitter {
   private async walkTree(gen: number, emit: boolean, collect?: (f: WalkFile) => void): Promise<void> {
     await walkFiles(
       this.watchPath,
-      { maxDepth: this.maxDepth, dirFilter: this.dirFilter, fileFilter: this.filter },
+      { maxDepth: this.maxDepth, dirFilter: this.dirFilter, fileFilter: this.filter, policy: this.scanPolicy, signal: this.scanController.signal },
       (f) => {
         if (gen !== this.generation) return;
         collect?.(f);
-        this.noteMtime(f.path, f.stat.mtimeMs, emit);
+        this.noteMtime(f.path, f.stat.mtimeMs, emit || this.mode === "native" && f.stat.mtimeMs >= this.primingStartedAt + 1);
       },
     );
   }
 
   private startChokidar(): void {
-    this.isPrimed = true;
-    this.primed = Promise.resolve();
+    const gen = ++this.generation;
+    this.isPrimed = false;
     this.chokidarWatcher = chokidarWatch(this.watchPath, {
       persistent: true,
       ignoreInitial: true,
@@ -298,26 +317,41 @@ export class RecursiveWatcher extends EventEmitter {
     });
 
     this.chokidarWatcher.on("add", (filePath) => {
+      if (gen !== this.generation) return;
       const rel = path.relative(this.watchPath, filePath);
       if (this.filter(rel)) this.callback(filePath, "add");
     });
 
     this.chokidarWatcher.on("change", (filePath) => {
+      if (gen !== this.generation) return;
       const rel = path.relative(this.watchPath, filePath);
       if (this.filter(rel)) this.callback(filePath, "change");
     });
 
     this.chokidarWatcher.on("error", (err: unknown) => {
+      if (gen !== this.generation) return;
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     });
 
-    this.chokidarWatcher.on("ready", () => {
-      this.emit("ready");
+    const ready = new Promise<void>(resolve => {
+      const signal = this.scanController.signal;
+      const done = () => { signal.removeEventListener("abort", done); resolve(); };
+      this.chokidarWatcher!.once("ready", done);
+      signal.addEventListener("abort", done, { once: true });
     });
+    const existing: WalkFile[] = [];
+    this.primed = this.walkTree(gen, false, this.onExisting ? f => existing.push(f) : undefined).then(async () => {
+      await ready;
+      if (gen !== this.generation) return;
+      this.isPrimed = true;
+      await this.onExisting?.(existing);
+      if (gen === this.generation) this.emit("ready");
+    }).catch(error => { if (gen === this.generation) this.emit("error", error); });
   }
 
   stop(): void {
     this.generation++;
+    this.scanController.abort();
     if (this.fsWatcher) {
       this.fsWatcher.close();
       this.fsWatcher = null;
@@ -335,17 +369,20 @@ export class RecursiveWatcher extends EventEmitter {
       this.rescanTimer = null;
     }
     this.rescanRequested = false;
+    this.rescanRunning = false;
+    this.lastRescanEndedAt = 0;
     this.knownMtime.clear();
     this.isPrimed = false;
   }
 
   async restart(): Promise<void> {
     this.stop();
+    const gen = this.generation;
     // Yield before re-opening: bun's native File Watcher thread holds an
     // os_unfair_lock during fs.watch teardown, and a back-to-back close→open
     // on the same path can deadlock the main thread against that worker.
     await new Promise((resolve) => setTimeout(resolve, 250));
-    this.start();
+    if (gen === this.generation) this.start();
   }
 
   get isWatching(): boolean {

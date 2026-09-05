@@ -15,6 +15,9 @@ import {
   parseMessageRefUrl,
   messageRefPayload,
   parseMessageRefPayload,
+  parseRepoObjectId,
+  repoObjectId,
+  parseGitHubLocationUrl,
 } from "./entityLinks";
 
 const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
@@ -351,5 +354,93 @@ describe("entityReferenceLabel", () => {
 
   test("an empty title is not a title", () => {
     expect(entityReferenceLabel({ title: "   ", shortId: "ct-7", rawId: "ct-7" })).toBe("ct-7");
+  });
+});
+
+describe("repository objects: pull requests and commits", () => {
+  const PR = "codecast-sh/codecast#482";
+  const COMMIT = "codecast-sh/codecast@aa57b85ee";
+
+  test("a GitHub pull request or commit URL is the codecast object", () => {
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast/pull/482")).toEqual({ type: "pr", id: PR });
+    // Views of the object (files, a review thread) and display case collapse to the object.
+    expect(parseEntityUrl("https://github.com/Codecast-sh/Codecast/pull/482/files#discussion_r12")).toEqual({ type: "pr", id: PR });
+    expect(parseEntityUrl("https://www.github.com/codecast-sh/codecast.git/pull/482")).toEqual({ type: "pr", id: PR });
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast/commit/aa57b85ee")).toEqual({ type: "commit", id: COMMIT });
+  });
+
+  test("other GitHub URLs are places, not objects", () => {
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast")).toBeNull();
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast/blob/main/README.md")).toBeNull();
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast/pulls")).toBeNull();
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast/issues/12")).toBeNull();
+    expect(parseEntityUrl("https://github.com/codecast-sh/codecast/pull/not-a-number")).toBeNull();
+  });
+
+  test("codecast's own pages for them parse in both families", () => {
+    expect(parseEntityUrl("/pr/codecast-sh/codecast/482")).toEqual({ type: "pr", id: PR });
+    expect(parseEntityUrl("https://codecast.sh/commit/codecast-sh/codecast/aa57b85ee")).toEqual({ type: "commit", id: COMMIT });
+    expect(parseEntityUrl("/r/codecast-sh/codecast/pull/482")).toEqual({ type: "pr", id: PR });
+    expect(parseEntityUrl("/r/codecast-sh/codecast/commit/aa57b85ee")).toEqual({ type: "commit", id: COMMIT });
+    // The repository pages under /r are not objects.
+    expect(parseEntityUrl("/r/codecast-sh/codecast")).toBeNull();
+    expect(parseEntityUrl("/r/codecast-sh/codecast/tree/main")).toBeNull();
+  });
+
+  test("routes and public URLs are built from the reference", () => {
+    expect(entityRoute("pr", PR)).toBe("/pr/codecast-sh/codecast/482");
+    expect(entityRoute("commit", COMMIT)).toBe("/commit/codecast-sh/codecast/aa57b85ee");
+    expect(buildEntityUrl("pr", PR)).toBe("https://codecast.sh/pr/codecast-sh/codecast/482");
+    // A raw Convex id names the row but not its repository: not routable from here.
+    expect(entityRoute("pr", "s97f0jvy02p54v6as7gnfkegrs8aps7a")).toBeNull();
+  });
+
+  test("the text forms carry their type", () => {
+    expect(entityTypeFromId(PR)).toBe("pr");
+    expect(entityTypeFromId("Codecast-sh/codecast#7")).toBe("pr");
+    expect(entityTypeFromId(COMMIT)).toBe("commit");
+    expect(isEntityId(PR)).toBe(true);
+    expect(isEntityId(COMMIT)).toBe(true);
+    expect(parseRepoObjectId("Codecast-sh/codecast#7")).toEqual({ type: "pr", repository: "codecast-sh/codecast", number: 7 });
+    expect(parseRepoObjectId("a/b@ABCDEF1")).toEqual({ type: "commit", repository: "a/b", sha: "abcdef1" });
+    expect(repoObjectId({ type: "commit", repository: "A/B", sha: "ABCDEF1" })).toBe("a/b@abcdef1");
+  });
+
+  test("near misses stay text: file paths with a line, version pins, short shas", () => {
+    expect(isEntityId("src/foo.ts:12")).toBe(false);
+    expect(isEntityId("@scope/pkg@1.2.3")).toBe(false);
+    expect(isEntityId("a/b@12345")).toBe(false); // fewer than 7 hex chars
+    expect(isEntityId("#482")).toBe(false); // no repository
+    expect(parseRepoObjectId("a/b#")).toBeNull();
+  });
+
+  test("the prose scanner finds them beside the other ids", () => {
+    const text = "merged codecast-sh/codecast#482 (ct-9) as foo/bar@deadbeef1; npm i @scope/pkg@1.2.3";
+    expect(text.match(bareEntityIdRegex())).toEqual(["codecast-sh/codecast#482", "ct-9", "foo/bar@deadbeef1"]);
+    const mention = entityMentionRegex().exec("@[Fix the auth race codecast-sh/codecast#482]");
+    expect(mention?.[1]).toBe("Fix the auth race");
+    expect(mention?.[2]).toBe("codecast-sh/codecast#482");
+  });
+});
+
+describe("parseGitHubLocationUrl", () => {
+  test("repository, tree, blob with a line range, commits, compare, lists", () => {
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast")).toEqual({ repository: "codecast-sh/codecast", kind: "repo" });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/tree/main/packages/web")).toEqual({ repository: "codecast-sh/codecast", kind: "tree", ref: "main", path: "packages/web" });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/blob/main/packages/web/x.ts#L10-L20")).toEqual({ repository: "codecast-sh/codecast", kind: "blob", ref: "main", path: "packages/web/x.ts", line: 10, endLine: 20 });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/blob/aa57b85ee/README.md#L3")).toEqual({ repository: "codecast-sh/codecast", kind: "blob", ref: "aa57b85ee", path: "README.md", line: 3 });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/commits/main")).toEqual({ repository: "codecast-sh/codecast", kind: "commits", ref: "main" });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/compare/main...feat/x")).toEqual({ repository: "codecast-sh/codecast", kind: "compare", base: "main", head: "feat/x" });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/pulls")).toEqual({ repository: "codecast-sh/codecast", kind: "pulls" });
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/tags")).toEqual({ repository: "codecast-sh/codecast", kind: "tags" });
+  });
+
+  test("objects, foreign hosts and non-repository pages are null", () => {
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/pull/1")).toBeNull();
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/commit/aa57b85ee")).toBeNull();
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh")).toBeNull();
+    expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/issues/4")).toBeNull();
+    expect(parseGitHubLocationUrl("https://gitlab.com/codecast-sh/codecast/tree/main")).toBeNull();
+    expect(parseGitHubLocationUrl("/repo/codecast-sh/codecast")).toBeNull();
   });
 });

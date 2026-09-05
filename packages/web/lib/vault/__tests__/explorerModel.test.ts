@@ -191,3 +191,37 @@ describe("renameMoves", () => {
     expect(renameMoves(paths, "other.md", "misc.md")).toEqual([["other.md", "misc.md"]]);
   });
 });
+
+describe("ignored entries (show ignored files)", () => {
+  // The daemon flags what the repo rules hide when asked to list it; the tree
+  // must carry that through without letting it count as notes.
+  const files: Record<string, VaultFileEntry> = {
+    docs: { path: "docs", mtime: 1, size: 0, dir: true },
+    "docs/guide.md": { path: "docs/guide.md", mtime: 2, size: 5 },
+    dist: { path: "dist", mtime: 3, size: 0, dir: true, ignored: true },
+    "dist/bundle.md": { path: "dist/bundle.md", mtime: 4, size: 9, ignored: true },
+    "dist/app.js": { path: "dist/app.js", mtime: 5, size: 9, ignored: true },
+  };
+
+  test("the flag travels onto the node, folders included", () => {
+    const root = buildVaultTree(files);
+    const dist = root.children.find((n) => n.path === "dist");
+    const docs = root.children.find((n) => n.path === "docs");
+    expect(dist?.ignored).toBe(true);
+    expect(dist?.children.every((c) => c.ignored)).toBe(true);
+    expect(docs?.ignored).toBeUndefined();
+    expect(docs?.children[0]?.ignored).toBeUndefined();
+  });
+
+  test("an ignored .md is not a note in the folder counts", () => {
+    const root = buildVaultTree(files);
+    expect(root.children.find((n) => n.path === "docs")?.noteCount).toBe(1);
+    expect(root.children.find((n) => n.path === "dist")?.noteCount).toBe(0);
+    expect(root.noteCount).toBe(1);
+  });
+
+  test("notes-only view still lists an ignored note when the scan supplied it", () => {
+    const visible = visibleVaultFiles(files, false);
+    expect(Object.keys(visible).sort()).toEqual(["dist", "dist/bundle.md", "docs", "docs/guide.md"]);
+  });
+});

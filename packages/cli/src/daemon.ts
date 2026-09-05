@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+import { VersionedObservationSet } from "./versionedObservationSet.js";
+import { PendingDeliveryHeldError, requirePendingDeliveryAdmission } from "./pendingDeliveryAdmission.js";
+import { isCodexSafetyError } from "@codecast/shared/contracts";
+import { codexTurnErrorMessage } from "./codexTurnError.js";
+import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
+import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
+import { ingestRetainedWeight } from "./workers/ingestTransport.js";
+import { ingestMessageTitle, ingestRecord, ingestSource } from "./workers/ingestClient.js";
+import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
+export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
+import { validateTranscriptIngest, readTranscriptIngest, serializeTranscript, computeIngestSyncDelta, ingestIdentity, sameIngestFile, sameIngestSnapshot } from "./workers/ingestClient.js";
+import { readCompleteLines, readCompleteLinesSync, readIngestWindow, cursorPassBoundary } from "./transcriptWindow.js";
+export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type PassBoundary, type ReadWindowOpts } from "./transcriptWindow.js";
+import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.js";
+import { countTrackedFleet, type FleetCounts } from "./fleetCounts.js";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
@@ -7,13 +23,14 @@ import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
-import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { AccountLifecycleGate } from "./accountLifecycleGate.js";
+import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
+import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
   HIBERNATE_MAX_PER_PASS,
-  HIBERNATE_SUBAGENT_QUIET_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -21,7 +38,7 @@ import {
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { walkFiles, walkDirs, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
+import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
@@ -31,10 +48,12 @@ import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
 import { hostForDevice, listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
+import { hasActiveCloudWork } from "./cloud/activity.js";
 import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
+import { answerLocalRead, buildRepoMirror, refsFingerprint, type LocalReadRequest } from "./repoMirror.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
   useProfile,
@@ -99,6 +118,7 @@ import {
   threadForkTimeoutMsForBytes,
   threadItemsToMessages,
   type ApprovalPolicy,
+  type SandboxPolicy,
   type ApprovalRequest,
   type ThreadItem,
 } from "./codexAppServer.js";
@@ -153,6 +173,12 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
+import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
+import { collectScan, visitScan, scanCanFallback, ScanCancelled, yieldScanBatch } from "./workers/scanClient.js";
+import { recentScan } from "./workers/scanJobs.js";
+import type { ScanJob, ScanRow } from "./workers/scanTypes.js";
+import { SUSPEND_GAP_MIN_MS, clocksDisagree, sawSuspend } from "./suspendClock.js";
+export { SUSPEND_GAP_MIN_MS, clocksDisagree, sawSuspend } from "./suspendClock.js";
 import {
   PASTE_END,
   PASTE_START,
@@ -178,10 +204,11 @@ import { HookStatusGate } from "./hookStatusGate.js";
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
+import { handleFsBrowseHttp } from "./fs/browseHttp.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
-import { enumerateProjectRoots, enumerateAgentHomeDirs, MAX_PROJECT_ROOTS, PROJECT_PARENT_DIRS, AGENT_HOME_DIRS } from "./projectRoots.js";
+import { enumerateProjectRoots, enumerateAgentHomeDirs, enumerateLocalRootsAsync, MAX_PROJECT_ROOTS, PROJECT_PARENT_DIRS, AGENT_HOME_DIRS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -193,6 +220,12 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   resumeModelFlagFromFile,
   resumeEffortFlagFromFile,
+  type ExportResult,
+  generateGrokSession,
+  writeGrokSession,
+  generatePiSession,
+  piSessionFilePath,
+  renderConversationHandoff,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
@@ -212,12 +245,13 @@ import {
   resumeTmuxName,
   rewriteSubagentJsonlToUuid,
   upgradedLegacyResumeTmuxName,
+  grokStableRulesFragment,
 } from "./resumeCommand.js";
-import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, launchBinary } from "./launchCommand.js";
+import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -368,6 +402,18 @@ async function resolveResumeCwdOrRefuse(opts: {
         }
       : undefined,
   });
+}
+
+// Where a transcript regenerated from Convex should say it ran. Explicit
+// override first, then the conversation's recorded project path; never the
+// daemon's own cwd (see generatedSessionCwd) and never the filesystem root.
+// Null means "refuse to regenerate": a rollout with no honest cwd is one the
+// resume path would only refuse anyway, after overwriting the real file.
+function regenerationCwd(data: ExportResult, cwdOverride?: string): string | null {
+  for (const candidate of [cwdOverride, data.conversation.project_path]) {
+    if (isResumableCwd(candidate) && fs.existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 // "Clone it first" is only an actionable banner when there is a git remote to
@@ -694,7 +740,7 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
 // both answer with this floor: the tick monitor below, and the freeze probe's
 // CPU rule (isSuspendGap). Tuning it in one place used to leave the two
 // watchers disagreeing about the same window. Exported for tests.
-export const SUSPEND_GAP_MIN_MS = 30_000;
+
 
 // The one rule both loop watchers use to answer "did the machine sleep during
 // this window". The wall clock runs through a suspend and the monotonic clock
@@ -704,9 +750,7 @@ export const SUSPEND_GAP_MIN_MS = 30_000;
 // under it, while the freeze probe sees 100ms ticks and asks instead whether
 // the sleep was a large FRACTION of the gap. One name, two bars, so the next
 // reader cannot pick whichever rule they find first.
-export function clocksDisagree(wallMs: number, monoMs: number, minGapMs: number): boolean {
-  return wallMs - monoMs >= minGapMs;
-}
+
 
 // "Did the machine sleep in this window" — a different question from
 // classifyTickGap's "was the loop pinned in it", and one window can answer yes
@@ -715,9 +759,7 @@ export function clocksDisagree(wallMs: number, monoMs: number, minGapMs: number)
 // backend outage clock) is owed to the sleep whatever the loop did around it:
 // the FSEvents stream can go silent across a suspend without erroring, and a
 // stall verdict on the same window must not swallow that recovery.
-export function sawSuspend(wallMs: number, monoMs: number): boolean {
-  return clocksDisagree(wallMs, monoMs, SUSPEND_GAP_MIN_MS);
-}
+
 
 // A long gap between timer ticks has two very different causes: the MACHINE slept
 // (the process consumed ~no CPU during the gap) or the EVENT LOOP was pinned by
@@ -875,6 +917,8 @@ const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
 // in the right working directory even when the repo lives off the convention paths.
 const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
+// sessionId -> repair key (see projectPathRepairKey) the server last confirmed.
+const PROJECT_PATH_REPAIRS_FILE = path.join(CONFIG_DIR, "project-path-repairs.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
 
@@ -930,13 +974,14 @@ export function buildBlankLaunchArgs(
   return [];
 }
 
-function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
-  const flags = getPermissionFlags("codex", config);
-  const codexArgs = getAgentArgs(config, "codex") || "";
-  if (flags?.includes("--dangerously-bypass") || codexArgs.includes("--dangerously-bypass") || flags?.includes("--full-auto") || codexArgs.includes("--full-auto")) {
-    return "never";
-  }
-  return "on-request";
+function resolveCodexPermissionDefaults(config?: Config | null) {
+  const { binaryArgs } = buildLaunchArgs({
+    agentType: "codex",
+    configuredArgs: getAgentArgs(config, "codex") || "",
+    permFlags: getPermissionFlags("codex", config),
+    defaultFlags: null,
+  });
+  return codexPermissionsFromArgs(binaryArgs);
 }
 
 interface ConversationCache {
@@ -955,6 +1000,10 @@ interface PendingMessages {
     timestamp: number;
     filePath: string;
     fileSize: number;
+    ingestKey?: string;
+    ingestSignature?: string;
+    ingestIdentity?: string;
+    ingestClient?: string;
     thinking?: string;
     toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
@@ -982,6 +1031,7 @@ interface DaemonState {
   // Loop freeze budget, written by the 30s monitor tick so `cast health` can
   // print it without asking the daemon.
   loopFreeze?: LoopFreezeState;
+  fleetCounts?: FleetCounts;
   // macOS App Data (TCC) outcome for Cursor's data dir, recorded so later
   // logins can start the watcher without re-touching an undecided TCC state
   // (see cursorWatcherDecision) and doctor can explain a denial.
@@ -1374,15 +1424,20 @@ export function collectPastedInjectedIds(conversationId: string): string[] {
   return ids;
 }
 
+// Forgets what THIS process has already pasted for a conversation so re-pended
+// rows can land again after the pane was replaced. It does NOT touch a delivery
+// that is still running: an in-flight entry belongs to a delivery that will
+// paste into whichever pane the (shared, in-flight) resume produces and then
+// clears its own entry in `finally` — or is reclaimed by IN_FLIGHT_HARD_TTL_MS
+// if it hangs. Dropping it here let the poller start a second delivery of the
+// same row while the first was mid-paste, so a fork's seed prompt landed twice
+// (2026-09-05, grok rebuild path). `inFlight` is reported for the log only.
 export function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number; preserved: number } {
   let inFlight = 0;
   let dedup = 0;
   let preserved = 0;
-  for (const [id, entry] of messagesInFlight) {
-    if (entry.conversationId === conversationId) {
-      messagesInFlight.delete(id);
-      inFlight++;
-    }
+  for (const entry of messagesInFlight.values()) {
+    if (entry.conversationId === conversationId) inFlight++;
   }
   for (const [id, entry] of injectedMessageTs) {
     if (entry.conversationId === conversationId) {
@@ -1400,7 +1455,7 @@ export function clearMessageDeliveryStateForConversation(conversationId: string)
       dedup++;
     }
   }
-  conversationDeliveryActive.delete(conversationId);
+  // The per-conversation lock is released by the running delivery's `finally`.
   return { inFlight, dedup, preserved };
 }
 
@@ -1430,7 +1485,7 @@ async function clearConversationDeliveryAndResumeState(
 
   const cleared = clearMessageDeliveryStateForConversation(conversationId);
   if (cleared.inFlight || cleared.dedup || cleared.preserved) {
-    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.inFlight} in-flight, ${cleared.dedup} dedup, ${cleared.preserved} unconfirmed-injected preserved`);
+    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.dedup} dedup, ${cleared.preserved} unconfirmed-injected preserved, ${cleared.inFlight} in-flight left to finish`);
   }
   recentSessionInjections.delete(conversationId);
 }
@@ -1469,17 +1524,32 @@ export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThre
 type InvocableSkill = { name: string; description: string };
 const SKILLS_SCAN_TTL_MS = 5 * 60_000;
 const skillsScanMemo = new Map<string, { at: number; value: Promise<InvocableSkill[]> }>();
+const skillsScanGood = new Map<string, InvocableSkill[]>();
+let skillsScanGeneration = 0;
 export function readAvailableSkills(projectPath?: string): Promise<InvocableSkill[]> {
-  const key = projectPath ?? "";
+  const home = process.env.HOME || "";
+  const key = `${home}\0${projectPath ?? ""}`;
   const memo = skillsScanMemo.get(key);
-  if (memo && Date.now() - memo.at < SKILLS_SCAN_TTL_MS) return memo.value;
-  const value = readInventoryAsync(process.env.HOME || "", projectPath).then(toInvocableList);
-  skillsScanMemo.set(key, { at: Date.now(), value });
-  value.catch(() => skillsScanMemo.delete(key));
-  return value;
+  if (memo && Date.now() - memo.at < SKILLS_SCAN_TTL_MS) return skillsScanGood.has(key) ? Promise.resolve(skillsScanGood.get(key)!) : memo.value;
+  const generation = skillsScanGeneration;
+  const value = readInventoryAsync(home, projectPath).then(inventory => {
+    if (generation !== skillsScanGeneration) throw new ScanCancelled("skills scan reset");
+    if (inventory.unreadable.length) throw new Error("skills inventory unavailable");
+    const skills = toInvocableList(inventory);
+    skillsScanGood.set(key, skills);
+    return skills;
+  });
+  const entry = { at: Date.now(), value };
+  skillsScanMemo.set(key, entry);
+  void value.catch(() => { if (skillsScanMemo.get(key) === entry) skillsScanMemo.delete(key); });
+  const good = skillsScanGood.get(key);
+  return good ? Promise.resolve(good) : value;
 }
+
 export function resetSkillsScanMemoForTests(): void {
+  skillsScanGeneration++;
   skillsScanMemo.clear();
+  skillsScanGood.clear();
 }
 
 function syncSkillsForConversation(conversationId: string, projectPath: string | undefined, syncService: SyncService): void {
@@ -1524,7 +1594,10 @@ function sendAgentStatus(
   // brings it back.
   opts?: { hibernatedAt?: number | null },
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   const prevStatus = lastSentAgentStatus.get(sessionId);
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking && prevStatus !== status) parking.cancel();
   const isTransition = prevStatus !== status;
   // The throttle drops redundant "working" re-sends. A write carrying a park
   // stamp is never redundant: dropping it would leave hibernated_at set on a
@@ -1550,11 +1623,16 @@ function sendAgentStatus(
   const openTasks = pendingOpenTaskReports.get(sessionId);
   pendingOpenTaskReports.delete(sessionId);
   const withTasks = openTasks !== undefined && SETTLE_STATUSES_WITH_TASKS.has(status);
-  if (withTasks) {
-    lastOpenTasksSentAt.set(sessionId, Date.now());
-    lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
-  }
-  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+  const payload: PendingStatusPayload = { conversationId, status, permissionMode, openTasks: withTasks ? openTasks : undefined };
+  void serializeSessionStatus(sessionId, async () => {
+    if (status === "hibernated" && !hibernatedSessions.has(sessionId)) return false;
+    const acknowledged = await syncService.updateSessionAgentStatus(conversationId, status, clientTs, payload.permissionMode, payload.openTasks, presumed, opts?.hibernatedAt);
+    if (acknowledged && payload.openTasks !== undefined) {
+      lastOpenTasksSentAt.set(sessionId, Date.now());
+      lastOpenTasksSentJson.set(sessionId, JSON.stringify(payload.openTasks));
+    }
+    return acknowledged;
+  }, "status", payload);
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
@@ -1727,6 +1805,7 @@ function startHookServer(): http.Server {
     if (handleTerminalHttp(req, res, terminalServerOptions())) return;
     if (handleVaultHttp(req, res, vaultServerOptions())) return;
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
+    if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
 
     res.writeHead(404);
     res.end();
@@ -1871,7 +1950,7 @@ export async function extractPendingToolUseFromTranscriptAsync(transcriptPath: s
 }
 
 const permissionRecordPending = new Set<string>();
-const permissionJustResolved = new Set<string>();
+const permissionJustResolved = new VersionedObservationSet<string>();
 // One-shot cleanup tracking: when a session is first observed in
 // bypassPermissions mode (post-daemon-restart or post-upgrade), sweep any
 // stale pending_permissions records left over from before the phantom-suppression
@@ -2492,11 +2571,42 @@ const localProjectRootsCache = createMtimeGatedCache<string[]>(
   computeLocalProjectRootsNow,
   { ttlMs: 5 * 60_000 },
 );
+let localRootsSnapshot: { home: string; data: string[]; at: number } | null = null;
+let localRootsGeneration = 0;
+let localRootsRefresh: { home: string; promise: Promise<void> } | null = null;
+export function refreshLocalProjectRoots(): Promise<void> {
+  const home = process.env.HOME || "";
+  if (localRootsRefresh?.home === home) return localRootsRefresh.promise;
+  const generation = ++localRootsGeneration;
+  const started = [...new Set([...startedSessionTmux.values()].map(s => s.projectPath).filter((p): p is string => !!p))].slice(0, MAX_PROJECT_ROOTS);
+  const promise = (async () => {
+    let roots: string[];
+    if (daemonWorkersEnabled()) {
+      try {
+        const rows = await collectScan({ name: "roots", home, started });
+        roots = rows.map(r => { if (r.type !== "root") throw new Error("invalid root observation"); return r.path; });
+      } catch (error) { if (!scanCanFallback(error)) throw error; roots = await enumerateLocalRootsAsync(home, started); }
+    } else roots = await enumerateLocalRootsAsync(home, started);
+    if (generation === localRootsGeneration && home === (process.env.HOME || "")) localRootsSnapshot = { home, data: roots, at: Date.now() };
+  })().catch(() => {}).finally(() => { if (localRootsRefresh?.promise === promise) localRootsRefresh = null; });
+  localRootsRefresh = { home, promise };
+  return promise;
+}
 export function computeLocalProjectRoots(): string[] {
-  return localProjectRootsCache.get();
+  if (!daemonWorkersEnabled()) return localProjectRootsCache.get();
+  const home = process.env.HOME || "";
+  if (!localRootsSnapshot || localRootsSnapshot.home !== home || Date.now() - localRootsSnapshot.at > 30_000) void refreshLocalProjectRoots();
+  return localRootsSnapshot?.home === home ? localRootsSnapshot.data : [];
+}
+function projectRootsHeartbeatFields(): { local_project_roots?: string[] } {
+  const roots = computeLocalProjectRoots();
+  return !daemonWorkersEnabled() || localRootsSnapshot?.home === (process.env.HOME || "") ? { local_project_roots: roots } : {};
 }
 export function invalidateLocalProjectRoots(): void {
   localProjectRootsCache.invalidate();
+  localRootsGeneration++;
+  localRootsRefresh = null;
+  if (localRootsSnapshot) localRootsSnapshot.at = 0;
 }
 
 // Sync-backlog fields published on every heartbeat so the web can show a
@@ -3332,6 +3442,7 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -3367,7 +3478,7 @@ async function sendHeartbeat(): Promise<void> {
         pid: process.pid,
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
-        local_project_roots: computeLocalProjectRoots(),
+        ...projectRootsHeartbeatFields(),
         // Per-repo git health (origin real? fetch ok? ahead/behind) — see gitPlane.ts.
         git_plane: gitPlaneHeartbeatPayload(),
         // The device's PUBLIC git key (gitIdentity.ts) — not a secret; the web
@@ -3822,7 +3933,8 @@ export async function killLocalPanesForConversation(
 // account credential. Extracted verbatim from the kill_session command body.
 async function killConversationBackends(
   conversationId: string,
-  sessionIdHint?: string
+  sessionIdHint?: string,
+  retireWorkspace = false,
 ): Promise<{ result?: string; error?: string }> {
   let result: string | undefined;
   let error: string | undefined;
@@ -3832,7 +3944,8 @@ async function killConversationBackends(
   // Released at the end when it is a codecast worktree holding no work
   // (worktreeGc.ts) — killing a session is the one moment a worktree stops
   // being anybody's.
-  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath;
+  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath
+    ?? persistedAppServerThreads.get(conversationId)?.cwd;
 
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
@@ -3846,7 +3959,7 @@ async function killConversationBackends(
       sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
     }
     log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
-    return { result: "killed_app_server" };
+    result = "killed_app_server";
   }
   if (teardown.killedTmux) {
     result = "killed_tmux";
@@ -3884,7 +3997,7 @@ async function killConversationBackends(
   // already-dead tree, and the guard is what makes killing a child alone safe. The
   // parent's own kill is unaffected: it owns its process, so it takes the branch
   // below and tears its tree down normally.
-  const teardownPlan = planSessionTeardown(sessionId ? sessionProcessOwnership(sessionId) : "owned");
+  const teardownPlan = planSessionTeardown(sessionId ? await acquireSessionProcessOwnership(sessionId) : "unknown");
   if (sessionId && !result && !teardownPlan.reapPidTree) {
     log(`[REMOTE] Skipping process teardown for ${shortId(sessionId)}: does not own its process (conversation ${conversationId.slice(0, 12)})`);
   } else if (sessionId && !result) {
@@ -3946,7 +4059,12 @@ async function killConversationBackends(
   // injected message.
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
-  if (gcCwd) void releaseSessionWorktree(gcCwd, log).catch((err) => log(`[WORKTREE-GC] ${String(err).slice(0, 160)}`));
+  if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree) && !error) {
+    const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
+      ? syncServiceRef.isWorktreeShared(conversationId, p)
+      : Promise.reject(new Error("No session roster")));
+    log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
+  }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
   return { result, error };
@@ -3967,7 +4085,7 @@ async function killConversationBackendsForAgentSwitch(
       : undefined;
 
   if (sessionId) {
-    const plan = planSessionTeardown(sessionProcessOwnership(sessionId));
+    const plan = planSessionTeardown(await acquireSessionProcessOwnership(sessionId));
     const cachedTmux = resumeSessionCache.get(sessionId);
     if (cachedTmux && cachedTmux !== startedTmux && validateTmuxTarget(cachedTmux) && plan.killCachedResumeTmux) {
       await killTmuxSessionAndTree(cachedTmux);
@@ -4579,16 +4697,27 @@ async function executeRemoteCommand(
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
         // plain argv, which works here because envPrefix starts with `env`.
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        if (agentType === "grok") {
+          // The feed rides `--rules` (grok has no hook channel for context); the
+          // fragment is a shell substitution, so it is appended to the typed
+          // command after the argv allowlist, never passed through it.
+          try {
+            const rulesFile = await writeGrokStableRulesFile(config, cwd, stablePrefs, conversationId || `launch-${Date.now()}`, conversationId);
+            cmdText += grokStableRulesFragment(rulesFile);
+          } catch (err) {
+            log(`grok stable rules skipped: ${err instanceof Error ? err.message : String(err)}`, "warn");
+          }
+        }
 
         let codexThreadId: string | null = null;
-        const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
-        const codexApprovalPolicy: ApprovalPolicy = codexSkipApprovals ? "never" : "on-request";
+        const codexPermissions = codexPermissionsFromArgs(binaryArgs);
+        const codexApprovalPolicy = codexPermissions.approvalPolicy;
         const activeCodexAppServer = codexAppServerInstance?.running
           ? codexAppServerInstance
           : null;
         if (agentType === "codex" && activeCodexAppServer) {
           try {
-            const sandbox = codexSkipApprovals ? "danger-full-access" as const : "workspace-write" as const;
+            const sandbox = codexPermissions.sandbox;
             const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
             const resp = await startCodexThreadThenRecordStableContext(
               () => activeCodexAppServer.threadStart({
@@ -4629,7 +4758,7 @@ async function executeRemoteCommand(
           log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
-            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy, sandbox: codexPermissions.sandbox, persist: true });
             // This device now owns and runs the session — claim it and clear any
             // stale "clone it first" error a different device may have left.
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
@@ -4724,15 +4853,15 @@ async function executeRemoteCommand(
           break;
         }
 
-        const escapeThreadId = appServerConversations.get(conversationId);
-        if (escapeThreadId && codexAppServerInstance?.running) {
+        const escapeThreadId = appServerConversations.get(conversationId) ?? persistedAppServerThreads.get(conversationId)?.threadId;
+        if (escapeThreadId) {
           const activeTurnId = findActiveTurnForThread(escapeThreadId);
           const persisted = persistedAppServerThreads.get(conversationId);
           if (persisted?.activeTurnId) {
             persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
             persistAppServerThreadRegistrations();
           }
-          if (activeTurnId) {
+          if (activeTurnId && codexAppServerInstance?.running) {
             await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
             result = "escape_interrupted";
             log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
@@ -4975,7 +5104,7 @@ async function executeRemoteCommand(
         const sessionIdHint = typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined;
         const killed = pendingAgentSwitches.has(conversationId)
           ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
-          : await killConversationBackends(conversationId, sessionIdHint);
+          : await killConversationBackends(conversationId, sessionIdHint, true);
         result = killed.result;
         error = killed.error;
         break;
@@ -5088,80 +5217,85 @@ async function executeRemoteCommand(
           break;
         }
 
-        let switched: string | null = null;
-        if (profile) {
-          try {
-            const switchResult = useProfile(profile);
-            switched = switchResult.to;
-            log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
-            // Remotes run on a pushed COPY of this credential — refresh them now
-            // instead of waiting for the 30-min loop.
-            pushCredentialToRemoteHosts("account_switch").catch(() => {});
-            // Surface the new active account in Settings without waiting a beat.
-            sendHeartbeat().catch(() => {});
-            // Probe the new account's meters now, not at the next 5-minute
-            // tick: the server's auto-switch loop holds off judging this
-            // account until a snapshot fetched after the switch lands.
-            maintainCcUsageSnapshots("account_switch")
-              .then(() => sendHeartbeat())
-              .catch(() => {});
-          } catch (err) {
-            // Don't tear anything down if the swap itself failed.
-            error = `Account switch failed: ${err instanceof Error ? err.message : String(err)}`;
-            break;
-          }
-        }
-
-        let killed = 0;
-        let continued = 0;
-        for (const convId of conversationIds) {
-          try {
-            const out = await killConversationBackends(convId, sessionIds[convId]);
-            if (out.result && out.result !== "no_process" && out.result !== "no_session") killed++;
-          } catch (err) {
-            log(`[ACCOUNTS] Teardown failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-        if (sendContinue && syncServiceRef) {
-          // Paced, not fired at once: each continue resumes a process whose
-          // first request carries the whole context, and twenty of those in
-          // the same half-minute trip the provider's per-minute cap — the
-          // fleet then parks on a 429 the CLI renders as a limit, and the
-          // loop rotates to the next account to do it again (2026-09-04).
-          // The spacing keeps the revive under the cap; the enqueue runs on
-          // after the command reports so the ack isn't held for minutes.
-          const sync = syncServiceRef;
-          const enqueueContinue = async (convId: string) => {
+        const releaseAccountSwitch = await accountLifecycleGate.acquireSwitch();
+        try {
+          let switched: string | null = null;
+          if (profile) {
             try {
-              // client_id keyed by command id: re-running the command can't
-              // double-queue, but a deliberate second switch still can.
-              await sync.enqueueUserMessage(
-                convId,
-                "continue",
-                continueClientIds[convId] || `acct-switch-${commandId}-${convId}`,
-              );
-              return true;
+              const switchResult = useProfile(profile);
+              switched = switchResult.to;
+              log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
+              // Remotes run on a pushed COPY of this credential — refresh them now
+              // instead of waiting for the 30-min loop.
+              pushCredentialToRemoteHosts("account_switch").catch(() => {});
+              // Surface the new active account in Settings without waiting a beat.
+              sendHeartbeat().catch(() => {});
+              // Probe the new account's meters now, not at the next 5-minute
+              // tick: the server's auto-switch loop holds off judging this
+              // account until a snapshot fetched after the switch lands.
+              maintainCcUsageSnapshots("account_switch")
+                .then(() => sendHeartbeat())
+                .catch(() => {});
             } catch (err) {
-              log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
-              return false;
+              // Don't tear anything down if the swap itself failed.
+              error = `Account switch failed: ${err instanceof Error ? err.message : String(err)}`;
+              break;
             }
-          };
-          const [first, ...rest] = conversationIds;
-          if (first && (await enqueueContinue(first))) continued++;
-          if (rest.length > 0) {
-            continued += rest.length;
-            void (async () => {
-              let sent = 0;
-              for (const convId of rest) {
-                await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
-                if (await enqueueContinue(convId)) sent++;
-              }
-              log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
-            })();
           }
+
+          let killed = 0;
+          let continued = 0;
+          for (const convId of conversationIds) {
+            try {
+              const out = await killConversationBackends(convId, sessionIds[convId]);
+              if (out.result && out.result !== "no_process" && out.result !== "no_session") killed++;
+            } catch (err) {
+              log(`[ACCOUNTS] Teardown failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          if (sendContinue && syncServiceRef) {
+            // Paced, not fired at once: each continue resumes a process whose
+            // first request carries the whole context, and twenty of those in
+            // the same half-minute trip the provider's per-minute cap — the
+            // fleet then parks on a 429 the CLI renders as a limit, and the
+            // loop rotates to the next account to do it again (2026-09-04).
+            // The spacing keeps the revive under the cap; the enqueue runs on
+            // after the command reports so the ack isn't held for minutes.
+            const sync = syncServiceRef;
+            const enqueueContinue = async (convId: string) => {
+              try {
+                // client_id keyed by command id: re-running the command can't
+                // double-queue, but a deliberate second switch still can.
+                await sync.enqueueUserMessage(
+                  convId,
+                  "continue",
+                  continueClientIds[convId] || `acct-switch-${commandId}-${convId}`,
+                );
+                return true;
+              } catch (err) {
+                log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+                return false;
+              }
+            };
+            const [first, ...rest] = conversationIds;
+            if (first && (await enqueueContinue(first))) continued++;
+            if (rest.length > 0) {
+              continued += rest.length;
+              void (async () => {
+                let sent = 0;
+                for (const convId of rest) {
+                  await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
+                  if (await enqueueContinue(convId)) sent++;
+                }
+                log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
+              })();
+            }
+          }
+          result = JSON.stringify({ switched, killed, continued });
+          log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}${conversationIds.length > 1 ? ` (paced ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart)` : ""}`);
+        } finally {
+          releaseAccountSwitch();
         }
-        result = JSON.stringify({ switched, killed, continued });
-        log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}${conversationIds.length > 1 ? ` (paced ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart)` : ""}`);
         break;
       }
       // Web sign-in CTA: run the browser OAuth flow via `claude auth login` and
@@ -5278,9 +5412,27 @@ async function executeRemoteCommand(
                 const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
                 if (exportData.messages.length > 0) {
                   const tailMessages = chooseClaudeAutoTrim(exportData);
-                  const { jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
-                  const { filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd);
-                  setPosition(reconFilePath, fs.statSync(reconFilePath).size);
+                  let newSessionId: string;
+                  let reconFilePath: string;
+                  if (targetAgent === "grok") {
+                    const files = generateGrokSession(exportData, { tailMessages, cwd });
+                    ({ sessionId: newSessionId, filePath: reconFilePath } = writeGrokSession(files));
+                  } else if (targetAgent === "pi") {
+                    const pi = generatePiSession(exportData, { tailMessages, cwd });
+                    newSessionId = pi.sessionId;
+                    reconFilePath = piSessionFilePath(pi.cwd, pi.sessionId);
+                    await writeRebuiltDeltaTranscript("pi", pi.jsonl, reconFilePath, pi.sessionId);
+                  } else if (targetAgent === "opencode") {
+                    const sesId = await rebuildOpencodeSession(exportData, cwd);
+                    if (!sesId) throw new Error("opencode serve sidecar unavailable");
+                    newSessionId = sesId;
+                    reconFilePath = "";
+                  } else {
+                    let reconJsonl: string;
+                    ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, cwd }));
+                    ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
+                  }
+                  if (reconFilePath) setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                   remapConversationSession(sessionId, newSessionId, conversationId);
                   void pushSessionIdBinding(conversationId, newSessionId, cwd);
                   const resumed = await autoResumeSession(
@@ -5442,6 +5594,8 @@ async function executeRemoteCommand(
           }
         }
         if (resumeAgentType === "codex" && (parsed.fork === true || forceReconstitute) && conversationId) {
+          let forkTimeoutMs = 0;
+          let forkFailed = false;
           try {
             const activeCodexAppServer = codexAppServerInstance?.running ? codexAppServerInstance : null;
             if (!activeCodexAppServer) {
@@ -5455,14 +5609,14 @@ async function executeRemoteCommand(
               result = JSON.stringify({ forked: false, reason: "no_local_checkout" });
               break;
             }
-            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId });
+            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId, cwd });
             const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
             const importBytes = fs.statSync(importPath).size;
             setPosition(importPath, importBytes);
-            const approvalPolicy = resolveCodexApprovalPolicy(config);
+            const { approvalPolicy, sandbox } = resolveCodexPermissionDefaults(config);
             pendingAppServerForkParents.add(importSessionId);
             pendingForkParentId = importSessionId;
-            const forkTimeoutMs = threadForkTimeoutMsForBytes(importBytes);
+            forkTimeoutMs = threadForkTimeoutMsForBytes(importBytes);
             if (forkTimeoutMs > 60_000) {
               log(`[REMOTE] Codex history import is ${Math.ceil(importBytes / (1024 * 1024))} MiB; allowing ${Math.round(forkTimeoutMs / 1000)}s for thread/fork`);
             }
@@ -5477,7 +5631,7 @@ async function executeRemoteCommand(
                 ? { config: { model_reasoning_effort: resumeOptions.effort } }
                 : {}),
               approvalPolicy,
-              sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
+              sandbox,
             }, forkTimeoutMs);
             const realThreadId = forked.thread.id;
             remapConversationSession(sessionId, realThreadId, conversationId);
@@ -5485,6 +5639,7 @@ async function executeRemoteCommand(
               cwd,
               persist: true,
               approvalPolicy,
+              sandbox,
             });
             if (forked.thread.path && fs.existsSync(forked.thread.path)) {
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
@@ -5513,11 +5668,71 @@ async function executeRemoteCommand(
             const message = forkErr instanceof Error ? forkErr.message : String(forkErr);
             logError(`[REMOTE] Codex app-server fork import failed for ${sessionId.slice(0, 8)}`, forkErr instanceof Error ? forkErr : new Error(message));
             error = `Codex history import failed: ${message}`;
+            forkFailed = true;
             stopManagedSessionHeartbeat(sessionId);
             await syncServiceRef?.unregisterManagedSession(sessionId).catch(logConvexFailure);
             await syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
           } finally {
-            if (pendingForkParentId) pendingAppServerForkParents.delete(pendingForkParentId);
+            if (pendingForkParentId) {
+              // A fork that timed out on our side is usually still running in the
+              // app-server, which keeps writing the replayed history into the new
+              // rollout after we gave up. Keep the parent guarded for one more
+              // timeout window so the watcher pins that rollout at EOF instead of
+              // ingesting the replay as new messages (jx7652s, 2026-09-04).
+              const releasedParentId = pendingForkParentId;
+              if (forkFailed && forkTimeoutMs > 0) {
+                setTimeout(() => pendingAppServerForkParents.delete(releasedParentId), forkTimeoutMs).unref();
+              } else {
+                pendingAppServerForkParents.delete(releasedParentId);
+              }
+            }
+            restartingSessionIds.delete(sessionId);
+          }
+          break;
+        }
+        // Native fork: the client copies its own session state under the new id
+        // (registry `forkCmd` — grok's `--resume <parent> --fork-session
+        // --session-id <new>`). The server offers it only for at-tip plain forks
+        // and passes the parent id; this branch never falls through to the
+        // rebuild path, because a client that forks natively is one whose
+        // transcript codecast cannot write. The new id must be one the client
+        // accepts, so a key it would reject is replaced by a fresh UUID and the
+        // row rebound — the same shape as a claude reconstitution. The
+        // session→conversation map is written BEFORE launch so the watcher
+        // links the child's transcript instead of minting a doppelgänger.
+        // No delivery-state reset afterwards: the branch's seed message is
+        // already in flight against this very launch (its delivery joined the
+        // in-flight resume), and clearing it re-delivers the seed (observed
+        // 2026-09-05). Nothing stale can exist for a session that never ran.
+        if (parsed.fork === true && conversationId && resumeAgentType && agentForksNatively(resumeAgentType)
+            && typeof parsed.parent_session_id === "string" && parsed.parent_session_id !== sessionId
+            && !findSessionFile(sessionId)) {
+          const parentId = parsed.parent_session_id as string;
+          const nativeId = isValidResumeSessionId(resumeAgentType, sessionId) ? sessionId : randomUUID();
+          log(`[REMOTE] Native fork ${parentId.slice(0, 8)} → ${nativeId.slice(0, 8)} (${resumeAgentType}) for conv ${conversationId.slice(0, 12)}`);
+          try {
+            const cache = readConversationCache();
+            cache[nativeId] = conversationId;
+            saveConversationCache(cache);
+            if (conversationCacheRef) conversationCacheRef[nativeId] = conversationId;
+            if (nativeId !== sessionId) {
+              remapConversationSession(sessionId, nativeId, conversationId);
+              await pushSessionIdBinding(conversationId, nativeId, projectPath || undefined);
+            }
+            const forked = await autoResumeSession(
+              nativeId, "", readTitleCache(), projectPath, conversationId, resumeAgentType,
+              { ...resumeOptions, forkFromSessionId: parentId },
+            );
+            if (forked) {
+              syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
+              conversationResumeFailures.delete(conversationId);
+              result = JSON.stringify({ forked: true, session_id: nativeId });
+              log(`[REMOTE] Native fork ${nativeId.slice(0, 8)} running for conv ${conversationId.slice(0, 12)}`);
+            } else {
+              error = `Native ${resumeAgentType} fork of ${parentId.slice(0, 8)} failed`;
+              await syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
+            }
+          } finally {
             restartingSessionIds.delete(sessionId);
           }
           break;
@@ -5590,15 +5805,28 @@ async function executeRemoteCommand(
                 let newSessionId: string;
                 let reconFilePath: string;
                 if (reconAgent === "codex") {
-                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId }));
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId, cwd }));
                   ({ filePath: reconFilePath } = writeCodexSession(reconJsonl, newSessionId));
+                } else if (reconAgent === "grok") {
+                  const files = generateGrokSession(exportData, { tailMessages: chooseClaudeAutoTrim(exportData), cwd });
+                  ({ sessionId: newSessionId, filePath: reconFilePath } = writeGrokSession(files));
+                } else if (reconAgent === "pi") {
+                  const pi = generatePiSession(exportData, { tailMessages: chooseClaudeAutoTrim(exportData), cwd });
+                  newSessionId = pi.sessionId;
+                  reconFilePath = piSessionFilePath(pi.cwd, pi.sessionId);
+                  await writeRebuiltDeltaTranscript("pi", pi.jsonl, reconFilePath, pi.sessionId);
+                } else if (reconAgent === "opencode") {
+                  const sesId = await rebuildOpencodeSession(exportData, cwd);
+                  if (!sesId) throw new Error("opencode serve sidecar unavailable");
+                  newSessionId = sesId;
+                  reconFilePath = "";
                 } else {
                   const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
                   const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId, cwd }));
                   ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
                 }
-                setPosition(reconFilePath, fs.statSync(reconFilePath).size);
+                if (reconFilePath) setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
 
                 const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType, resumeOptions);
@@ -6227,6 +6455,32 @@ export async function buildCodexStableContext(
 /** A stable-context card represents context that reached a real Codex thread.
  * Never publish it before threadStart resolves: app-server startup can fail and
  * fall back to tmux, where no developerInstructions were injected. */
+/**
+ * grok gets the stable-context feed at launch through `--rules` (see
+ * grokStableRulesFragment): build it in-process exactly as the codex app-server
+ * path does, write it to a private file the pane's shell substitutes in, and
+ * record what was injected against the conversation. Returns the file path, or
+ * undefined when stable mode is off for this launch.
+ */
+export async function writeGrokStableRulesFile(
+  config: Config | null,
+  cwd: string | undefined,
+  prefs: StableLaunchPrefs | undefined,
+  key: string,
+  conversationId?: string,
+): Promise<string | undefined> {
+  const built = await buildCodexStableContext(config, cwd, prefs);
+  if (!built) return undefined;
+  const dir = path.join(CONFIG_DIR, "stable-rules");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `${key.replace(/[^A-Za-z0-9_-]/g, "_")}.md`);
+  fs.writeFileSync(file, built.text, { mode: 0o600 });
+  if (conversationId && config) {
+    recordStableContext(config, { conversation_id: conversationId, data: built.data }).catch(() => {});
+  }
+  return file;
+}
+
 export async function startCodexThreadThenRecordStableContext<T>(
   startThread: () => Promise<T>,
   record?: () => void,
@@ -6337,30 +6591,7 @@ function saveTitleCache(cache: TitleCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
-function generateTitleFromMessage(content: string): string {
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const cmdNameMatch = trimmed.match(/<command-name>([^<]*)<\/command-name>/);
-  if (cmdNameMatch) return `/${cmdNameMatch[1].replace(/^\//, "")}`;
-
-  const cmdMsgMatch = trimmed.match(/<command-message>([^<]*)<\/command-message>/);
-  if (cmdMsgMatch) return `/${cmdMsgMatch[1].replace(/^\//, "")}`;
-
-  const cleaned = trimmed
-    .replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, "")
-    .replace(/<[^>]+>/g, "")
-    .trim();
-
-  const result = cleaned || trimmed;
-  if (result.length <= 50) {
-    return result;
-  }
-
-  return result.slice(0, 50) + "...";
-}
+export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
 
 // Every watcher event, the command poll and the sweeps read the state file
 // first; on a 200 session fleet that is one sync read per transcript append.
@@ -6688,7 +6919,7 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
   if (cached !== undefined) return cached;
   const decodedSlugPath = decodeProjectDirName(dirName);
   let recordedCwd: string | undefined;
-  try { recordedCwd = extractCwd(readFileHead(filePath, 65536)); } catch {}
+  try { recordedCwd = extractCwd(readFileHeadLines(filePath)); } catch {}
   const result = pickProjectPath({ decodedSlugPath, recordedCwd, home: process.env.HOME });
   // Only memoize a trustworthy answer: a found cwd, or a slug that resolved to a
   // real non-$HOME project. A not-yet-populated transcript (no cwd line yet)
@@ -6699,50 +6930,405 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
   return result;
 }
 
-async function flushPendingMessagesBatch(
-  pendingMsgs: Array<{ uuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string }>,
-  conversationId: string,
-  syncService: SyncService,
-  retryQueue: RetryQueue,
-): Promise<void> {
+export async function retryCreateTranscriptConversation(params: CreateConversationParams, conversationCache: ConversationCache, pendingMessages: PendingMessages, syncService: SyncService, retryQueue: RetryQueue, updateState: () => void): Promise<boolean> {
+  return serializeTranscript(`ingest-session:${params.sessionId}`, async () => {
+      // Ops carry the exact params the direct create attempted (including
+      // parentConversationId/isSubagent — dropping them minted flat,
+      // unparented subagent conversations, jx70pyh 2026-07-29).
+      const before = conversationCache[params.sessionId];
+      const created = await syncService.createConversation(params);
+      checkTranscriptDeadline();
+      const conversationId = conversationCache[params.sessionId] !== before && conversationCache[params.sessionId] ? conversationCache[params.sessionId] : created;
+      conversationCache[params.sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
+
+      // Mirror the direct path's pending-subagent resolution so a child whose
+      // queued op predates full params (older daemon's persisted queue) still
+      // re-parents via linkSessions.
+      for (const link of resolvePendingSubagentLinks(params.sessionId, conversationId, pendingSubagentParents, conversationCache)) {
+        syncService.linkSessions(link.parentConvId, link.childConvId, subagentDescriptions.get(link.childSessionId)).then(() => {
+          log(`Retry: Linked pending subagent ${link.childSessionId.slice(0, 8)} -> parent ${link.parentSessionId.slice(0, 8)}`);
+        }).catch((linkErr) => {
+          log(`Retry: Failed to link subagent ${link.childSessionId.slice(0, 8)}: ${linkErr}`);
+        });
+        pendingSubagentParents.delete(link.childSessionId);
+      }
+
+      try {
+        if (!await flushPendingTranscript(pendingMessages, params.sessionId, conversationId, conversationCache, syncService, retryQueue)) return false;
+      } finally { transcriptRetries.delete(params.sessionId); }
+      updateState();
+      return true;
+  });
+}
+
+class TranscriptIngestRetry extends Error {}
+const transcriptRetries = new Set<string>();
+const transcriptRetryOwners = new TranscriptRetryOwner({
+  allowed: () => !readDaemonState()?.authExpired && !isSyncPaused(),
+  retryable: error => !(error instanceof AuthExpiredError),
+  onMissing: async source => {
+    transcriptAckObserved.delete(source.file);
+    codexModelPositions.delete(source.file);
+    bakImageRecoveryDone.delete(source.file);
+    await pruneAcceptedTranscript(source.file);
+  },
+  onStop: source => { transcriptAckObserved.delete(source.file); },
+});
+type TranscriptAckWindow = { file: string; identity: string; boundary: number; source: ReturnType<typeof ingestIdentity>; pasted: Map<string, string[]> };
+const transcriptAckObserved = new Map<string, ReturnType<typeof ingestIdentity>>();
+const TRANSCRIPT_ACK_OBSERVATIONS = 4096;
+const transcriptAckWindows = new Map<string, TranscriptAckWindow>();
+async function observeTranscriptAckWindow(sessionId: string, file: string): Promise<void> {
+  const pasted = new Map<string, string[]>();
+  for (const [id, entry] of injectedMessageTs) {
+    if (messagesInFlight.has(id)) continue;
+    const ids = pasted.get(entry.conversationId) ?? [];
+    ids.push(id); pasted.set(entry.conversationId, ids);
+  }
+  let current: ReturnType<typeof ingestIdentity>;
+  try { current = ingestIdentity(await fs.promises.stat(file)); }
+  catch (err: any) {
+    if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) { transcriptAckObserved.delete(file); return; }
+    throw err;
+  }
+  const previous = transcriptAckObserved.get(file);
+  transcriptAckObserved.delete(file);
+  transcriptAckObserved.set(file, current);
+  if (transcriptAckObserved.size > TRANSCRIPT_ACK_OBSERVATIONS) transcriptAckObserved.delete(transcriptAckObserved.keys().next().value!);
+  if (previous && sameIngestFile(previous, current) && current.size >= previous.size) {
+    transcriptAckWindows.set(sessionId, { file, identity: JSON.stringify([current.dev, current.ino, current.birthtimeMs]), boundary: previous.size, source: current, pasted });
+  }
+}
+function transcriptAckEligibility(messages: RawMessage[], sessionId: string, conversationId: string, pendingReplay: boolean): () => Promise<boolean> {
+  const window = transcriptAckWindows.get(sessionId);
+  const eligible = !pendingReplay && !!window && messages.every(msg => {
+    if (msg.role !== "user") return true;
+    if (isHarnessEmittedUserTurn(msg.content)) return false;
+    const record = ingestRecord(msg);
+    return !!record && ["claude", "cursor", "codex"].includes(record.client) && record.file === window.file && record.identity === window.identity && record.offset >= window.boundary;
+  });
+  const pasted = window?.pasted.get(conversationId) ?? [];
+  return async () => {
+    if (!eligible || !window) return false;
+    let source: ReturnType<typeof ingestIdentity>;
+    try { source = ingestIdentity(await fs.promises.stat(window.file)); }
+    catch (err: any) {
+      if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) return false;
+      throw err;
+    }
+    if (!sameIngestFile(window.source, source) || source.size < window.source.size || source.size === window.source.size && !sameIngestSnapshot(window.source, source)) return false;
+    const current = collectPastedInjectedIds(conversationId);
+    return current.length === pasted.length && current.every((id, i) => id === pasted[i]);
+  };
+}
+type TranscriptReceipt = { signature: string; file: string; identity: string; size: number; sessionId: string; weight: number; sourceKey: string };
+const acceptedPending = new Map<string, Map<string, TranscriptReceipt>>();
+let acceptedPendingReserved = 0;
+let acceptedPendingCount = 0;
+let acceptedPendingBytes = 0;
+let acceptedPendingReservedBytes = 0;
+const acceptedPendingOwners = new Map<string,{count:number;bytes:number;reserved:number;reservedBytes:number}>();
+const retainedPendingWeights = new WeakMap<object,number>();
+const TRANSCRIPT_PENDING_ROWS = INGEST_WINDOW_ROWS;
+const TRANSCRIPT_PENDING_BYTES = 2 * 1024 * 1024;
+const TRANSCRIPT_RECEIPT_ROWS = 2048;
+const TRANSCRIPT_RECEIPT_BYTES = 8 * 1024 * 1024;
+let transcriptCapacityLogAt = 0;
+function transcriptCapacityRefused(sessionId: string, kind: string): void {
+  transcriptRetries.add(sessionId);
+  if (Date.now() - transcriptCapacityLogAt >= 5000) {
+    transcriptCapacityLogAt = Date.now();
+    log(`Transcript ${sessionId} ${kind} capacity; source remains unread; receipts=${acceptedPendingCount} reserved=${acceptedPendingReserved} bytes=${acceptedPendingBytes + acceptedPendingReservedBytes}`);
+  }
+}
+const transcriptReceiptKey = (key: string, signature: string) => key + "\0" + signature;
+function deleteTranscriptReceipt(receipts: Map<string,TranscriptReceipt>, key: string, receipt: TranscriptReceipt): void {
+  if (receipts.get(key) !== receipt || !receipts.delete(key)) return;
+  acceptedPendingCount--; acceptedPendingBytes -= receipt.weight;
+  const owner = acceptedPendingOwners.get(receipt.sessionId)!;
+  owner.count--; owner.bytes -= receipt.weight;
+  if (!owner.count && !owner.reserved) acceptedPendingOwners.delete(receipt.sessionId);
+}
+function reserveTranscriptReceipts(sessionId: string, conversationId: string, entries: Array<{key:string;signature:string;file:string;identity:string;size:number} | undefined>): {accept:(inputIndexes?:readonly number[])=>void;release:()=>void} | null {
+  const owner = acceptedPendingOwners.get(sessionId) ?? {count:0,bytes:0,reserved:0,reservedBytes:0};
+  const additions = new Map<string,TranscriptReceipt>();
+  const keys = entries.map(entry => entry ? transcriptReceiptKey(entry.key,entry.signature) : undefined);
+  for (const entry of entries) {
+    if (!entry) continue;
+    const key = transcriptReceiptKey(entry.key,entry.signature);
+    if (acceptedPending.get(conversationId)?.has(key)) continue;
+    additions.set(key,{signature:entry.signature,file:entry.file,identity:entry.identity,size:entry.size,sessionId,sourceKey:entry.key,weight:2*(key.length+entry.file.length+entry.identity.length+sessionId.length)+512});
+  }
+  const count=additions.size,bytes=[...additions.values()].reduce((sum,entry)=>sum+entry.weight,0);
+  if (owner.count+owner.reserved+count>TRANSCRIPT_RECEIPT_ROWS || owner.bytes+owner.reservedBytes+bytes>TRANSCRIPT_RECEIPT_BYTES || acceptedPendingCount+acceptedPendingReserved+count>65_536 || acceptedPendingBytes+acceptedPendingReservedBytes+bytes>64*1024*1024) {
+    transcriptCapacityRefused(sessionId,"receipt");return null;
+  }
+  acceptedPendingOwners.set(sessionId,owner);
+  owner.reserved+=count;owner.reservedBytes+=bytes;acceptedPendingReserved+=count;acceptedPendingReservedBytes+=bytes;
+  let released=false;
+  const acceptKey=(key:string|undefined)=>{
+    if(released||!key)return;
+    const receipt=additions.get(key);
+    if(!receipt)return;
+    additions.delete(key);
+    owner.reserved--;owner.reservedBytes-=receipt.weight;acceptedPendingReserved--;acceptedPendingReservedBytes-=receipt.weight;
+    let receipts=acceptedPending.get(conversationId);
+    if(!receipts){receipts=new Map();acceptedPending.set(conversationId,receipts);}
+    if(!receipts.has(key)){
+      receipts.set(key,receipt);owner.count++;owner.bytes+=receipt.weight;acceptedPendingCount++;acceptedPendingBytes+=receipt.weight;
+    }
+  };
+  return {
+    accept:(inputIndexes)=>{
+      if(inputIndexes)for(const index of inputIndexes)acceptKey(keys[index]);
+      else for(const key of additions.keys())acceptKey(key);
+    },
+    release:()=>{
+      if(released)return;released=true;
+      const remainingBytes=[...additions.values()].reduce((sum,entry)=>sum+entry.weight,0);
+      owner.reserved-=additions.size;owner.reservedBytes-=remainingBytes;acceptedPendingReserved-=additions.size;acceptedPendingReservedBytes-=remainingBytes;
+      additions.clear();
+      if(!owner.count&&!owner.reserved)acceptedPendingOwners.delete(sessionId);
+    },
+  };
+}
+
+const pendingKey = (m: PendingMessages[string][number]) => m.uuid ? `uuid:${m.uuid}` : m.ingestKey;
+async function pruneAcceptedTranscript(file?: string, missingSession?: string): Promise<void> {
+  const observed = new Map<string, fs.Stats | null>();
+  let checked = 0;
+  for (const [conversationId, receipts] of acceptedPending) {
+    for (const [key, receipt] of receipts) {
+      if (++checked % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (file && receipt.file !== file) continue;
+      if (!observed.has(receipt.file)) {
+        try { observed.set(receipt.file, await fs.promises.stat(receipt.file)); }
+        catch (err: any) {
+          if (err.code === "ENOENT" || err.code === "ENOTDIR") observed.set(receipt.file, null);
+          else throw err;
+        }
+      }
+      const stat = observed.get(receipt.file);
+      if (receipt.sessionId === missingSession || !stat || receipt.identity !== JSON.stringify([stat.dev, stat.ino, stat.birthtimeMs]) || stat.size < receipt.size) {
+        deleteTranscriptReceipt(receipts,key,receipt);
+      }
+    }
+    if (!receipts.size && acceptedPending.get(conversationId) === receipts) acceptedPending.delete(conversationId);
+  }
+}
+async function runTranscriptPass(sessionId: string, file: string, run: () => Promise<void>): Promise<void> {
+  return serializeTranscript(`ingest-session:${sessionId}`, () => serializeTranscript(file, async () => {
+    transcriptRetries.delete(sessionId);
+    try {
+      await pruneAcceptedTranscript(file);
+      await observeTranscriptAckWindow(sessionId, file);
+      await run();
+      if (transcriptRetries.has(sessionId)) throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unread data`);
+    } finally { transcriptRetries.delete(sessionId); transcriptAckWindows.delete(sessionId); }
+  }));
+}
+function queueTranscriptConversation(retryQueue: RetryQueue, params: Record<string, unknown>, error: string): string {
+  const existing = retryQueue.getPendingOperations().find(op => op.type === "createConversation" && op.params.sessionId === params.sessionId);
+  return existing?.id ?? retryQueue.add("createConversation", params, error);
+}
+export async function retainPendingTranscript(pending: PendingMessages, sessionId: string, messages: RawMessage[], filePath: string, fileSize: number): Promise<void> {
+  transcriptRetries.add(sessionId);
+  const original = pending[sessionId], snapshot = [...(original ?? [])], candidate = [...snapshot];
+  const indexes = new Map<string,number>();
+  for (let i=0;i<candidate.length;i++) { const key=pendingKey(candidate[i]);if(key)indexes.set(key,i); }
+  for (const msg of messages) {
+    const record=ingestRecord(msg);
+    const weight=record ? record.weight+2*(record.key.length+filePath.length)+1024 : await ingestRetainedWeight(msg,checkTranscriptDeadline)+2*filePath.length+1024;
+    if(weight>TRANSCRIPT_PENDING_BYTES){transcriptCapacityRefused(sessionId,"pending row");return;}
+    const row:PendingMessages[string][number]={...msg,role:mapRole(msg.role),content:redactSecrets(msg.content),filePath,fileSize,ingestKey:record?.key,ingestSignature:record?.signature,ingestIdentity:record?.identity,ingestClient:record?.client};
+    retainedPendingWeights.set(row,weight);
+    const key=pendingKey(row),index=key?indexes.get(key):undefined;
+    if(index===undefined){if(candidate.length>=TRANSCRIPT_PENDING_ROWS){transcriptCapacityRefused(sessionId,"pending count");return;}if(key)indexes.set(key,candidate.length);candidate.push(row);}
+    else candidate[index]=row;
+  }
+  let ownerBytes=0,globalBytes=0,globalCount=0,checked=0;
+  const generations=new Set<string>();
+  for (const row of candidate) {
+    ownerBytes+=retainedPendingWeights.get(row)??await ingestRetainedWeight(row,checkTranscriptDeadline);
+    generations.add(JSON.stringify([row.filePath,row.ingestIdentity]));
+  }
+  if(ownerBytes>TRANSCRIPT_PENDING_BYTES||generations.size>2){transcriptCapacityRefused(sessionId,"pending owner");return;}
+  for (const key in pending) {
+    if(key===sessionId)continue;
+    for(const row of pending[key]){
+      globalBytes+=retainedPendingWeights.get(row)??await ingestRetainedWeight(row,checkTranscriptDeadline);globalCount++;
+      if(++checked%128===0){await new Promise<void>(resolve=>setImmediate(resolve));checkTranscriptDeadline();}
+    }
+  }
+  if(globalBytes+ownerBytes>32*1024*1024||globalCount+candidate.length>8192){transcriptCapacityRefused(sessionId,"pending global");return;}
+  if(pending[sessionId]!==original||original&&(original.length!==snapshot.length||snapshot.some((row,i)=>original[i]!==row)))return;
+  pending[sessionId]=candidate;
+}
+
+export async function flushPendingMessagesBatch(
+  pendingMsgs: PendingMessages[string], conversationId: string, syncService: SyncService, retryQueue: RetryQueue, onAccepted?: () => void,
+  onBatchAccepted?: (inputIndexes: readonly number[]) => void,
+): Promise<"accepted" | "stale" | "auth" | "unresolved"> {
+  const messages = [];
+  for (let i = 0; i < pendingMsgs.length; i++) {
+    const {filePath, fileSize, ingestKey, ingestSignature, ingestIdentity, ingestClient, uuid, ...msg} = pendingMsgs[i];
+    messages.push({...msg, messageUuid: uuid});
+    if (i % 128 === 127) await new Promise<void>(resolve => setImmediate(resolve));
+  }
   try {
-    await syncService.addMessages({
-      conversationId,
-      messages: pendingMsgs.map(msg => ({
-        messageUuid: msg.uuid,
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        thinking: msg.thinking,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        images: msg.images,
-        subtype: msg.subtype,
-        model: msg.model,
-      })),
-    });
+    await syncService.addMessages({conversationId, messages},onBatchAccepted ? {onBatchAccepted} : undefined);
+    onAccepted?.();
+    return "accepted";
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    if (isStaleConversationError(errMsg)) {
-      log(`Batch pending flush hit stale conversation ${conversationId}; dropping batch so the caller can re-resolve: ${errMsg}`);
-      return;
+    if (isStaleConversationError(errMsg)) return "stale";
+    if (err instanceof AuthExpiredError) return "auth";
+    log(`Batch pending flush unresolved: ${errMsg}`);
+    return "unresolved";
+  }
+}
+export async function flushPendingTranscript(pending: PendingMessages, sessionId: string, conversationId: string, cache: ConversationCache, syncService: SyncService, retryQueue: RetryQueue): Promise<boolean> {
+  if (cache[sessionId] !== conversationId) { transcriptRetries.add(sessionId); return false; }
+  checkTranscriptDeadline();
+  const snapshot = (pending[sessionId] ?? []).slice(0,TRANSCRIPT_PENDING_ROWS);
+  if (!snapshot.length) return true;
+  const unsent=snapshot.filter(row=>!row.ingestKey||!row.ingestSignature||!acceptedPending.get(conversationId)?.has(transcriptReceiptKey(row.ingestKey,row.ingestSignature)));
+  const entries=[];
+  for(const row of unsent){
+    if(row.ingestKey&&row.ingestSignature&&row.ingestIdentity)entries.push({key:row.ingestKey,signature:row.ingestSignature,file:row.filePath,identity:row.ingestIdentity,size:0});
+    else if(!row.uuid){transcriptCapacityRefused(sessionId,"unproven pending receipt");return false;}
+    else entries.push(undefined);
+  }
+  const reservation=reserveTranscriptReceipts(sessionId,conversationId,entries);
+  if(!reservation)return false;
+  try {
+    const outcome=unsent.length?await flushPendingMessagesBatch(unsent,conversationId,syncService,retryQueue,reservation.accept,reservation.accept):"accepted";
+    if(outcome!=="accepted"){
+      if(outcome!=="auth")transcriptRetries.add(sessionId);
+      if(outcome==="stale"&&cache[sessionId]===conversationId){delete cache[sessionId];saveConversationCache(cache);}
+      return false;
     }
-    log(`Batch pending flush failed, queueing individually: ${errMsg}`);
-    for (const msg of pendingMsgs) {
-      retryQueue.add("addMessage", {
-        conversationId,
-        messageUuid: msg.uuid,
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        thinking: msg.thinking,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        images: msg.images,
-        subtype: msg.subtype,
-        model: msg.model,
-      }, errMsg);
+    for(const row of snapshot)if(row.ingestClient)transcriptRetryOwners.wake({client:row.ingestClient,file:row.filePath,sessionId});
+    if(cache[sessionId]!==conversationId){transcriptRetries.add(sessionId);return false;}
+    checkTranscriptDeadline();
+    const accepted=new Set(snapshot),remaining=(pending[sessionId]??[]).filter(row=>!accepted.has(row));
+    if(remaining.length)pending[sessionId]=remaining;else delete pending[sessionId];
+    if(remaining.length)transcriptRetries.add(sessionId);
+    return !remaining.length;
+  }finally{reservation.release();}
+}
+
+async function syncTranscriptMessages(messages: RawMessage[], conversationId: string, syncService: SyncService, retryQueue: RetryQueue, pending: PendingMessages, sessionId: string, cache: ConversationCache, authorityKeys: readonly string[] = [sessionId], forceNoAck = false) {
+  const unresolved={authExpired:false,conversationNotFound:false,accepted:false};
+  if(authorityKeys.some(key=>cache[key]!==conversationId)){transcriptRetries.add(sessionId);return unresolved;}
+  checkTranscriptDeadline();
+  const pendingReplay=!!pending[sessionId]?.length||!!acceptedPending.get(conversationId)?.size;
+  if(!await flushPendingTranscript(pending,sessionId,conversationId,cache,syncService,retryQueue))return unresolved;
+  const remaining:RawMessage[]=[];
+  for(let i=0;i<messages.length;i++){
+    const msg=messages[i],record=ingestRecord(msg);
+    if(!record||!acceptedPending.get(conversationId)?.has(transcriptReceiptKey(record.key,record.signature)))remaining.push(msg);
+    if(i%128===127){await new Promise<void>(resolve=>setImmediate(resolve));checkTranscriptDeadline();}
+  }
+  const eligible=transcriptAckEligibility(messages,sessionId,conversationId,pendingReplay);
+  for(let offset=0;offset<remaining.length;offset+=TRANSCRIPT_PENDING_ROWS){
+    assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys);
+    const batch=remaining.slice(offset,offset+TRANSCRIPT_PENDING_ROWS),entries=[];
+    for(const msg of batch){
+      if(msg.uuid){entries.push(undefined);continue;}
+      const record=ingestRecord(msg);
+      if(!record){transcriptCapacityRefused(sessionId,"unproven direct receipt");return unresolved;}
+      entries.push({key:record.key,signature:record.signature,file:record.file,identity:record.identity,size:record.sourceSize});
     }
+    const reservation=reserveTranscriptReceipts(sessionId,conversationId,entries);
+    if(!reservation)return unresolved;
+    try{
+      const result=await syncMessagesBatch(batch,conversationId,syncService,retryQueue,batch.every(msg=>!!msg.uuid),async()=>!forceNoAck&&remaining.length<=TRANSCRIPT_PENDING_ROWS&&authorityKeys.every(key=>cache[key]===conversationId)&&await eligible()&&authorityKeys.every(key=>cache[key]===conversationId),reservation.accept,reservation.accept);
+      if(authorityKeys.some(key=>cache[key]!==conversationId)){transcriptRetries.add(sessionId);return {...result,accepted:false,conversationNotFound:false};}
+      checkTranscriptDeadline();
+      if(!result.accepted){if(!result.authExpired)transcriptRetries.add(sessionId);return result;}
+    }finally{reservation.release();}
+  }
+  assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys);
+  return {authExpired:false,conversationNotFound:false,accepted:true};
+}
+
+function captureTranscriptMapping(sessionId: string, cache: ConversationCache, keys: readonly string[] = [sessionId]): (created: string) => string {
+  checkTranscriptDeadline();
+  const snapshot = keys.map(key => [key,cache[key]] as const);
+  return created => {
+    checkTranscriptDeadline();
+    if (snapshot.some(([key,value]) => cache[key] !== value)) {
+      transcriptRetries.add(sessionId);
+      throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed during creation`);
+    }
+    return snapshot.find(([,value]) => !!value)?.[1] ?? created;
+  };
+}
+function assertTranscriptAuthority(sessionId: string, conversationId: string | undefined, cache: ConversationCache, keys: readonly string[] = [sessionId]): void {
+  checkTranscriptDeadline();
+  if (keys.some(key => cache[key] !== conversationId)) {
+    transcriptRetries.add(sessionId);
+    throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed`);
+  }
+}
+async function transcriptSignatureWatermark(signatures: ReadonlyMap<string,string>): Promise<string> {
+  const hash = createHash("sha256");
+  let chunks = 0;
+  for (const [uuid, signature] of signatures) {
+    for (const value of [uuid, signature]) {
+      hash.update(String(value.length)).update(":");
+      for (let offset = 0; offset < value.length; offset += 8192) {
+        hash.update(value.slice(offset, offset + 8192));
+        if (++chunks % 128 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); checkTranscriptDeadline(); }
+      }
+    }
+  }
+  return hash.digest("hex");
+}
+function transcriptCountReplaced(result: object, count: number): boolean {
+  const source = ingestSource(result);
+  if (!source) throw new Error("unknown transcript count source");
+  const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
+  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && (previous.dev !== source.identity.dev || previous.ino !== source.identity.ino || previous.birthtimeMs !== source.identity.birthtimeMs));
+}
+async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionId: string, conversationId: string | undefined, cache: ConversationCache, commit: () => void, keys: readonly string[] = [sessionId], signatureState?: ReadonlyMap<string,string>, consumedMessages: RawMessage[] = result.messages): Promise<void> {
+  const source = ingestSource(result);
+  if (!source) throw new Error("unknown transcript source commit");
+  const unit = ["claude","cursor","codex"].includes(source.client) ? "bytes" : ["pi","grok"].includes(source.client) ? "signatures" : "count";
+  const currentWatermark = () => source.client === "gemini" ? geminiSyncedCounts.get(source.file) ?? 0 : source.client === "opencode" ? opencodeSyncedCounts.get(sessionId) ?? 0 : getPosition(source.file);
+  const priorSignatures = piSyncedSigs.get(source.file) ?? new Map<string,string>();
+  const before = unit === "signatures" ? await transcriptSignatureWatermark(priorSignatures) : currentWatermark();
+  const nextSignatures = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures) : undefined;
+  const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
+  const paired = previous?.client === source.client && previous.sessionId === sessionId && previous.unit === unit && previous.watermark === before && (unit === "signatures" ? ledger?.lastSyncedPosition === 0 : ledger?.lastSyncedPosition === before);
+  const same = paired && previous.dev === source.identity.dev && previous.ino === source.identity.ino && previous.birthtimeMs === source.identity.birthtimeMs;
+  const prefixProven = (unit === "signatures" ? priorSignatures.size === 0 : before === 0) || !!(same && previous.prefixProven);
+  assertTranscriptAuthority(sessionId,conversationId,cache,keys);
+  await validateTranscriptIngest(result);
+  assertTranscriptAuthority(sessionId,conversationId,cache,keys);
+  commit();
+  const watermark = nextSignatures ?? currentWatermark();
+  updateSyncRecord(source.file, {
+    lastSyncedAt: Date.now(),
+    lastSyncedPosition: unit === "signatures" ? 0 : watermark as number,
+    conversationId,
+    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,prefixProven},
+  });
+  const consumed=new Set<string>();
+  for(let i=0;i<consumedMessages.length;i++){
+    const record=ingestRecord(consumedMessages[i]);if(record)consumed.add(record.key);
+    if(i%128===127)await new Promise<void>(resolve=>setImmediate(resolve));
+  }
+  let checked=0;
+  for(const [destination,receipts] of acceptedPending){
+    for(const [key,receipt] of receipts){
+      if(receipt.sessionId===sessionId&&consumed.has(receipt.sourceKey))deleteTranscriptReceipt(receipts,key,receipt);
+      if(++checked%128===0)await new Promise<void>(resolve=>setImmediate(resolve));
+    }
+    if(!receipts.size&&acceptedPending.get(destination)===receipts)acceptedPending.delete(destination);
   }
 }
 
@@ -6809,7 +7395,11 @@ async function syncMessagesBatch(
   conversationId: string,
   syncService: SyncService,
   retryQueue: RetryQueue,
-): Promise<{ authExpired: boolean; conversationNotFound: boolean }> {
+  enqueueOnFailure = true,
+  ackEligible?: () => boolean | Promise<boolean>,
+  onAccepted?: () => void,
+  onBatchAccepted?: (inputIndexes: readonly number[]) => void,
+): Promise<{ authExpired: boolean; conversationNotFound: boolean; accepted: boolean }> {
   // Prepare + offload images ONCE. offloadImages mutates the prepared messages in
   // place (raw base64 → storageId, or drops oversized images), so the same small
   // array is reused for the send, the inline retry, and the retry-queue enqueue.
@@ -6819,17 +7409,18 @@ async function syncMessagesBatch(
   await syncService.offloadImages(prepared);
   if (retryQueue.hasPendingConversation(conversationId)) {
     log(`Conversation ${conversationId.slice(0, 12)} already has retry backlog; buffering ${messages.length} new msgs into retry queue`);
-    retryQueue.add("addMessages", {
+    if (enqueueOnFailure) retryQueue.add("addMessages", {
       conversationId,
       messages: prepared,
     }, "conversation backlog already queued");
-    return { authExpired: false, conversationNotFound: false };
+    return { authExpired: false, conversationNotFound: false, accepted: false };
   }
   try {
     const synced = await syncService.addMessages({
       conversationId,
       messages: prepared,
-    });
+    },onBatchAccepted ? {onBatchAccepted} : undefined);
+    onAccepted?.();
     resetAuthFailureCount();
     // If we just synced a user message from the JSONL, ack the injected pending
     // messages THIS process pasted (scoped — see collectPastedInjectedIds). The
@@ -6838,7 +7429,7 @@ async function syncMessagesBatch(
     // oversized content). Passing the explicit id list (even empty) stops a
     // historical user turn — e.g. an auto-resume resyncing a fresh JSONL from
     // position 0 — from terminalizing rows that never landed (DEC-01).
-    if (messages.some(m => m.role === "user")) {
+    if ((ackEligible ? await ackEligible() : true) && messages.some(m => m.role === "user")) {
       const pastedIds = collectPastedInjectedIds(conversationId);
       const transcriptIds = synced.ids.filter((_, index) =>
         messages[index]?.role === "user" && !isHarnessEmittedUserTurn(messages[index]?.content));
@@ -6859,17 +7450,17 @@ async function syncMessagesBatch(
         deliveryAcks,
       ).catch(logConvexFailure);
     }
-    return { authExpired: false, conversationNotFound: false };
+    return { authExpired: false, conversationNotFound: false, accepted: true };
   } catch (err) {
     if (err instanceof AuthExpiredError) {
       if (handleAuthFailure()) {
-        return { authExpired: true, conversationNotFound: false };
+        return { authExpired: true, conversationNotFound: false, accepted: false };
       }
     }
 
     const errMsg = err instanceof Error ? err.message : String(err);
     if (isStaleConversationError(errMsg)) {
-      return { authExpired: false, conversationNotFound: true };
+      return { authExpired: false, conversationNotFound: true, accepted: false };
     }
 
     // Hand the failed batch straight to the retry queue instead of burning a
@@ -6881,11 +7472,11 @@ async function syncMessagesBatch(
     // the right owner of retries; a transient single blip just lands on the
     // queue's short initial backoff (~seconds) instead of a sub-minute freeze.
     log(`Batch sync failed (${messages.length} msgs), queueing for retry: ${errMsg}`);
-    retryQueue.add("addMessages", {
+    if (enqueueOnFailure) retryQueue.add("addMessages", {
       conversationId,
       messages: prepared,
     }, errMsg);
-    return { authExpired: false, conversationNotFound: false };
+    return { authExpired: false, conversationNotFound: false, accepted: false };
   }
 }
 
@@ -6895,6 +7486,39 @@ function readFileHead(filePath: string, maxBytes: number = 8192): string {
     const buf = Buffer.alloc(maxBytes);
     const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
     return buf.slice(0, bytesRead).toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// The transcript head reader for anything that PARSES the first lines (cwd,
+// session id, session_meta). A fixed byte prefix is the wrong tool for that:
+// Codex 0.153 writes its session_meta line with the full base_instructions text
+// inline (22KB observed on 2026-09-05), so a 5000-byte prefix cut inside that
+// line, JSON.parse threw, and every field on it read as absent. The resume then
+// refused for "no cwd", regenerated the rollout from Convex under the daemon's
+// own cwd (/), and re-resumed into Codex's "Choose working directory" picker
+// on every delivery. Reads whole lines: 64KB at a time until `minLines` are
+// complete (or EOF / `maxBytes`), so the caller sees the same superset a
+// 64KB prefix gave it whenever that was enough, and the full lines when not.
+const HEAD_LINES_CHUNK = 65536;
+export function readFileHeadLines(filePath: string, minLines = 8, maxBytes = 4 * 1024 * 1024): string {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let newlines = 0;
+    while (total < maxBytes && newlines < minLines) {
+      const want = Math.min(HEAD_LINES_CHUNK, maxBytes - total);
+      const buf = Buffer.alloc(want);
+      const n = fs.readSync(fd, buf, 0, want, total);
+      if (n <= 0) break;
+      const got = buf.subarray(0, n);
+      for (const b of got) if (b === 0x0a) newlines++;
+      chunks.push(got);
+      total += n;
+    }
+    return Buffer.concat(chunks, total).toString("utf-8");
   } finally {
     fs.closeSync(fd);
   }
@@ -6922,17 +7546,7 @@ const CODEX_META_HEAD_CHUNK = 256 * 1024;
 const CODEX_META_HEAD_MAX = 16 * 1024 * 1024;
 /** Where the leading session_meta block ends: the index just past its last
  *  line, or -1 while no complete non meta line exists yet. */
-export function sessionMetaHeadCut(acc: string): number {
-  let cut = 0;
-  let nl = acc.indexOf("\n");
-  while (nl >= 0) {
-    const line = acc.slice(cut, nl);
-    if (line.trim() && !line.includes('"type":"session_meta"')) return cut;
-    cut = nl + 1;
-    nl = acc.indexOf("\n", cut);
-  }
-  return -1;
-}
+
 function readCodexSessionMetaHeadSync(filePath: string): string {
   const fd = fs.openSync(filePath, "r");
   try {
@@ -6956,21 +7570,6 @@ function readCodexSessionMetaHeadSync(filePath: string): string {
 /** The same head for the metrics tick, read one window at a time off the
  *  loop. Same cap on bytes read; a torn trailing line is left out, which the
  *  metadata parse would have rejected anyway. */
-export async function readCodexSessionMetaHeadAsync(filePath: string): Promise<string> {
-  const size = (await fs.promises.stat(filePath)).size;
-  const limit = Math.min(size, CODEX_META_HEAD_MAX);
-  let acc = "";
-  let offset = 0;
-  while (offset < limit) {
-    const { content, bytesConsumed } = await readIngestWindow(filePath, offset, limit - offset, { step: CODEX_META_HEAD_CHUNK });
-    if (bytesConsumed === 0) break;
-    acc += content;
-    offset += bytesConsumed;
-    const cut = sessionMetaHeadCut(acc);
-    if (cut >= 0) return acc.slice(0, cut);
-  }
-  return acc;
-}
 
 // The leading session_meta block is immutable once written, so a rollout file's fork root
 // never changes — cache it per path to avoid re-reading ~200KB on every incremental sync.
@@ -6987,16 +7586,6 @@ function rememberCodexMeta(filePath: string, head: string): ReturnType<typeof ex
 }
 function codexSessionMetadataFor(filePath: string): ReturnType<typeof extractCodexSessionMetadata> {
   return codexSessionMetaCache.get(filePath) ?? rememberCodexMeta(filePath, readCodexSessionMetaHead(filePath));
-}
-/** Fill the metadata cache for a rollout off the loop, so the sync lookup
- *  the metrics tick makes next answers from the cache. */
-async function primeCodexSessionMetadata(filePath: string): Promise<void> {
-  if (codexSessionMetaCache.has(filePath)) return;
-  try {
-    rememberCodexMeta(filePath, await readCodexSessionMetaHeadAsync(filePath));
-  } catch {
-    // unreadable this pass; the sync lookup reports unknown
-  }
 }
 function resolveCodexForkRoot(filePath: string): string | undefined {
   if (codexForkRootCache.has(filePath)) return codexForkRootCache.get(filePath);
@@ -7032,69 +7621,101 @@ function resolveCodexForkRoot(filePath: string): string | undefined {
 // SIGKILL during the exact race the guard exists for. Callers choose the safe
 // direction for their side: destructive paths fail closed, metrics fail open.
 //
-// Memoized only once DECIDED. The leading session_meta is immutable after it is
-// fully written (same reasoning as codexForkRootCache), so a decided answer never
-// changes; an undecided one must not be cached or the race becomes permanent.
-// Note the cost asymmetry this leaves: an undecidable id re-walks findSessionFile
-// on every call (~3.5ms), which is deliberate — correctness over a cached guess.
-const sessionOwnershipCache = new Map<string, ProcessOwnership>();
-// staleOk answers from the session-file index without the recent-changes probe
-// (for the metrics tick, which fails open and re-asks). A "no rollout → owned"
-// verdict from a possibly stale index is returned but NOT memoized: a rollout
-// younger than the index could flip it, and memoizing the guess would hand the
-// kill guard a wrong "owned" forever. Destructive callers use the default.
+type OwnershipObservation = { home: string; path: string; identity: string; ownership: ProcessOwnership };
+const sessionOwnershipCache = new Map<string, OwnershipObservation>();
+const ownershipFileIdentity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:${stat.ctimeMs}:${stat.size}`;
+
 export function sessionProcessOwnership(sessionId: string, opts?: { staleOk?: boolean }): ProcessOwnership {
+  const home = process.env.HOME || "";
+  if (sessionFileIndexHome !== home || !sessionFileIndexReady) return "unknown";
+  const rollout = codexRolloutIndex?.get(sessionId);
+  if (!rollout) return "unknown";
   const memo = sessionOwnershipCache.get(sessionId);
-  if (memo !== undefined) return memo;
-
-  // Ask the Codex rollout store DIRECTLY. Routing this through findSessionFile
-  // was a live hole: that helper searches ~/.claude/projects first, and
-  // materializeSession writes a CLAUDE-shaped JSONL under a Codex session id
-  // (clientOwnsSessionStore excludes codex, so its regeneration skip never fires).
-  // A materialized Codex subagent therefore resolved as agentType "claude" →
-  // "owned" → memoized, silently restoring the full SIGKILL-the-parent defect and
-  // keeping it until daemon restart. The rollout is the authority on what a Codex
-  // session is; a materialized mirror is a copy, and must never answer this.
-  const rolloutPath = findCodexRolloutPath(sessionId, opts);
-  if (!rolloutPath) {
-    // No rollout: either a genuinely non-Codex session (only Codex threads can
-    // borrow, so it owns its process) or an id we know nothing about yet.
-    if (!findSessionFile(sessionId, opts)) return "unknown";
-    if (!opts?.staleOk) sessionOwnershipCache.set(sessionId, "owned");
-    return "owned";
-  }
-
-  let meta: ReturnType<typeof extractCodexSessionMetadata>;
+  if (opts?.staleOk) return memo?.home === home && memo.path === rollout ? memo.ownership : "unknown";
   try {
-    meta = codexSessionMetadataFor(rolloutPath);
-  } catch {
-    return "unknown"; // unreadable this pass
-  }
-  if (!meta) return "unknown"; // file exists but session_meta isn't complete yet
+    const before = fs.statSync(rollout);
+    const meta = extractCodexSessionMetadata(readCodexSessionMetaHead(rollout));
+    if (!before.isFile() || meta?.id !== sessionId || ownershipFileIdentity(before) !== ownershipFileIdentity(fs.statSync(rollout))) return "unknown";
+    return classifyProcessOwnership(meta);
+  } catch { return "unknown"; }
+}
+
+let codexOwnershipScan: { home: string; generation: number; pending: Promise<Map<string, string[]>> } | undefined;
+async function freshCodexOwnershipFiles(): Promise<Map<string, string[]>> {
+  const home = process.env.HOME || "", generation = sessionFileIndexGeneration;
+  if (codexOwnershipScan?.home === home && codexOwnershipScan.generation === generation) return codexOwnershipScan.pending;
+  const pending = (async () => {
+    const files = new Map<string, string[]>();
+    const job: ScanJob = { name: "walk", root: path.join(home, ".codex", "sessions"), policy: { files: "jsonl" }, stats: false, requireComplete: true };
+    const apply = (rows: ScanRow[]) => {
+      for (const row of rows) if (row.type === "file") {
+        const id = row.name.match(TRAILING_UUID_JSONL_RE)?.[1];
+        if (id) files.set(id, [...(files.get(id) ?? []), row.path]);
+      }
+    };
+    if (daemonWorkersEnabled()) await visitScan(job, apply);
+    else {
+      const { scanPages } = await import("./workers/scanJobs.js");
+      for await (const rows of scanPages(job)) { apply(rows); await yieldScanBatch(); }
+    }
+    if (home !== (process.env.HOME || "") || generation !== sessionFileIndexGeneration || !sessionFileIndexReady) throw new ScanCancelled("ownership evidence changed");
+    return files;
+  })();
+  const entry = { home, generation, pending };
+  codexOwnershipScan = entry;
+  try { return await pending; }
+  finally { if (codexOwnershipScan === entry) codexOwnershipScan = undefined; }
+}
+
+async function observeCodexOwnership(sessionId: string, rollout: string, home: string): Promise<ProcessOwnership> {
+  const before = await fs.promises.stat(rollout);
+  const meta = extractCodexSessionMetadata(await readCodexSessionMetaHeadAsync(rollout));
+  const after = await fs.promises.stat(rollout);
+  if (home !== (process.env.HOME || "") || !before.isFile() || meta?.id !== sessionId || ownershipFileIdentity(before) !== ownershipFileIdentity(after)) return "unknown";
   const ownership = classifyProcessOwnership(meta);
-  if (ownership === "unknown") return "unknown"; // an unrecognized shape may change meaning; don't cache
-  sessionOwnershipCache.set(sessionId, ownership);
+  sessionOwnershipCache.set(sessionId, { home, path: rollout, identity: ownershipFileIdentity(after), ownership });
   return ownership;
+}
+
+export async function acquireSessionProcessOwnership(sessionId: string, signal?: AbortSignal): Promise<ProcessOwnership> {
+  const home = process.env.HOME || "";
+  if (!home || signal?.aborted) return "unknown";
+  await ensureSessionFileIndex();
+  const generation = sessionFileIndexGeneration;
+  const current = () => !signal?.aborted && home === (process.env.HOME || "") && generation === sessionFileIndexGeneration && sessionFileIndexReady;
+  if (!current()) return "unknown";
+  try {
+    const paths = (await freshCodexOwnershipFiles()).get(sessionId);
+    if (!current()) return "unknown";
+    if (paths) {
+      if (paths.length !== 1) return "unknown";
+      const ownership = await observeCodexOwnership(sessionId, paths[0], home);
+      return current() ? ownership : "unknown";
+    }
+    if (codexRolloutIndex?.has(sessionId) || sessionOwnershipCache.get(sessionId)?.home === home) return "unknown";
+    const file = sessionFileIndex?.get(sessionId) ?? await freshSessionObservation(sessionId, false);
+    if (!file || file.agentType === "codex") return "unknown";
+    await fs.promises.access(file.path, fs.constants.R_OK);
+    const stat = await fs.promises.stat(file.path);
+    if (!current() || !stat.isFile()) return "unknown";
+    sessionFileIndex?.set(sessionId, file);
+    return "owned";
+  } catch { return "unknown"; }
 }
 
 /** Metrics fail OPEN: only a session we positively know to be a borrower is
  *  denied credit for its subtree. An undecided session keeps reporting — the
  *  worst case is a transiently double-counted tree, not a lost signal. */
-// Metrics-side negative memo: an "unknown" verdict re-walks two directory
-// scans per call, and collectResourceSnapshot asks for every cached session
-// every tick — under load that loop alone froze the event loop 6s (readdirSync,
-// 2026-08-21). The kill guard keeps re-asking (it must); metrics, which fail
-// open anyway, can reuse an undecided answer for a few minutes.
 const borrowsUnknownUntil = new Map<string, number>();
 const BORROWS_UNKNOWN_MEMO_MS = 5 * 60_000;
 function sessionBorrowsProcess(sessionId: string): boolean {
-  const until = borrowsUnknownUntil.get(sessionId);
+  const until = borrowsUnknownUntil.get(`${process.env.HOME || ""}:${sessionId}`);
   if (until !== undefined && until > Date.now()) return false;
   // staleOk: metrics fail open and re-ask; index staleness is within the same
   // few minutes this memo already tolerates. The kill guard asks fresh.
   const ownership = sessionProcessOwnership(sessionId, { staleOk: true });
-  if (ownership === "unknown") borrowsUnknownUntil.set(sessionId, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
-  else borrowsUnknownUntil.delete(sessionId);
+  if (ownership === "unknown") borrowsUnknownUntil.set(`${process.env.HOME || ""}:${sessionId}`, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
+  else borrowsUnknownUntil.delete(`${process.env.HOME || ""}:${sessionId}`);
   return ownership === "borrowed";
 }
 
@@ -7109,14 +7730,18 @@ function sessionBorrowsProcess(sessionId: string): boolean {
 export async function classifySharedPidSessions(sessionIds: string[]): Promise<Set<string>> {
   await ensureSessionFileIndex();
   const now = Date.now();
-  const undecided = sessionIds.filter(
-    (id) => !sessionOwnershipCache.has(id) && !((borrowsUnknownUntil.get(id) ?? 0) > now),
-  );
+  const home = process.env.HOME || "";
+  const undecided = sessionIds.filter(id => !((borrowsUnknownUntil.get(`${home}:${id}`) ?? 0) > now));
   await runBounded(undecided, 4, async (id) => {
-    const rollout = findCodexRolloutPath(id, { staleOk: true });
+    const rollout = sessionFileIndexHome === home ? codexRolloutIndex?.get(id) : undefined;
     if (!rollout) return;
-    await primeCodexSessionMetadata(rollout);
-    if (!codexSessionMetaCache.has(rollout)) borrowsUnknownUntil.set(id, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
+    try {
+      const stat = await fs.promises.stat(rollout);
+      const memo = sessionOwnershipCache.get(id);
+      if (memo?.home === home && memo.path === rollout && memo.identity === ownershipFileIdentity(stat)) return;
+      sessionOwnershipCache.delete(id);
+      await observeCodexOwnership(id, rollout, home);
+    } catch { sessionOwnershipCache.delete(id); }
   }, "Ownership prime");
   return new Set(sessionIds.filter(sessionBorrowsProcess));
 }
@@ -7319,11 +7944,37 @@ async function ancestorTranscriptSessionIds(pids: number[]): Promise<Map<number,
   return byPid;
 }
 
-async function resolveSpawnerConversation(
+function transcriptStartedAt(filePath: string): number {
+  const timestamp = readFileHead(filePath, 512).match(/"timestamp"\s*:\s*"([^"]+)"/)?.[1];
+  return timestamp ? Date.parse(timestamp) : NaN;
+}
+
+async function trackTmuxSpawns(
+  messages: ParsedMessage[],
+  parent: string,
+  syncService: SyncService,
+  conversationCache: ConversationCache,
+): Promise<void> {
+  const names = new Set(tmuxSpawnRegistry.record(messages, parent));
+  if (!names.size) return;
+  for (const [childSid, info] of sessionProcessCache) {
+    const name = info.tmuxTarget?.split(":")[0];
+    const child = conversationCache[childSid];
+    if (!name || !names.has(name) || !child || child === parent) continue;
+    const transcript = findSessionFile(childSid);
+    if (!transcript || tmuxSpawnRegistry.parent(name, transcriptStartedAt(transcript.path)) !== parent) continue;
+    await syncService.linkSessions(parent, child);
+    spawnLinkAttempts.delete(childSid);
+    log(`Linked tmux-spawned child ${childSid.slice(0, 8)} -> parent ${parent.slice(0, 12)}`);
+  }
+}
+
+export async function resolveSpawnerConversation(
   filePath: string,
   sessionId: string,
   agentType: AgentClientId,
   conversationCache: ConversationCache,
+  spawnRegistry: TmuxSpawnRegistry = tmuxSpawnRegistry,
 ): Promise<string | null> {
   let pids = await pidsWithFileOpen(filePath);
   if (pids.length === 0) {
@@ -7333,8 +7984,14 @@ async function resolveSpawnerConversation(
   if (pids.length === 0) return null;
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
+  const tmuxPanes = spawnRegistry.hasEntries()
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    : "";
+  const startedAt = transcriptStartedAt(filePath);
   for (const pid of pids) {
     const ancestors = collectAncestorPids(pidToPpid, pid);
+    const tmuxParent = spawnRegistry.parentForPanes(tmuxPanes, [pid, ...ancestors], startedAt);
+    if (tmuxParent && tmuxParent !== conversationCache[sessionId]) return tmuxParent;
     // Claude Code's pid registry first: a plain file read, no subprocess.
     const registrySessionId = resolveSpawnerSessionId(ancestors, readPidRegistrySessionId, sessionId);
     if (registrySessionId && conversationCache[registrySessionId]) {
@@ -7538,29 +8195,29 @@ export function subagentParentSessionFromPath(filePath: string): string | undefi
 // processSessionFile is the one function every append passes through.
 const subagentActivityByParent = new Map<string, number>();
 const SUBAGENT_ACTIVITY_MAX_ENTRIES = 500;
+let subagentCoverageLost = false;
 
 export function noteSubagentActivity(filePath: string, at: number = Date.now()): void {
   const parent = subagentParentSessionFromPath(filePath);
   if (!parent) return;
-  subagentActivityByParent.set(parent, at);
-  // A machine that ran thousands of subagents would otherwise hold every parent
-  // id forever. Anything past the quiet window can no longer block a park.
-  if (subagentActivityByParent.size > SUBAGENT_ACTIVITY_MAX_ENTRIES) {
-    const cutoff = at - HIBERNATE_SUBAGENT_QUIET_MS;
-    for (const [id, seen] of subagentActivityByParent) if (seen < cutoff) subagentActivityByParent.delete(id);
+  if (!subagentActivityByParent.has(parent) && subagentActivityByParent.size >= SUBAGENT_ACTIVITY_MAX_ENTRIES) {
+    subagentCoverageLost = true;
+    return;
   }
+  subagentActivityByParent.set(parent, Math.max(at, subagentActivityByParent.get(parent) ?? -Infinity));
 }
 
 /** How long since a subagent of `sessionId` produced output. Infinity when the
  *  daemon has never seen one write. */
 export function subagentActiveAgoMs(sessionId: string, now: number = Date.now()): number {
   const seen = subagentActivityByParent.get(sessionId);
-  return seen === undefined ? Infinity : now - seen;
+  return seen === undefined ? (subagentCoverageLost ? NaN : Infinity) : now - seen;
 }
 
 /** Test seam: forget every recorded subagent append. */
 export function resetSubagentActivityForTests(): void {
   subagentActivityByParent.clear();
+  subagentCoverageLost = false;
 }
 
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
@@ -7582,99 +8239,6 @@ const SYNC_BYTES_PER_PASS = 1 * 1024 * 1024;
 export const MAX_SYNC_CONTINUATIONS = 24;
 
 /**
- * Where a read window may be cut: the index of the LAST byte to consume, or
- * -1 to ask for a bigger window. `len` is how many bytes of `buf` are valid;
- * `atEof` says no more bytes exist past them; `from` is the first byte an
- * earlier step of the same window did not already search (bytes before it
- * hold no boundary, so a step costs only the tail it read).
- */
-export type PassBoundary = (buf: Buffer, len: number, atEof: boolean, from?: number) => number;
-
-// A newline is one byte and never part of a multibyte sequence, so a byte cut
-// at it is charset safe and the byte count needs no re-encode.
-const newlineBoundary: PassBoundary = (buf, len, _atEof, from = 0) => {
-  const i = buf.subarray(from, len).lastIndexOf(0x0a);
-  return i < 0 ? -1 : from + i;
-};
-
-type ReadRequest = { buf: Buffer; offset: number; length: number; position: number };
-
-export type ReadWindowOpts = { step?: number; boundary?: PassBoundary; buffer?: Buffer };
-
-// The window algorithm both readers share: fill one window, look for a
-// boundary, and when there is none and bytes remain, grow the window and
-// read only the new tail. Growth doubles (capped at what exists) so an
-// oversized line costs under twice its size in copying and a logarithmic
-// number of steps; the boundary search covers only the new tail. Each
-// `yield` is one read the driver performs (awaited or synchronous), so the
-// async driver frees the loop between steps.
-function* completeLinesPlan(
-  position: number,
-  available: number,
-  opts: ReadWindowOpts,
-): Generator<ReadRequest, { content: string; bytesConsumed: number; steps: number }, number> {
-  const step = opts.step ?? SYNC_BYTES_PER_PASS;
-  const boundary = opts.boundary ?? newlineBoundary;
-  // allocUnsafe: every byte read below `len` is written by a read first.
-  let buf = opts.buffer ?? Buffer.allocUnsafe(Math.min(available, step));
-  let len = 0;
-  let steps = 0;
-  for (;;) {
-    const from = len;
-    const want = Math.min(buf.length, available) - len;
-    const n = want > 0 ? yield { buf, offset: len, length: want, position: position + len } : 0;
-    steps++;
-    if (n <= 0) available = len; // the file shrank under us: what we hold is all there is
-    len += n;
-    const atEof = len >= available;
-    const cut = len > 0 ? boundary(buf, len, atEof, from) : -1;
-    if (cut >= 0) return { content: buf.toString("utf8", 0, cut + 1), bytesConsumed: cut + 1, steps };
-    // No boundary at EOF: a line still being written. Consume nothing and let
-    // the next pass re-read it (same rule as before the window existed).
-    if (atEof) return { content: "", bytesConsumed: 0, steps };
-    const grown = Buffer.allocUnsafe(Math.min(Math.max(buf.length * 2, step), available));
-    buf.copy(grown, 0, 0, len);
-    buf = grown;
-  }
-}
-
-/**
- * The complete lines available at `position`, read one window at a time.
- * Replaces the old escape that, on a line longer than the window, re-read the
- * whole remaining file in one allocation; now an oversized line costs one
- * more window per step, with the loop free during every read.
- */
-export async function readCompleteLines(
-  fd: fs.promises.FileHandle,
-  position: number,
-  available: number,
-  opts: ReadWindowOpts = {},
-): Promise<{ content: string; bytesConsumed: number; steps: number }> {
-  const plan = completeLinesPlan(position, available, opts);
-  let r = plan.next(0);
-  while (!r.done) {
-    const { bytesRead } = await fd.read(r.value.buf, r.value.offset, r.value.length, r.value.position);
-    r = plan.next(bytesRead);
-  }
-  return r.value;
-}
-
-/** The synchronous twin, for the hook paths that cannot await. */
-export function readCompleteLinesSync(
-  fd: number,
-  position: number,
-  available: number,
-  opts: ReadWindowOpts = {},
-): { content: string; bytesConsumed: number; steps: number } {
-  const plan = completeLinesPlan(position, available, opts);
-  let r = plan.next(0);
-  while (!r.done) {
-    r = plan.next(fs.readSync(fd, r.value.buf, r.value.offset, r.value.length, r.value.position));
-  }
-  return r.value;
-}
-
-/**
  * Drain any remaining known backlog in bounded passes instead of waiting for
  * the next file watch event or the 5 minute watchdog. The caller has already
  * advanced its position, so each continuation is durable forward progress.
@@ -7689,7 +8253,8 @@ export async function continueSyncPass(
   depth: number,
   next: () => Promise<void>,
 ): Promise<void> {
-  if (!(bytesConsumed > 0 && lastPosition + bytesConsumed < size && depth < MAX_SYNC_CONTINUATIONS)) return;
+  if (!(bytesConsumed > 0 && lastPosition + bytesConsumed < size)) return;
+  if (depth >= MAX_SYNC_CONTINUATIONS) throw new TranscriptIngestRetry("Transcript continuation budget retains unread data");
   await new Promise((resolve) => setImmediate(resolve));
   await next();
 }
@@ -7701,10 +8266,20 @@ export async function continueSyncPass(
  * of throwing ENOENT forever, which turned a deleted transcript into a
  * permanent retry loop). A shrink is a rotation and resets to the start.
  */
-async function ingestStat(filePath: string, lastPosition: number): Promise<{ size: number; lastPosition: number } | null> {
-  let size: number;
+async function ingestStat(filePath: string, lastPosition: number, client: string, sessionId: string): Promise<{ size: number; lastPosition: number; identity: ReturnType<typeof ingestIdentity> } | null> {
+  let size: number, identity: ReturnType<typeof ingestIdentity>;
   try {
-    size = (await fs.promises.stat(filePath)).size;
+    identity = ingestIdentity(await fs.promises.stat(filePath));
+    const ledger = getSyncRecord(filePath);
+    const saved = ledger?.sourceGeneration;
+    const previous = saved?.client === client && saved.sessionId === sessionId && saved.unit === "bytes" && saved.watermark === lastPosition && ledger?.lastSyncedPosition === lastPosition ? saved : undefined;
+    size = identity.size;
+    if (previous && (previous.dev !== identity.dev || previous.ino !== identity.ino || previous.birthtimeMs !== identity.birthtimeMs)) {
+      lastPosition = 0;
+      setPosition(filePath,0);
+      codexModelPositions.delete(filePath);
+    }
+
   } catch (err: any) {
     if (err.code === "EACCES" || err.code === "EPERM") {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
@@ -7721,59 +8296,23 @@ async function ingestStat(filePath: string, lastPosition: number): Promise<{ siz
     setPosition(filePath, 0);
     lastPosition = 0;
   }
-  return { size, lastPosition };
+  return { size, lastPosition, identity };
 }
-
-/**
- * One window of complete lines from `position`, on a handle held only for
- * the read. The read is async: a 1MB window still blocked the loop 8s when
- * the disk was contended (2026-09-02). The parse the caller does next stays
- * on the loop, which is what SYNC_BYTES_PER_PASS bounds.
- */
-async function readIngestWindow(
-  filePath: string,
-  position: number,
-  available: number,
-  opts?: { step?: number; boundary?: PassBoundary },
-): Promise<{ content: string; bytesConsumed: number; steps: number }> {
-  const fd = await fs.promises.open(filePath, "r");
-  try {
-    return await readCompleteLines(fd, position, available, opts);
-  } finally {
-    await fd.close().catch(() => {});
+function assertTranscriptReadGeneration(result: object, identity: ReturnType<typeof ingestIdentity>): void {
+  const source = ingestSource(result);
+  if (!source) throw new Error("unknown transcript read generation");
+  if (!sameIngestFile(identity,source.identity)) {
+    checkTranscriptDeadline();
+    if (getPosition(source.file) === source.offset) setPosition(source.file,0);
+    throw new TranscriptIngestRetry("Transcript generation changed after offset lookup");
   }
 }
 
-/**
- * Cut a cursor transcript window just before its last role header, so a
- * message whose lines straddle the window is never synced truncated:
- * parseCursorTranscriptFile buffers lines until the next header, so a newline
- * cut inside a message would sync the first half and drop the rest. At EOF
- * the cut is the last newline, which is what a whole tail read did before.
- */
-export const cursorPassBoundary: PassBoundary = (buf, len, atEof, from = 0) => {
-  // At EOF the whole window is consumed, so this is the one full search.
-  if (atEof) return newlineBoundary(buf, len, atEof, 0);
-  const end = newlineBoundary(buf, len, atEof, from);
-  if (end < 0) return -1; // the tail added no complete line, so no new header
-  // Only a line the window holds whole can be a header: past the last
-  // newline, "user:" may be the start of a content line still to come. The
-  // header rule is the parser's own, so the cut and the parse agree. Lines
-  // whole before `from` were judged by an earlier step, so decode from the
-  // line that straddles it.
-  const lineStart = from > 0 ? buf.lastIndexOf(0x0a, from - 1) + 1 : 0;
-  const lines = buf.toString("utf8", lineStart, end).split("\n");
-  let headerAt = -1;
-  let bytes = lineStart;
-  for (const l of lines) {
-    if (bytes > 0 && isCursorRoleHeaderLine(l)) headerAt = bytes;
-    bytes += Buffer.byteLength(l, "utf8") + 1;
-  }
-  // The byte before the header line is the newline that ends the previous one.
-  return headerAt < 0 ? -1 : headerAt - 1;
-};
+export async function processSessionFile(...args: Parameters<typeof processSessionFilePass>): Promise<void> {
+  return runTranscriptPass(args[1], path.resolve(args[0]), () => processSessionFilePass(...args));
+}
 
-export async function processSessionFile(
+async function processSessionFilePass(
   filePath: string,
   sessionId: string,
   projectPath: string,
@@ -7790,7 +8329,7 @@ export async function processSessionFile(
   continuationDepth: number = 0,
 ): Promise<void> {
   const isSubagent = filePath.split(path.sep).includes("subagents");
-  const stats = await ingestStat(filePath, getPosition(filePath));
+  const stats = await ingestStat(filePath, getPosition(filePath), "claude", sessionId);
   if (!stats) return;
   const lastPosition = stats.lastPosition;
   // New bytes in a subagent transcript mean its parent has a live child inside
@@ -7826,49 +8365,28 @@ export async function processSessionFile(
     // drains in bounded, convergent steps (see constant above) rather than
     // one giant batch. A trailing partial line (a large entry still being
     // written) is left for the next pass.
-    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition);
+    const ingest = await readTranscriptIngest({client:"claude",file:filePath,sessionId,offset:lastPosition,recoverBackup:!bakImageRecoveryDone.has(filePath)});
+    assertTranscriptReadGeneration(ingest,stats.identity);
+    const { bytesConsumed, metadata } = ingest;
+    if (!bytesConsumed) return;
+    let messages = ingest.messages;
+    const permissionObservation = permissionJustResolved.capture(sessionId);
+    const suppressPermissionResponses = permissionObservation !== undefined;
+    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
 
-    if (!newContent) {
-      // No complete lines yet — don't advance position
-      return;
-    }
-    const LARGE_BATCH_BYTES = 64 * 1024;
-    if (bytesConsumed >= LARGE_BATCH_BYTES) {
-      log(`Processing ${bytesConsumed} bytes for session ${sessionId.slice(0, 8)} (from position ${lastPosition})`);
-    }
-    let messages = parseTranscriptFor("claude", newContent);
-
-    const bakPath = filePath + ".bak";
-    if (!bakImageRecoveryDone.has(filePath) && fs.existsSync(bakPath)) {
-      bakImageRecoveryDone.add(filePath);
-      messages = recoverImagesFromBackup(messages, bakPath, log);
-    }
-
-    if (permissionJustResolved.has(sessionId)) {
+    if (suppressPermissionResponses) {
       const before = messages.length;
       messages = messages.filter(m => !(m.role === "user" && /^[yn]$/i.test(m.content?.trim())));
       if (messages.length < before) {
         log(`Filtered ${before - messages.length} permission response message(s) for session ${sessionId.slice(0, 8)}`);
       }
-      permissionJustResolved.delete(sessionId);
     }
 
     let conversationId = conversationCache[sessionId];
 
     // Check for summary title using the already-read new chunk + small tail read
     if (conversationId) {
-      let titleContent: string;
-      try {
-        titleContent = newContent + "\n" + readFileTailSync(filePath, 4096);
-      } catch (err: any) {
-        if (err.code === 'EACCES' || err.code === 'EPERM') {
-          log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
-          setPosition(filePath, lastPosition + bytesConsumed);
-          return;
-        }
-        throw err;
-      }
-      const summaryTitle = extractSummaryTitle(titleContent);
+      const summaryTitle = metadata.summaryTitle;
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
           await syncService.updateTitle(conversationId, summaryTitle);
@@ -7883,12 +8401,7 @@ export async function processSessionFile(
 
       if (!planHandoffChecked.has(sessionId)) {
         planHandoffChecked.add(sessionId);
-        let headContent: string;
-        try {
-          headContent = readFileHead(filePath, 16384);
-        } catch { headContent = ""; }
-        const headMessages = parseSessionFile(headContent);
-        const userMsgs = headMessages.filter(m => m.role === "user").slice(0, 3);
+        const userMsgs = metadata.headMessages ?? [];
         for (const msg of userMsgs) {
           if (!msg.content) continue;
           const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
@@ -7915,40 +8428,49 @@ export async function processSessionFile(
     }
 
   if (messages.length === 0) {
-    setPosition(filePath, lastPosition + bytesConsumed);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      setPosition(filePath, lastPosition + bytesConsumed);
+      if (metadata.backupAttempted) bakImageRecoveryDone.add(filePath);
+      permissionJustResolved.consume(sessionId, permissionObservation);
+    });
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFilePass(
+      filePath,
+      sessionId,
+      projectPath,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateStateCallback,
+      parentConversationId,
+      overrideAgentType,
+      continuationDepth + 1,
+    ));
     return;
   }
 
   if (!conversationId) {
-    let headContent: string;
-    try {
-      headContent = readFileHead(filePath, 16384);
-    } catch (err: any) {
-      if (err.code === 'EACCES' || err.code === 'EPERM') {
-        log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
-        return;
-      }
-      throw err;
-    }
-
     // The exact params the direct create attempts, kept for the catch block: a
     // failed create must retry with THIS object, not a rebuilt reduced one.
     let createParams: CreateConversationParams | null = null;
     try {
-      const slug = extractSlug(headContent);
-      const parentMessageUuid = extractParentUuid(headContent);
+      const slug = metadata.slug;
+      const parentMessageUuid = metadata.parentUuid;
       const firstMessageTimestamp = messages[0]?.timestamp;
       const dirName = path.basename(path.dirname(filePath));
       const decodedPath = dirName ? decodeProjectDirName(dirName) : undefined;
       const actualProjectPath = pickProjectPath({
         decodedSlugPath: decodedPath || projectPath,
-        recordedCwd: extractCwd(headContent),
+        recordedCwd: metadata.cwd,
         home: process.env.HOME,
       });
       const gitInfo = actualProjectPath ? await getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
       // Detect parent conversation from file path (subagents/) or content (plan handoff)
       let isPlanHandoff = false;
@@ -7965,13 +8487,9 @@ export async function processSessionFile(
       if (!parentConversationId) {
         const userMessages = messages.filter(msg => msg.role === "user").slice(0, 3);
         for (const msg of userMessages) {
-          if (!msg.content) continue;
-          const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
-          if (handoffMatch) {
-            const jsonlPath = handoffMatch[1];
-            const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
-            if (parentSessionMatch) {
-              const parentSessionId = parentSessionMatch[1];
+          const parentSessionId = ingestRecord(msg)?.handoffParent;
+          if (parentSessionId !== undefined) {
+            if (parentSessionId) {
               if (conversationCache[parentSessionId]) {
                 parentConversationId = conversationCache[parentSessionId];
                 isPlanHandoff = true;
@@ -7979,25 +8497,6 @@ export async function processSessionFile(
               }
             }
             break;
-          }
-        }
-      }
-
-      // Detect parent from tmux spawn tracking (agent-spawn.sh / tmux new-session called by another session)
-      if (!parentConversationId && tmuxSpawnedBySession.size > 0) {
-        const spawnProc = await findSessionProcess(sessionId, "claude").catch(() => null);
-        if (spawnProc) {
-          let childTmuxName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
-          if (!childTmuxName) {
-            const pane = await findTmuxPaneForTty(spawnProc.tty);
-            if (pane) {
-              childTmuxName = pane.split(":")[0];
-              cacheSessionProcess(sessionId, spawnProc, pane);
-            }
-          }
-          if (childTmuxName && tmuxSpawnedBySession.has(childTmuxName)) {
-            parentConversationId = tmuxSpawnedBySession.get(childTmuxName)!;
-            log(`Detected tmux-spawned parent for ${sessionId.slice(0, 8)}: ${parentConversationId.slice(0, 12)} via tmux session ${childTmuxName}`);
           }
         }
       }
@@ -8081,31 +8580,24 @@ export async function processSessionFile(
         // frozen doppelgänger that receives input but never output. Skip it,
         // and advance position + ledger so the stale-file scan doesn't
         // re-detect the file forever.
+        checkTranscriptDeadline();
         setPosition(filePath, stats.size);
         markSynced(filePath, stats.size, 0);
         log(`Skipped conversation creation for fork artifact ${sessionId.slice(0, 28)} (${filePath})`);
         return;
       } else {
-        const cliFlags = detectCliFlags(headContent + "\n" + newContent);
+        const cliFlags = metadata.cliFlags;
         let subagentDescription: string | undefined;
         let subagentAgentType: string | undefined;
-        if (isSubagent) {
-          try {
-            const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
-            if (fs.existsSync(metaPath)) {
-              const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
-              if (meta.description) {
-                subagentDescription = meta.description;
-                subagentDescriptions.set(sessionId, meta.description);
-              }
-              if (meta.agentType) subagentAgentType = meta.agentType;
-            }
-          } catch {}
+        if (isSubagent && metadata.subagent) {
+          subagentDescription = metadata.subagent.description;
+          subagentAgentType = metadata.subagent.agentType;
+          if (subagentDescription) subagentDescriptions.set(sessionId, subagentDescription);
         }
         // Teammate transcripts self-identify on every line — stamp the team
         // identity at create so the row never exists without it. The parent
         // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
-        const teamInfo = !isSubagent && newContent.includes('"teamName"') ? extractTeamInfo(newContent) : undefined;
+        const teamInfo = !isSubagent ? metadata.teamInfo : undefined;
         // A headless claude child (`claude -p` run from another session's Bash)
         // nests under its spawner as a subagent. Fork lineage (parentMessageUuid)
         // and agent-team teammates keep their first-class semantics — teammates
@@ -8140,7 +8632,9 @@ export async function processSessionFile(
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         };
+        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation(createParams);
+        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
@@ -8207,15 +8701,11 @@ export async function processSessionFile(
         });
       }
 
-      if (pendingMessages[sessionId]) {
-        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-        delete pendingMessages[sessionId];
-      }
+      if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
           log("⚠️  Authentication expired - sync paused");
-          setPosition(filePath, lastPosition + bytesConsumed);
           return;
         }
         // Let it fall through to retry queue
@@ -8224,25 +8714,7 @@ export async function processSessionFile(
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Failed to create conversation, queueing for retry: ${errMsg}`);
 
-      if (!pendingMessages[sessionId]) {
-        pendingMessages[sessionId] = [];
-      }
-      for (const msg of messages) {
-        pendingMessages[sessionId].push({
-          uuid: msg.uuid,
-          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-          content: redactSecrets(msg.content),
-          timestamp: msg.timestamp,
-          filePath,
-          fileSize: stats.size,
-          thinking: msg.thinking,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          images: msg.images,
-          subtype: msg.subtype,
-          model: msg.model,
-        });
-      }
+      await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
 
       // A subagent whose create failed must stay re-parentable no matter what
       // the retry ends up sending (e.g. a stale persisted op from an older
@@ -8257,36 +8729,23 @@ export async function processSessionFile(
       if (createParams) {
         // Retry exactly what the direct call attempted — rebuilding a reduced
         // param set here silently dropped parentConversationId/isSubagent.
-        retryQueue.add("createConversation", createParams as unknown as Record<string, unknown>, errMsg);
-        setPosition(filePath, lastPosition + bytesConsumed);
+        queueTranscriptConversation(retryQueue, createParams as unknown as Record<string, unknown>, errMsg);
         return;
       }
 
       // Create failed before the params were assembled — rebuild what we can.
-      let retryHeadContent: string;
-      try {
-        retryHeadContent = readFileHead(filePath, 16384);
-      } catch (readErr: any) {
-        if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
-          log(`Warning: Permission denied reading ${filePath} for retry queue. Skipping.`);
-          setPosition(filePath, lastPosition + bytesConsumed);
-          return;
-        }
-        throw readErr;
-      }
-
-      const slug = extractSlug(retryHeadContent);
+      const slug = metadata.slug;
       const firstMsgTimestamp = messages[0]?.timestamp;
       const retryDirName = path.basename(path.dirname(filePath));
       const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : undefined;
       const retryProjectPath = pickProjectPath({
         decodedSlugPath: retryDecoded || projectPath,
-        recordedCwd: extractCwd(retryHeadContent),
+        recordedCwd: metadata.cwd,
         home: process.env.HOME,
       });
       const gitInfo = retryProjectPath ? await getGitInfo(retryProjectPath) : undefined;
 
-      retryQueue.add("createConversation", {
+      queueTranscriptConversation(retryQueue, {
         userId,
         teamId,
         sessionId,
@@ -8298,7 +8757,6 @@ export async function processSessionFile(
         isSubagent: isSubagent || undefined,
       }, errMsg);
 
-      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
   }
@@ -8315,28 +8773,19 @@ export async function processSessionFile(
   // conversation yet on the pass that saw the stamp, and the lead may only
   // resolve once the team's panes are live. Cheap string gate first — only
   // teammate transcripts carry the stamp.
-  if (conversationId && !isSubagent && !teamLinkDone.has(sessionId) && newContent.includes('"teamName"')) {
-    maybeLinkTeamSpawn(sessionId, conversationId, newContent, syncService, conversationCache).catch((err) => {
+  if (conversationId && !isSubagent && !teamLinkDone.has(sessionId) && metadata.teamInfo) {
+    maybeLinkTeamSpawn(sessionId, conversationId, JSON.stringify(metadata.teamInfo), syncService, conversationCache).catch((err) => {
       log(`Teammate link attempt failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
   // Intercept plan mode tool calls (ExitPlanMode, TaskCreate, TaskUpdate) and sync to Convex
-  if (conversationId && (newContent.includes("ExitPlanMode") || newContent.includes("TaskCreate") || newContent.includes("TaskUpdate"))) {
-    const lines = newContent.split("\n");
-    for (const line of lines) {
-      if (!line.includes("ExitPlanMode") && !line.includes("TaskCreate") && !line.includes("TaskUpdate")) continue;
-      try {
-        const entry = JSON.parse(line);
-        const msg = entry.message || entry;
-        const blocks = Array.isArray(msg.content) ? msg.content : [];
-        for (const block of blocks) {
-          if (block.type !== "tool_use") continue;
-
+  if (conversationId && metadata.planTools?.length) {
+    for (const block of metadata.planTools) {
           if (block.name === "ExitPlanMode" && block.input?.plan && !planModeSynced.has(sessionId)) {
             planModeSynced.add(sessionId);
             const dirName = path.basename(path.dirname(filePath));
-            const projPath = dirName ? resolveTranscriptProjectPath(filePath, dirName) : undefined;
+            const projPath = dirName ? pickProjectPath({decodedSlugPath:decodeProjectDirName(dirName),recordedCwd:metadata.cwd,home:process.env.HOME}) : undefined;
             try {
               const planShortId = await syncService.syncPlanFromPlanMode({
                 sessionId,
@@ -8354,23 +8803,37 @@ export async function processSessionFile(
           }
 
           if (block.name === "TaskCreate" && block.input?.subject) {
-            const taskMap = planModeTaskMap.get(sessionId) || new Map();
-            const localId = String(taskMap.size + 1);
-            try {
-              const shortId = await syncService.syncTaskFromPlanMode({
-                sessionId,
-                title: block.input.subject,
-                description: block.input.description,
-                planShortId: planModePlanMap.get(sessionId),
-              });
-              if (shortId) {
-                taskMap.set(localId, shortId);
+            const receiptKey = `occurrence:${block.occurrence}`;
+            let taskMap = planModeTaskMap.get(sessionId);
+            if (!taskMap?.has(receiptKey)) {
+              assertTranscriptAuthority(sessionId, conversationId, conversationCache);
+              let shortId: string | null;
+              try {
+                shortId = await syncService.syncTaskFromPlanMode({
+                  sessionId,
+                  title: block.input.subject,
+                  description: block.input.description,
+                  planShortId: planModePlanMap.get(sessionId),
+                  clientKey: `transcript-task:${block.occurrence}`,
+                });
+              } catch (err) {
+                if (err instanceof AuthExpiredError) return;
+                log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
+                throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unresolved TaskCreate ${block.occurrence}`);
+              }
+              if (!shortId) throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unresolved TaskCreate ${block.occurrence}`);
+              await validateTranscriptIngest(ingest);
+              assertTranscriptAuthority(sessionId, conversationId, conversationCache);
+              taskMap = planModeTaskMap.get(sessionId) ?? new Map<string, string>();
+              if (!taskMap.has(receiptKey)) {
+                let localId = 1;
+                for (const key of taskMap.keys()) if (/^[1-9][0-9]*$/.test(key)) localId = Math.max(localId, Number(key) + 1);
+                taskMap.set(String(localId), shortId);
+                taskMap.set(receiptKey, shortId);
                 planModeTaskMap.set(sessionId, taskMap);
                 savePlanModeCache();
                 log(`Synced task ${shortId} from TaskCreate in session ${sessionId.slice(0, 8)}: ${block.input.subject}`);
               }
-            } catch (err) {
-              log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
 
@@ -8404,48 +8867,10 @@ export async function processSessionFile(
               }
             }
           }
-        }
-      } catch {}
     }
   }
 
-  // Detect tmux session spawns in bash tool calls (agent-spawn.sh, tmux new-session)
-  if (conversationId && (newContent.includes("agent-spawn") || newContent.includes("tmux new-session") || newContent.includes("new-session"))) {
-    const spawnLines = newContent.split("\n");
-    for (const spawnLine of spawnLines) {
-      if (!spawnLine.includes("agent-spawn") && !spawnLine.includes("new-session")) continue;
-      try {
-        const entry = JSON.parse(spawnLine);
-        const msg = entry.message || entry;
-        const blocks = Array.isArray(msg.content) ? msg.content : [];
-        for (const block of blocks) {
-          if (block.type !== "tool_use") continue;
-          const cmd = block.input?.command;
-          if (typeof cmd !== "string") continue;
-          let spawnMatch = cmd.match(/agent-spawn(?:\.sh)?\s+\S+\s+["']?([^\s"']+)["']?/);
-          if (!spawnMatch) {
-            spawnMatch = cmd.match(/tmux\s+new-session\s+(?:.*?\s)?-s\s+["']?([^\s"']+)["']?/);
-          }
-          if (spawnMatch) {
-            const tmuxName = spawnMatch[1];
-            tmuxSpawnedBySession.set(tmuxName, conversationId);
-            log(`Tracked tmux spawn: ${tmuxName} -> parent ${conversationId.slice(0, 12)}`);
-            // Retroactively link if child session was already created
-            for (const [childSid, info] of sessionProcessCache) {
-              if (info.tmuxTarget?.split(":")[0] === tmuxName && conversationCache[childSid]) {
-                const childConvId = conversationCache[childSid];
-                syncService.linkSessions(conversationId, childConvId).then(() => {
-                  log(`Retroactively linked tmux-spawned child ${childSid.slice(0, 8)} -> parent ${conversationId.slice(0, 12)}`);
-                }).catch(err => {
-                  log(`Failed retroactive tmux spawn link: ${err instanceof Error ? err.message : String(err)}`);
-                });
-              }
-            }
-          }
-        }
-      } catch {}
-    }
-  }
+  await trackTmuxSpawns(messages, conversationId, syncService, conversationCache);
 
   syncSkillsForConversation(conversationId, projectPath, syncService);
 
@@ -8459,43 +8884,34 @@ export async function processSessionFile(
     if (turnTs !== null) markTurnStarted(sessionId, turnTs);
   }
 
-  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+  const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
   if (batchResult.authExpired) {
     log("⚠️  Authentication expired - sync paused");
     return;
   }
+  if (!batchResult.accepted && !batchResult.conversationNotFound) return;
   if (batchResult.conversationNotFound) {
+    if (conversationCache[sessionId] !== conversationId) return;
     log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
     delete conversationCache[sessionId];
     saveConversationCache(conversationCache);
 
-    let recreateHeadContent: string;
-    try {
-      recreateHeadContent = readFileHead(filePath, 16384);
-    } catch (readErr: any) {
-      if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
-        log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
-        setPosition(filePath, lastPosition + bytesConsumed);
-        return;
-      }
-      throw readErr;
-    }
-
-    const slug = extractSlug(recreateHeadContent);
+    const slug = metadata.slug;
     const firstMessageTimestamp = messages[0]?.timestamp;
     const recreateDirName = path.basename(path.dirname(filePath));
     const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : undefined;
     const recreateProjectPath = pickProjectPath({
       decodedSlugPath: recreateDecoded || projectPath,
-      recordedCwd: extractCwd(recreateHeadContent),
+      recordedCwd: metadata.cwd,
       home: process.env.HOME,
     });
     const gitInfo = recreateProjectPath ? await getGitInfo(recreateProjectPath) : undefined;
 
     try {
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
+      const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
         teamId,
@@ -8507,22 +8923,27 @@ export async function processSessionFile(
         startedAt: firstMessageTimestamp,
         gitInfo,
       });
+      conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for session ${sessionId}`);
 
-      await syncService.addMessages({
-        conversationId,
-        messages: messages.map(prepMessageForSync),
-      });
+      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        if (!retryResult.accepted) return;
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      transcriptRetries.add(sessionId);
       log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
+      return;
     }
   }
 
-    setPosition(filePath, lastPosition + bytesConsumed);
-    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      setPosition(filePath, lastPosition + bytesConsumed);
+      if (metadata.backupAttempted) bakImageRecoveryDone.add(filePath);
+      permissionJustResolved.consume(sessionId, permissionObservation);
+      markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
+    });
     log(`Synced ${messages.length} messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -8545,7 +8966,7 @@ export async function processSessionFile(
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
-      const permissionPrompt = detectPermissionPrompt(lastAssistantMessage.content);
+      const permissionPrompt = metadata.permissionPrompt;
       if (permissionPrompt && !permissionRecordPending.has(sessionId)) {
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
         permissionRecordPending.add(sessionId);
@@ -8670,7 +9091,7 @@ export async function processSessionFile(
 
     updateStateCallback();
 
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFile(
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFilePass(
       filePath,
       sessionId,
       projectPath,
@@ -8698,7 +9119,11 @@ export async function processSessionFile(
   }
 }
 
-async function processCursorSession(
+export async function processCursorSession(...args: Parameters<typeof processCursorSessionPass>): Promise<void> {
+  return runTranscriptPass(args[1], path.resolve(args[0]), () => processCursorSessionPass(...args));
+}
+
+async function processCursorSessionPass(
   dbPath: string,
   sessionId: string,
   workspacePath: string,
@@ -8710,11 +9135,16 @@ async function processCursorSession(
   pendingMessages: PendingMessages,
   updateStateCallback: () => void
 ): Promise<void> {
-  const syncedCount = getPosition(dbPath);
+  let syncedCount = getPosition(dbPath);
 
   let result: { messages: ParsedMessage[]; maxRowId: number; totalCount: number };
   try {
-    result = extractMessagesFromCursorDb(dbPath, syncedCount);
+    result = await readTranscriptIngest({client:"cursorDb",file:dbPath,sessionId,offset:syncedCount});
+    if (transcriptCountReplaced(result,syncedCount)) {
+      syncedCount = 0;
+      setPosition(dbPath,0);
+      result = await readTranscriptIngest({client:"cursorDb",file:dbPath,sessionId,offset:0});
+    }
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${dbPath}. Will retry when permissions are restored.`);
@@ -8722,10 +9152,12 @@ async function processCursorSession(
     }
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Failed to extract messages from Cursor DB: ${errMsg}`);
-    return;
+    throw err;
   }
 
-  const { messages, totalCount } = result;
+  const { totalCount } = result;
+  const messages = result.messages.slice(0, TRANSCRIPT_PENDING_ROWS);
+  const committedCount = syncedCount + messages.length;
 
   if (messages.length === 0) {
     return;
@@ -8737,8 +9169,9 @@ async function processCursorSession(
     try {
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
+      const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
         teamId,
@@ -8748,19 +9181,16 @@ async function processCursorSession(
         title,
         startedAt: firstMessageTimestamp,
       });
+      conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Created conversation ${conversationId} for Cursor session ${sessionId}`);
 
-      if (pendingMessages[sessionId]) {
-        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-        delete pendingMessages[sessionId];
-      }
+      if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
           log("⚠️  Authentication expired - sync paused");
-          setPosition(dbPath, totalCount);
           return;
         }
         // Let it fall through to retry queue
@@ -8769,29 +9199,11 @@ async function processCursorSession(
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
 
-      if (!pendingMessages[sessionId]) {
-        pendingMessages[sessionId] = [];
-      }
-      for (const msg of messages) {
-        pendingMessages[sessionId].push({
-          uuid: msg.uuid,
-          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-          content: redactSecrets(msg.content),
-          timestamp: msg.timestamp,
-          filePath: dbPath,
-          fileSize: totalCount,
-          thinking: msg.thinking,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          images: msg.images,
-          subtype: msg.subtype,
-          model: msg.model,
-        });
-      }
+      await retainPendingTranscript(pendingMessages, sessionId, messages, dbPath, totalCount);
 
       const firstMsgTimestamp = messages[0]?.timestamp;
 
-      retryQueue.add("createConversation", {
+      queueTranscriptConversation(retryQueue, {
         userId,
         teamId,
         sessionId,
@@ -8800,26 +9212,28 @@ async function processCursorSession(
         startedAt: firstMsgTimestamp,
       }, errMsg);
 
-      setPosition(dbPath, totalCount);
       return;
     }
   }
 
-  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+  const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
   if (batchResult.authExpired) {
     log("⚠️  Authentication expired - sync paused");
     return;
   }
+  if (!batchResult.accepted && !batchResult.conversationNotFound) return;
   if (batchResult.conversationNotFound) {
+    if (conversationCache[sessionId] !== conversationId) return;
     log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
     delete conversationCache[sessionId];
     saveConversationCache(conversationCache);
 
     const firstMessageTimestamp = messages[0]?.timestamp;
     const firstUserMessage = messages.find(msg => msg.role === "user");
-    const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+    const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
     try {
+      const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
         teamId,
@@ -8829,21 +9243,25 @@ async function processCursorSession(
         title,
         startedAt: firstMessageTimestamp,
       });
+      conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
 
-      await syncService.addMessages({
-        conversationId,
-        messages: messages.map(prepMessageForSync),
-      });
+      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        if (!retryResult.accepted) return;
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      transcriptRetries.add(sessionId);
       log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
+      return;
     }
   }
 
-  setPosition(dbPath, totalCount);
+  await commitTranscriptIngest(result,sessionId,conversationId,conversationCache,() => {
+    setPosition(dbPath, committedCount);
+  }, [sessionId], undefined, messages);
+  if (committedCount < totalCount) transcriptRetries.add(sessionId);
   log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
   syncStats.messagesSynced += messages.length;
   syncStats.sessionsActive.add(sessionId);
@@ -8851,7 +9269,11 @@ async function processCursorSession(
   updateStateCallback();
 }
 
-async function processCursorTranscriptFile(
+export async function processCursorTranscriptFile(...args: Parameters<typeof processCursorTranscriptFilePass>): Promise<void> {
+  return runTranscriptPass(args[1], path.resolve(args[0]), () => processCursorTranscriptFilePass(...args));
+}
+
+async function processCursorTranscriptFilePass(
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -8863,38 +9285,54 @@ async function processCursorTranscriptFile(
   updateStateCallback: () => void,
   continuationDepth: number = 0,
 ): Promise<void> {
-  const stats = await ingestStat(filePath, getPosition(filePath));
+  const stats = await ingestStat(filePath, getPosition(filePath), "cursor", sessionId);
   if (!stats || stats.size <= stats.lastPosition) return;
   const lastPosition = stats.lastPosition;
 
   try {
     // Windowed like claude ingest; the boundary keeps a multi line message
     // whole across passes (see cursorPassBoundary).
-    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition, { boundary: cursorPassBoundary });
-    if (!newContent) return;
-    const messages = parseTranscriptFor("cursor", newContent);
+    const ingest = await readTranscriptIngest({client:"cursor",file:filePath,sessionId,offset:lastPosition});
+    assertTranscriptReadGeneration(ingest,stats.identity);
+    const {messages,bytesConsumed} = ingest;
+    if (!bytesConsumed) return;
 
     let conversationId = conversationCache[sessionId];
 
     if (messages.length === 0) {
-      setPosition(filePath, lastPosition + bytesConsumed);
+      await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+        setPosition(filePath, lastPosition + bytesConsumed);
+      });
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFilePass(
+      filePath,
+      sessionId,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      updateStateCallback,
+      continuationDepth + 1,
+    ));
       return;
     }
 
     if (!conversationId) {
       let projectPath: string | undefined;
       try {
-        projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+        projectPath = await findWorkspacePathForCursorConversation(sessionId) || undefined;
       } catch {
         projectPath = undefined;
       }
 
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
       const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
 
       try {
+        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -8907,20 +9345,17 @@ async function processCursorTranscriptFile(
           parentMessageUuid: undefined,
           gitInfo,
         });
+        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Created conversation ${conversationId} for Cursor transcript ${sessionId}`);
         syncStats.conversationsCreated++;
 
-        if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-          delete pendingMessages[sessionId];
-        }
+        if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            setPosition(filePath, lastPosition + bytesConsumed);
             return;
           }
         }
@@ -8928,27 +9363,9 @@ async function processCursorTranscriptFile(
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
 
-        if (!pendingMessages[sessionId]) {
-          pendingMessages[sessionId] = [];
-        }
-        for (const msg of messages) {
-          pendingMessages[sessionId].push({
-            uuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            filePath,
-            fileSize: stats.size,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-            model: msg.model,
-          });
-        }
+        await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
 
-        retryQueue.add("createConversation", {
+        queueTranscriptConversation(retryQueue, {
           userId,
           teamId,
           sessionId,
@@ -8959,28 +9376,30 @@ async function processCursorTranscriptFile(
           gitInfo,
         }, errMsg);
 
-        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
     }
 
-    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+    const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
     }
+    if (!batchResult.accepted && !batchResult.conversationNotFound) return;
     if (batchResult.conversationNotFound) {
+      if (conversationCache[sessionId] !== conversationId) return;
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
       delete conversationCache[sessionId];
       saveConversationCache(conversationCache);
 
       try {
-        const projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+        const projectPath = await findWorkspacePathForCursorConversation(sessionId) || undefined;
         const firstMessageTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find(m => m.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
         const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
 
+        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -8993,29 +9412,32 @@ async function processCursorTranscriptFile(
           parentMessageUuid: undefined,
           gitInfo,
         });
+        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
 
-        await syncService.addMessages({
-          conversationId,
-          messages: messages.map(prepMessageForSync),
-        });
+        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        if (!retryResult.accepted) return;
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        transcriptRetries.add(sessionId);
         log(`Failed to recreate Cursor conversation and add messages: ${retryErrMsg}`);
+        return;
       }
     }
 
-    setPosition(filePath, lastPosition + bytesConsumed);
-    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      setPosition(filePath, lastPosition + bytesConsumed);
+      markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
+    });
     log(`Synced ${messages.length} Cursor transcript messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
 
     updateStateCallback();
 
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFile(
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFilePass(
       filePath,
       sessionId,
       syncService,
@@ -9030,12 +9452,17 @@ async function processCursorTranscriptFile(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
+    throw err;
   }
 }
 
 const codexModelPositions = new Map<string, { offset: number; model?: string }>();
 
-async function processCodexSession(
+export async function processCodexSession(...args: Parameters<typeof processCodexSessionPass>): Promise<void> {
+  return runTranscriptPass(args[1], path.resolve(args[0]), () => processCodexSessionPass(...args));
+}
+
+async function processCodexSessionPass(
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -9048,24 +9475,19 @@ async function processCodexSession(
   updateStateCallback: () => void,
   continuationDepth: number = 0,
 ): Promise<void> {
-  const stats = await ingestStat(filePath, getPosition(filePath));
+  const stats = await ingestStat(filePath, getPosition(filePath), "codex", sessionId);
   if (!stats || stats.size <= stats.lastPosition) return;
   const lastPosition = stats.lastPosition;
 
   try {
     // Windowed like claude ingest: one pass per window, continuation below.
-    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition);
-    if (!newContent) return;
-    let sessionMetaHead: string;
-    try {
-      sessionMetaHead = readFileHead(filePath, 4096);
-    } catch (err: any) {
-      if (err.code === "EACCES" || err.code === "EPERM") {
-        log(`Warning: Permission denied reading ${filePath} for Codex session metadata. Skipping.`);
-        return;
-      }
-      throw err;
-    }
+    const cachedModel = codexModelPositions.get(filePath);
+    const ingest = await readTranscriptIngest({client:"codex",file:filePath,sessionId,offset:lastPosition,model:cachedModel?.model,modelKnown:cachedModel?.offset === lastPosition});
+    assertTranscriptReadGeneration(ingest,stats.identity);
+    const {messages,bytesConsumed,metadata} = ingest;
+    if (!bytesConsumed) return;
+    const sessionMetaHead = metadata.appServerHead ?? "";
+    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
     const persistedAppServerThreadIds = new Set(
       [...persistedAppServerThreads.values()].map((record) => record.threadId),
     );
@@ -9076,25 +9498,21 @@ async function processCodexSession(
       persistedAppServerThreadIds,
       pendingAppServerForkParents,
     )) {
+      checkTranscriptDeadline();
       setPosition(filePath, stats.size);
       markSynced(filePath, stats.size, 0);
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
-    const codexMetadata = codexSessionMetadataFor(filePath);
+    const codexMetadata = metadata.codex;
     const nativeParentSessionId = codexMetadata?.parentThreadId;
-    const cachedModel = codexModelPositions.get(filePath);
-    const modelState = { model: cachedModel?.offset === lastPosition
-      ? cachedModel.model
-      : await readCodexModelBeforeOffset(filePath, lastPosition) };
-    const messages = parseCodexSessionFile(newContent, modelState);
-    codexModelPositions.set(filePath, { offset: lastPosition + bytesConsumed, model: modelState.model });
+    codexModelPositions.set(filePath, {offset:lastPosition+bytesConsumed,model:ingest.model});
 
     // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
     // session embeds its lineage back to a common root, so we key the conversation off that
     // root. We register BOTH the live fork id and the root so future forks collapse here and
     // lookups by the live session id (inject/status/kill) keep resolving.
-    const forkRoot = resolveCodexForkRoot(filePath);
+    const forkRoot = metadata.forkRoot;
     const lineageKeys =
       forkRoot && forkRoot !== sessionId ? [sessionId, forkRoot] : [sessionId];
     const setConversationCache = (cid: string): void => {
@@ -9110,7 +9528,7 @@ async function processCodexSession(
     const clearConversationCache = (): void => {
       let changed = false;
       for (const k of lineageKeys) {
-        if (k in conversationCache) {
+        if (k in conversationCache && conversationCache[k] === conversationId) {
           delete conversationCache[k];
           changed = true;
         }
@@ -9129,18 +9547,7 @@ async function processCodexSession(
     if (conversationId) setConversationCache(conversationId);
 
     if (conversationId) {
-      let titleContent: string;
-      try {
-        titleContent = newContent + "\n" + readFileTailSync(filePath, 4096);
-      } catch (err: any) {
-        if (err.code === 'EACCES' || err.code === 'EPERM') {
-          log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
-          setPosition(filePath, lastPosition + bytesConsumed);
-          return;
-        }
-        throw err;
-      }
-      const summaryTitle = extractSummaryTitle(titleContent);
+      const summaryTitle = metadata.summaryTitle;
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
           await syncService.updateTitle(conversationId, summaryTitle);
@@ -9155,14 +9562,28 @@ async function processCodexSession(
     }
 
     if (messages.length === 0) {
-      setPosition(filePath, lastPosition + bytesConsumed);
+      await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+        setPosition(filePath, lastPosition + bytesConsumed);
+      },lineageKeys);
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSessionPass(
+      filePath,
+      sessionId,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateStateCallback,
+      continuationDepth + 1,
+    ));
       return;
     }
 
     if (!conversationId) {
       try {
-        const headContent = sessionMetaHead.length >= 16384 ? sessionMetaHead : readFileHead(filePath, 16384);
-        const projectPath = extractCodexCwd(headContent);
+        const projectPath = metadata.cwd;
         const firstMessageTimestamp = messages[0]?.timestamp;
         let matchedStartedConversation: string | null = null;
 
@@ -9218,7 +9639,7 @@ async function processCodexSession(
         } else {
 
           const firstUserMessage = messages.find(msg => msg.role === "user");
-          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+          const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
           // A codex session spawned by another session's Bash tool (`codex
           // exec`) nests under its spawner as a subagent instead of surfacing
@@ -9244,6 +9665,7 @@ async function processCodexSession(
             if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
           }
 
+          const finishCreate = captureTranscriptMapping(sessionId,conversationCache,lineageKeys);
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -9255,9 +9677,10 @@ async function processCodexSession(
             startedAt: firstMessageTimestamp,
             parentMessageUuid: undefined,
             parentConversationId,
-            isSubagent: !!nativeParentSessionId || undefined,
+            isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
             gitInfo: undefined,
           });
+          conversationId = finishCreate(conversationId);
           setConversationCache(conversationId);
           await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
           log(`Created conversation ${conversationId} for Codex session ${sessionId}${forkRoot && forkRoot !== sessionId ? ` (lineage root ${forkRoot.slice(0, 8)})` : ""}`);
@@ -9270,16 +9693,12 @@ async function processCodexSession(
             });
           }
 
-          if (pendingMessages[sessionId]) {
-            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-            delete pendingMessages[sessionId];
-          }
+          if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
         }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            setPosition(filePath, lastPosition + bytesConsumed);
             return;
           }
           // Let it fall through to retry queue
@@ -9288,31 +9707,13 @@ async function processCodexSession(
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create Codex conversation, queueing for retry: ${errMsg}`);
 
-        if (!pendingMessages[sessionId]) {
-          pendingMessages[sessionId] = [];
-        }
-        for (const msg of messages) {
-          pendingMessages[sessionId].push({
-            uuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            filePath,
-            fileSize: stats.size,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-            model: msg.model,
-          });
-        }
+        await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
 
         const firstMsgTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
-        retryQueue.add("createConversation", {
+        queueTranscriptConversation(retryQueue, {
           userId,
           teamId,
           sessionId,
@@ -9321,25 +9722,27 @@ async function processCodexSession(
           startedAt: firstMsgTimestamp,
         }, errMsg);
 
-        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
     }
 
-    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+    const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, lineageKeys);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
     }
+    if (!batchResult.accepted && !batchResult.conversationNotFound) return;
     if (batchResult.conversationNotFound) {
+      if (conversationCache[sessionId] !== conversationId) return;
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
       clearConversationCache();
 
       const firstMsgTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
       try {
+        const finishCreate = captureTranscriptMapping(sessionId,conversationCache,lineageKeys);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9348,21 +9751,24 @@ async function processCodexSession(
           title,
           startedAt: firstMsgTimestamp,
         });
+        conversationId = finishCreate(conversationId);
         setConversationCache(conversationId);
         log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
 
-        await syncService.addMessages({
-          conversationId,
-          messages: messages.map(prepMessageForSync),
-        });
+        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, lineageKeys, true);
+        if (!retryResult.accepted) return;
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        transcriptRetries.add(sessionId);
         log(`Failed to recreate Codex conversation and add messages: ${retryErrMsg}`);
+        return;
       }
     }
 
-    setPosition(filePath, lastPosition + bytesConsumed);
-    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      setPosition(filePath, lastPosition + bytesConsumed);
+      markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
+    },lineageKeys);
     log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -9374,19 +9780,12 @@ async function processCodexSession(
       // newContent is only the bytes since the last sync position — a live-watched
       // review delivers exited_review_mode and task_complete in different chunks.
       // Once the terminal task_complete shows up, judge against the whole transcript.
-      if (codexMetadata?.originator === "codex_exec" && newContent.includes('"task_complete"')) {
-        let fullContent = newContent;
-        try {
-          fullContent = await fs.promises.readFile(filePath, "utf-8");
-        } catch {}
-        if (
-          isCompletedStandaloneCodexReview(codexMetadata, fullContent) ||
-          isCompletedNativeCodexReviewChild(codexMetadata, fullContent)
-        ) {
-          scheduleCodexReviewRetirement(filePath, sessionId, conversationId, syncService);
-        }
+      if (metadata.completedReview) {
+        scheduleCodexReviewRetirement(filePath, sessionId, conversationId, syncService);
       }
     }
+
+    await trackTmuxSpawns(messages, conversationId, syncService, conversationCache);
 
     // Spawned-child link that failed at creation (child process not visible
     // yet) — bounded retries on later passes, no-op once resolved or exhausted.
@@ -9401,7 +9800,7 @@ async function processCodexSession(
 
     updateStateCallback();
 
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSession(
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSessionPass(
       filePath,
       sessionId,
       syncService,
@@ -9417,12 +9816,17 @@ async function processCodexSession(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Codex session file ${filePath}: ${errMsg}`);
+    throw err;
   }
 }
 
 const geminiSyncedCounts = new Map<string, number>();
 
-async function processGeminiSession(
+export async function processGeminiSession(...args: Parameters<typeof processGeminiSessionPass>): Promise<void> {
+  return runTranscriptPass(args[1], path.resolve(args[0]), () => processGeminiSessionPass(...args));
+}
+
+async function processGeminiSessionPass(
   filePath: string,
   sessionId: string,
   projectHash: string,
@@ -9436,33 +9840,26 @@ async function processGeminiSession(
   updateStateCallback: () => void
 ): Promise<void> {
   try {
-    let content: string;
-    try {
-      content = await fs.promises.readFile(filePath, "utf-8");
-    } catch (err: any) {
-      if (err.code === 'EACCES' || err.code === 'EPERM') {
-        log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
-        return;
-      }
-      throw err;
-    }
-
-    const allMessages = parseTranscriptFor("gemini", content);
-    const previousCount = geminiSyncedCounts.get(filePath) || 0;
+    const ingest = await readTranscriptIngest({client:"gemini",file:filePath,sessionId,offset:0});
+    const allMessages = ingest.messages;
+    let previousCount = geminiSyncedCounts.get(filePath) || 0;
+    if (transcriptCountReplaced(ingest,previousCount)) { previousCount = 0; geminiSyncedCounts.delete(filePath); }
 
     if (allMessages.length <= previousCount) {
       return;
     }
 
-    const newMessages = allMessages.slice(previousCount);
+    const newMessages = allMessages.slice(previousCount, previousCount + TRANSCRIPT_PENDING_ROWS);
+    const committedCount = previousCount + newMessages.length;
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
       try {
         const firstUserMessage = allMessages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
         const startTime = allMessages[0]?.timestamp;
 
+        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9475,6 +9872,7 @@ async function processGeminiSession(
           parentMessageUuid: undefined,
           gitInfo: undefined,
         });
+        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Created conversation ${conversationId} for Gemini session ${sessionId}`);
@@ -9487,15 +9885,11 @@ async function processGeminiSession(
           });
         }
 
-        if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-          delete pendingMessages[sessionId];
-        }
+        if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            geminiSyncedCounts.set(filePath, allMessages.length);
             return;
           }
         }
@@ -9503,30 +9897,12 @@ async function processGeminiSession(
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create Gemini conversation, queueing for retry: ${errMsg}`);
 
-        if (!pendingMessages[sessionId]) {
-          pendingMessages[sessionId] = [];
-        }
-        for (const msg of newMessages) {
-          pendingMessages[sessionId].push({
-            uuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            filePath,
-            fileSize: content.length,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-            model: msg.model,
-          });
-        }
+        await retainPendingTranscript(pendingMessages, sessionId, newMessages, filePath, ingest.fileSize);
 
         const firstUserMessage = allMessages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
-        retryQueue.add("createConversation", {
+        queueTranscriptConversation(retryQueue, {
           userId,
           teamId,
           sessionId,
@@ -9535,25 +9911,27 @@ async function processGeminiSession(
           startedAt: allMessages[0]?.timestamp,
         }, errMsg);
 
-        geminiSyncedCounts.set(filePath, allMessages.length);
         return;
       }
     }
 
-    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
+    const batchResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
     }
+    if (!batchResult.accepted && !batchResult.conversationNotFound) return;
     if (batchResult.conversationNotFound) {
+      if (conversationCache[sessionId] !== conversationId) return;
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
       delete conversationCache[sessionId];
       saveConversationCache(conversationCache);
 
       const firstUserMessage = allMessages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
       try {
+        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9562,21 +9940,25 @@ async function processGeminiSession(
           title,
           startedAt: allMessages[0]?.timestamp,
         });
+        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Gemini session ${sessionId}`);
 
-        await syncService.addMessages({
-          conversationId,
-          messages: newMessages.map(prepMessageForSync),
-        });
+        const retryResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        if (!retryResult.accepted) return;
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        transcriptRetries.add(sessionId);
         log(`Failed to recreate Gemini conversation and add messages: ${retryErrMsg}`);
+        return;
       }
     }
 
-    geminiSyncedCounts.set(filePath, allMessages.length);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      geminiSyncedCounts.set(filePath, committedCount);
+    }, [sessionId], undefined, newMessages);
+    if (committedCount < allMessages.length) transcriptRetries.add(sessionId);
     log(`Synced ${newMessages.length} Gemini messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -9586,6 +9968,7 @@ async function processGeminiSession(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Gemini session file ${filePath}: ${errMsg}`);
+    throw err;
   }
 }
 
@@ -9665,7 +10048,31 @@ export function seedOpencodeForkSyncBaseline(forkSessionId: string): number {
   }
 }
 
-async function processOpencodeSession(
+/**
+ * Rebuild a conversation as an OpenCode session: create one through the serve
+ * sidecar in `cwd` and append the whole (trimmed) history as a single `noReply`
+ * user message. The message starts with the codecast import prefix, which the
+ * opencode parser drops, so the watcher never syncs it back. Returns the real
+ * `ses_` id `opencode -s` resumes, or null when the sidecar cannot run.
+ */
+async function rebuildOpencodeSession(exportData: ExportResult, cwd: string | undefined): Promise<string | null> {
+  const server = await ensureOpencodeServer(readConfig());
+  if (!server) return null;
+  const created = await server.createSession(
+    exportData.conversation.title ? { title: exportData.conversation.title } : {},
+    { directory: cwd },
+  );
+  const text = renderConversationHandoff(exportData, chooseClaudeAutoTrim(exportData));
+  await server.appendUserMessage(created.id, text, { directory: cwd });
+  log(`[REMOTE] Rebuilt conversation ${exportData.conversation.id.slice(0, 12)} as opencode session ${created.id.slice(0, 12)} (${exportData.messages.length} msgs as one import message)`);
+  return created.id;
+}
+
+export async function processOpencodeSession(...args: Parameters<typeof processOpencodeSessionPass>): Promise<void> {
+  return runTranscriptPass(args[0], opencodeDbPath(), () => processOpencodeSessionPass(...args));
+}
+
+async function processOpencodeSessionPass(
   sessionId: string,
   syncService: SyncService,
   userId: string,
@@ -9677,12 +10084,16 @@ async function processOpencodeSession(
   updateStateCallback: () => void
 ): Promise<void> {
   try {
-    const assembled = assembleOpencodeSession(sessionId);
-    if (!assembled) return;
-    const allMessages = parseTranscriptFor("opencode", assembled);
+    const ingest = await readTranscriptIngest({client:"opencode",file:opencodeDbPath(),sessionId,offset:0});
+    if (ingest.metadata.sessionExists === false) {
+      opencodeSyncedCounts.delete(sessionId);
+      await pruneAcceptedTranscript(opencodeDbPath(),sessionId);
+      return;
+    }
+    if (transcriptCountReplaced(ingest,opencodeSyncedCounts.get(sessionId) ?? 0)) opencodeSyncedCounts.delete(sessionId);
+    const allMessages = ingest.messages;
     if (allMessages.length === 0) return;
-
-    const cwd = resolveOpencodeSessionCwd(sessionId);
+    const cwd = ingest.metadata.cwd;
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
@@ -9691,7 +10102,7 @@ async function processOpencodeSession(
       // (same contract as the codex native-review path). A task-tool child is
       // never the session a user launched, so it must not claim a started stub
       // (its cwd matches its parent's, which would collide with the cwd match).
-      const lineage = readOpencodeSessionLineage(sessionId);
+      const lineage = ingest.metadata;
 
       // Bind a freshly launched opencode session to its pending started-tmux
       // conversation. opencode's session id never appears in the launched process
@@ -9726,13 +10137,14 @@ async function processOpencodeSession(
         log(`Linked opencode session ${sessionId} to started conversation ${conversationId.slice(0, 12)} via cwd ${cwd}`);
       } else {
         const firstUserMessage = allMessages.find((m) => m.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
         const parentConversationId = lineage.parentSessionId ? conversationCache[lineage.parentSessionId] : undefined;
         if (lineage.parentSessionId && !parentConversationId) {
           // Parent hasn't synced yet (backfill order is arbitrary) — link when it does.
           pendingNativeParents.set(sessionId, { parentSessionId: lineage.parentSessionId, description: lineage.agentName });
         }
         try {
+          const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -9748,6 +10160,7 @@ async function processOpencodeSession(
             subagentDescription: parentConversationId ? lineage.agentName : undefined,
             gitInfo: cwd ? await getGitInfo(cwd) : undefined,
           });
+          conversationId = finishCreate(conversationId);
         } catch (err) {
           if (err instanceof AuthExpiredError && handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
@@ -9758,24 +10171,24 @@ async function processOpencodeSession(
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Created conversation ${conversationId} for opencode session ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId.slice(0, 12)})` : ""}`);
-        if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-          delete pendingMessages[sessionId];
-        }
+        if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
       }
     }
 
     // Upsert-based delta: re-send the last already-synced message (its body may have
     // grown as parts streamed in) plus everything new. addMessages patches by uuid.
     const prevCount = opencodeSyncedCounts.get(sessionId) ?? 0;
-    const toSync = allMessages.slice(Math.max(0, prevCount - 1));
+    const committedCount = Math.min(allMessages.length, Math.max(0, prevCount - 1) + TRANSCRIPT_PENDING_ROWS);
+    const toSync = allMessages.slice(Math.max(0, prevCount - 1), committedCount);
     if (toSync.length > 0) {
-      const batchResult = await syncMessagesBatch(toSync, conversationId, syncService, retryQueue);
+      const batchResult = await syncTranscriptMessages(toSync, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
       if (batchResult.authExpired) {
         log("⚠️  Authentication expired - sync paused");
         return;
       }
+      if (!batchResult.accepted && !batchResult.conversationNotFound) return;
       if (batchResult.conversationNotFound) {
+        if (conversationCache[sessionId] !== conversationId) return;
         log(`Conversation ${conversationId} not found, invalidating opencode cache`);
         delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
@@ -9783,14 +10196,17 @@ async function processOpencodeSession(
         return;
       }
     }
-    opencodeSyncedCounts.set(sessionId, allMessages.length);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      opencodeSyncedCounts.set(sessionId, committedCount);
+    }, [sessionId], undefined, toSync);
+    if (committedCount < allMessages.length) transcriptRetries.add(sessionId);
 
     // This session may be the parent a task-tool child synced ahead of.
     await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
 
     // Title: opencode names the session in its meta (info.title); mirror it.
     try {
-      const metaTitle = (JSON.parse(assembled).info as { title?: string } | undefined)?.title;
+      const metaTitle = ingest.metadata.title;
       if (metaTitle && titleCache[sessionId] !== metaTitle) {
         await syncService.updateTitle(conversationId, metaTitle);
         titleCache[sessionId] = metaTitle;
@@ -9802,7 +10218,7 @@ async function processOpencodeSession(
     // defers on them): the newest message tells us working vs turn-complete, so this
     // fires the idle flip that routes the session into needs-input when its turn ends.
     if (conversationId && !appServerConversations.has(conversationId)) {
-      const turn = classifyOpencodeTranscriptTail(assembled);
+      const turn = ingest.metadata.turn;
       sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId, null) : "working");
     }
 
@@ -9813,6 +10229,7 @@ async function processOpencodeSession(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing opencode session ${sessionId}: ${errMsg}`);
+    throw err;
   }
 }
 
@@ -9834,6 +10251,31 @@ async function processOpencodeSession(
 // the opening line), so uuid membership alone would freeze every message at
 // whatever prefix the first watcher pass caught.
 const piSyncedSigs = new Map<string, Map<string, string>>();
+
+/**
+ * Write a transcript codecast REBUILT for a delta-synced client (pi) so the
+ * watcher ingests only what the client appends afterwards. The delta sync has
+ * no file position: every pass re-parses the whole file and syncs whatever is
+ * not in `piSyncedSigs`, so a rebuilt file — the conversation's own history —
+ * would be synced back into the conversation under fresh uuids (a duplicate
+ * "PONG" on 2026-09-06). The file is written to a staging name the watcher's
+ * `.jsonl` filter ignores, ingested once through the same worker to obtain the
+ * exact signatures, registered as synced under the final path, then renamed
+ * into place.
+ */
+async function writeRebuiltDeltaTranscript(client: "pi", content: string, finalPath: string, sessionId: string): Promise<void> {
+  const staging = `${finalPath}.codecast-rebuild`;
+  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+  fs.writeFileSync(staging, content);
+  try {
+    const ingest = await readTranscriptIngest({ client, file: staging, sessionId, offset: 0 });
+    const { nextSynced } = await computeIngestSyncDelta(ingest.messages, ingest.signatures!, new Map());
+    piSyncedSigs.set(path.resolve(finalPath), nextSynced);
+  } catch (err) {
+    log(`Rebuilt ${client} transcript baseline failed for ${sessionId.slice(0, 8)} (history may re-sync): ${err instanceof Error ? err.message : String(err)}`, "warn");
+  }
+  fs.renameSync(staging, finalPath);
+}
 
 // One message's sync signature: the whole serialized message. A grok assistant
 // message GROWS under an unchanged uuid across parses — content/thinking chunks
@@ -9918,7 +10360,11 @@ export function isGrokInternalSessionDir(updatesPath: string): boolean {
 // upsert the new turns, delete the orphaned ones. Everything client-specific is
 // parameterized here; the wrappers below (processPiSession / processGrokSession)
 // are what the watcher registrations bind.
-async function processTranscriptDeltaSession(
+export async function processTranscriptDeltaSession(...args: Parameters<typeof processTranscriptDeltaSessionPass>): Promise<void> {
+  return runTranscriptPass(args[2], path.resolve(args[1]), () => processTranscriptDeltaSessionPass(...args));
+}
+
+async function processTranscriptDeltaSessionPass(
   client: Extract<AgentClientId, "pi" | "grok">,
   filePath: string,
   sessionId: string,
@@ -9935,29 +10381,15 @@ async function processTranscriptDeltaSession(
     // grok-internal children (subagents, hidden sessions) sync through their
     // parent's transcript; ingesting them here would mint a top-level codecast
     // conversation per subagent.
-    if (client === "grok" && isGrokInternalSessionDir(filePath)) return;
-    let content: string;
-    try {
-      content = await fs.promises.readFile(filePath, "utf-8");
-    } catch (err: any) {
-      if (err.code === "EACCES" || err.code === "EPERM") {
-        log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
-        return;
-      }
-      if (err.code === "ENOENT") {
-        log(`${client} transcript ${filePath} no longer exists; nothing to sync.`);
-        return;
-      }
-      throw err;
-    }
-
-    const allMessages = parseTranscriptFor(client, content);
+    const ingest = await readTranscriptIngest({client,file:filePath,sessionId,offset:0});
+    if (client === "grok" && ingest.metadata.internal) return;
+    const allMessages = ingest.messages;
     // A transient empty/corrupt parse must be a no-op, never a signal to delete the
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
     const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
-    const { newMessages, orphanUuids, nextSynced } = computePiSyncDelta(allMessages, syncedSigs);
+    const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
     if (newMessages.length === 0 && orphanUuids.length === 0) return;
 
     let conversationId = conversationCache[sessionId];
@@ -9969,8 +10401,8 @@ async function processTranscriptDeltaSession(
         // slug dir decodes back to it only lossily (see decodePiCwdSlug — and
         // grok's long-path hash dirs don't decode at all).
         const projectPath = client === "pi"
-          ? extractPiCwd(content) ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-          : grokSessionCwdFromTranscriptPath(filePath);
+          ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
+          : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
 
         // Bind a daemon-launched agent to its start_session stub (codex pattern):
         // find the live process's tmux pane and match it against the pending started
@@ -10014,7 +10446,8 @@ async function processTranscriptDeltaSession(
           log(`Linked ${client} session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
         } else {
           const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+          const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+          const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -10027,6 +10460,7 @@ async function processTranscriptDeltaSession(
             parentMessageUuid: undefined,
             gitInfo: undefined,
           });
+          conversationId = finishCreate(conversationId);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
           log(`Created conversation ${conversationId} for ${client} session ${sessionId}`);
@@ -10035,45 +10469,24 @@ async function processTranscriptDeltaSession(
             (global as any).activeSessions.set(conversationId, { sessionId, conversationId, projectPath: "" });
           }
 
-          if (pendingMessages[sessionId]) {
-            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-            delete pendingMessages[sessionId];
-          }
+          if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
         }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            piSyncedSigs.set(filePath, nextSynced);
             return;
           }
         }
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create ${client} conversation, queueing for retry: ${errMsg}`);
 
-        if (!pendingMessages[sessionId]) pendingMessages[sessionId] = [];
-        for (const msg of newMessages) {
-          pendingMessages[sessionId].push({
-            uuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            filePath,
-            fileSize: content.length,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-            model: msg.model,
-          });
-        }
+        await retainPendingTranscript(pendingMessages, sessionId, newMessages, filePath, ingest.fileSize);
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-        retryQueue.add("createConversation", {
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        queueTranscriptConversation(retryQueue, {
           userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
         }, errMsg);
-        piSyncedSigs.set(filePath, nextSynced);
         return;
       }
     }
@@ -10082,32 +10495,39 @@ async function processTranscriptDeltaSession(
     // orphans — skip the empty batch and go straight to cleanup.
     let conversationRecreated = false;
     if (newMessages.length > 0) {
-      const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
+      const batchResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
       if (batchResult.authExpired) {
         log("⚠️  Authentication expired - sync paused");
         return; // leave the synced set unadvanced so the next pass retries
       }
+      if (!batchResult.accepted && !batchResult.conversationNotFound) return;
       if (batchResult.conversationNotFound) {
+        if (conversationCache[sessionId] !== conversationId) return;
         conversationRecreated = true;
         log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
         delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
 
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
         try {
+          const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
             userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
           });
+          conversationId = finishCreate(conversationId);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
           log(`Recreated conversation ${conversationId} for ${client} session ${sessionId}`);
           // Fresh conversation: rebuild it from the FULL active branch, not just the
           // delta (the shared prefix isn't there anymore). No orphans to clean.
-          await syncService.addMessages({ conversationId, messages: allMessages.map(prepMessageForSync) });
+          const retryResult = await syncTranscriptMessages(allMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        if (!retryResult.accepted) return;
         } catch (retryErr) {
           const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          transcriptRetries.add(sessionId);
           log(`Failed to recreate ${client} conversation and add messages: ${retryErrMsg}`);
+          return;
         }
       }
     }
@@ -10128,7 +10548,9 @@ async function processTranscriptDeltaSession(
       }
     }
 
-    piSyncedSigs.set(filePath, finalSynced);
+    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
+      piSyncedSigs.set(filePath, finalSynced);
+    }, [sessionId], finalSynced);
     log(`Synced ${newMessages.length} ${client} messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -10143,7 +10565,7 @@ async function processTranscriptDeltaSession(
       // turn-end verdict. The final tail always reaches here: turn_completed
       // stamps stopReason on the last assistant message, which changes its
       // messageSyncSig and re-opens the delta.
-      const turn = classifyTranscriptTailFor(client)?.(content) ?? "unknown";
+      const turn = ingest.metadata.turn ?? "unknown";
       sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId, { path: filePath, agentType: client }) : "working");
     }
 
@@ -10151,6 +10573,7 @@ async function processTranscriptDeltaSession(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing ${client} session file ${filePath}: ${errMsg}`);
+    throw err;
   }
 }
 
@@ -10451,7 +10874,28 @@ let hookClaimsIndexing: Promise<void> | null = null;
 // The registry dir holds thousands of files; only the recent ones (by mtime) are
 // parsed, and the scan is async and shared so concurrent lookups don't each pay
 // for it or block the loop.
-async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]> {
+async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]>;
+async function hookClaimsForPid(pid: number, opts: { fresh: true; registryDir?: string }): Promise<ProcessSessionClaim[] | null>;
+async function hookClaimsForPid(pid: number, opts?: { fresh: true; registryDir?: string }): Promise<ProcessSessionClaim[] | null> {
+  if (opts?.fresh) {
+    const claims: ProcessSessionClaim[] = [];
+    const dir = opts.registryDir ?? path.join(CONFIG_DIR, "session-registry");
+    let scanned = 0;
+    try {
+      for await (const file of await fs.promises.opendir(dir)) {
+        if (++scanned > 50_000) return null;
+        if (!file.name.endsWith(".json")) continue;
+        const reg = JSON.parse(await fs.promises.readFile(path.join(dir, file.name), "utf8"));
+        if (!isHookRegistration(reg)) continue;
+        if (!Number.isInteger(reg.pid) || reg.pid <= 1 || !Number.isFinite(reg.ts)) return null;
+        if (reg.pid === pid) claims.push({ sessionId: file.name.slice(0, -5), ts: reg.ts });
+      }
+      return claims;
+    } catch (err) {
+      log(`[IDENTITY] destructive claim read unavailable: ${String(err)}`);
+      return null;
+    }
+  }
   if (Date.now() - hookClaimsIndexedAt >= HOOK_CLAIM_INDEX_TTL_MS) {
     hookClaimsIndexing ??= (async () => {
       const dir = path.join(CONFIG_DIR, "session-registry");
@@ -10717,7 +11161,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
 
       if (recentlyModified) {
         // Determine the project directory from the JSONL content
-        const jsonlContent = readFileHead(jsonlPath, 5000);
+        const jsonlContent = readFileHeadLines(jsonlPath);
         const projectCwd = extractCwd(jsonlContent) || (agentType === "codex" ? extractCodexCwd(jsonlContent) : null);
 
         if (projectCwd) {
@@ -11449,6 +11893,14 @@ async function checkForInteractivePrompt(
 
     log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
 
+    // Codex's working-directory picker is a launch artifact (see
+    // isResumeCwdPicker), answered here rather than minted as a card the user
+    // would have to clear on every resume.
+    if (isResumeCwdPicker(prompt.question)) {
+      await answerResumeCwdPicker(tmuxTarget, paneContent);
+      return;
+    }
+
     // The spend-limit interstitial is a limit park, not a question: emit the
     // canonical limit banner (see spendLimitDialogBanner) instead of a scraped
     // card whose "Continue" would confirm a billing action. The banner message
@@ -11664,6 +12116,42 @@ export function paneContentAfterLaunchEcho(paneContent: string): string {
   return nl >= 0 ? paneContent.slice(nl + 1) : "";
 }
 
+// Codex's working-directory picker, as the TUI renders it (0.153):
+//
+//   Choose working directory to resume this session
+//     Session = latest cwd recorded in the resumed session
+//     Current = your current working directory
+//   › 1. Use session directory (/Users/ashot/src/codecast)
+//     2. Use current directory (/)
+//     3. Always use session directory
+//     4. Always use current directory
+//     Press enter to continue
+//
+// parseInteractivePrompt reads the two "=" lines as the question; the
+// classifier's live region (a five-line tail when no separators are on screen)
+// holds only the option rows. Both shapes are matched, so the same test serves
+// the scraped card path and the live-region classifier.
+const RESUME_CWD_PICKER_RE = /latest cwd recorded in the resumed session|Choose working directory to resume|Use session directory \(|Always use (?:session|current) directory/i;
+export function isResumeCwdPicker(text: string): boolean {
+  return RESUME_CWD_PICKER_RE.test(text);
+}
+
+// Keys that answer the picker. The recorded session directory is the truth
+// about where the session ran and is preselected, so Enter alone takes it.
+// When that directory does not exist on this machine (a checkout that lives
+// elsewhere here) the current directory is the only one Codex can open.
+export function planResumeCwdPickerKeys(text: string, exists: (p: string) => boolean = fs.existsSync): string[] {
+  const sessionDir = text.match(/1\.\s*Use session directory \(([^)]+)\)/)?.[1]?.trim();
+  return sessionDir && exists(sessionDir) ? ["Enter"] : ["Down", "Enter"];
+}
+
+async function answerResumeCwdPicker(target: string, paneText: string): Promise<void> {
+  const keys = planResumeCwdPickerKeys(paneText);
+  log(`Answering Codex working-directory picker in ${target} (${keys.join("+")})`);
+  for (const key of keys) await tmuxExec(["send-keys", "-t", target, key]);
+  await new Promise(resolve => setTimeout(resolve, 800));
+}
+
 export type TmuxLiveState =
   | "idle"          // empty input prompt — safe to paste
   | "busy"          // spinner / "esc to interrupt" — wait
@@ -11672,6 +12160,7 @@ export type TmuxLiveState =
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
+  | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
@@ -11744,6 +12233,14 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // AskUserQuestion menu has numbered options but not this footer, so it stays a
   // blocking menu for parseInteractivePrompt to handle rather than being dismissed
   // out from under the user.
+  // Codex's "Choose working directory to resume this session" picker: a
+  // `codex resume` launched in a cwd other than the rollout's recorded one. A
+  // launch artifact the daemon caused, not a question for the user, so it is
+  // answered in place (answerResumeCwdPicker) and never minted as a card.
+  // Checked before the update-menu rule: same '›' + numbered rows + "Press
+  // enter to continue" shape, but Escape here quits the resume into a bare
+  // shell, and the next delivery would then paste into that shell.
+  if (isResumeCwdPicker(region)) return "cwd_picker";
   const numberedCursorRow = /^[^\S\n]*[›❯>][^\S\n]*\d+[.)][^\S\n]/m.test(region);
   if (numberedCursorRow && /Press enter to continue|Update available!/i.test(region)) {
     return "update_menu";
@@ -11882,6 +12379,7 @@ function reconcileStatusFromPane(
   conversationId: string,
   syncService: SyncService,
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   // The claude-chrome classifier below cannot read GLYPHLESS_PROMPT_CLIENTS
   // panes — worse than "unknown" for grok, whose ❯ composer stays visible for
   // the whole turn while its busy chrome (header spinner, "Esc:cancel",
@@ -12914,8 +13412,13 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   const baseTarget = target.split(":")[0];
   const start = Date.now();
   while (tmuxTargetLocks.has(baseTarget)) {
+    const parking = [...hibernationInFlight.values()].find(park => park.done === tmuxTargetLocks.get(baseTarget));
+    if (parking) parking.cancel();
     const elapsed = Date.now() - start;
     if (elapsed >= TMUX_LOCK_WAIT_MS) {
+      if ([...hibernationInFlight.values()].some(park => park.done === tmuxTargetLocks.get(baseTarget))) {
+        throw new Error("Hibernation still owns this tmux target");
+      }
       log(`tmux lock for ${baseTarget} held >${Math.round(elapsed / 1000)}s, forcing release and proceeding`);
       tmuxTargetLocks.delete(baseTarget);
       break;
@@ -13139,31 +13642,98 @@ async function paneOwnsPid(target: string, pid: number): Promise<boolean> {
  * Any doubt skips the reap. Skipping costs one stray process; guessing wrong
  * kills a live agent somebody is talking to.
  */
-async function reapOrphanedAgent(sessionId: string, pid: number, pane: string): Promise<void> {
+const orphanReaperIo = {
+  identity: async (pid: number, sessionId: string) => {
+    const { stdout } = await _execFileAsync("ps", ["-ww", "-p", String(pid), "-o", "lstart=,uid=,ppid=,command="],
+      { timeout: 3000, env: { ...process.env, LC_ALL: "C" } });
+    return parseOrphanProcessIdentity(stdout, sessionId, process.getuid?.());
+  },
+  claims: (pid: number) => hookClaimsForPid(pid, { fresh: true }),
+  processes: () => snapshotProcessTableAsync({ timeout: 3000 }),
+  panes: () => tmuxExec(["list-panes", "-a", "-F", "#{pane_pid}"], { timeout: 3000 }),
+  conversationId: (sessionId: string) => conversationCacheRef?.[sessionId],
+  signal: (pid: number) => { process.kill(pid, "SIGKILL"); },
+};
+
+async function reapOrphanedAgent(sessionId: string, pid: number, pane: string, signal?: AbortSignal): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid || !validateTmuxTarget(pane)) return;
+  const conversationId = orphanReaperIo.conversationId(sessionId);
+  if (!conversationId || hibernationInFlight.has(sessionId) || signal?.aborted) return;
+  const home = process.env.HOME;
+  const cachedPane = resumeSessionCache.get(sessionId);
+  const resumedAt = lastResumeAt.get(sessionId);
+  const status = lastSentAgentStatus.get(sessionId);
+  const commands = JSON.stringify([[...processedCommandIds], [...processedPollCommandIds]]);
+  const targets = [...new Set([pane, pane.split(":")[0], `=${pane.split(":")[0]}`])];
+  if (targets.some(target => tmuxTargetLocks.has(target))) return;
+  const abort = new AbortController();
+  let release!: () => void;
+  let revoke!: () => void;
+  const revoked = new Promise<void>(resolve => { revoke = resolve; });
+  const reservation: HibernationReservation = {
+    done: new Promise<void>(resolve => { release = resolve; }),
+    cancelled: false,
+    committing: false,
+    cancel: () => { reservation.cancelled = true; abort.abort(); revoke(); },
+  };
+  const unchanged = () => !reservation.cancelled && !signal?.aborted &&
+    hibernationInFlight.get(sessionId) === reservation &&
+    targets.every(target => tmuxTargetLocks.get(target) === reservation.done) &&
+    home === process.env.HOME && orphanReaperIo.conversationId(sessionId) === conversationId &&
+    resumeSessionCache.get(sessionId) === cachedPane && lastResumeAt.get(sessionId) === resumedAt &&
+    lastSentAgentStatus.get(sessionId) === status && !restartingSessionIds.has(sessionId) &&
+    !pendingAgentSwitches.has(conversationId) && heldClaimIds.size === 0 &&
+    commands === JSON.stringify([[...processedCommandIds], [...processedPollCommandIds]]) &&
+    !productionHibernationIo.deliveryActive(sessionId, conversationId);
+  hibernationInFlight.set(sessionId, reservation);
+  for (const target of targets) tmuxTargetLocks.set(target, reservation.done);
+  signal?.addEventListener("abort", reservation.cancel, { once: true });
+  const deadline = setTimeout(reservation.cancel, HIBERNATION_ATTEMPT_TIMEOUT_MS);
+  const work = Promise.resolve().then(async () => {
+    if (!unchanged()) return;
+    const initial = await orphanReaperIo.identity(pid, sessionId);
+    if (!initial || !unchanged()) return;
+    if (!planSessionTeardown(await acquireSessionProcessOwnership(sessionId, abort.signal)).reapPidTree || !unchanged()) return;
+    const generation = sessionFileIndexGeneration;
+    const current = () => unchanged() && sessionFileIndexReady && generation === sessionFileIndexGeneration;
+    const sameIdentity = async () => JSON.stringify(await orphanReaperIo.identity(pid, sessionId)) === JSON.stringify(initial) && current();
+    if (!await sameIdentity()) return;
+    const observedAt = performance.now();
+    const claims = await orphanReaperIo.claims(pid);
+    if (!claims || !current()) return;
+    if (judgeProcessIdentity({ sessionId, argvId: sessionId, claims, processStartSec: initial.startSec }).verdict !== "owned") return;
+    const newest = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
+    if (claims.some(claim => claim.ts >= initial.startSec - 5 && claim.ts === newest && claim.sessionId !== sessionId)) return;
+    const procs = await orphanReaperIo.processes();
+    if (!current()) return;
+    const root = procs.find(proc => proc.pid === pid);
+    if (!root || root.ppid !== 1 || root.uid !== initial.uid || root.command !== initial.command || descendantPids(procs, pid).length) return;
+    const { stdout } = await orphanReaperIo.panes();
+    if (!current()) return;
+    const panes = stdout.trim().split("\n");
+    if (panes.some(value => !/^\d+$/.test(value) || Number(value) <= 1 || Number(value) === pid)) return;
+    if (!await sameIdentity() || performance.now() - observedAt > 1000 || !current()) return;
+    reservation.committing = true;
+    orphanReaperIo.signal(pid);
+    log(`[ORPHAN] reaped verified childless pid=${pid} for ${shortId(sessionId)} (stranded off ${pane})`);
+  }).catch(err => { log(`[ORPHAN] refused pid=${pid} for ${shortId(sessionId)}: ${String(err)}`); });
   try {
-    const { stdout } = await execAsync(
-      `ps -o ppid=,command= -p ${pid} 2>/dev/null`,
-      { timeout: 3000, killSignal: "SIGKILL" },
-    );
-    const line = stdout.trim();
-    if (!line) return;
-    const ppid = parseInt(line.split(/\s+/)[0] ?? "", 10);
-    if (ppid !== 1) {
-      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: parent ${ppid} is alive, so it is not orphaned`);
-      return;
-    }
-    if (!line.includes(sessionId)) {
-      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: argv does not name this session (likely a borrowed parent pid)`);
-      return;
-    }
-    if (!planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree) {
-      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: session does not positively own its process`);
-      return;
-    }
-    const killed = await reapPidTree(pid);
-    log(`[ORPHAN] reaped ${killed} process(es) for ${shortId(sessionId)} (pid=${pid}, stranded off ${pane})`);
-  } catch {}
+    await Promise.race([work, revoked]);
+  } finally {
+    clearTimeout(deadline);
+    signal?.removeEventListener("abort", reservation.cancel);
+    reservation.cancel();
+    if (hibernationInFlight.get(sessionId) === reservation) hibernationInFlight.delete(sessionId);
+    for (const target of targets) if (tmuxTargetLocks.get(target) === reservation.done) tmuxTargetLocks.delete(target);
+    release();
+  }
 }
+
+export const orphanReaperForTests = {
+  reapOrphanedAgent, io: orphanReaperIo, pendingAgentSwitches,
+  get restartingSessionIds() { return restartingSessionIds; },
+  conversationDeliveryActive, processedCommandIds, withTmuxLock,
+};
 
 /**
  * Accept Claude Code's workspace trust dialog by SELECTING the affirmative
@@ -13341,6 +13911,8 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
       log(`Dismissing agent update menu in ${target} (Escape, never Enter)`);
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 800));
+    } else if (state === "cwd_picker") {
+      await answerResumeCwdPicker(target, region);
     } else if (state === "warning") {
       log(`Dismissing warning banner in ${target}`);
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -13525,30 +14097,67 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
 }
 
-// Drains the composer with blind C-a/C-k cycles before a paste.
+// Text the composer shows after its last ❯/› glyph: the prompt line plus the
+// wrapped/continuation lines under it, up to the box rule or a blank line.
+// null when no glyph is visible (glyphless client or mid-redraw).
+export function tmuxComposerText(pane: string): string | null {
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return null;
+  const lines = pane.slice(glyphAt + 1).split("\n");
+  const body = [lines[0]];
+  for (const line of lines.slice(1)) {
+    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+// Drains the composer before a paste.
 //
-// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
-// single C-u does not reliably empty the buffer when stale text is present
+// One cycle is C-a (start of line), C-k (kill to end of line), BSpace (join
+// onto the line above). Why not a single C-u: in Claude Code 2.1.x's input box
+// a single C-u does not reliably empty the buffer when stale text is present
 // (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
 // the paste and the trailing Enter submits both as one message — the
-// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
-// (start of line) + C-k (kill to end) drains reliably; three cycles handles
-// multi-line drafts. See daemon.inject-clear.test.ts.
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Why BSpace:
+// C-a/C-k only ever empties the CURRENT line, so a multi-line draft (a pasted
+// <session-message> block, a stale multi-paragraph prompt) kept every line
+// above the cursor no matter how many cycles ran, the Enter gate saw foreign
+// text forever, and the message sat pending for hours (msg ns7c8zkm,
+// 2026-09-04, 294 failed drains). BSpace on the emptied line removes the
+// newline and pulls the cursor onto the line above, so each cycle retires one
+// line; on an empty composer all three keys are no-ops.
+//
+// Three blind cycles cover the common short draft. Past that the drain
+// captures the pane every three cycles and keeps going only while text is
+// still visible at the prompt, so a long draft drains fully without a fixed
+// guess at its line count. See daemon.inject-enter-gate.test.ts.
 //
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
+export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
 ): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    await exec(["send-keys", "-t", target, "C-a"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    await exec(["send-keys", "-t", target, "C-k"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
+  const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let cycle = 1; cycle <= DRAIN_MAX_CYCLES; cycle++) {
+    for (const key of ["C-a", "C-k", "BSpace"]) {
+      await exec(["send-keys", "-t", target, key]);
+      await pause(20);
+    }
+    if (cycle % 3 !== 0) continue;
+    let pane: string;
+    try {
+      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    } catch {
+      break; // capture problems are diagnosed by the Enter gate
+    }
+    const text = tmuxComposerText(pane);
+    if (text === null || !text.trim()) break;
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await pause(50);
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -14371,12 +14980,7 @@ class UndeliverableMessageError extends Error {}
  *  when the expiring negative memos re-asked in a batch on a saturated disk
  *  (2026-08-29, and the same shape on 2026-08-21).
  *
- *  A MISS still answers with per-call ground truth: sessionProcessOwnership
- *  memoizes "owned" for an id with no rollout, so a stale "no rollout" here
- *  would freeze the wrong verdict and re-open the SIGKILL-the-parent hole for
- *  any rollout younger than the index. Creating (or moving) a rollout bumps
- *  its containing day dir's mtime, so scanning only the leaf dirs touched
- *  since the walk closes that window at a few stats' cost. */
+ */
 function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): string | null {
   const hit = indexedSessionLookup(() => codexRolloutIndex, (p) => p, codexRolloutKnownMisses, sessionId);
   if (hit || opts?.staleOk) return hit;
@@ -14394,6 +14998,7 @@ function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): 
 // non-leaf level are checked whenever their parent dir is fresh, matching the
 // old fully-recursive walk for anything recently added.
 function probeRecentCodexRollouts(sessionId: string): string | null {
+  if (daemonWorkersEnabled()) return recentSessionObservation(sessionId, true)?.path ?? null;
   return timeSyncFs("probeRecentCodexRollouts", sessionId, () => probeRecentCodexRolloutsSync(sessionId));
 }
 function probeRecentCodexRolloutsSync(sessionId: string): string | null {
@@ -14525,6 +15130,11 @@ const sessionFilePendingMisses = new Map<string, number>();
 
 /** Test hook: forget the index so the next lookup re-walks. */
 export function resetSessionFileIndexForTests(): void {
+  if (!sessionFileIndexRefresh) sessionFileIndexGeneration++;
+  sessionFileIndexReady = false;
+  recentSessionScans.clear();
+  sessionOwnershipCache.clear();
+  borrowsUnknownUntil.clear();
   sessionFileIndex = null;
   codexRolloutIndex = null;
   sessionFileIndexBuiltAt = 0;
@@ -14576,6 +15186,7 @@ function sessionFileIndexStores(home: string): IndexStore[] {
       agentType: "claude",
       walk: {
         maxDepth: 6,
+        policy: { dirs: "claudeIndex", files: "claudeIndex" },
         dirFilter: (rel) => {
           const d = segs(rel);
           return d.length <= 2 || (d.length === 3 && d[2] === "subagents") || (d.length === 4 && d[3] === "workflows") || d.length === 5;
@@ -14588,21 +15199,21 @@ function sessionFileIndexStores(home: string): IndexStore[] {
     {
       root: path.join(home, ".codex", "sessions"),
       agentType: "codex",
-      walk: {},
+      walk: { policy: {} },
       idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
     },
     // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
     {
       root: path.join(home, ".gemini", "tmp"),
       agentType: "gemini",
-      walk: { maxDepth: 3, dirFilter: (rel) => { const d = segs(rel); return d.length === 1 || d[1] === "chats"; }, fileFilter: (rel) => rel.endsWith(".json") && segs(rel).length === 3 },
+      walk: { policy: { dirs: "gemini", files: "geminiIndex" }, maxDepth: 3, dirFilter: (rel) => { const d = segs(rel); return d.length === 1 || d[1] === "chats"; }, fileFilter: (rel) => rel.endsWith(".json") && segs(rel).length === 3 },
       idOf: (f) => f.name.slice(0, -5),
     },
     // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl
     {
       root: path.join(home, ".pi", "agent", "sessions"),
       agentType: "pi",
-      walk: { maxDepth: 2, fileFilter: (rel) => segs(rel).length === 2 },
+      walk: { policy: { files: "piIndex" }, maxDepth: 2, fileFilter: (rel) => segs(rel).length === 2 },
       idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
     },
     // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
@@ -14610,7 +15221,7 @@ function sessionFileIndexStores(home: string): IndexStore[] {
     {
       root: path.join(home, ".grok", "sessions"),
       agentType: "grok",
-      walk: { maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
+      walk: { policy: { files: "grokIndex" }, maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
       idOf: (f) => segs(f.rel)[1],
     },
   ];
@@ -14637,15 +15248,16 @@ function buildSessionFileIndex(home: string): SessionFileIndexBuild {
   return build;
 }
 
-async function buildSessionFileIndexAsync(home: string): Promise<SessionFileIndexBuild> {
+async function buildSessionFileIndexAsync(home: string, signal?: AbortSignal): Promise<SessionFileIndexBuild> {
   const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
   for (const store of sessionFileIndexStores(home)) {
-    await walkDirs(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
+    await walkEntryBatches(store.root, { ...store.walk, signal, requireComplete: true }, (files) => recordIndexFiles(build, store, files));
   }
   return build;
 }
 
-function installSessionFileIndex(home: string, built: SessionFileIndexBuild): void {
+function installSessionFileIndex(home: string, built: SessionFileIndexBuild, ready = true): void {
+  sessionFileIndexReady = ready;
   sessionFileIndexHome = home;
   sessionFileIndex = built.index;
   codexRolloutIndex = built.codexRollouts;
@@ -14655,6 +15267,9 @@ function installSessionFileIndex(home: string, built: SessionFileIndexBuild): vo
 }
 
 function rebuildSessionFileIndex(): void {
+  sessionFileIndexGeneration++;
+  sessionFileIndexController?.abort();
+  sessionFileIndexRefresh = null;
   const home = process.env.HOME || "";
   installSessionFileIndex(home, buildSessionFileIndex(home));
 }
@@ -14667,19 +15282,27 @@ function rebuildSessionFileIndex(): void {
 // One refresh in flight at a time; the boot path kicks the first one so the
 // first lookup rarely has to build cold.
 let sessionFileIndexRefresh: Promise<void> | null = null;
+let sessionFileIndexRefreshHome = "";
+let sessionFileIndexGeneration = 0;
+let sessionFileIndexReady = false;
+let sessionFileIndexController: AbortController | null = null;
 export function refreshSessionFileIndex(): Promise<void> {
-  if (sessionFileIndexRefresh) return sessionFileIndexRefresh;
   const home = process.env.HOME || "";
-  sessionFileIndexRefresh = buildSessionFileIndexAsync(home)
+  if (sessionFileIndexRefresh && sessionFileIndexRefreshHome === home) return sessionFileIndexRefresh;
+  sessionFileIndexController?.abort();
+  sessionFileIndexReady = false;
+  const controller = new AbortController();
+  sessionFileIndexController = controller;
+  const generation = ++sessionFileIndexGeneration;
+  sessionFileIndexRefreshHome = home;
+  const pending = buildSessionFileIndexAsync(home, controller.signal)
     .then((built) => {
-      // A sync build that ran meanwhile (HOME swap, cold lookup) is at least as
-      // fresh as this one only if it is newer than our start; simpler and safe:
-      // install unless HOME moved under us.
-      if ((process.env.HOME || "") === home) installSessionFileIndex(home, built);
+      if (!controller.signal.aborted && generation === sessionFileIndexGeneration && (process.env.HOME || "") === home) installSessionFileIndex(home, built);
     })
     .catch(() => {})
-    .finally(() => { sessionFileIndexRefresh = null; });
-  return sessionFileIndexRefresh;
+    .finally(() => { if (sessionFileIndexRefresh === pending) sessionFileIndexRefresh = null; });
+  sessionFileIndexRefresh = pending;
+  return pending;
 }
 
 /** The boot path: an empty index first, so the status file replay and the
@@ -14687,14 +15310,14 @@ export function refreshSessionFileIndex(): Promise<void> {
  *  the refresh lands the real map off the loop. Every replayed session would
  *  otherwise hit the cold sync build before the warmup finished. */
 export function primeSessionFileIndexAtBoot(): Promise<void> {
-  installSessionFileIndex(process.env.HOME || "", { index: new Map(), codexRollouts: new Map() });
+  installSessionFileIndex(process.env.HOME || "", { index: new Map(), codexRollouts: new Map() }, false);
   return refreshSessionFileIndex();
 }
 
 /** Resolves once an index for the current HOME exists. Awaiting this before a
  *  lookup is what keeps the lookup's cold rebuild off the loop. */
 export function ensureSessionFileIndex(): Promise<void> {
-  if (sessionFileIndex && sessionFileIndexHome === (process.env.HOME || "")) return Promise.resolve();
+  if (sessionFileIndexReady && sessionFileIndex && sessionFileIndexHome === (process.env.HOME || "")) return Promise.resolve();
   return refreshSessionFileIndex();
 }
 
@@ -14716,6 +15339,7 @@ function indexedSessionLookup<T>(
   if (!getMap() || sessionFileIndexHome !== (process.env.HOME || "")) {
     // A build already in flight lands the map off the loop; answer null
     // meanwhile rather than walk the stores on the loop (1s at load 60).
+    if (daemonWorkersEnabled()) { void refreshSessionFileIndex(); return null; }
     if (sessionFileIndexRefresh) return null;
     rebuildSessionFileIndex();
     rebuiltThisCall = true;
@@ -14760,7 +15384,45 @@ function indexedSessionLookup<T>(
 // window at ~1ms. Nested claude layouts (subagents, workflow runs) are not
 // probed: those agents are reached through their parent and tolerate index
 // latency.
+type RecentSessionScan = { home: string; generation: number; at: number; pending: Promise<SessionFileInfo | null>; value?: SessionFileInfo | null };
+const recentSessionScans = new Map<string, RecentSessionScan>();
+async function freshSessionObservation(sessionId: string, codexOnly: boolean, complete = false): Promise<SessionFileInfo | null> {
+  const home = process.env.HOME || "";
+  const generation = sessionFileIndexGeneration;
+  const job: Extract<ScanJob, { name: "recent" }> = { name: "recent", home, sessionId, since: sessionFileIndexBuiltAt - 60_000, codexOnly, complete };
+  let rows: ScanRow[];
+  if (daemonWorkersEnabled()) {
+    try { rows = await collectScan(job); }
+    catch (error) { if (!scanCanFallback(error)) throw error; rows = await recentScan(job); }
+  } else rows = await recentScan(job);
+  if (home !== (process.env.HOME || "") || generation !== sessionFileIndexGeneration) throw new ScanCancelled("session root changed");
+  const row = rows[0];
+  return row?.type === "recent" ? { path: row.path, agentType: row.agentType as AgentClientId } : null;
+}
+function recentSessionObservation(sessionId: string, codexOnly: boolean): SessionFileInfo | null {
+  const home = process.env.HOME || "", key = `${codexOnly}:${sessionId}`;
+  const existing = recentSessionScans.get(key);
+  if (existing?.home === home && existing.generation === sessionFileIndexGeneration && (existing.value === undefined || Date.now() - existing.at < 2_000)) return existing.value ?? null;
+  if (recentSessionScans.size >= 512) recentSessionScans.delete(recentSessionScans.keys().next().value!);
+  const entry: RecentSessionScan = { home, generation: sessionFileIndexGeneration, at: Date.now(), pending: freshSessionObservation(sessionId, codexOnly) };
+  recentSessionScans.set(key, entry);
+  void entry.pending.then(value => {
+    if (recentSessionScans.get(key) !== entry || home !== (process.env.HOME || "") || entry.generation !== sessionFileIndexGeneration) return;
+    entry.value = value; entry.at = Date.now();
+    if (value) {
+      if (codexOnly) { codexRolloutIndex?.set(sessionId, value.path); codexRolloutKnownMisses.delete(sessionId); }
+      else { sessionFileIndex?.set(sessionId, value); sessionFileKnownMisses.delete(sessionId); }
+    }
+  }, () => { if (recentSessionScans.get(key) === entry) recentSessionScans.delete(key); });
+  return null;
+}
+export async function refreshRecentSessionFileForTests(sessionId: string, codexOnly = false): Promise<void> {
+  recentSessionObservation(sessionId, codexOnly);
+  await recentSessionScans.get(`${codexOnly}:${sessionId}`)?.pending;
+}
+
 function probeRecentSessionFiles(sessionId: string): SessionFileInfo | null {
+  if (daemonWorkersEnabled()) return recentSessionObservation(sessionId, false);
   return timeSyncFs("probeRecentSessionFiles", sessionId, () => probeRecentSessionFilesSync(sessionId));
 }
 function probeRecentSessionFilesSync(sessionId: string): SessionFileInfo | null {
@@ -14853,13 +15515,19 @@ const hibernatedSessions = new Set<string>();
 // any session therefore clears the stamp whether or not the daemon remembers
 // parking it, and this set keeps that to one extra write per session per boot
 // instead of one per message delivery.
-const hibernationStampCleared = new Set<string>();
+const hibernationStampCleared = new Map<string, string>();
 // A teardown retires the session, so there is no wake coming to clear the mark
 // and nothing left on the server to clear it from. Local bookkeeping only: no
 // status write, no log line. Without this a killed parked session stayed in the
 // set for the life of the daemon and the live-versus-parked count over-reported.
 function forgetHibernationPark(sessionId: string | undefined): void {
-  if (sessionId) hibernatedSessions.delete(sessionId);
+  if (!sessionId) return;
+  expectedHibernationExits.delete(sessionId);
+  hibernatedSessions.delete(sessionId);
+  hibernationStampCleared.delete(sessionId);
+  pendingHibernationStamps.delete(sessionId);
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking) parking.cancel();
 }
 // When each session last finished a resume. The hibernation policy refuses to
 // park a session somebody just asked for; the reaper has no equivalent because
@@ -14902,7 +15570,7 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy; sandbox?: PersistedCodexThread["sandbox"] };
 type PersistedAppServerThreadRecord = PersistedCodexThread;
 type AppServerStreamingPartial = { itemId: string; content: string };
 type AppServerPartialMessage = AppServerStreamingPartial;
@@ -14928,6 +15596,17 @@ const appServerRecoveryRetryAt = new Map<string, number>();
 const appServerRecoveringThreads = new Set<string>();
 let appServerShuttingDown = false;
 
+export function isSupersededAppServerSession(
+  sessionId: string,
+  conversationId = conversationCacheRef?.[sessionId],
+  live: ReadonlyMap<string, string> = appServerConversations,
+  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+): boolean {
+  if (!conversationId) return false;
+  const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
+  return !!threadId && threadId !== sessionId;
+}
+
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
   const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
   if (!firstLine) return undefined;
@@ -14952,6 +15631,19 @@ export function isAppServerOwnedCodexTranscript(
   if (liveThreadIds.has(sessionId) || persistedThreadIds.has(sessionId)) return true;
   const forkParentId = codexForkParentIdFromHead(headContent);
   return !!forkParentId && pendingForkParents.has(forkParentId);
+}
+
+/** A rollout the app-server forked from a codecast import (a `codecast-fork-*`
+ *  file written by generateCodexJsonl) starts with the whole imported history
+ *  replayed under fresh item ids and fork-time timestamps. Nothing in that
+ *  prefix is new: it is the conversation's own past, already in Convex. If the
+ *  fork's registration never landed (thread/fork timed out, daemon restarted),
+ *  ingesting the file from offset 0 re-creates every message as if typed at
+ *  fork time (jx7652s and jx7b88a, 2026-09-04). So on the FIRST sight of such
+ *  a rollout with no position, pin it at EOF; later appends are real turns
+ *  (a tmux `codex resume` fallback writes there) and sync normally. */
+export function isImportBornCodexRolloutFirstSight(lastPosition: number, forkParentFileName: string | null): boolean {
+  return lastPosition === 0 && !!forkParentFileName && forkParentFileName.startsWith("codecast-fork-");
 }
 
 export function upsertAppServerThreadRegistration(
@@ -15108,7 +15800,7 @@ async function stopLocalSessionBackends(conversationId: string, sessionId: strin
   // running parent TUI. The tmux-name sweep further down is genuinely safe
   // unguarded: it matches names derived from THIS session's id, which a parent's
   // tmux never carries.
-  const teardownPlan = planSessionTeardown(sessionProcessOwnership(sessionId));
+  const teardownPlan = planSessionTeardown(await acquireSessionProcessOwnership(sessionId));
   try {
     if (teardownPlan.reapPidTree) {
       const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
@@ -15333,7 +16025,9 @@ async function syncAppServerTurnMessagesIfChanged(
   }
 }
 
-function persistAppServerThreadRegistrations(): void {
+/** Returns false when the record could not be written, so a caller that needs
+ *  the write to be durable (policy invalidation) can refuse to proceed. */
+function persistAppServerThreadRegistrations(): boolean {
   try {
     const data: Record<string, PersistedAppServerThreadRecord> = {};
     const now = Date.now();
@@ -15345,7 +16039,29 @@ function persistAppServerThreadRegistrations(): void {
     const temp = `${APP_SERVER_THREADS_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(data), "utf-8");
     fs.renameSync(temp, APP_SERVER_THREADS_FILE);
-  } catch {}
+    return true;
+  } catch (err) {
+    logError("[codex-app-server] could not persist thread registrations", err instanceof Error ? err : new Error(String(err)));
+    return false;
+  }
+}
+
+/**
+ * The policy the live client recorded for a thread, falling back to whatever the
+ * record already held. Read at persist time rather than threaded through every
+ * registration call site, because the client learns it from the server's own
+ * start, resume and fork responses.
+ */
+function policyForPersist(
+  threadId: string,
+  previous?: PersistedCodexThread,
+): SandboxPolicy | null | undefined {
+  return persistedPolicyFor({
+    pending: !!codexAppServerInstance?.hasPendingPolicyChange(threadId),
+    invalidated: !!codexAppServerInstance?.isPolicyInvalidated(threadId),
+    live: codexAppServerInstance?.policyForThread(threadId),
+    previous: previous?.sandboxPolicy,
+  });
 }
 
 function registerAppServerConversation(
@@ -15356,19 +16072,24 @@ function registerAppServerConversation(
     updatedAt?: number;
     persist?: boolean;
     approvalPolicy?: ApprovalPolicy;
+    sandbox?: PersistedCodexThread["sandbox"];
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
   }
   const previous = persistedAppServerThreads.get(conversationId);
+  const carried = previous?.threadId === threadId ? previous : undefined;
+  const sandboxPolicy = policyForPersist(threadId, carried);
   persistedAppServerThreads.set(conversationId, {
-    ...(previous?.threadId === threadId ? previous : {}),
+    ...(carried ?? {}),
     threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
+    sandbox: sandboxPolicy === undefined ? opts.sandbox ?? carried?.sandbox : undefined,
+    sandboxPolicy,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15379,23 +16100,42 @@ function forgetPersistedAppServerConversation(conversationId: string): void {
   persistAppServerThreadRegistrations();
 }
 
+/**
+ * Persists a policy change and NOTHING else. Deliberately not
+ * markAppServerConversationResumable, which writes a fresh lifecycle record: the
+ * rehydrate loop detects a replaced conversation by object identity, so a policy
+ * refresh has to leave the record it updates in place.
+ */
+function persistThreadPolicyOnly(conversationId: string, threadId: string): boolean {
+  const record = persistedAppServerThreads.get(conversationId);
+  if (!applyPolicyInPlace(record, threadId, policyForPersist(threadId, record))) return true;
+  return persistAppServerThreadRegistrations();
+}
+
 function markAppServerConversationResumable(
   conversationId: string,
   threadId?: string,
   updatedAt: number = Date.now(),
-): void {
+): boolean {
   const resolvedThreadId = threadId ?? appServerConversations.get(conversationId);
-  if (!resolvedThreadId) return;
+  if (!resolvedThreadId) return false;
   const liveEntry = appServerThreads.get(resolvedThreadId);
   const previous = persistedAppServerThreads.get(conversationId);
+  // A thread the live map has forgotten still has a saved cwd, policy and
+  // sandbox worth keeping: erasing them here is what left records that later
+  // resumed under whatever default Codex chose.
+  const carried = previous?.threadId === resolvedThreadId ? previous : undefined;
+  const sandboxPolicy = policyForPersist(resolvedThreadId, carried);
   persistedAppServerThreads.set(conversationId, {
-    ...(previous?.threadId === resolvedThreadId ? previous : {}),
+    ...(carried ?? {}),
     threadId: resolvedThreadId,
     updatedAt,
-    cwd: liveEntry?.cwd,
-    approvalPolicy: liveEntry?.approvalPolicy,
+    cwd: liveEntry?.cwd ?? carried?.cwd,
+    approvalPolicy: liveEntry?.approvalPolicy ?? carried?.approvalPolicy,
+    sandbox: sandboxPolicy === undefined ? liveEntry?.sandbox ?? carried?.sandbox : undefined,
+    sandboxPolicy,
   });
-  persistAppServerThreadRegistrations();
+  return persistAppServerThreadRegistrations();
 }
 
 async function rehydratePersistedAppServerThreads(): Promise<void> {
@@ -15413,6 +16153,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
     if ((appServerRecoveryRetryAt.get(conversationId) ?? 0) > Date.now()) continue;
     if (appServerConversations.has(conversationId) && (!record.activeTurnId || findActiveTurnForThread(record.threadId))) continue;
     try {
+      let hasPendingMessages = false;
       if (record.activeTurnId) {
         const service = syncServiceRef;
         if (!service) continue;
@@ -15425,23 +16166,23 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
-        if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
+        hasPendingMessages = !!lifecycle.hasPendingMessages;
+        if (hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
-      const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
-      const response = await server.threadResume({
-        threadId: record.threadId,
-        ...(record.cwd ? { cwd: record.cwd } : {}),
-        approvalPolicy: policy,
-      });
+      const policy = record.approvalPolicy ?? resolveCodexPermissionDefaults(activeConfig).approvalPolicy;
+      const response = await server.threadResume(codexResumeParams(record, policy));
       if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
         persist: false,
         approvalPolicy: policy,
+        sandbox: record.sandbox,
       });
+      log(`[codex-app-server] resumed thread ${record.threadId.slice(0, 8)} policy=${response.sandbox?.type ?? "server-default"} approvalPolicy=${policy}`);
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
+      if (hasPendingMessages) continue;
       appServerRecoveringThreads.add(record.threadId);
       try {
         const action = await recoverCodexTurn({
@@ -15468,7 +16209,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/thread not found|no rollout found/i.test(message)) {
+      if (isMissingAppServerThreadError(err)) {
         dropped++;
         forgetPersistedAppServerConversation(conversationId);
       } else {
@@ -15505,6 +16246,8 @@ function loadPersistedAppServerThreadRegistrations(): void {
         updatedAt,
         cwd: record.cwd,
         approvalPolicy: record.approvalPolicy,
+        sandbox: record.sandbox,
+        sandboxPolicy: record.sandboxPolicy,
         activeTurnId: record.activeTurnId,
         recoveryAttempts: record.recoveryAttempts,
       });
@@ -15693,6 +16436,8 @@ export const MAX_RESUME_READINESS_POLL_MS = 120_000;
 // session, six seconds apart stays under the provider's per-minute cap that
 // a same-second burst of eighteen tripped.
 const SWITCH_CONTINUE_SPACING_MS = 6_000;
+let resumeInnerForTests: typeof autoResumeSessionInner | null = null;
+const accountLifecycleGate = new AccountLifecycleGate();
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
 // Must stay STRICTLY LARGER than the longest a single resume can legitimately
@@ -15876,7 +16621,7 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
-  if (!syncServiceRef) return;
+  if (!syncServiceRef || isSupersededAppServerSession(sessionId)) return;
   managedHeartbeatSessions.add(sessionId);
   ensureHeartbeatFlushLoop();
 }
@@ -15948,12 +16693,13 @@ async function flushManagedHeartbeats(): Promise<void> {
   }
 }
 
-async function runHeartbeatFlush(): Promise<void> {
+export async function runHeartbeatFlush(): Promise<void> {
   // Capture once so the non-null narrowing holds across the awaits below
   // (a module-level `let` would re-widen to `SyncService | null` after each).
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  retryHibernationStamps();
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -15966,17 +16712,17 @@ async function runHeartbeatFlush(): Promise<void> {
 
   // Batched liveness write. logHeartbeatStatus stays per-session (throttled,
   // local-only). Resource metrics are pushed separately by collectResourceSnapshot.
-  const payload = ids.map((sessionId) => {
-    const status = lastSentAgentStatus.get(sessionId);
-    logHeartbeatStatus(sessionId, status);
-    return status
-      ? { session_id: sessionId, agent_status: status, client_ts: now }
-      : { session_id: sessionId };
-  });
-  const batchCount = Math.ceil(payload.length / HEARTBEAT_BATCH_SIZE);
-  for (let i = 0; i < payload.length; i += HEARTBEAT_BATCH_SIZE) {
+  const batchCount = Math.ceil(ids.length / HEARTBEAT_BATCH_SIZE);
+  for (let i = 0; i < ids.length; i += HEARTBEAT_BATCH_SIZE) {
+    const payload = ids.slice(i, i + HEARTBEAT_BATCH_SIZE).map((sessionId) => {
+      const status = lastSentAgentStatus.get(sessionId);
+      logHeartbeatStatus(sessionId, status);
+      return status
+        ? { session_id: sessionId, agent_status: status, client_ts: now }
+        : { session_id: sessionId };
+    });
     try {
-      await sync.heartbeatManagedSessionsBatch(payload.slice(i, i + HEARTBEAT_BATCH_SIZE));
+      await sync.heartbeatManagedSessionsBatch(payload);
     } catch {}
   }
   // One line/tick to confirm the fleet flushes in a handful of transactions
@@ -15989,7 +16735,7 @@ async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -16102,7 +16848,7 @@ function collectGitSweepTargets(
     let cwd = sessionCwdCache.get(file.path);
     if (!cwd) {
       try {
-        const head = readFileHead(file.path, 65536);
+        const head = readFileHeadLines(file.path);
         cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
       } catch {}
       if (cwd) sessionCwdCache.set(file.path, cwd);
@@ -16274,6 +17020,61 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
   const bad = states.filter((s) => !s.origin_ok || s.fetch_ok === false);
   if (bad.length) {
     log(`[GITPLANE] ${states.length} repos, ${bad.length} unhealthy: ${bad.map((s) => `${path.basename(s.root)}(${!s.origin_ok ? "origin" : s.needs_access ? "needs-access" : "fetch"})`).join(", ")}`);
+  }
+
+  await publishLocalRepos([...byRoot.keys()]).catch((e) => log(`[REPOMIRROR] pass error: ${(e as Error)?.message ?? e}`));
+}
+
+// ─── Publishing checkouts into the repository cache ──────────────────────────
+// The fourth git-plane duty: every repo with live sessions publishes its
+// branches, tags, first page of history, root tree and readme into the server's
+// repository cache (repos.ingestLocal), so the repo pages work from this
+// machine's checkout with no GitHub App at all. The server decides who may read
+// it from the directory team mapping — the same rule that shares this path's
+// sessions — and answers `private` for a path that shares nothing, which is
+// remembered so a private checkout costs one call per daemon lifetime.
+//
+// A checkout is pushed again only when its refs move (refsFingerprint), or
+// after REPO_MIRROR_MAX_AGE_MS so a row's freshness stamp never goes stale for
+// good. Engine in repoMirror.ts.
+
+const REPO_MIRROR_MAX_AGE_MS = 6 * 60 * 60_000;
+/** root -> fingerprint and time of the last successful push. */
+const repoMirrorPushed = new Map<string, { fingerprint: string; at: number }>();
+/** Roots the server declined as private: not asked again this lifetime. */
+const repoMirrorPrivate = new Set<string>();
+
+async function publishLocalRepos(roots: string[]): Promise<void> {
+  if (!syncServiceRef) return;
+  const now = Date.now();
+  for (const root of roots) {
+    if (repoMirrorPrivate.has(root)) continue;
+    const fingerprint = await refsFingerprint(root);
+    const last = repoMirrorPushed.get(root);
+    if (last && last.fingerprint === fingerprint && now - last.at < REPO_MIRROR_MAX_AGE_MS) continue;
+
+    const mirror = await buildRepoMirror(root);
+    if (!mirror) continue;
+    const result = await syncServiceRef.ingestLocalRepo({
+      root,
+      repository: mirror.repository,
+      remote_url: mirror.remote_url,
+      device_label: deviceLabel(),
+      default_branch: mirror.default_branch,
+      head_sha: mirror.head_sha,
+      rows: mirror.rows,
+      commits: mirror.commits,
+    });
+    if (!result) continue;
+    if (result.published) {
+      repoMirrorPushed.set(root, { fingerprint, at: now });
+      log(`[REPOMIRROR] published ${mirror.repository} from ${root}: ${result.rows} rows, ${result.commits_created} new commits`);
+    } else if (result.reason === "private") {
+      repoMirrorPrivate.add(root);
+      log(`[REPOMIRROR] ${root} shares no sessions with a team; not published`);
+    } else {
+      repoMirrorPushed.set(root, { fingerprint, at: now });
+    }
   }
 }
 
@@ -16658,9 +17459,11 @@ async function reapOneTerminal(
   tmux: string,
   convId: string | undefined,
   idleHours: number,
-  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated" } = {},
+  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated"; boundary?: HibernationBoundary } = {},
 ): Promise<boolean> {
-  const hibernating = opts.parkAs === "hibernated";
+  if (opts.parkAs === "hibernated") {
+    return opts.boundary ? parkHibernationTerminal(sessionId, tmux, convId, idleHours, opts.boundary) : false;
+  }
   // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
   // False here means the pane survived, so no caller may count or report a kill.
   try {
@@ -16678,38 +17481,17 @@ async function reapOneTerminal(
   // path decay a frozen "working" into "stopped"/needs-attention. No session_error
   // (this is a tidy reap, not a crash).
   if (convId && syncServiceRef) {
-    if (hibernating) {
-      const now = Date.now();
-      sendAgentStatus(syncServiceRef, convId, sessionId, "hibernated", now, undefined, undefined, { hibernatedAt: now });
-    } else {
-      await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
-    }
+    await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
   }
   // A dismissed or killed conversation's worktree goes with its terminal when
   // it holds no work (worktreeGc.ts); a stash is a park, and keeps it.
   const gcCwd = opts.gcWorktree ? await tmuxPaneCwd(tmux + ":0.0") : undefined;
   await killTmuxSessionAndTree(tmux);
-  if (hibernating) {
-    // Put the session BACK in the heartbeat set, after the pane is gone and
-    // after resumeSessionCache.delete above. Two facts make that safe and
-    // necessary: reapStaleManagedSessions deletes any managed_sessions row that
-    // stops beating for an hour, which would throw away the park stamp and the
-    // status; and heartbeatHealthCheck returns at once for a session with no
-    // resumeSessionCache entry, so it cannot reconstitute the pane we just
-    // killed.
-    hibernatedSessions.add(sessionId);
-    // Straight into the set rather than through ensureManagedSessionHeartbeat,
-    // which is a no-op until the sync service exists: what must survive is the
-    // membership, and the flush loop (started once, never stopped) is already
-    // running by the time anything can be parked.
-    managedHeartbeatSessions.add(sessionId);
-    ensureHeartbeatFlushLoop();
-    reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
-  } else {
-    reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
-  }
+  reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
   if (gcCwd) {
-    const verdict = await releaseSessionWorktree(gcCwd, log).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
+    const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
+      ? syncServiceRef.isWorktreeShared(convId, p)
+      : Promise.reject(new Error("No session roster"))).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
     reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
   }
   return true;
@@ -16773,7 +17555,247 @@ async function reapIdleOrphanTerminals(): Promise<void> {
 // Every dependency goes through an injected io so the test can drive the fleet
 // without a real one. The production io below is the only place that touches
 // tmux, the transcript or Convex.
+export type HibernationTarget = {
+  session: string;
+  pane: string;
+  pid: number;
+  start: string;
+  stamp: string;
+  conversationStamp: string;
+};
+
+type HibernationBoundary = {
+  target: HibernationTarget;
+  terminal(args: string[]): Promise<{ stdout: string }>;
+  revalidate(): Promise<boolean>;
+  unchanged(): boolean;
+  beginCommit(): boolean;
+};
+
+type HibernationReservation = { done: Promise<void>; cancelled: boolean; committing: boolean; cancel(): void };
+const hibernationInFlight = new Map<string, HibernationReservation>();
+const hibernationEvidenceJobs = new Map<string, Promise<string | null>>();
+const HIBERNATION_ATTEMPT_TIMEOUT_MS = 15_000;
+type HibernationExit = { phase: "committing" | "parked"; replayStop?: () => void };
+const expectedHibernationExits = new Map<string, HibernationExit>();
+
+function deferHibernationHookStop(sessionId: string, status: AgentStatus, replay: () => void): boolean {
+  const expected = expectedHibernationExits.get(sessionId);
+  if (!expected || status !== "stopped") return false;
+  if (expected.phase === "committing") expected.replayStop = replay;
+  return true;
+}
+
+export function publishHookStatus(sync: SyncService, conversationId: string, sessionId: string, data: HookStatusData, statusChanged: boolean, modeChanged = false): void {
+  if (deferHibernationHookStop(sessionId, data.status, () => publishHookStatus(sync, conversationId, sessionId, data, statusChanged, modeChanged))) return;
+  if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
+    sendAgentStatus(sync, conversationId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+  } else pendingOpenTaskReports.delete(sessionId);
+  if (data.status === "stopped" && statusChanged) {
+    const restartTs = restartingSessionIds.get(sessionId);
+    if (!restartTs || Date.now() - restartTs >= RESTART_GUARD_TTL_MS) void sync.markSessionCompleted(conversationId).catch(logConvexFailure);
+  }
+}
+const HIBERNATION_PANE_FORMAT = "#{session_id}|#{pane_id}|#{pane_pid}|#{session_name}|#{session_attached}|#{@codecast_session_id}|#{@codecast_conversation_id}|#{pane_dead}";
+
+export async function inspectHibernationTarget(sessionId: string, tmux: string, conversationId: string, registryDir?: string): Promise<HibernationTarget | null> {
+  if (!validateTmuxTarget(tmux)) return null;
+  await ensureSessionFileIndex();
+  if (!sessionFileIndexReady || sessionFileIndexHome !== (process.env.HOME || "") || codexRolloutIndex?.has(sessionId)) return null;
+  try { if ((await freshCodexOwnershipFiles()).has(sessionId)) return null; } catch { return null; }
+  const { stdout } = await tmuxExec(["list-panes", "-s", "-t", `=${tmux}`, "-F", HIBERNATION_PANE_FORMAT], { timeout: 3000 });
+  if (!tmuxSessionIsSinglePane(stdout)) return null;
+  const [session, pane, rawPid, name, attached, stamp, conversationStamp, dead] = stdout.trim().split("|");
+  if (!/^\$\d+$/.test(session) || !/^%\d+$/.test(pane) || name !== tmux || attached !== "0" || dead !== "0") return null;
+  if (stamp && stamp !== sessionId) return null;
+  if (conversationStamp && conversationStamp !== conversationId) return null;
+  const pid = Number(rawPid);
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return null;
+  const { stdout: identity } = await _execFileAsync("ps", ["-p", String(pid), "-o", "lstart=,uid=,command="], { timeout: 3000 });
+  const match = identity.trim().match(/^(\S+\s+\S+\s+\d+\s+\S+\s+\d+)\s+(\d+)\s+(.+)$/);
+  if (!match || process.getuid?.() !== Number(match[2])) return null;
+  const argvId = argvSessionId(match[3]);
+  if (argvId !== sessionId) return null;
+  const processStartSec = Date.parse(match[1]) / 1000;
+  if (!Number.isFinite(processStartSec)) return null;
+  const claims = await hookClaimsForPid(pid, { fresh: true, registryDir });
+  if (!claims || judgeProcessIdentity({ sessionId, argvId, claims, processStartSec }).verdict !== "owned") return null;
+  const newestClaim = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
+  if (claims.some(c => c.ts >= processStartSec - 5 && c.sessionId !== sessionId && c.ts === newestClaim)) return null;
+  if (!await hibernationChildHistoryIsClear(sessionId)) return null;
+  const procs = await snapshotProcessTableAsync({ timeout: 3000 });
+  const root = procs.find(p => p.pid === pid);
+  if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return null;
+  if (descendantPids(procs, pid).length > 0) return null;
+  return { session, pane, pid, start: match[1], stamp, conversationStamp };
+}
+
+async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolean> {
+  if (subagentActiveAgoMs(sessionId) !== Infinity) return false;
+  const file = findReapTranscript(sessionId);
+  if (!file || file.agentType !== "claude") return false;
+  const dir = path.join(path.dirname(file.path), sessionId, "subagents");
+  try {
+    if ((await fs.promises.readdir(dir)).length > 0) return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return false;
+  }
+  const stat = await fs.promises.stat(file.path);
+  if (stat.size > 1024 * 1024) return false;
+  const content = await fs.promises.readFile(file.path, "utf8");
+  const after = await fs.promises.stat(file.path);
+  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return false;
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    const row = JSON.parse(line);
+    if (!Array.isArray(row.message?.content)) continue;
+    for (const block of row.message.content) {
+      if (block?.type === "tool_use" &&
+          (["Agent", "Task", "Workflow", "Monitor"].includes(block.name) || block.input?.run_in_background)) return false;
+    }
+  }
+  return true;
+}
+
+function hibernationLocalUnchanged(cand: HibernationCandidate, io: HibernationPassIo, reservation: HibernationReservation): boolean {
+  if (reservation.cancelled || hibernationInFlight.get(cand.sessionId) !== reservation) return false;
+  if (resumeSessionCache.get(cand.sessionId) !== cand.tmux || !managedHeartbeatSessions.has(cand.sessionId)) return false;
+  if (lastSentAgentStatus.get(cand.sessionId) !== cand.status) return false;
+  const cachedConv = io.conversationIds()[cand.sessionId];
+  if (cachedConv && cachedConv !== cand.conversationId) return false;
+  const fresh = {
+    ...cand,
+    sharedPane: [...resumeSessionCache.values()].filter(tmux => tmux === cand.tmux).length !== 1,
+    subagentActiveAgoMs: io.subagentActiveAgoMs(cand.sessionId),
+    resumedAgoMs: io.now() - (lastResumeAt.get(cand.sessionId) ?? -Infinity),
+    messagesInFlight: io.deliveryActive(cand.sessionId, cand.conversationId),
+  };
+  return hibernationBlockReason(fresh) === null;
+}
+
+async function attemptHibernation(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
+  if (hibernationInFlight.has(cand.sessionId) || hibernationEvidenceJobs.has(cand.sessionId) || tmuxTargetLocks.has(cand.tmux)) return "in-flight-messages";
+  if (hibernationEvidenceJobs.size >= HIBERNATE_MAX_PER_PASS) return "evidence-busy";
+  let release!: () => void;
+  let revoke!: () => void;
+  const revoked = new Promise<void>(resolve => { revoke = resolve; });
+  const reservation: HibernationReservation = {
+    done: new Promise<void>(resolve => { release = resolve; }),
+    cancelled: false,
+    committing: false,
+    cancel: () => {
+      reservation.cancelled = true;
+      if (!reservation.committing) revoke();
+    },
+  };
+  const lockTargets = [cand.tmux, `=${cand.tmux}`];
+  if (lockTargets.some(target => tmuxTargetLocks.has(target))) return "in-flight-messages";
+  hibernationInFlight.set(cand.sessionId, reservation);
+  for (const target of lockTargets) tmuxTargetLocks.set(target, reservation.done);
+  const deadline = setTimeout(() => reservation.cancel(), Math.min(io.attemptTimeoutMs ?? HIBERNATION_ATTEMPT_TIMEOUT_MS, HIBERNATION_ATTEMPT_TIMEOUT_MS));
+  const work = Promise.resolve().then(async () => {
+    const refusal = await hibernationRefusalReason(cand, io);
+    if (refusal) return refusal;
+    if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
+    const target = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
+    if (!target) return "target-unverified";
+    if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
+    for (const alias of [target.session, target.pane]) {
+      if (tmuxTargetLocks.has(alias)) return "in-flight-messages";
+      tmuxTargetLocks.set(alias, reservation.done);
+      lockTargets.push(alias);
+    }
+    const boundary: HibernationBoundary = {
+      target,
+      terminal: io.terminal,
+      beginCommit: () => {
+        if (!hibernationLocalUnchanged(cand, io, reservation)) return false;
+        clearTimeout(deadline);
+        reservation.committing = true;
+        return true;
+      },
+      unchanged: () => hibernationLocalUnchanged(cand, io, reservation),
+      revalidate: async () => {
+        if (!hibernationLocalUnchanged(cand, io, reservation)) return false;
+        if (await hibernationRefusalReason(cand, io)) return false;
+        const attached = await io.tmuxSessions();
+        if (attached.get(cand.tmux) !== 0) return false;
+        const current = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
+        return JSON.stringify(current) === JSON.stringify(target) && hibernationLocalUnchanged(cand, io, reservation);
+      },
+    };
+    if (!await boundary.revalidate()) return "evidence-changed";
+    return await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000), boundary)
+      ? null : "teardown-refused";
+  }).catch(err => {
+    log(`[HIBERNATE] refused ${cand.sessionId}: ${String(err)}`);
+    return "evidence-unavailable";
+  }).finally(() => {
+    if (hibernationEvidenceJobs.get(cand.sessionId) === work) hibernationEvidenceJobs.delete(cand.sessionId);
+  });
+  hibernationEvidenceJobs.set(cand.sessionId, work);
+  try {
+    return await Promise.race([work, revoked.then(() => "evidence-cancelled")]);
+  } finally {
+    clearTimeout(deadline);
+    reservation.cancelled = true;
+    if (hibernationInFlight.get(cand.sessionId) === reservation) hibernationInFlight.delete(cand.sessionId);
+    for (const target of lockTargets) {
+      if (tmuxTargetLocks.get(target) === reservation.done) tmuxTargetLocks.delete(target);
+    }
+    release();
+  }
+}
+
+async function parkHibernationTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean> {
+  const { target } = boundary;
+  const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
+  if (classifyLivePaneFor(detectSessionAgentType(sessionId), pane) !== "idle") return false;
+  if (!await boundary.revalidate() || !boundary.unchanged()) return false;
+  const checks = [
+    `#{==:#{session_id},${target.session}}`, `#{==:#{pane_id},${target.pane}}`,
+    `#{==:#{pane_pid},${target.pid}}`, "#{==:#{session_attached},0}",
+    "#{==:#{session_windows},1}", "#{==:#{window_panes},1}", "#{==:#{pane_dead},0}",
+    `#{==:#{@codecast_session_id},${target.stamp}}`,
+    `#{==:#{@codecast_conversation_id},${target.conversationStamp}}`,
+  ];
+  const condition = checks.reduce((a, b) => `#{&&:${a},${b}}`);
+  if (!boundary.beginCommit()) return false;
+  const expected: HibernationExit = { phase: "committing" };
+  expectedHibernationExits.set(sessionId, expected);
+  let killed = false;
+  try {
+    const { stdout } = await boundary.terminal(["if-shell", "-F", "-t", target.pane, condition,
+      `kill-pane -t ${target.pane} ; display-message -p parked`, "display-message -p refused"]);
+    if (stdout.trim() !== "parked") return false;
+    killed = true;
+    expected.phase = "parked";
+    delete expected.replayStop;
+    const remaining = await boundary.terminal(["list-panes", "-a", "-F", "#{pane_id}"]);
+    if (remaining.stdout.trim().split("\n").includes(target.pane)) return false;
+    if (!boundary.unchanged()) return false;
+  } finally {
+    if (killed && resumeSessionCache.get(sessionId) === tmux) resumeSessionCache.delete(sessionId);
+    if (expected.phase !== "parked" && expectedHibernationExits.get(sessionId) === expected) {
+      expectedHibernationExits.delete(sessionId);
+      expected.replayStop?.();
+    }
+  }
+  stopCodexPermissionPoller(sessionId);
+  resumeSessionCache.delete(sessionId);
+  hibernatedSessions.add(sessionId);
+  hibernationStampCleared.delete(sessionId);
+  lastSentAgentStatus.set(sessionId, "hibernated");
+  managedHeartbeatSessions.add(sessionId);
+  ensureHeartbeatFlushLoop();
+  if (convId) queueHibernationStamp(sessionId, convId, Date.now());
+  reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  return true;
+}
+
 export type HibernationPassIo = {
+  attemptTimeoutMs?: number;
+  terminal(args: string[]): Promise<{ stdout: string }>;
   policy(): { maxLive: number; idleMs: number; maxPerPass: number };
   /** tmux session name to the number of clients attached to it. */
   tmuxSessions(): Promise<Map<string, number>>;
@@ -16786,15 +17808,17 @@ export type HibernationPassIo = {
   transcriptLastRealMs(sessionId: string): Promise<number | null>;
   lifecycle(conversationId: string, sessionId: string): Promise<ConversationLifecycle | null>;
   /** False when the session runs inside another session's process tree. */
-  canReapPidTree(sessionId: string): boolean;
+  canReapPidTree(sessionId: string): boolean | Promise<boolean>;
   /** True when work is reaching this session right now. Read again at the kill. */
   deliveryActive(sessionId: string, conversationId: string | undefined): boolean;
   /** True when the pane is gone; false when the kill-time recheck refused it. */
-  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<boolean>;
+  inspectTarget(sessionId: string, tmux: string, conversationId: string): Promise<HibernationTarget | null>;
+  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean>;
   now(): number;
 };
 
 const productionHibernationIo: HibernationPassIo = {
+  terminal: (args) => tmuxExec(args, { timeout: 3000, killSignal: "SIGKILL" }),
   policy: () => ({
     // The cached config, never readConfig: that is a synchronous file read and
     // this runs on the maintenance tick.
@@ -16813,14 +17837,20 @@ const productionHibernationIo: HibernationPassIo = {
     const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}|#{session_attached}"], { timeout: 5000 });
     for (const line of stdout.split("\n")) {
       const [name, count] = line.trim().split("|");
-      if (name) attached.set(name, Number(count) || 0);
+      if (name) attached.set(name, count && /^\d+$/.test(count) ? Number(count) : NaN);
     }
     return attached;
   },
   awakeIdleMs: (sessionId) => getSessionAwakeIdleMs(sessionId),
   subagentActiveAgoMs: (sessionId) => subagentActiveAgoMs(sessionId),
   conversationIds: () => readConversationCache(),
-  askSidecarMtimeMs: (sessionId) => askInputSidecarMtimeMs(sessionId),
+  askSidecarMtimeMs: async (sessionId) => {
+    try { return (await fs.promises.stat(path.join(ASK_INPUT_DIR, `${sessionId}.json`))).mtimeMs; }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  },
   transcriptLastRealMs: async (sessionId) => {
     const file = findReapTranscript(sessionId);
     if (!file) return null;
@@ -16831,22 +17861,17 @@ const productionHibernationIo: HibernationPassIo = {
     }
   },
   lifecycle: async (conversationId, sessionId) =>
-    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId, sessionId).catch(() => null) : null,
-  // Asked FRESH, like every other destructive caller (killConversationBackends,
-  // teardownConversationBackends). staleOk answers from the session file index
-  // alone, and a Codex subagent whose rollout is younger than that index reads
-  // as "owned" — the exact wrong answer, because the teardown would then kill
-  // the parent's process tree on the child's behalf. The cost is bounded: at
-  // most HIBERNATE_MAX_PER_PASS lookups per pass, and the probes behind a miss
-  // only read directories that changed since the last index build.
-  canReapPidTree: (sessionId) => planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree,
+    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId).catch(() => null) : null,
+  canReapPidTree: async (sessionId) => planSessionTeardown(await acquireSessionProcessOwnership(sessionId)).reapPidTree,
   deliveryActive: (sessionId, conversationId) =>
     resumeInFlight.has(sessionId) ||
     (!!conversationId &&
       (conversationDeliveryActive.has(conversationId) ||
-        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId))),
-  park: (sessionId, tmux, convId, idleHours) =>
-    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated" }),
+        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId) ||
+        [...injectedMessageTs.values()].some((m) => m.conversationId === conversationId && !m.confirmed))),
+  inspectTarget: inspectHibernationTarget,
+  park: (sessionId, tmux, convId, idleHours, boundary) =>
+    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated", boundary }),
   now: () => Date.now(),
 };
 
@@ -16867,8 +17892,7 @@ export function trackSessionPaneForTests(
   if (tmux === null) {
     resumeSessionCache.delete(sessionId);
     managedHeartbeatSessions.delete(sessionId);
-    hibernatedSessions.delete(sessionId);
-    hibernationStampCleared.delete(sessionId);
+    forgetHibernationPark(sessionId);
     lastSentAgentStatus.delete(sessionId);
     lastResumeAt.delete(sessionId);
     return;
@@ -16877,8 +17901,15 @@ export function trackSessionPaneForTests(
   managedHeartbeatSessions.add(sessionId);
   // `parked` stands in for a park this daemon did, which only a real teardown
   // sets: the pass tests stub io.park, so without it nothing local is marked.
-  if (facts.parked) hibernatedSessions.add(sessionId);
-  if (facts.status) lastSentAgentStatus.set(sessionId, facts.status);
+  if (facts.parked) {
+    hibernatedSessions.add(sessionId);
+    hibernationStampCleared.delete(sessionId);
+  }
+  if (facts.status) {
+    const parking = hibernationInFlight.get(sessionId);
+    if (parking && lastSentAgentStatus.get(sessionId) !== facts.status) parking.cancel();
+    lastSentAgentStatus.set(sessionId, facts.status);
+  }
   if (facts.resumedAt !== undefined) lastResumeAt.set(sessionId, facts.resumedAt);
 }
 
@@ -16967,25 +17998,17 @@ async function hibernationRefusalReason(cand: HibernationCandidate, io: Hibernat
     const lastRealMs = await io.transcriptLastRealMs(cand.sessionId);
     if (askUserQuestionStillPending(sidecarMtimeMs, lastRealMs)) return "pending-question";
   }
-  if (cand.conversationId) {
-    const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
-    // A null lifecycle PROCEEDS, the opposite of the reaper's
-    // stampedPaneReapEligibility. The reaper retires a session for good, so it
-    // must refuse to guess; hibernation retires nothing and the next message
-    // brings the session back, so an unreachable backend is not a reason to
-    // keep burning a pane.
-    //
-    // A DEGRADED answer is different from no answer. The legacy fallback route
-    // carries the status and nothing else, so the pin and the pending messages
-    // come back undefined and read exactly like "not pinned, nothing queued".
-    // Refuse instead: a wrong yes here parks a pinned session.
-    if (lifecycle && lifecycle.hideStateKnown === false) return "lifecycle-degraded";
-    if (lifecycle?.inboxPinnedAt) return "pinned";
-    if (lifecycle?.hasPendingMessages) return "pending-messages";
-  }
+  if (!cand.conversationId) return "conversation-unknown";
+  const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
+  if (!lifecycle) return "lifecycle-unknown";
+  if (lifecycle.hideStateKnown !== true || lifecycle.source !== "lifecycle") return "lifecycle-degraded";
+  if (!lifecycle.status || !["active", "completed"].includes(lifecycle.status)) return "lifecycle-unknown";
+  if (lifecycle.inboxPinnedAt === undefined || lifecycle.hasPendingMessages === undefined) return "lifecycle-degraded";
+  if (lifecycle.inboxPinnedAt !== null) return "pinned";
+  if (lifecycle.hasPendingMessages !== false) return "pending-messages";
   // A borrowed process means the pane belongs to a parent. Killing the tree
   // would kill the parent on the child's behalf.
-  if (!io.canReapPidTree(cand.sessionId)) return "borrowed-process";
+  if (!await io.canReapPidTree(cand.sessionId)) return "borrowed-process";
   // The delivery facts came from a snapshot taken before the gates above, and
   // each gate can wait seconds on a stat, a transcript tail and a Convex round
   // trip. A message that started delivering inside that window is already
@@ -17009,18 +18032,15 @@ export async function hibernateSessionNow(
   const candidates = await collectHibernationCandidates(io);
   if (candidates === null) return { error: "tmux is not answering, so nothing was parked" };
   const cand = candidates.find((c) => c.sessionId === sessionId);
-  // Nothing live here to park. Not an error the user can act on: the session is
-  // already cold, which is what hibernation produces.
-  if (!cand) return { result: "already_parked" };
-  const refusal = await hibernationRefusalReason(cand, io);
-  if (refusal) return { result: `skipped_${refusal}`, error: `not parked: ${refusal}` };
-  const parked = await io.park(
-    cand.sessionId,
-    cand.tmux,
-    cand.conversationId ?? conversationId,
-    Math.round(cand.awakeIdleMs / 3600000),
-  );
-  return parked ? { result: "hibernated" } : { result: "skipped_busy", error: "the pane went busy at kill time" };
+  if (!cand) return hibernatedSessions.has(sessionId)
+    ? { result: "already_parked" }
+    : { result: "skipped_no-live-pane", error: "not parked: no-live-pane" };
+  if (conversationId && cand.conversationId && conversationId !== cand.conversationId) {
+    return { result: "skipped_conversation-conflict", error: "not parked: conversation-conflict" };
+  }
+  cand.conversationId ??= conversationId;
+  const refusal = await attemptHibernation(cand, io);
+  return refusal ? { result: `skipped_${refusal}`, error: `not parked: ${refusal}` } : { result: "hibernated" };
 }
 
 // `io` overrides only the parts a test needs; everything else stays real, so
@@ -17039,10 +18059,9 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   const { picked, skips } = selectHibernationCandidates(candidates, policy);
   let hibernated = 0;
   for (const cand of picked) {
-    const refusal = await hibernationRefusalReason(cand, io);
-    if (refusal) { skips.push(refusal); continue; }
-    if (await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000))) hibernated++;
-    else skips.push("busy-at-kill");
+    const refusal = await attemptHibernation(cand, io);
+    if (refusal) skips.push(refusal);
+    else hibernated++;
   }
   // File-only, like the reaper's pass line: this fires every ~5 min.
   reaperLog(`hibernation pass: ${candidates.length} live, cap=${policy.maxLive}, hibernated ${hibernated}, skipped: ${summarizeReapSkips(skips)}`, false);
@@ -17096,6 +18115,7 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
 export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -17198,10 +18218,12 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
 }
 
 async function heartbeatHealthCheck(sessionId: string): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
   if (resumeInFlight.has(sessionId)) return;
+  if (expectedHibernationExits.has(sessionId)) return;
   const restartTs = restartingSessionIds.get(sessionId);
   if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) return;
 
@@ -17284,6 +18306,13 @@ export type ResumeOptions = {
    * Only the gate reads this; nothing downstream does.
    */
   userInitiated?: boolean;
+  /**
+   * Launch the client's native fork of this parent session (registry `forkCmd`)
+   * under the new id instead of resuming an existing transcript. The parent's
+   * local transcript supplies the cwd; the child's appears when the client
+   * writes it.
+   */
+  forkFromSessionId?: string;
   model?: string;
   effort?: string;
 };
@@ -17365,14 +18394,6 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 }
 
 export function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
-  // A pane is coming back for a session this daemon parked. autoResumeSession is
-  // the wake most parks end in, but not the only one: the transcript driven pane
-  // adoption and the warm restart scan land here instead, and without this the
-  // session would carry hibernated_at while visibly holding a pane. Gated on the
-  // park mark rather than the boot scoped clear, because this also runs for
-  // sessions that are merely starting, and a status write there would race the
-  // start's own "resuming".
-  if (hibernatedSessions.has(sessionId)) clearHibernationPark(sessionId, conversationId);
   // Track the pane immediately, exactly as a resumed/warm-recovered session is. The periodic
   // health sweep (heartbeatHealthCheck) and the pane-authoritative status reconcile both gate
   // on resumeSessionCache membership. A freshly-started session that was never resumed wasn't
@@ -17381,6 +18402,7 @@ export function registerManagedStartedSession(conversationId: string, sessionId:
   // into the cache, which was the only reason it ever recovered). Set before the syncServiceRef
   // guard: this is local bookkeeping that doesn't depend on the sync client.
   resumeSessionCache.set(sessionId, tmuxSession);
+  clearHibernationPark(sessionId, conversationId);
   if (!syncServiceRef) return;
   setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
   setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId).catch(() => {});
@@ -17678,7 +18700,7 @@ const pendingSubagentParents = new Map<string, string>();
 // Track subagent descriptions read from .meta.json: sessionId -> description
 const subagentDescriptions = new Map<string, string>();
 // Track tmux sessions spawned by known parent sessions: tmuxSessionName -> parentConversationId
-const tmuxSpawnedBySession = new Map<string, string>();
+const tmuxSpawnRegistry = new TmuxSpawnRegistry(path.join(CONFIG_DIR, "tmux-spawns.json"));
 
 interface CachedProcessInfo {
   pid: number;
@@ -18037,10 +19059,12 @@ export function resumeReuseCandidates(
 // but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
-export function buildResumeEnvPrefix(agentType: string): string {
-  return agentType === "claude"
+export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
+  const prefix = agentType === "claude"
     ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : AGENT_ENV_SCRUB;
+  const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
+  return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
 
 // The settings-level transcript pin (agentEnv.ts): idempotent, respects an
@@ -18191,82 +19215,95 @@ async function resolveLiveTmuxTarget(
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
-  // Lifecycle gate: a killed/completed conversation must never come back on its
-  // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
-  // (the health check's reconstitution, message-delivery resume, the warm pool,
-  // repairAndResumeSession), so the check lives here rather than at each caller.
-  // Fails OPEN on a lookup error.
-  if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
-    return false;
-  }
-
-  // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
-  // together. One owner lookup serves both.
-  const ownerInfo = conversationId && syncServiceRef
-    ? await syncServiceRef.getConversationOwnerInfo(conversationId)
-    : null;
-  const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
-  if (verdict === "owned_by_live_device") {
-    log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by live device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
-    return false;
-  }
-  if (verdict === "remote_no_conversation") {
-    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
-    return false;
-  }
-  if (verdict === "remote_unowned") {
-    const owner = ownerInfo?.ownerDeviceId;
-    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
-    return false;
-  }
-  // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
-    const startedAt = resumeInFlightStarted.get(sessionId) ?? 0;
-    const age = Date.now() - startedAt;
-    if (age > RESUME_IN_FLIGHT_TIMEOUT_MS) {
-      logDelivery(`Resume in-flight for ${sessionId.slice(0, 8)} is stale (${Math.round(age / 1000)}s), clearing and retrying`);
-      resumeInFlight.delete(sessionId);
-      resumeInFlightStarted.delete(sessionId);
-    } else {
-      logDelivery(`Resume already in flight for ${sessionId.slice(0, 8)}, waiting (age=${Math.round(age / 1000)}s)...`);
+    const age = Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
+    if (age < RESUME_IN_FLIGHT_TIMEOUT_MS) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const result = await Promise.race([
           existing,
-          new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error("resume_timeout")), RESUME_IN_FLIGHT_TIMEOUT_MS - age)),
+          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), RESUME_IN_FLIGHT_TIMEOUT_MS - age); }),
         ]);
-        if (result && content) {
-          const tmuxSession = resumeSessionCache.get(sessionId);
-          if (tmuxSession) {
-            await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint);
-            log(`Injected message to already-resumed session ${sessionId.slice(0, 8)}`);
+        if (result !== null) {
+          if (result && content) {
+            const tmuxSession = resumeSessionCache.get(sessionId);
+            if (tmuxSession) await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint);
           }
+          return result;
         }
-        return result;
-      } catch (err) {
-        if (err instanceof Error && err.message === "resume_timeout") {
-          logDelivery(`Resume in-flight timed out for ${sessionId.slice(0, 8)}, clearing and retrying`);
-          resumeInFlight.delete(sessionId);
-          resumeInFlightStarted.delete(sessionId);
-        } else {
-          throw err;
-        }
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
+    if (resumeInFlight.get(sessionId) === existing) {
+      resumeInFlight.delete(sessionId);
+      resumeInFlightStarted.delete(sessionId);
+    }
+    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
   }
-  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
+  let releaseAccountResume: (() => void) | undefined;
+  const promise = Promise.resolve().then(async () => {
+    const canResume = async (): Promise<boolean> => {
+      // Lifecycle gate: a killed/completed conversation must never come back on its
+      // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
+      // (the health check's reconstitution, message-delivery resume, the warm pool,
+      // repairAndResumeSession), so the check lives here rather than at each caller.
+      // Fails OPEN on a lookup error.
+      if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
+        return false;
+      }
+
+      // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
+      // together. One owner lookup serves both.
+      const ownerInfo = conversationId && syncServiceRef
+        ? await syncServiceRef.getConversationOwnerInfo(conversationId)
+        : null;
+      const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
+      if (verdict === "owned_by_live_device") {
+        log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by live device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+        return false;
+      }
+      if (verdict === "remote_no_conversation") {
+        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
+        return false;
+      }
+      if (verdict === "remote_unowned") {
+        const owner = ownerInfo?.ownerDeviceId;
+        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
+        return false;
+      }
+      return true;
+    };
+    if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
+    releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
+    if (resumeInFlight.get(sessionId) !== promise) return false;
+    if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
+
+    const parking = hibernationInFlight.get(sessionId);
+    if (parking) {
+      parking.cancel();
+      await parking.done;
+      if (resumeInFlight.get(sessionId) !== promise) return false;
+      if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
+    }
+    if (resumeInFlight.get(sessionId) !== promise) return false;
+    expectedHibernationExits.delete(sessionId);
+    const resumed = await (resumeInnerForTests ?? autoResumeSessionInner)(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
+    if (resumed && resumeInFlight.get(sessionId) === promise) clearHibernationPark(sessionId, conversationId);
+    return resumed;
+  });
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
   try {
-    const resumed = await promise;
-    // Every automatic and user-driven resume path funnels through here, so this
-    // is the one place that has to know the park is over.
-    if (resumed) clearHibernationPark(sessionId, conversationId);
-    return resumed;
+    return await promise;
   } finally {
-    lastResumeAt.set(sessionId, Date.now());
-    resumeInFlight.delete(sessionId);
-    resumeInFlightStarted.delete(sessionId);
+    if (resumeInFlight.get(sessionId) === promise) {
+      lastResumeAt.set(sessionId, Date.now());
+      resumeInFlight.delete(sessionId);
+      resumeInFlightStarted.delete(sessionId);
+    }
+    releaseAccountResume?.();
   }
 }
 
@@ -18299,25 +19336,131 @@ export function wakeStatusAfterPark(stored: AgentStatus | undefined): AgentStatu
  * which keeps the common case — a message reaching an already live session — at
  * zero extra Convex writes.
  */
-export function clearHibernationPark(sessionId: string, conversationId?: string): void {
-  const wasParked = hibernatedSessions.delete(sessionId);
-  if (!wasParked && hibernationStampCleared.has(sessionId)) return;
-  // Forgetting the memo costs one extra status write the next time a session
-  // wakes and can never cost a missed clear, so a flat cap is enough to keep a
-  // daemon that runs for weeks from holding every id it ever woke.
-  if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
-  hibernationStampCleared.add(sessionId);
-  const convId = conversationId ?? readConversationCache()[sessionId];
-  if (convId && syncServiceRef) {
-    // Through sendAgentStatus, not straight to the mutation: the map it writes
-    // is what the 30s heartbeat re-asserts, so a wake that skipped it would
-    // clear the stamp on the server and keep sending "hibernated" forever.
-    const status = wakeStatusAfterPark(lastSentAgentStatus.get(sessionId));
-    sendAgentStatus(syncServiceRef, convId, sessionId, status, Date.now(), undefined, undefined, { hibernatedAt: null });
+type HibernationStamp = { conversationId?: string; at: number | null };
+const pendingHibernationStamps = new Map<string, HibernationStamp>();
+const hibernationStampWrites = new Map<string, Promise<void>>();
+const sessionStatusWrites = new Map<string, Promise<boolean>>();
+type PendingStatusPayload = { conversationId: string; status: AgentStatus; permissionMode?: PermissionMode; openTasks?: OpenTaskReport[] };
+type PendingStatusWrite = { order: number; write: () => Promise<boolean>; settle: (ack: boolean) => void; payload?: PendingStatusPayload };
+type SessionStatusQueue = { next: number; status?: PendingStatusWrite; stamp?: PendingStatusWrite };
+const sessionStatusQueues = new Map<string, SessionStatusQueue>();
+
+function serializeSessionStatus(sessionId: string, write: () => Promise<boolean>, kind: "status" | "stamp" = "status", payload?: PendingStatusPayload, acknowledgmentTimeoutMs = 30_000): Promise<boolean> {
+  let queue = sessionStatusQueues.get(sessionId);
+  const start = !queue;
+  if (!queue) {
+    queue = { next: 0 };
+    sessionStatusQueues.set(sessionId, queue);
   }
-  // The log line reports a park ending. A first wake that only clears a stamp
-  // this daemon cannot remember setting is bookkeeping, and saying WOKE for it
-  // would put a park in the log for every session after every restart.
+  const previous = queue[kind];
+  if (payload && previous?.payload?.conversationId === payload.conversationId) {
+    payload.permissionMode ??= previous.payload.permissionMode;
+    if (SETTLE_STATUSES_WITH_TASKS.has(payload.status) && SETTLE_STATUSES_WITH_TASKS.has(previous.payload.status)) {
+      payload.openTasks ??= previous.payload.openTasks;
+    }
+  }
+  previous?.settle(false);
+  const result = new Promise<boolean>(resolve => {
+    let settled = false;
+    const settle = (acknowledged: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve(acknowledged);
+    };
+    const deadline = setTimeout(() => settle(false), acknowledgmentTimeoutMs);
+    queue[kind] = { order: queue.next++, write, settle, payload };
+  });
+  if (start) {
+    const owned = queue;
+    const drain = Promise.resolve().then(async () => {
+      while (owned.status || owned.stamp) {
+        const kind = owned.status && (!owned.stamp || owned.status.order < owned.stamp.order) ? "status" : "stamp";
+        const next = owned[kind]!;
+        delete owned[kind];
+        let acknowledged = false;
+        try { acknowledged = await next.write(); }
+        catch (err) { log(`[sendAgentStatus] error: ${String(err)}`); }
+        next.settle(acknowledged === true);
+      }
+      if (sessionStatusQueues.get(sessionId) === owned) {
+        sessionStatusQueues.delete(sessionId);
+        sessionStatusWrites.delete(sessionId);
+      }
+      return true;
+    });
+    sessionStatusWrites.set(sessionId, drain);
+  }
+  return result;
+}
+
+export const hibernationConcurrencyForTests = {
+  sendAgentStatus, serializeSessionStatus, sessionStatusQueues, sessionStatusWrites,
+  pendingHibernationStamps, hibernationStampWrites, hibernationStampCleared,
+  pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession,
+  hibernationInFlight, hibernationEvidenceJobs, subagentActivityByParent, tmuxTargetLocks,
+  freshClaims: (pid: number, registryDir: string) => hookClaimsForPid(pid, { fresh: true, registryDir }),
+  setResumeInner: (fn: typeof autoResumeSessionInner | null) => { resumeInnerForTests = fn; },
+};
+
+function queueHibernationStamp(sessionId: string, conversationId: string | undefined, at: number | null): void {
+  pendingHibernationStamps.set(sessionId, { conversationId, at });
+  if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
+}
+
+function flushHibernationStamp(sessionId: string): Promise<void> {
+  const running = hibernationStampWrites.get(sessionId);
+  if (running) return running;
+  const stamp = pendingHibernationStamps.get(sessionId);
+  if (!stamp || !syncServiceRef) return Promise.resolve();
+  const conversationId = stamp.conversationId ?? readConversationCache()[sessionId];
+  if (!conversationId) return Promise.resolve();
+  const sync = syncServiceRef;
+  const write = serializeSessionStatus(sessionId, async () => {
+    if (pendingHibernationStamps.get(sessionId) !== stamp) return false;
+    if ((stamp.at !== null) !== hibernatedSessions.has(sessionId)) return false;
+    const status = stamp.at === null ? wakeStatusAfterPark(lastSentAgentStatus.get(sessionId)) : "hibernated";
+    return sync.updateSessionAgentStatus(conversationId, status, Date.now(), undefined, undefined, undefined, stamp.at);
+  }, "stamp").then(confirmed => {
+    if (confirmed !== true || pendingHibernationStamps.get(sessionId) !== stamp) return;
+    pendingHibernationStamps.delete(sessionId);
+    if (stamp.at === null) {
+      if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
+      hibernationStampCleared.set(sessionId, conversationId);
+    }
+  }).finally(() => {
+    if (hibernationStampWrites.get(sessionId) !== write) return;
+    hibernationStampWrites.delete(sessionId);
+    const pending = pendingHibernationStamps.get(sessionId);
+    if (pending && pending !== stamp) void flushHibernationStamp(sessionId);
+  });
+  hibernationStampWrites.set(sessionId, write);
+  return write;
+}
+
+export async function flushHibernationStamps(): Promise<void> {
+  await Promise.all([...pendingHibernationStamps.keys()].map(flushHibernationStamp));
+}
+
+function retryHibernationStamps(): void {
+  for (const sessionId of pendingHibernationStamps.keys()) {
+    if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
+  }
+}
+
+export function clearHibernationPark(sessionId: string, conversationId?: string): void {
+  expectedHibernationExits.delete(sessionId);
+  const parking = hibernationInFlight.get(sessionId);
+  if (parking) parking.cancel();
+  const wasParked = hibernatedSessions.delete(sessionId);
+  lastSentAgentStatus.set(sessionId, wakeStatusAfterPark(lastSentAgentStatus.get(sessionId)));
+  const convId = conversationId ?? readConversationCache()[sessionId];
+  if (!wasParked && convId && hibernationStampCleared.get(sessionId) === convId) return;
+  const pending = pendingHibernationStamps.get(sessionId);
+  if (pending?.at === null && (!convId || !pending.conversationId || pending.conversationId === convId)) {
+    pending.conversationId ??= convId;
+    if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
+  } else queueHibernationStamp(sessionId, convId, null);
   if (wasParked) reaperLog(`WOKE session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)}`);
 }
 
@@ -18419,7 +19562,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
   }
 
-  let sessionFile = findSessionFile(sessionId);
+  // A native fork has no transcript of its own yet: the parent's stands in for
+  // cwd resolution and readiness timing, and its absence means the fork cannot
+  // run here (the client copies state it must be able to read).
+  const forkFromSessionId = opts?.forkFromSessionId;
+  let sessionFile = findSessionFile(forkFromSessionId ?? sessionId);
   const config = readConfig();
   // cursor-agent and opencode each own their session store (SQLite: ~/.cursor,
   // ~/.local/share/opencode/opencode.db), and pi/grok own their JSONL trees under
@@ -18433,7 +19580,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const storeOwnedResumeType = agentTypeHint ?? sessionFile?.agentType;
   const isStoreOwnedResume = storeOwnedResumeType === "cursor" || storeOwnedResumeType === "opencode";
   const isCursorResume = agentTypeHint === "cursor";
-  if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
+  // A store-owned client (opencode) never has a session file; its rebuild is
+  // needed only when the store lacks the session (cross-device, or a synthetic
+  // fork key) — an existing session resumes as-is.
+  const storeLacksSession = storeOwnedResumeType === "opencode" && !sessionExistsInOpencodeDb(sessionId);
+  if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && (!isStoreOwnedResume || storeLacksSession) && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -18443,22 +19594,48 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         return false;
       }
       const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
-      let jsonl: string;
-      let reconId: string;
-      if (reconAgentType === "codex") {
-        ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId }));
-      } else {
-        const tailMessages = chooseClaudeAutoTrim(data);
-        ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId }));
+      const reconCwd = regenerationCwd(data, cwdOverride);
+      if (!reconCwd) {
+        logDelivery(`Reconstitution refused for ${sessionId.slice(0, 8)}: no project path to regenerate under`);
+        await refuseResumeNoLocalCheckout(sessionId, conversationId, undefined);
+        return false;
       }
+      let jsonl = "";
+      let reconId: string;
       // Write under the same cwd the resume will run in (see localSessionDir):
       // a valid override wins, otherwise the locally-resolved repo path.
       const reconDir = (cwdOverride && fs.existsSync(cwdOverride))
         ? cwdOverride
         : localSessionDir(data.conversation.project_path || undefined);
-      const result = reconAgentType === "codex"
-        ? writeCodexSession(jsonl, reconId)
-        : writeClaudeCodeSession(jsonl, reconId, reconDir);
+      let result: { sessionId: string; filePath: string };
+      if (reconAgentType === "codex") {
+        ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId, cwd: reconCwd }));
+        result = writeCodexSession(jsonl, reconId);
+      } else if (reconAgentType === "grok") {
+        // grok's bundle lives under the cwd's own directory; a synthetic
+        // `forked-…` key is not a UUID grok accepts, so the writer mints one.
+        const files = generateGrokSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconDir });
+        reconId = files.sessionId;
+        result = writeGrokSession(files);
+      } else if (reconAgentType === "pi") {
+        const pi = generatePiSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconDir });
+        reconId = pi.sessionId;
+        const piPath = piSessionFilePath(pi.cwd, pi.sessionId);
+        await writeRebuiltDeltaTranscript("pi", pi.jsonl, piPath, pi.sessionId);
+        result = { sessionId: pi.sessionId, filePath: piPath };
+      } else if (reconAgentType === "opencode") {
+        const sesId = await rebuildOpencodeSession(data, reconDir);
+        if (!sesId) {
+          logDelivery(`Cannot rebuild ${sessionId.slice(0, 8)} as opencode: serve sidecar unavailable`);
+          return false;
+        }
+        reconId = sesId;
+        result = { sessionId: sesId, filePath: "" };
+      } else {
+        const tailMessages = chooseClaudeAutoTrim(data);
+        ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId, cwd: reconCwd }));
+        result = writeClaudeCodeSession(jsonl, reconId, reconDir);
+      }
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
         remapConversationSession(sessionId, reconId, conversationId);
@@ -18474,7 +19651,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
       sessionId = reconId;
       sessionFile = findSessionFile(reconId);
-      if (!sessionFile) {
+      if (!sessionFile && !isStoreOwnedResume) {
         logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
         return false;
       }
@@ -18483,7 +19660,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       return false;
     }
   } else if (!sessionFile && !isStoreOwnedResume) {
-    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
+    logDelivery(forkFromSessionId
+      ? `Cannot fork ${forkFromSessionId.slice(0, 8)} → ${sessionId.slice(0, 8)}: parent transcript not on this machine`
+      : `Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
     return false;
   }
 
@@ -18508,8 +19687,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     resumeFatalReasons.set(sessionId, "invalid_session_id");
     return false;
   }
+  if (forkFromSessionId && (!AGENT_CLIENTS[agentType].forkCmd || !isValidResumeSessionId(agentType, forkFromSessionId))) {
+    log(`[SECURITY] Refusing native fork for ${agentType}: ${AGENT_CLIENTS[agentType].forkCmd ? `malformed parent id ${JSON.stringify(forkFromSessionId.slice(0, 80))}` : "no forkCmd"}`);
+    return false;
+  }
   const jsonlPath = isStoreOwnedResume ? "" : sessionFile!.path;
-  const jsonlContent = isStoreOwnedResume ? "" : readFileHead(jsonlPath, 5000);
+  const jsonlContent = isStoreOwnedResume ? "" : readFileHeadLines(jsonlPath);
 
   let cwd: string;
   let resumeCmd: string;
@@ -18558,9 +19741,19 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // Per-session account twin of the effort fallback below: set from the
   // conversation row inside the claude branch, sourced on the resume line.
   let resumeAccountPrefix = "";
+  let stableRulesFile: string | undefined;
+  if (agentType === "grok") {
+    try {
+      stableRulesFile = await writeGrokStableRulesFile(config, cwd, undefined, sessionId, conversationId);
+    } catch (err) {
+      log(`grok stable rules skipped on resume: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    }
+  }
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
     model: opts?.model,
     effort: opts?.effort,
+    forkFromSessionId,
+    stableRulesFile,
     codexArgs: getAgentArgs(config, "codex"),
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
     grokArgs: getAgentArgs(config, "grok"),
@@ -18697,7 +19890,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);
     // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -18876,6 +20069,30 @@ export function clientOwnsSessionStore(agentType: AgentClientId | undefined | nu
   return agentType != null && agentType !== "claude" && agentType !== "codex";
 }
 
+// Materialization writes a CLAUDE transcript AND binds it to the conversation as
+// its session id, so the conversation's next resume launches claude. That is only
+// ever right for a conversation whose declared agent IS claude (or an unhinted one,
+// which defaults to claude downstream). Codex is excluded even though the daemon
+// can generate a codex JSONL: a codex conversation's live backend is its app-server
+// thread, its history lives in ~/.codex/sessions, and a fabricated claude session is
+// therefore not a recovery but a SECOND agent answering in the same thread. On
+// 2026-09-04 that put opus-5 and gpt-6-astra in one conversation, each briefing the
+// same fleet of seventeen sessions, and minted a duplicate conversation row for the
+// twin. This is the delivery twin of startFreshSessionForDelivery's cross-agent
+// refusal: a message left pending is recoverable, a wrong-agent backend is not.
+export function mayMaterializeClaudeTranscript(agentType: AgentClientId | undefined | null): boolean {
+  return agentType == null || agentType === "claude";
+}
+
+// Does an app-server error prove the thread is GONE? Only "thread not found" and
+// "no rollout found" do. A timeout says nothing: under load turn/start routinely
+// exceeds its deadline while the turn itself runs, so treating that as a dead
+// thread retires a live binding and sends the next delivery down the fallback
+// chain (2026-09-04).
+export function isMissingAppServerThreadError(err: unknown): boolean {
+  return /thread not found|no rollout found/i.test(err instanceof Error ? err.message : String(err));
+}
+
 // The resume paths' twin of clientOwnsSessionStore: may a resume with NO local
 // transcript fabricate one from the convex export? Only for the clients whose
 // missing-transcript recovery has always been a local reconstitution — claude,
@@ -18888,7 +20105,8 @@ export function clientOwnsSessionStore(agentType: AgentClientId | undefined | nu
 // THIS predicate, so a new client is excluded by default instead of silently
 // joining the claude fallback.
 export function mayReconstituteResumeTranscript(agentType: AgentClientId | undefined | null): boolean {
-  return agentType == null || agentType === "claude" || agentType === "codex" || agentType === "gemini";
+  // `undefined` is the daemon's "claude / unspecified" spelling.
+  return agentType == null || agentReconstitutes(agentType);
 }
 
 async function repairAndResumeSession(
@@ -18966,23 +20184,30 @@ async function repairAndResumeSession(
         const agentType = agentTypeHint || sessionFile?.agentType || "claude";
         const isCodexSession = agentType === "codex";
         const failureReason = !isCodexSession ? resumeFatalReasons.get(sessionId) ?? null : null;
-        const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
+        const projectPath = regenerationCwd(exportData, cwdOverride);
+        if (!projectPath) {
+          // Writing the rollout anyway would stamp it with the daemon's own cwd
+          // (`/`) and overwrite whatever transcript is on disk with one that
+          // resumes into Codex's working-directory picker — the 2026-09-05 loop.
+          log(`Repair refused for ${sessionId.slice(0, 8)}: no project path to regenerate under (transcript left untouched)`);
+          return false;
+        }
 
         let jsonl: string;
         let tailMessages: number | undefined;
         let targetSessionId = sessionId;
 
         if (isCodexSession) {
-          ({ jsonl } = generateCodexJsonl(exportData, { sessionId }));
+          ({ jsonl } = generateCodexJsonl(exportData, { sessionId, cwd: projectPath }));
         } else {
           const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
           tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
           if (shouldMaterializeFreshClaudeSession(failureReason)) {
-            const generated = generateClaudeCodeJsonl(exportData, { tailMessages });
+            const generated = generateClaudeCodeJsonl(exportData, { tailMessages, cwd: projectPath });
             jsonl = generated.jsonl;
             targetSessionId = generated.sessionId;
           } else {
-            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
+            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId, cwd: projectPath }));
           }
         }
 
@@ -19348,22 +20573,27 @@ async function materializeSession(
         logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
-      // A store-owned client (opencode/pi/cursor) has no Claude-JSONL transcript to
-      // materialize — fabricating one is invalid and, for opencode, the write path
-      // corrupts the shared opencode.db (ct-39174/ct-39178). Delivery falls back to
-      // the started-pane injection / re-resume instead of a materialized session.
+      // Only a claude (or unhinted) conversation may be materialized. A store-owned
+      // client (opencode/pi/cursor) has no Claude-JSONL transcript at all, and for
+      // opencode the write path corrupts the shared opencode.db (ct-39174/ct-39178);
+      // codex has its own live backend and would gain a second agent. Delivery falls
+      // back to the started-pane injection / re-resume instead.
       const matAgentType = fromConvexAgentType(exportData.conversation.agent_type);
-      if (clientOwnsSessionStore(matAgentType)) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: ${matAgentType} owns its session store (no Claude JSONL to materialize)`);
+      if (!mayMaterializeClaudeTranscript(matAgentType)) {
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: conversation is ${matAgentType}, a materialized session would attach a claude backend to it`);
         return null;
       }
 
       const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+      const projectPath = regenerationCwd(exportData);
+      if (!projectPath) {
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: no project path to regenerate under`);
+        return null;
+      }
       // Use the conversation's actual session_id so the JSONL matches Convex
       const convSessionId = exportData.conversation.session_id || undefined;
-      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId });
-      const projectPath = exportData.conversation.project_path || undefined;
+      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId, cwd: projectPath });
       const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, localSessionDir(projectPath));
       setPosition(matFilePath, fs.statSync(matFilePath).size);
 
@@ -19438,6 +20668,7 @@ async function deliverMessage(
   titleCache: TitleCache
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
+  await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
   touchHostActivity();
 
   if (pendingAgentSwitches.has(conversationId)) {
@@ -19489,6 +20720,7 @@ async function deliverMessage(
     if (appServerThreadId) {
       try {
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
+        await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
         await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
         // Delivered input = a new turn: spend any declared settle verdict from
         // before it (codex settles key turnStartedAt by thread id — see
@@ -19510,8 +20742,18 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
-        removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
-        if (err instanceof Error && /thread not found|no rollout found/i.test(err.message)) {
+        if (err instanceof PendingDeliveryHeldError) throw err;
+        if (isCodexSafetyError(err as Parameters<typeof isCodexSafetyError>[0])) {
+          const errorMessage = codexTurnErrorMessage(messageId, err as Parameters<typeof codexTurnErrorMessage>[1], Date.now());
+          await syncService.setSessionError(conversationId, errorMessage.content, { force: true });
+          throw new PendingDeliveryHeldError();
+        }
+        // Retire the binding ONLY when the thread is provably gone. A timed-out or
+        // dropped turn/start leaves a live thread live, and unregistering it there
+        // was what made a codex conversation look backend-less on the next delivery
+        // (2026-09-04); the recovery sweep re-resumes anything genuinely lost.
+        if (isMissingAppServerThreadError(err)) {
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
           forgetPersistedAppServerConversation(conversationId);
         }
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
@@ -19627,6 +20869,7 @@ async function deliverMessage(
         // "delivered". If we marked after and the ack won the race it would find no row and the
         // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
+        await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
         await injectViaTmux(startedTmuxTarget, content, entry.agentType);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
@@ -19637,6 +20880,7 @@ async function deliverMessage(
         }
         return true;
       } catch (err) {
+        if (err instanceof PendingDeliveryHeldError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         // A deaf-but-painted composer (payload never rendered) or a paste that
         // provably never reached the agent are conditions of THIS healthy,
@@ -19755,6 +20999,7 @@ async function deliverMessage(
       // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
+      await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
       await injectViaTmux(injectTarget, content, detectedType);
       // A process-discovered pane can go stale between scan and inject — verify the agent
@@ -19774,6 +21019,7 @@ async function deliverMessage(
         return true;
       }
     } catch (err) {
+      if (err instanceof PendingDeliveryHeldError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       // Same reasoning as tryStartedTmux: these two mean a live pane exists
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
@@ -19805,6 +21051,7 @@ async function deliverMessage(
     try {
       // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
       // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
+      await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
       await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
         agentType: detectedType,
@@ -19812,7 +21059,18 @@ async function deliverMessage(
       logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
       return true;
     } catch (err) {
+      if (err instanceof PendingDeliveryHeldError) throw err;
       logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (detectedType === "codex") {
+      // A live Codex TUI holds the rollout's writer lock, so `codex resume` of
+      // the same thread fails ("already has an active writer"): a tmux resume
+      // beside it can only die into a bare shell, and the auto-resume-failed →
+      // repair chain below would then regenerate the rollout over the live
+      // one. The tty lookup that failed here is transient (a slow ps snapshot
+      // drops the column); leave the message pending for the next scan.
+      logDelivery(`Live Codex process pid=${live.proc.pid} could not be reached; not auto-resuming beside it (message stays pending)`);
+      return false;
     }
     logDelivery(`All injection methods failed for live process pid=${live.proc.pid}, falling back to auto-resume`);
   } else if (!live.tmuxTarget && !live.proc) {
@@ -19846,6 +21104,7 @@ async function deliverMessage(
   // to "delivered" when Claude echoes the message to JSONL, so this status write is not
   // load-bearing. Keeping it non-blocking ensures a slow/stalled Convex mark can't wedge the
   // resume+inject — the same failure mode fixed on the live-tmux path above.
+  await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {
@@ -19902,11 +21161,65 @@ function isSyncPaused(): boolean {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
 
+// The boot sweep used to send conversations:updateProjectPath for EVERY
+// transcript under ~/.claude/projects on every daemon start — 2250 mutations
+// on this machine, ~3/s for the first minutes after a restart, almost all of
+// them no-ops (the row already had that path). That is exactly the window in
+// which a restarted daemon should be delivering the user's queued messages, and
+// on 2026-09-04 it landed inside a backend brownout where every extra write
+// queued behind the ones that mattered. The server's answer is stable for a
+// given (session, path, git root), so remember what it confirmed and send only
+// what changed: a new transcript, a moved checkout, or a row the earlier boot
+// never reached.
+export function projectPathRepairKey(projectPath: string, gitRoot?: string): string {
+  return `${projectPath}\n${gitRoot ?? ""}`;
+}
+
+// Decide whether a transcript's path still needs to go to the server.
+// `confirmed` is the previous boot's session -> key map; a matching key means
+// the server already holds this exact path and git root for the session.
+export function projectPathRepairNeeded(
+  confirmed: Record<string, string>,
+  sessionId: string,
+  projectPath: string,
+  gitRoot?: string,
+): { key: string; send: boolean } {
+  const key = projectPathRepairKey(projectPath, gitRoot);
+  return { key, send: confirmed[sessionId] !== key };
+}
+
+function readProjectPathRepairs(): Record<string, string> {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PROJECT_PATH_REPAIRS_FILE, "utf-8"));
+    return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistProjectPathRepairs(map: Record<string, string>): void {
+  try {
+    const temp = `${PROJECT_PATH_REPAIRS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(map));
+    fs.renameSync(temp, PROJECT_PATH_REPAIRS_FILE);
+  } catch {}
+}
+
 async function repairProjectPaths(syncService: SyncService): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   if (!fs.existsSync(claudeProjectsDir)) return;
 
   log("Checking for project paths that need repair...");
+  const confirmed = readProjectPathRepairs();
+  // Rebuilt from this boot's transcripts only, so entries for deleted
+  // transcripts fall away instead of accumulating forever.
+  const nextConfirmed: Record<string, string> = {};
+  // Only sessions this daemon has a conversation for can be marked confirmed:
+  // for an unknown session the server answers { updated: false } whether the
+  // row is right or missing, and a row created later must still get swept.
+  const knownConversations = readConversationCache();
+  let skipped = 0;
+  let sent = 0;
 
   const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
@@ -19963,7 +21276,16 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const result = await syncService.updateProjectPath(sessionId, projectPath, await resolveRepoRoot(projectPath));
+        const gitRoot = await resolveRepoRoot(projectPath);
+        const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot);
+        if (!plan.send) {
+          skipped++;
+          nextConfirmed[sessionId] = plan.key;
+          continue;
+        }
+        sent++;
+        const result = await syncService.updateProjectPath(sessionId, projectPath, gitRoot);
+        if (result && knownConversations[sessionId]) nextConfirmed[sessionId] = plan.key;
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -19974,9 +21296,8 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     }
   }
 
-  if (repaired > 0) {
-    log(`Repaired ${repaired} project paths (checked ${checked})`);
-  }
+  persistProjectPathRepairs(nextConfirmed);
+  log(`Project path sweep: checked ${checked}, unchanged ${skipped}, sent ${sent}, repaired ${repaired}`);
 }
 
 async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void> {
@@ -20474,7 +21795,8 @@ export function shouldSelfHeal(
   monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  return Math.min(staleMs, monoStaleMs) > thresholdMs;
+  const recoveryThreshold = sawSuspend(staleMs, monoStaleMs) ? Math.min(thresholdMs, 90_000) : thresholdMs;
+  return Math.min(staleMs, monoStaleMs) > recoveryThreshold;
 }
 
 function selfHealIfTimersStalled(source: string): void {
@@ -20726,7 +22048,7 @@ async function sweepStaleTmuxServers(): Promise<void> {
     const livePid = await liveTmuxServerPid();
     const { kill: stale, selfHosted, refused } = staleTmuxServerKillPlan(procs, livePid, process.getuid?.());
     if (refused) {
-      log(`[TMUX-SWEEP] WARNING: tmux did not answer, so no server can be identified as live — skipping the sweep`);
+      log(`[TMUX-SWEEP] WARNING: ${refused} — skipping the sweep`);
       return;
     }
     for (const server of selfHosted) {
@@ -20773,10 +22095,10 @@ async function findStaleFiles(
 }
 
 // Top-level <project>/<session>.jsonl only.
-function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+export function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".claude", "projects"),
-    { maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
+    { policy: { files: "jsonl" }, maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
     maxAgeMs,
     (f) => shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
   );
@@ -20802,12 +22124,12 @@ export { isAppServerManagedCodexSessionHead };
 
 // A codex transcript the app server manages is written by that server, not by
 // us, so a position behind its size is expected and not stale.
-function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+export function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".codex", "sessions"),
-    { fileFilter: (rel) => rel.endsWith(".jsonl") },
+    { policy: { files: "jsonl" }, fileFilter: (rel) => rel.endsWith(".jsonl"), excludeCodexAppServer: true },
     maxAgeMs,
-    (f) => f.stat.size !== getPosition(f.path) && !isAppServerManagedCodexSessionHead(readFileHead(f.path, 2048)),
+    (f) => f.stat.size !== getPosition(f.path),
   );
 }
 
@@ -20894,64 +22216,21 @@ function getCursorMaxRowId(dbPath: string): number {
   }
 }
 
-interface CursorComposerData {
-  allComposers?: Array<{
-    composerId?: string;
-  }>;
-}
-
-function getCursorComposerData(dbPath: string): CursorComposerData | null {
-  let db: Database | null = null;
-  try {
-    db = new Database(dbPath, { readonly: true });
-    const row = db
-      .query<{ value: string }, []>(
-        "SELECT value FROM ItemTable WHERE key = 'composer.composerData' LIMIT 1"
-      )
-      .get();
-    if (!row?.value) {
-      return null;
-    }
-    return JSON.parse(row.value) as CursorComposerData;
-  } catch {
-    return null;
-  } finally {
-    if (db) {
-      db.close();
-    }
+export async function findWorkspacePathForCursorConversation(sessionId: string): Promise<string | null> {
+  const home = process.env.HOME || "";
+  const root = path.join(detectCursorPath(), "User", "workspaceStorage");
+  const job: Extract<ScanJob, { name: "cursorWorkspace" }> = { name: "cursorWorkspace", home, root, sessionId };
+  let workspacePath: string | null;
+  if (daemonWorkersEnabled()) {
+    const rows = await collectScan(job);
+    if (rows.length !== 1 || rows[0].type !== "cursorWorkspace") throw new Error("invalid Cursor workspace observation");
+    workspacePath = rows[0].workspacePath;
+  } else {
+    const { findCursorWorkspace } = await import("./workers/cursorObservation.js");
+    workspacePath = await findCursorWorkspace(job);
   }
-}
-
-function findWorkspacePathForCursorConversation(sessionId: string): string | null {
-  const workspaceStoragePath = getCursorWorkspaceStoragePath();
-  if (!workspaceStoragePath) {
-    return null;
-  }
-
-  let workspaceDirs: string[];
-  try {
-    workspaceDirs = fs.readdirSync(workspaceStoragePath);
-  } catch {
-    return null;
-  }
-
-  for (const workspaceHash of workspaceDirs) {
-    const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
-    if (!fs.existsSync(dbPath)) {
-      continue;
-    }
-
-    const composerData = getCursorComposerData(dbPath);
-    const composers = composerData?.allComposers || [];
-    if (!composers.some(c => c.composerId === sessionId)) {
-      continue;
-    }
-
-    const workspaceStorageDir = path.dirname(dbPath);
-    return getCursorWorkspaceFolderPath(workspaceStorageDir);
-  }
-
-  return null;
+  if (home !== (process.env.HOME || "") || root !== path.join(detectCursorPath(), "User", "workspaceStorage")) throw new ScanCancelled("Cursor root changed");
+  return workspacePath;
 }
 
 interface StaleCursorSession {
@@ -20966,7 +22245,7 @@ interface StaleCursorSession {
 // on checkpoint (the same rule cursorWatcher uses). The sqlite open is the
 // one sync step here, so it runs only for a db that changed since last time;
 // the position compare still runs every sweep, so a failed sync is retried.
-const cursorStaleSweepSeen = new Map<string, { mtimeMs: number; maxRowId: number }>();
+const cursorStaleSweepSeen = new Map<string, { mtimeMs: number; maxRowId: number; workspacePath?: string | null }>();
 export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<StaleCursorSession[]> {
   const workspaceStoragePath = getCursorWorkspaceStoragePath();
   if (!workspaceStoragePath) return [];
@@ -20974,19 +22253,42 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
   const newestByDb = new Map<string, number>();
   await walkFiles(
     workspaceStoragePath,
-    { maxDepth: 2, fileFilter: (rel) => /state\.vscdb(-wal)?$/.test(rel) },
+    { policy: { files: "cursorDb" }, maxDepth: 2, fileFilter: (rel) => /state\.vscdb(-wal)?$/.test(rel) },
     (f) => {
       const dbPath = f.path.endsWith("-wal") ? f.path.slice(0, -"-wal".length) : f.path;
       newestByDb.set(dbPath, Math.max(newestByDb.get(dbPath) ?? 0, f.stat.mtimeMs));
     },
   );
 
+  if (daemonWorkersEnabled()) {
+    const changed = [...newestByDb].filter(([file, mtimeMs]) => now - mtimeMs <= maxAgeMs && cursorStaleSweepSeen.get(file)?.mtimeMs !== mtimeMs).map(([file]) => file);
+    for (let i = 0; i < changed.length; i += 128) {
+      const paths = changed.slice(i, i + 128);
+      let rows: ScanRow[];
+      try { rows = await collectScan({name: 'cursorDatabases', paths}); }
+      catch (error) {
+        if (!scanCanFallback(error)) throw error;
+        const { observeCursorDatabase } = await import('./workers/cursorObservation.js');
+        rows = [];
+        for (const file of paths) rows.push(await observeCursorDatabase(file));
+      }
+      for (const row of rows) {
+        if (row.type === 'cursorError') continue;
+        if (row.type !== 'cursorDb') throw new Error('invalid cursor observation');
+        cursorStaleSweepSeen.set(row.path, {mtimeMs: newestByDb.get(row.path)!, maxRowId: row.maxRowId ?? 0, workspacePath: row.workspacePath});
+      }
+      await yieldScanBatch();
+    }
+  }
   const staleSessions: StaleCursorSession[] = [];
+  let applied = 0;
   for (const [dbPath, mtimeMs] of newestByDb) {
+    if (++applied % 128 === 0) await yieldScanBatch();
     if (now - mtimeMs > maxAgeMs) continue;
     try {
       let seen = cursorStaleSweepSeen.get(dbPath);
       if (!seen || seen.mtimeMs !== mtimeMs) {
+        if (daemonWorkersEnabled()) continue;
         seen = { mtimeMs, maxRowId: timeSyncFs("getCursorMaxRowId", dbPath, () => getCursorMaxRowId(dbPath)) };
         cursorStaleSweepSeen.set(dbPath, seen);
       }
@@ -20997,7 +22299,7 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
       const workspaceHash = path.basename(workspaceStorageDir);
       staleSessions.push({
         sessionId: workspaceHash,
-        workspacePath: getCursorWorkspaceFolderPath(workspaceStorageDir) || workspaceHash,
+        workspacePath: (seen.workspacePath === undefined ? getCursorWorkspaceFolderPath(workspaceStorageDir) : seen.workspacePath) || workspaceHash,
         dbPath,
         mtimeMs,
       });
@@ -21010,10 +22312,10 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
   return staleSessions;
 }
 
-function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+export function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".cursor", "projects"),
-    { fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
+    { policy: { files: "cursorStale" }, fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
     maxAgeMs,
     (f) => f.stat.size !== getPosition(f.path),
   );
@@ -21378,7 +22680,7 @@ function startEventLoopMonitor(): NodeJS.Timeout {
     const cpuDelta = process.cpuUsage(lastTickCpu);
     lastTickCpu = process.cpuUsage();
 
-    saveDaemonState({ lastHeartbeatTick: now, loopFreeze: { ...loopFreezes.summary(now), at: now } });
+    saveDaemonState({ lastHeartbeatTick: now, loopFreeze: { ...loopFreezes.summary(now), at: now }, fleetCounts: countTrackedFleet(managedHeartbeatSessions, hibernatedSessions, now) });
     lastEventLoopTick = now;
     lastEventLoopTickMono = performance.now();
 
@@ -21450,8 +22752,9 @@ async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<
   const unsyncedFiles = await findUnsyncedFilesAsync(
     claudeProjectsDir,
     undefined,
-    (filePath) => isTranscriptFileInSyncScope(filePath, config),
+    (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
     watchDirFilter,
+    { dirs: "claudeWatch", files: "jsonl" },
   );
   const droppedCount = retryQueue.getDroppedOperationCount();
   const queueSize = retryQueue.getLogicalQueueSize();
@@ -21886,7 +23189,7 @@ function startWatchdog(
 
     await runBounded(staleCursorTranscriptFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const sessionId = path.basename(filePath, ".txt");
-      const workspacePath = findWorkspacePathForCursorConversation(sessionId);
+      const workspacePath = await findWorkspacePathForCursorConversation(sessionId);
 
       if (workspacePath) {
         if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
@@ -21971,6 +23274,7 @@ async function main(): Promise<void> {
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
   const underLaunchd = isManagedByLaunchd();
   process.on("exit", (code) => {
+    closeDaemonWorkers();
     // Reap the opencode serve sidecar on EVERY exit path (crash, self-update respawn,
     // fatal, hard-exit timer) — it isn't spawned detached, but process.exit doesn't
     // kill it either, so without this a dying daemon orphans a live unauthenticated
@@ -22115,6 +23419,7 @@ async function main(): Promise<void> {
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
+  configureDaemonWorkers(config.daemon_workers === true);
 
   log(`User ID: ${config.user_id}`);
   log(`Convex URL: ${convexUrl}`);
@@ -22161,7 +23466,7 @@ async function main(): Promise<void> {
   // Register this device early + on its own interval, so device presence never
   // depends on later (potentially slow) init steps.
   void sendHeartbeat().catch(() => {});
-  setInterval(() => { sendHeartbeat().catch(() => {}); }, 30_000);
+  setInterval(() => { transcriptRetryOwners.drain(); sendHeartbeat().catch(() => {}); }, 30_000);
 
   // Hourly re-assert of the settings-level transcript pin (asserted once at
   // boot already) — converges a settings.json rewritten out from under us.
@@ -22344,6 +23649,7 @@ async function main(): Promise<void> {
           if (sessionId) {
             resumeSessionCache.set(sessionId, recoveredTmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
+            clearHibernationPark(sessionId, convId || undefined);
             if (syncServiceRef) {
               syncServiceRef.registerManagedSession(sessionId, process.pid, recoveredTmuxSession, (convId || undefined) as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(sessionId);
@@ -22488,33 +23794,7 @@ async function main(): Promise<void> {
 
   retryQueue.setExecutor(async (op: RetryOperation): Promise<boolean> => {
     if (op.type === "createConversation") {
-      // Ops carry the exact params the direct create attempted (including
-      // parentConversationId/isSubagent — dropping them minted flat,
-      // unparented subagent conversations, jx70pyh 2026-07-29).
-      const params = op.params as unknown as CreateConversationParams;
-      const conversationId = await syncService.createConversation(params);
-      conversationCache[params.sessionId] = conversationId;
-      saveConversationCache(conversationCache);
-      log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
-
-      // Mirror the direct path's pending-subagent resolution so a child whose
-      // queued op predates full params (older daemon's persisted queue) still
-      // re-parents via linkSessions.
-      for (const link of resolvePendingSubagentLinks(params.sessionId, conversationId, pendingSubagentParents, conversationCache)) {
-        syncService.linkSessions(link.parentConvId, link.childConvId, subagentDescriptions.get(link.childSessionId)).then(() => {
-          log(`Retry: Linked pending subagent ${link.childSessionId.slice(0, 8)} -> parent ${link.parentSessionId.slice(0, 8)}`);
-        }).catch((linkErr) => {
-          log(`Retry: Failed to link subagent ${link.childSessionId.slice(0, 8)}: ${linkErr}`);
-        });
-        pendingSubagentParents.delete(link.childSessionId);
-      }
-
-      if (pendingMessages[params.sessionId]) {
-        await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService, retryQueue);
-        delete pendingMessages[params.sessionId];
-      }
-      updateState();
-      return true;
+      return retryCreateTranscriptConversation(op.params as unknown as CreateConversationParams, conversationCache, pendingMessages, syncService, retryQueue, updateState);
     }
 
     if (op.type === "updateSessionId") {
@@ -22829,7 +24109,7 @@ async function main(): Promise<void> {
 
     let sync = fileSyncs.get(filePath);
     if (!sync) {
-      sync = new InvalidateSync(async () => {
+      sync = transcriptRetryOwners.create(fileSyncs, filePath, {client:"claude",file:path.resolve(filePath),sessionId:event.sessionId}, async () => {
         await processSessionFile(
           filePath,
           event.sessionId,
@@ -22895,6 +24175,8 @@ async function main(): Promise<void> {
       const prev = lastHookStatus.get(sessionId);
       if (prev && prev.ts > data.ts) return;
       if (prev && prev.ts === data.ts && prev.status === data.status) return;
+
+      if (deferHibernationHookStop(sessionId, data.status, () => handleStatusData(sessionId, data, filePath, opts))) return;
 
       // A live hook (no filePath) primes at the front of the queue: after a
       // restart the boot replay queues every cold transcript, and a Stop
@@ -23031,25 +24313,9 @@ async function main(): Promise<void> {
         recentSessionInjections.delete(convId);
       }
 
-      if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
-        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
-        log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
-      } else {
-        // Nothing sent, so the open-task report the settle computed must not
-        // wait around to ride an unrelated later status.
-        pendingOpenTaskReports.delete(sessionId);
-      }
-
-      if (data.status === "stopped" && statusChanged) {
-        const restartTs = restartingSessionIds.get(sessionId);
-        if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
-          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
-          if (filePath) try { fs.unlinkSync(filePath); } catch {}
-        } else {
-          log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
-          syncService.markSessionCompleted(convId).catch(logConvexFailure);
-          if (filePath) try { fs.unlinkSync(filePath); } catch {}
-        }
+      publishHookStatus(syncService, convId, sessionId, data, statusChanged, !!modeChanged);
+      if (data.status === "stopped" && statusChanged && filePath) {
+        try { fs.unlinkSync(filePath); } catch {}
       }
 
       if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
@@ -23189,7 +24455,7 @@ async function main(): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(transcriptPath, projectDirName);
 
         if (isProjectAllowedToSync(projectPath, config) && !isPathExcluded(projectPath, config.excluded_paths)) {
-          const sync = new InvalidateSync(async () => {
+          const sync = transcriptRetryOwners.create(fileSyncs, transcriptPath, {client:"claude",file:path.resolve(transcriptPath),sessionId}, async () => {
             await processSessionFile(
               transcriptPath,
               sessionId,
@@ -23243,6 +24509,7 @@ async function main(): Promise<void> {
   async function findMostRecentSessionId(): Promise<string | null> {
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
     const files = await listFilesByMtime(claudeProjectsDir, {
+      policy: { files: "plan" },
       maxDepth: 2,
       fileFilter: (rel) => rel.includes(path.sep) && rel.endsWith(".jsonl") && !rel.includes("sessions-index"),
     });
@@ -23317,8 +24584,9 @@ async function main(): Promise<void> {
       unsyncedFiles = await findUnsyncedFilesAsync(
         claudeProjectsDir,
         undefined,
-        (filePath) => isTranscriptFileInSyncScope(filePath, config),
+        (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
         watchDirFilter,
+        { dirs: "claudeWatch", files: "jsonl" },
       );
     } catch (err) {
       logError(`${reason} failed to find unsynced files`, err instanceof Error ? err : new Error(String(err)));
@@ -23575,7 +24843,7 @@ async function main(): Promise<void> {
 
     let sync = cursorSyncs.get(dbPath);
     if (!sync) {
-      sync = new InvalidateSync(async () => {
+      sync = transcriptRetryOwners.create(cursorSyncs, dbPath, {client:"cursorDb",file:path.resolve(dbPath),sessionId:event.sessionId}, async () => {
         await processCursorSession(
           dbPath,
           event.sessionId,
@@ -23641,6 +24909,10 @@ async function main(): Promise<void> {
   });
 
   cursorTranscriptWatcher.on("session", (event: CursorTranscriptEvent) => {
+    void handleCursorTranscriptEvent(event).catch(error => logError("Cursor transcript event failed", error));
+  });
+
+  async function handleCursorTranscriptEvent(event: CursorTranscriptEvent): Promise<void> {
     const filePath = event.filePath;
     lastWatcherEventTime = Date.now();
 
@@ -23654,7 +24926,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const workspacePath = findWorkspacePathForCursorConversation(event.sessionId);
+    const workspacePath = await findWorkspacePathForCursorConversation(event.sessionId);
     if (workspacePath) {
       if (isPathExcluded(workspacePath, config.excluded_paths)) {
         log(`Skipping sync for excluded path: ${workspacePath}`);
@@ -23672,7 +24944,7 @@ async function main(): Promise<void> {
 
     let sync = cursorTranscriptSyncs.get(filePath);
     if (!sync) {
-      sync = new InvalidateSync(async () => {
+      sync = transcriptRetryOwners.create(cursorTranscriptSyncs, filePath, {client:"cursor",file:path.resolve(filePath),sessionId:event.sessionId}, async () => {
         await processCursorTranscriptFile(
           filePath,
           event.sessionId,
@@ -23689,7 +24961,7 @@ async function main(): Promise<void> {
     }
 
     sync.invalidate();
-  });
+  }
 
   cursorTranscriptWatcher.on("error", (error: Error) => {
     logError("Cursor transcript watcher error", error);
@@ -23703,6 +24975,7 @@ async function main(): Promise<void> {
 
   codexAppServerInstance = new CodexAppServer({
     log,
+    defaultPermissions: () => resolveCodexPermissionDefaults(activeConfig),
     onApproval: async (threadId: string, approval: ApprovalRequest) => {
       const entry = appServerThreads.get(threadId);
       if (!entry) return true;
@@ -23784,6 +25057,18 @@ async function main(): Promise<void> {
     }
   });
 
+  // turn/started fires before the turn/start response resolves, so the record
+  // written there cannot yet know an override was accepted. This closes the gap:
+  // once the server confirms a policy, persist it.
+  // Policy persistence, including the invalidation barrier: a clear that cannot
+  // be written refuses the request rather than letting a narrowing fly against a
+  // record that still grants the old access.
+  registerPolicyPersistenceHandlers({
+    client: codexAppServerInstance,
+    conversationForThread: (threadId) => appServerThreads.get(threadId)?.conversationId,
+    persist: persistThreadPolicyOnly,
+  });
+
   codexAppServerInstance.on("turnStarted", (threadId: string, turnId: string, model?: string) => {
     const entry = appServerThreads.get(threadId);
     appServerTurnProgress.set(turnId, makeAppServerTurnProgress(threadId, model));
@@ -23793,6 +25078,7 @@ async function main(): Promise<void> {
         threadId,
         cwd: entry.cwd,
         approvalPolicy: entry.approvalPolicy,
+        sandboxPolicy: policyForPersist(threadId, previous),
         updatedAt: Date.now(),
         activeTurnId: turnId,
         recoveryAttempts: appServerRecoveringThreads.has(threadId) ? previous?.recoveryAttempts : 0,
@@ -23805,6 +25091,13 @@ async function main(): Promise<void> {
       markAppServerConversationResumable(entry.conversationId, threadId);
     }
   });
+
+  registerAppServerSpawnTracking(
+    codexAppServerInstance,
+    threadId => appServerThreads.get(threadId)?.conversationId,
+    (messages, parent) => trackTmuxSpawns(messages, parent, syncService, conversationCache),
+    err => logError("[codex-app-server] could not track spawned session", err instanceof Error ? err : new Error(String(err))),
+  );
 
   codexAppServerInstance.on("itemStarted", (threadId: string, turnId: string, item: ThreadItem) => {
     const entry = appServerThreads.get(threadId);
@@ -23990,10 +25283,11 @@ async function main(): Promise<void> {
           }));
           if (codexAppServerInstance) {
             registry.register(new CodexAppServerRuntimeDriver({
+              defaultPermissions: () => resolveCodexPermissionDefaults(activeConfig),
               io: {
                 client: codexAppServerInstance,
-                registerThread({ conversationId, threadId, cwd, approvalPolicy }) {
-                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy });
+                registerThread({ conversationId, threadId, cwd, approvalPolicy, sandbox }) {
+                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy, sandbox, persist: true });
                 },
                 async inspectThread(threadId) {
                   if (!codexAppServerInstance?.running) return "unknown";
@@ -24056,7 +25350,7 @@ async function main(): Promise<void> {
 
       let sync = syncs.get(filePath);
       if (!sync) {
-        sync = new InvalidateSync(async () => {
+        sync = transcriptRetryOwners.create(syncs, filePath, {client:label.toLowerCase(),file:label === "OpenCode" ? opencodeDbPath() : path.resolve(filePath),sessionId:event.sessionId}, async () => {
           await process(event);
         }, MESSAGE_SYNC_DEBOUNCE);
         syncs.set(filePath, sync);
@@ -24377,7 +25671,9 @@ async function main(): Promise<void> {
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           injectedMessageTs.delete(msg._id);
-          if (err instanceof UndeliverableMessageError) {
+          if (err instanceof PendingDeliveryHeldError) {
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} no longer admitted; preserving it without retry`);
+          } else if (err instanceof UndeliverableMessageError) {
             // Terminal by construction: cancel (a status the server never
             // re-pends) instead of burning the retry ladder.
             logDelivery(`CANCELLED: msg=${msg._id.slice(0, 8)} can never be delivered: ${errMsg}`);
@@ -24599,6 +25895,53 @@ async function main(): Promise<void> {
 
   setupPermissionSubscription();
 
+  // On-demand repository reads: a page asked for a file, a deeper tree, an
+  // older history page, a blame, a compare or a commit's diff in a repository
+  // no GitHub App covers, and this machine publishes a checkout of it (see
+  // publishLocalRepos). The server hands the request here; the answer is the
+  // cache row GitHub would have produced, or the reason there is none. Each
+  // request is answered once per daemon; several machines may race, and the
+  // server keeps the first answer. Engine in repoMirror.ts.
+  const localReadsInFlight = new Set<string>();
+  const handleLocalReads = async (requests: unknown) => {
+    if (!Array.isArray(requests) || requests.length === 0) return;
+    for (const request of requests as LocalReadRequest[]) {
+      if (!request?._id || localReadsInFlight.has(request._id)) continue;
+      if (!fs.existsSync(request.root)) continue;
+      localReadsInFlight.add(request._id);
+      (async () => {
+        const answer = await answerLocalRead(request);
+        const result = await syncService.answerLocalRead({ request_id: request._id, ...answer });
+        const what = `${request.repository} ${request.kind} ${request.ref}${request.path ? `:${request.path}` : ""}`;
+        if ("error" in answer) log(`[REPOMIRROR] could not answer ${what}: ${answer.error}`);
+        else if (result?.ok) log(`[REPOMIRROR] answered ${what}`);
+        else if (result?.reason !== "gone") log(`[REPOMIRROR] answer for ${what} not accepted${result?.reason ? ` (${result.reason})` : ""}`);
+      })()
+        .catch((e) => log(`[REPOMIRROR] ${request.kind} ${request.ref} failed: ${(e as Error)?.message ?? e}`))
+        .finally(() => localReadsInFlight.delete(request._id));
+    }
+  };
+  let localReadsUnsubscribe: (() => void) | null = null;
+  const setupLocalReadSubscription = () => {
+    try {
+      localReadsUnsubscribe = subscriptionClient.onUpdate(
+        "repos:pendingLocalReads" as any,
+        { api_token: config.auth_token },
+        (requests: unknown) => { void handleLocalReads(requests); },
+        makeSubscriptionErrorHandler(
+          "Local repository reads",
+          () => { if (localReadsUnsubscribe) { localReadsUnsubscribe(); localReadsUnsubscribe = null; } },
+          () => setupLocalReadSubscription(),
+        ),
+      );
+    } catch (err) {
+      const delay = getReconnectDelay();
+      logWarn(`Local repository reads subscription lost, reconnecting in ${delay}ms`);
+      setTimeout(() => setupLocalReadSubscription(), delay);
+    }
+  };
+  setupLocalReadSubscription();
+
   const setupCommandSubscription = () => {
     try {
       log("Setting up daemon commands subscription");
@@ -24677,6 +26020,7 @@ async function main(): Promise<void> {
   }
 
   const shutdown = async () => {
+    closeDaemonWorkers();
     appServerShuttingDown = true;
     clearInterval(appServerRecoveryTimer);
     skipRespawn = true;
@@ -24767,6 +26111,7 @@ async function main(): Promise<void> {
     for (const sync of cursorTranscriptSyncs.values()) {
       sync.stop();
     }
+    transcriptRetryOwners.stop();
 
     if (releasePidFileIfOwned(PID_FILE, process.pid)) {
       log("PID file removed");
