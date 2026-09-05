@@ -232,7 +232,7 @@ jobs:
             codecast-linux-arm64 \
             codecast-linux-x64 \
             codecast-windows-x64.exe \
-            index.js.map; do
+            main.js.map; do
             aws s3 cp "$artifact" "s3://$R2_BUCKET/$artifact" \
               --endpoint-url "$R2_ENDPOINT" \
               --content-type application/octet-stream \
