@@ -929,6 +929,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       content,
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
+      human: true,
     });
   },
 
@@ -1865,6 +1866,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The store's convCommand action routes every kill/restart/repair/reconfigure/
   // rewind/fork/sendKeys/sendEscape/resume here. Every target takes
   // conversation_id as its first arg; per-command extras ride extraArgs.
+  hibernateSession: async (ctx, _userId, [requestId, convId, sessionId, ownerDeviceId]: [string, string, string, string]) => {
+    return await ctx.runMutation!((api as any).sessionCommands.hibernate, {
+      request_id: requestId, conversation_id: convId as Id<"conversations">,
+      session_id: sessionId, owner_device_id: ownerDeviceId,
+    });
+  },
+
   convCommand: async (ctx, userId, [convId, command, extraArgs]: [string, string, Record<string, any>?]) => {
     const fn = (SESSION_COMMANDS as Record<string, any>)[command];
     if (!fn) throw new Error(`convCommand: unknown command ${command}`);

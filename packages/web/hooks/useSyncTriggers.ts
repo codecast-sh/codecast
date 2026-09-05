@@ -3,7 +3,9 @@
 // readers below.
 import { useCallback, useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { ARMED_STATUSES, foreignTriggerConvIds, mergeTriggerRosters, type TaskRow } from "../components/triggerTasks";
+import { makeCollectionSig } from "../store/wakeSig";
 import { useSyncCollection, keyRowsBy } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 
@@ -20,14 +22,59 @@ export const triggerSig = (t: any) =>
   `${t.status}|${t.run_at ?? 0}|${t.last_run_at ?? 0}|${t.run_count ?? 0}|${t.display_title ?? t.title}|${t.display_summary ?? ""}|${t.last_run_needs_attention ? 1 : 0}|${t.last_run_failed ? 1 : 0}|${t.last_run_summary ?? ""}|${t.last_run_conversation_id ?? ""}|${t.schedule_type}|${t.interval_ms ?? 0}|${t.mode}|${t.prompt}`;
 const newestFirst = (a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0);
 
+// Which conversations the viewer sees carry an armed trigger their own roster
+// cannot explain — the ONLY session field this reads, so heartbeat churn on the
+// rest of the row never re-runs the candidate scan.
+const armedStampSig = makeCollectionSig<any>((s) => `${s?._id ?? ""}:${s?.armed_trigger_kind ?? ""}`);
+
+// The query answers with EVERY trigger anchored to those conversations; the
+// roster wants only the armed ones. Dropping the rest here keeps this
+// collection to the handful of rows the roster is missing, instead of
+// accumulating one conversation's whole trigger history.
+const keepArmed = (rows: any[]) => (rows ?? []).filter((t) => ARMED_STATUSES.has(t.status));
+
+/** Feeder: the anchored foreign triggers (see components/triggerTasks.ts,
+ *  foreignTriggerConvIds). Skips entirely when the roster explains every
+ *  armed stamp — the common case, and then this costs no subscription. */
+export function useSyncForeignTriggers(own: TaskRow[], enabled = true) {
+  const stampSig = useInboxStore(useCallback((s: any) => armedStampSig(s.sessions), []));
+  // A comma-joined key, not the array: the array IS the subscription args, so
+  // a fresh-but-equal one would resubscribe on every render.
+  const key = useMemo(
+    () =>
+      foreignTriggerConvIds(useInboxStore.getState().sessions as any, own)
+        .filter(isConvexId)
+        .join(","),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stampSig IS the armed-stamp digest of s.sessions; depending on the raw collection would re-run this on every heartbeat
+    [stampSig, own],
+  );
+  const args = useMemo(
+    () => (enabled && key ? { conversation_ids: key.split(",") } : ("skip" as const)),
+    [enabled, key],
+  );
+  return useSyncCollection("foreignTriggers", api.agentTasks.webListForConversations, args, {
+    select: keepArmed,
+  });
+}
+
 /**
  * Reader: every trigger, newest first, from the store. `ready` is false only
  * until the first live answer; a populated cache is the ordinary first
  * paint, not a loading state.
+ *
+ * "Every" means own AND anchored foreign: a trigger armed by a remote daemon's
+ * bot login on a conversation the viewer can see is the viewer's trigger to
+ * read, even though webList (indexed by user_id) can never carry it.
  */
 export function useTriggers(): { tasks: any[]; ready: boolean } {
   const { ready } = useSyncTriggers();
-  const tasks = useCollectionRows<any>("agentTasks", { sig: triggerSig, sort: newestFirst });
+  const own = useCollectionRows<any>("agentTasks", { sig: triggerSig, sort: newestFirst });
+  // Gated on the own roster having landed: before it does, every armed stamp
+  // looks unexplained, and the feeder would ask for the whole set and then
+  // immediately narrow.
+  useSyncForeignTriggers(own, ready || own.length > 0);
+  const foreign = useCollectionRows<any>("foreignTriggers", { sig: triggerSig, sort: newestFirst });
+  const tasks = useMemo(() => mergeTriggerRosters(own, foreign, newestFirst), [own, foreign]);
   return { tasks, ready };
 }
 

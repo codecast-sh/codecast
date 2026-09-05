@@ -29,6 +29,7 @@ type EventSubscription = { remove(): void };
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
 import { parseCallRingPush } from "@codecast/shared/contracts";
+import { captureError } from "../analytics";
 import {
   acceptInvite,
   declineInvite,
@@ -67,6 +68,39 @@ function getCallKit(): CallKitApi | null {
 }
 
 export const callKitAvailable = (): boolean => getCallKit() !== null;
+
+// Convex auth readiness, fed by the root layout. A Lock Screen answer fires
+// the instant the user slides, usually while the app is still cold starting —
+// before ConvexAuthProvider has read the token from the keychain. A mutation
+// sent then goes out unauthenticated, throws "Not authenticated", and the
+// bridge reports the call failed (seen on device 2026-09-05: "Call failed"
+// right after slide-to-answer). So the answer path waits for auth first,
+// bounded well inside the module's 30s answer timeout.
+let authReady = false;
+let authWaiters: Array<(ok: boolean) => void> = [];
+export function notifyCallKitAuth(ready: boolean): void {
+  authReady = ready;
+  if (ready) {
+    const w = authWaiters;
+    authWaiters = [];
+    for (const r of w) r(true);
+  }
+}
+function waitForAuth(timeoutMs: number): Promise<boolean> {
+  if (authReady) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const t = setTimeout(() => {
+      authWaiters = authWaiters.filter((r) => r !== done);
+      resolve(false);
+    }, timeoutMs);
+    const done = (ok: boolean) => {
+      clearTimeout(t);
+      resolve(ok);
+    };
+    authWaiters.push(done);
+  });
+}
+const ANSWER_AUTH_WAIT_MS = 20_000;
 
 // The CallKit session currently ringing / connected through us, if any:
 // CallKit's id ↔ our invite + room. One at a time — a second CallKit call
@@ -131,21 +165,34 @@ async function onAnswered(ev: { id: string; requestId: string }) {
   if (!k || !active || active.ckId !== ev.id) return;
   active.answered = true;
   const { ckId, inviteId, roomKey } = active;
+  const fail = async (reason: string) => {
+    // A failed answer is silent on device (CallKit just says "Call failed"),
+    // so name the reason where we can read it later.
+    captureError(new Error(`CallKit answer failed: ${reason}`), {
+      inviteId,
+      roomKey,
+      phase: getCallSnapshot().phase,
+    });
+    try {
+      await k.failIncomingCallConnected(ckId, ev.requestId);
+    } catch {}
+    active = null;
+  };
   try {
+    if (!(await waitForAuth(ANSWER_AUTH_WAIT_MS))) {
+      await fail("auth not ready within 20s");
+      return;
+    }
     // acceptInvite → respondInvite → joinCall; CallKit owns the audio session
     // on this path, so joinCall skips LiveKit's own start.
     await acceptInvite(inviteId, roomKey, { callKitManaged: true });
     if (getCallSnapshot().phase === "connected") {
       await k.fulfillIncomingCallConnected(ev.requestId);
     } else {
-      await k.failIncomingCallConnected(ckId, ev.requestId);
-      active = null;
+      await fail(getCallSnapshot().error ?? `phase ${getCallSnapshot().phase}`);
     }
-  } catch {
-    try {
-      await k.failIncomingCallConnected(ckId, ev.requestId);
-    } catch {}
-    active = null;
+  } catch (err: any) {
+    await fail(String(err?.message ?? err));
   }
 }
 

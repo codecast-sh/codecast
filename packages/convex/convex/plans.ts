@@ -413,7 +413,11 @@ export const update = mutation({
 
     const now = Date.now();
     const updates: any = { updated_at: now };
-    if (args.title) updates.title = args.title;
+    if (args.title) {
+      updates.title = args.title;
+      // The generated short name follows the title; the cron refills it.
+      updates.short_title = undefined;
+    }
     if (args.goal !== undefined) updates.goal = args.goal;
     if (args.acceptance_criteria) updates.acceptance_criteria = args.acceptance_criteria;
     if (args.status) updates.status = args.status;

@@ -43,6 +43,8 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   2: "e72f762fac4e3f41",
   3: "658e57e266be626a",
   4: "7af701cea3a64c02",
+  5: "5c58a1d04036be6a",
+  6: "838995f0ac3d38ba",
 };
 
 type Expected = {
@@ -124,7 +126,7 @@ describe("inbox projection golden fixtures", () => {
       }
       for (const t of a.truncated) truncated.add(t);
     }
-    for (const b of ["questions", "pinned", "new", "needs_input", "done", "dormant", "working", "stashed", "dismissed", "hidden"]) {
+    for (const b of ["questions", "pinned", "new", "needs_input", "done", "dormant", "working", "snoozed", "stashed", "dismissed", "hidden"]) {
       expect(buckets.has(b), `no fixture places a row in ${b}`).toBe(true);
     }
     // `idle` is in the alphabet for placeInboxRow callers (a killed row, a

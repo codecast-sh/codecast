@@ -142,6 +142,19 @@ export const TRUST_DECAYING_STATUSES: ReadonlySet<string> = new Set<string>([
 // (web/store/inboxStore.ts, which catches aged-out rows the overlay can't refresh).
 export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
 
+// How long a declared "dormant" is trusted on its own word. An agent that parks
+// itself names a wake; when the system can verify that wake (an armed trigger
+// or loop into the session, daemon-checked open background work) the park
+// stands as long as the wake does. A bare claim — the wake is another session's
+// reply, a remote job, something the daemon cannot see — has no one to expire
+// it: the status only re-derives on the NEXT turn, and if the wake never lands
+// there is no next turn, so the row sat in Dormant for days. Past this quiet
+// window a bare claim reads as needs_input (classifyWorkState, via
+// placeProjectableRow's dormantClaimExpired), where the inbox renders it as an
+// unverified claim rather than a park. Keyed on updated_at like the trust TTL:
+// a wake that lands is a message, which restarts the clock and the turn.
+export const DORMANT_CLAIM_TTL_MS = 2 * 60 * 60 * 1000;
+
 // Pure staleness predicate over a conversation row: its last activity is older
 // than the trust TTL, so any active live status it still carries (agent_status,
 // is_idle:false) can no longer be believed. This is THE shared test every reader
@@ -267,11 +280,13 @@ export const HEARTBEAT_ALIVE_MS = 90 * 1000;
 // The settle verdicts split on the two legs. The inferred one ("waiting", a
 // transcript scrape) takes both: a wedged background task must not park a
 // session forever. A DECLARED verdict ("dormant" / "done") skips the quiet-time
-// leg — a nightly trigger's home is quiet for 23h by design and the agent named
-// its wake — but still takes the dead-daemon leg for "dormant": a dead daemon
-// cannot deliver the wake it promised, so the row must resurface as needing a
-// human. "done" survives a dead daemon: the deliverable is already there and
-// nothing is waiting on a process.
+// leg here — a nightly trigger's home is quiet for 23h by design and the agent
+// named its wake — but still takes the dead-daemon leg for "dormant": a dead
+// daemon cannot deliver the wake it promised, so the row must resurface as
+// needing a human. "done" survives a dead daemon: the deliverable is already
+// there and nothing is waiting on a process. A "dormant" whose wake nothing
+// can verify has its own, longer quiet window (DORMANT_CLAIM_TTL_MS), applied
+// where the structural wakes are known: classifyWorkState.
 //
 // `heartbeatAlive` defaults to true for callers that already gate on a fresh
 // heartbeat (or have no managed row in hand); map-based consumers pass
