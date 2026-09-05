@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isRacyEmptyOverwrite, toMarkdown } from "./docSync";
+import { isRacyEmptyOverwrite, snapshotDocPatch, toMarkdown } from "./docSync";
 
 // Regression for the two doc-content wipes: opening a content-bearing doc in
 // the web editor before its markdown prop loaded either (a) seeded an empty v1
@@ -222,5 +222,30 @@ describe("toMarkdown date mentions", () => {
       ],
     });
     expect(md).toBe("Ship by @[Sep 1, 2026 date:2026-09-01] at the latest.\n\n");
+  });
+});
+
+// Opening a doc in the editor submits a snapshot of the unchanged body. That
+// must not move updated_at, or "Updated 1m ago" appears on every doc anyone
+// reads (seen 2026-09-05 on a doc last edited the day before).
+describe("snapshotDocPatch", () => {
+  const now = 1_800_000_000_000;
+  const doc = { title: "What breaks", content: "# What breaks\n\nbody" };
+
+  test("an identical body writes nothing", () => {
+    expect(snapshotDocPatch("# What breaks\n\nbody", doc, now)).toBeNull();
+    expect(snapshotDocPatch("# What breaks\n\nbody", { ...doc, content: "# What breaks\n\nbody\n" }, now)).toBeNull();
+  });
+
+  test("a changed body stamps updated_at and follows the heading", () => {
+    expect(snapshotDocPatch("# New title\n\nbody", doc, now)).toEqual({
+      content: "# New title\n\nbody",
+      title: "New title",
+      updated_at: now,
+    });
+  });
+
+  test("a stored title that disagrees with an unchanged heading is repaired without an edit stamp", () => {
+    expect(snapshotDocPatch("# What breaks\n\nbody", { ...doc, title: "stale" }, now)).toEqual({ title: "What breaks" });
   });
 });

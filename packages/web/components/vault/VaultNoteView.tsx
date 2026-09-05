@@ -54,6 +54,8 @@ export const VaultNoteView = memo(function VaultNoteView({
   const isRemote = useVaultStore((s) => s.isRemote);
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const exists = useVaultStore((s) => !!s.files[path]);
+  const ignored = useVaultStore((s) => !!s.files[path]?.ignored);
+  const endpoint = useVaultStore((s) => s.endpoint);
 
   const title = noteDisplayName(path.slice(path.lastIndexOf("/") + 1));
 
@@ -67,6 +69,13 @@ export const VaultNoteView = memo(function VaultNoteView({
   useWatchEffect(() => {
     if (isRemote && !body) void useVaultStore.getState().loadRemoteBody(path);
   }, [isRemote, path, !!body]);
+
+  // An ignored note (a generated .md, a worktree's copy of the docs) is
+  // deliberately left out of the scan's prefetch so it never reaches the index;
+  // opening it is the one moment it is wanted, so it is fetched like code is.
+  useWatchEffect(() => {
+    if (ignored && !body && endpoint) void useVaultStore.getState().loadTextBody(path);
+  }, [ignored, path, !!body, endpoint]);
 
   // Re-render (and re-resolve every wiki link) whenever the index changes — a
   // new note can turn a dangling link live without this note re-parsing.

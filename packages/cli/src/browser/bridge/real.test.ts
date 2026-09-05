@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   bridgeEndpointIfConfigured, connectRealBridge, engineBrowserFor, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint,
-  realTabOwnership, rememberRealTab, resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget,
+  realTabOwnership, rememberRealTab, resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget, walledOffFromExtension,
 } from "./real.js";
 import * as http from "node:http";
 import { startBridgeHost, writeBridgeState, type BridgeState, type RunningHost } from "./host.js";
@@ -47,9 +47,12 @@ describe("target id minting", () => {
 });
 
 describe("sticky target", () => {
-  test("defaults to clone", () => {
+  test("defaults to clone before an extension has paired", () => {
     expect(stickyTarget("session:a")).toBe("clone");
     expect(isRealMode({}, "session:a")).toBe(false);
+    writeBridgeState({ port: 41999, token: TEST_TOKEN });
+    expect(isRealMode({}, "session:a")).toBe(false);
+    expect(explicitTarget("session:a")).toBeNull();
   });
 
   test("is per session, and a flag beats it in both directions", () => {
@@ -78,20 +81,34 @@ describe("sticky target", () => {
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: process.pid, extensionConnected: false, extensionSeenAt: Date.now() });
     expect(extensionReady()).toBe(false);
     expect(isRealMode({}, "session:a")).toBe(true);
-    expect(isRealMode({}, "session:b")).toBe(false);
-    // A clone default is never written: the session moves over when the extension comes.
-    expect(explicitTarget("session:b")).toBeNull();
+    expect(isRealMode({}, "session:b")).toBe(true);
+    expect(explicitTarget("session:b")).toBe("real");
   });
 
-  test("a dead host never makes the real Chrome the default", () => {
+  test("a paired extension remains the default when its host dies", () => {
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: true, extensionSeenAt: Date.now() });
     expect(extensionReady()).toBe(false);
-    expect(stickyTarget("session:a")).toBe("clone");
+    expect(stickyTarget("session:a")).toBe("real");
+  });
+
+  test("new sessions prefer a disconnected paired extension, with clone available explicitly", () => {
+    writeBridgeState({ port: 41999, token: TEST_TOKEN, hostPid: process.pid, extensionConnected: false, extensionSeenAt: 1 });
+    expect(extensionReady()).toBe(false);
+    expect(stickyTarget("session:a")).toBe("real");
+    expect(isRealMode({ clone: true }, "session:a")).toBe(false);
+    expect(explicitTarget("session:a")).toBeNull();
+    expect(isRealMode({}, "session:a")).toBe(true);
+    expect(isRealMode({}, null)).toBe(true);
+    setStickyTarget("session:b", "clone");
+    expect(isRealMode({}, "session:b")).toBe(false);
+    expect(isRealMode({ real: true }, "session:b")).toBe(true);
   });
 
   test("the sign-in hint names the step that fits the bridge's state", () => {
     expect(realModeHint("session:a")).toContain("cast browser extension setup");
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: false, extensionSeenAt: Date.now() });
+    expect(realModeHint("session:a")).toBeNull();
+    setStickyTarget("session:a", "clone");
     expect(realModeHint("session:a")).toContain("not connected right now");
     // A session that settled on the clone before the extension came is told the way over.
     setStickyTarget("session:a", "clone");
@@ -176,9 +193,10 @@ describe("the browser behind an engine session key", () => {
   test("a -real key drives a PROVEN bridge host: its socket URL carrying the token", async () => {
     const host = await testBridgeHost();
     try {
+      // The session rides on the socket URL: the host scopes discovery by it.
       expect(await engineBrowserFor(realSessionKey("env-abc"))).toEqual({
         session: "env-abc-real",
-        cdp: `ws://127.0.0.1:${host.port}/devtools/browser/${host.token}`,
+        cdp: `ws://127.0.0.1:${host.port}/devtools/browser/${host.token}?session=env-abc-real`,
       });
       expect(await bridgeEndpointIfConfigured()).toEqual({ port: host.port, token: host.token });
     } finally {
@@ -218,6 +236,27 @@ describe("the browser behind an engine session key", () => {
 });
 
 describe("bringing the bridge up for a verb", () => {
+  test("a default verb waits for an extension reconnecting to an already running host", async () => {
+    const host = await testBridgeHost();
+    writeBridgeState({ port: host.port, token: TEST_TOKEN, hostPid: process.pid, extensionSeenAt: 1, extensionConnected: false });
+    const ext = new FakeExtension([]);
+    let reconnect: Promise<FakeExtension> | undefined;
+    const timer = setTimeout(() => { reconnect = ext.connect(host.port); }, 300);
+    try {
+      expect(isRealMode({}, "session:reconnecting")).toBe(true);
+      const { bridge, status } = await connectRealBridge(async () => {
+        throw new Error("the host is already running");
+      });
+      expect(bridge.started).toBe(false);
+      expect(status.extensionConnected).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      await reconnect;
+      ext.ws?.close();
+      await host.close();
+    }
+  });
+
   test("a verb's engine context starts a down host and waits for the extension, where the bare lookup refuses", async () => {
     const port = await freePort();
     writeBridgeState({ port, token: TEST_TOKEN, extensionSeenAt: 1 });
@@ -233,6 +272,7 @@ describe("bringing the bridge up for a verb", () => {
       }, 300);
     };
     try {
+      expect(isRealMode({}, "session:restarted")).toBe(true);
       // The reaper's lookup: a down host is a refusal, never a start.
       await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/no bridge host is answering/);
 
@@ -241,7 +281,7 @@ describe("bringing the bridge up for a verb", () => {
       expect(status.extensionConnected).toBe(true);
       expect(await engineBrowserFor("env-abc-real", bridge)).toEqual({
         session: "env-abc-real",
-        cdp: `ws://127.0.0.1:${port}/devtools/browser/${TEST_TOKEN}`,
+        cdp: `ws://127.0.0.1:${port}/devtools/browser/${TEST_TOKEN}?session=env-abc-real`,
       });
 
       // The next verb finds the host up: nothing is started twice.
@@ -268,5 +308,20 @@ describe("real session keys", () => {
     const long = realSessionKey("x".repeat(60));
     expect(long.length).toBe(60);
     expect(isRealSession(long)).toBe(true);
+  });
+});
+
+describe("walledOffFromExtension", () => {
+  test("names Chrome's own pages and the Web Store, dashboard included", () => {
+    expect(walledOffFromExtension("chrome://extensions")).toMatch(/chrome:\/\//);
+    expect(walledOffFromExtension("chrome-extension://abc/options.html")).toMatch(/chrome-extension/);
+    expect(walledOffFromExtension("https://chrome.google.com/webstore/devconsole")).toMatch(/Web Store/);
+    expect(walledOffFromExtension("https://chromewebstore.google.com/detail/x/abc")).toMatch(/Web Store/);
+  });
+  test("lets everything else through", () => {
+    expect(walledOffFromExtension("https://chrome.google.com/")).toBeNull();
+    expect(walledOffFromExtension("https://console.cloud.google.com/apis")).toBeNull();
+    expect(walledOffFromExtension("example.com/page")).toBeNull();
+    expect(walledOffFromExtension("not a url")).toBeNull();
   });
 });

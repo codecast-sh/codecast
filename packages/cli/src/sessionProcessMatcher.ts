@@ -376,11 +376,18 @@ export interface ProcessSessionClaim {
 }
 
 const ARGV_ID = "([A-Za-z0-9][A-Za-z0-9._-]{7,})(?=\\s|$)";
-// claude: `--resume <id>` / `-r <id>` / `--session-id <id>`; codex: `codex resume <id>`
-// (bare `resume` is only trusted right after the codex binary — it is an ordinary
-// word inside a prompt argument otherwise).
+// `--session-id <id>` names the session the process WRITES — an assigned id for a
+// fresh launch, or the child of a native fork (`--resume <parent> --fork-session
+// --session-id <child>`, claude and grok alike) — so it outranks `--resume`, which
+// in that shape names the parent being copied. Reading `--resume` first labelled
+// a grok fork pane as its parent, and the deferred resume then started a second
+// process on the child's session dir (2026-09-05). Then claude `--resume <id>` /
+// `-r <id>`; codex: `codex resume <id>` (bare `resume` is only trusted right
+// after the codex binary — it is an ordinary word inside a prompt argument
+// otherwise).
 const ARGV_SESSION_FLAG_RES = [
-  new RegExp(`(?:^|\\s)(?:--resume|--session-id|-r)[\\s=]+${ARGV_ID}`),
+  new RegExp(`(?:^|\\s)--session-id[\\s=]+${ARGV_ID}`),
+  new RegExp(`(?:^|\\s)(?:--resume|-r)[\\s=]+${ARGV_ID}`),
   new RegExp(`(?:^|\\s|/)codex\\s+resume\\s+${ARGV_ID}`),
 ];
 

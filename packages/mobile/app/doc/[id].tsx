@@ -18,6 +18,7 @@ import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { useSyncDocs } from "@/hooks/useSyncDocs";
 import { DOC_TYPE_CONFIG } from "@/components/DocItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
+import { describeDates } from "@codecast/shared/time";
 
 export default function DocDetailScreen() {
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
@@ -115,6 +116,10 @@ export default function DocDetailScreen() {
           )}
         </RNView>
 
+        {doc.created_at && (
+          <RNText style={styles.dates}>{describeDates(doc)}</RNText>
+        )}
+
         {doc.labels && doc.labels.length > 0 && (
           <RNView style={styles.labelRow}>
             {doc.labels.map((l: string) => (
@@ -210,6 +215,13 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
     marginBottom: Spacing.md,
+  },
+  dates: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    marginTop: -Spacing.sm,
+    marginBottom: Spacing.md,
+    fontVariant: ["tabular-nums"],
   },
   badge: {
     flexDirection: "row",

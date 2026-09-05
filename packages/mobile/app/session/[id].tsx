@@ -15,7 +15,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -4923,6 +4923,9 @@ export default function SessionDetailScreen() {
               break;
             }
             const showHeader = !prevNonToolResult || prevNonToolResult.role !== item.role;
+            // A person's direct send (<user-message from="Name">) is that person's
+            // own bubble: unwrap the body and name them — web's direct_user kind.
+            const directUser = item.role === 'user' ? parseUserMessage(item.content) : null;
 
             // Hide standalone tool result messages (they're shown inline with tool calls)
             if (item.role === 'user' && item.tool_results && item.tool_results.length > 0 && !item.content?.trim()) {
@@ -5018,7 +5021,7 @@ export default function SessionDetailScreen() {
                   </Pressable>
                 )}
                 <MessageBubble
-                  message={item}
+                  message={directUser ? { ...item, content: directUser.body } : item}
                   agentType={conversation.agent_type}
                   model={conversation.model}
                   showHeader={showHeader}
@@ -5029,7 +5032,7 @@ export default function SessionDetailScreen() {
                   globalToolResultMap={globalToolResultMap}
                   globalImageMap={globalImageMap}
                   openGallery={openGallery}
-                  userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
+                  userName={directUser?.from || conversation.user?.name || conversation.user?.email?.split('@')[0]}
                   showToast={showToast}
                   collapsed={collapsed}
                   childConversationMap={conversation.child_conversation_map}

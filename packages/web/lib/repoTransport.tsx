@@ -130,6 +130,7 @@ export function usePublicRepoRead<T>(url: string | null): PublicRead<T> {
   return {
     data: result?.data as T | undefined,
     missing: !!result?.missing,
+    pending: false,
     ready: result !== undefined,
     error: result?.error,
   };
