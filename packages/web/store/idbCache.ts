@@ -1,4 +1,5 @@
 import Dexie from "dexie";
+import { captureException } from "@sentry/react";
 import type { Patch } from "mutative";
 import {
   COLLECTION_INDEXES,
@@ -41,9 +42,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 28;
+export const CACHE_SCHEMA_VERSION = 29;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionDecisions:_id|sessions:_id|settingsData:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessions:_id|settingsData:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -332,7 +333,9 @@ export function setHydrating(v: boolean) {
 // write), so a continuous stream still flushes at most every DEBOUNCE_MS rather
 // than starving. Reads consult the pending buffer first for read-your-writes,
 // and page-hide flushes so an abrupt close still persists the freshest state.
-const _pendingMsgWrites = new Map<string, { messages: any[]; pagination: any }>();
+type MessageSnapshot = { messages: any[]; pagination: any };
+const _pendingMsgWrites = new Map<string, MessageSnapshot>();
+const _inFlightMsgWrites = new Set<string>();
 let _msgWriteTimer: ReturnType<typeof setTimeout> | null = null;
 const MSG_WRITE_DEBOUNCE_MS = 300;
 
@@ -371,14 +374,30 @@ function _flushMessageWrites() {
     _msgWriteTimer = null;
   }
   if (_pendingMsgWrites.size === 0) return;
-  const batch = Array.from(_pendingMsgWrites.entries());
-  _pendingMsgWrites.clear();
-  for (const [convId, { messages, pagination }] of batch) {
-    db.conversationMessages
-      .put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) })
-      .catch(() => {});
+  for (const [convId, snapshot] of _pendingMsgWrites) {
+    if (_inFlightMsgWrites.has(convId)) continue;
+    void _writeMessageSnapshot(convId, snapshot);
   }
   _maybePruneConversations();
+}
+
+async function _writeMessageSnapshot(convId: string, snapshot: MessageSnapshot) {
+  _inFlightMsgWrites.add(convId);
+  try {
+    const { messages, pagination } = snapshot;
+    await db.conversationMessages.put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) });
+    if (_pendingMsgWrites.get(convId) === snapshot) _pendingMsgWrites.delete(convId);
+  } catch (error) {
+    captureException(error, { tags: { source: "conversation-cache" } });
+  } finally {
+    _inFlightMsgWrites.delete(convId);
+    const pending = _pendingMsgWrites.get(convId);
+    if (pending && pending !== snapshot) _scheduleMessageWrites();
+  }
+}
+
+function _scheduleMessageWrites() {
+  if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, MSG_WRITE_DEBOUNCE_MS);
 }
 
 // Drop conversationMessages rows beyond the cap (oldest by latestTimestamp) and
@@ -456,8 +475,8 @@ async function _loadUserMessages(convId: string): Promise<any[] | undefined> {
 export async function loadConversationMessages(convId: string): Promise<CachedConversation | null> {
   // Read-your-writes: a just-written-but-not-yet-flushed payload is the freshest
   // truth, so serve it before falling back to the persisted IDB row.
-  const pending = _pendingMsgWrites.get(convId);
   const userMessages = await _loadUserMessages(convId);
+  const pending = _pendingMsgWrites.get(convId);
   if (pending) {
     return { messages: pending.messages, pagination: pending.pagination, latestTimestamp: _latestTs(pending.messages), userMessages };
   }
@@ -484,7 +503,7 @@ export function writeConversationMessages(convId: string, messages: any[], pagin
   if (_hydrating) return;
   _touchedAt.set(convId, Date.now());
   _pendingMsgWrites.set(convId, { messages, pagination });
-  if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, MSG_WRITE_DEBOUNCE_MS);
+  if (!_inFlightMsgWrites.has(convId)) _scheduleMessageWrites();
 }
 
 // -- Dispatch outbox: persist server-bound mutations until acknowledged --

@@ -246,13 +246,23 @@ export interface ResumeCwdInput {
 // ~/.claude/projects/-Users-<home>/, and the daemon later decodes project_path
 // from that slug (e.g. "/Users/m1"). Mirror start_session: surface "clone it
 // first" and let the owning device handle it.
+// A recorded or overridden cwd that can never be a checkout. The filesystem
+// root is what a transcript carries when it was regenerated under the daemon
+// (launchd runs it with cwd `/`); it "exists" on every machine, so without this
+// rule it would win the resolution below and resume the agent in `/`.
+export function isResumableCwd(p: string | null | undefined): p is string {
+  const trimmed = p?.trim();
+  if (!trimmed) return false;
+  return path.resolve(trimmed) !== path.parse(trimmed).root;
+}
+
 export async function resolveResumeCwd(input: ResumeCwdInput): Promise<string | null> {
   const exists = input.exists ?? defaultExists;
 
-  const override = input.cwdOverride?.trim() || null;
+  const override = isResumableCwd(input.cwdOverride) ? input.cwdOverride.trim() : null;
   if (override && exists(override)) return override;
 
-  const recorded = input.recordedCwd?.trim() || null;
+  const recorded = isResumableCwd(input.recordedCwd) ? input.recordedCwd.trim() : null;
   if (recorded) {
     if (exists(recorded)) return recorded;
     const viaLocal = input.resolveLocalRepo(recorded);

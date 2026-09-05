@@ -42,6 +42,7 @@
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh, type RefreshRow } from "./lib/tokenRefresh";
 import { query, action, internalAction, internalMutation, internalQuery } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { convexSiteUrl, webBaseUrl } from "./slack";
@@ -412,6 +413,13 @@ export const storeConnection = internalMutation({
       const stillPending = !!existing.pending_confirm_hash;
       await (ctx.db as any).patch(existing._id, {
         refresh_token_enc: args.refresh_token_enc ?? existing.refresh_token_enc,
+        // A reconnect is a fresh grant: drop the cached access token and any
+        // refresh in flight, whose outcome write is then refused.
+        access_token_enc: undefined,
+        access_expires_at: undefined,
+        refresh_lease_id: undefined,
+        refresh_lease_until: undefined,
+        last_error: undefined,
         granted_scopes: args.granted_scopes,
         updated_at: now,
         // A still-pending row gets THIS callback's confirm token (the older
@@ -552,14 +560,21 @@ export const getOwnedConnection = internalQuery({
     installation_id: v.string(),
     include_pending: v.optional(v.boolean()),
   },
-  handler: async (ctx, args): Promise<{ _id: string; refresh_token_enc: string } | null> => {
+  handler: async (ctx, args): Promise<(RefreshRow & { _id: string }) | null> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     const rowId = (ctx.db as any).normalizeId("google_installations", args.installation_id);
-    const row = rowId ? await ctx.db.get(rowId) : null;
-    if (!row || (row as any).scope_user_id.toString() !== userId.toString()) return null;
-    if ((row as any).pending_confirm_hash && !args.include_pending) return null;
-    return { _id: rowId.toString(), refresh_token_enc: (row as any).refresh_token_enc };
+    const row: any = rowId ? await ctx.db.get(rowId) : null;
+    if (!row || row.scope_user_id.toString() !== userId.toString()) return null;
+    if (row.pending_confirm_hash && !args.include_pending) return null;
+    return {
+      _id: rowId.toString(),
+      refresh_token_enc: row.refresh_token_enc,
+      access_token_enc: row.access_token_enc,
+      access_expires_at: row.access_expires_at,
+      refresh_lease_id: row.refresh_lease_id,
+      refresh_lease_until: row.refresh_lease_until,
+    };
   },
 });
 
@@ -572,17 +587,42 @@ export const deleteConnection = internalMutation({
   },
 });
 
-// updateStoredRefreshToken — Google MAY rotate the refresh token in a refresh
-// response; ignoring the new one leaves a permanently stale ciphertext and a
-// forced reconnect later. Internal: only getFreshAccessToken calls it, with a
-// ciphertext it just produced.
-export const updateStoredRefreshToken = internalMutation({
-  args: { installation_id: v.string(), refresh_token_enc: v.string() },
+// The previous getFreshAccessToken stored a rotated refresh token through an
+// unfenced updateStoredRefreshToken. It is gone, not bridged: a legacy call
+// carries no credential or lease identity, so no write it asks for can be
+// proven safe. The drain is structural and checked at cut time: nothing in
+// the codebase invokes googleOAuth.getFreshAccessToken yet (the Gmail agent
+// verbs are still to come) and google_installations holds no rows, so no
+// pre-deploy action can be in flight when this ships.
+
+/** Claim the refresh for one connection (lib/tokenRefresh.claimRefreshOn). */
+export const claimRefresh = internalMutation({
+  args: { installation_id: v.string(), expected_enc: v.string(), now: v.number() },
   handler: async (ctx, args) => {
     const rowId = (ctx.db as any).normalizeId("google_installations", args.installation_id);
-    if (!rowId) return { ok: false };
-    await (ctx.db as any).patch(rowId, { refresh_token_enc: args.refresh_token_enc, updated_at: Date.now() });
-    return { ok: true };
+    if (!rowId) return { ok: false, reason: "gone" as const };
+    return await claimRefreshOn(ctx.db, rowId, args.expected_enc, args.now);
+  },
+});
+
+/** Persist one refresh outcome, fenced (lib/tokenRefresh.writeRefreshOutcomeOn).
+ *  Google MAY rotate the refresh token in a refresh response; ignoring the new
+ *  one leaves a permanently stale ciphertext, so the pair lands in one write. */
+export const writeRefreshOutcome = internalMutation({
+  args: {
+    installation_id: v.string(),
+    expected_enc: v.string(),
+    lease: v.string(),
+    access_token_enc: v.optional(v.string()),
+    refresh_token_enc: v.optional(v.string()),
+    access_expires_at: v.optional(v.number()),
+    last_error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { installation_id, ...outcome } = args;
+    const rowId = (ctx.db as any).normalizeId("google_installations", installation_id);
+    if (!rowId) return { ok: false, reason: "gone" as const };
+    return await writeRefreshOutcomeOn(ctx.db, rowId, outcome);
   },
 });
 
@@ -611,60 +651,55 @@ export const disconnect = action({
 
 // getFreshAccessToken — the refresh half. Internal only: access tokens flow to
 // the audited credential path (the coming agent verbs), never to clients.
+// The access token is cached with its expiry and refreshed single flight
+// (lib/tokenRefresh), so a Gmail call no longer pays a token round trip and
+// two concurrent callers cannot both spend a rotating refresh token.
 // invalid_grant means the user revoked us (or the secret rotated) — reported,
 // not thrown, so callers can surface "reconnect Gmail".
 export const getFreshAccessToken = internalAction({
-  args: { api_token: v.optional(v.string()), installation_id: v.string() },
+  args: { api_token: v.optional(v.string()), installation_id: v.string(), force: v.optional(v.boolean()) },
   handler: async (
     ctx,
     args,
   ): Promise<{ ok: boolean; access_token?: string; expires_in?: number; error?: string }> => {
     const env = googleEnv();
     if (!env) return { ok: false, error: NOT_CONFIGURED };
-    const conn = await ctx.runQuery(internalApi.googleOAuth.getOwnedConnection, {
-      api_token: args.api_token,
-      installation_id: args.installation_id,
+    const res = await singleFlightRefresh({
+      provider: "Google",
+      read: () => ctx.runQuery(internalApi.googleOAuth.getOwnedConnection, { api_token: args.api_token, installation_id: args.installation_id }),
+      claim: (installation_id, expected_enc, now) =>
+        ctx.runMutation(internalApi.googleOAuth.claimRefresh, { installation_id, expected_enc, now }),
+      write: (installation_id, outcome) =>
+        ctx.runMutation(internalApi.googleOAuth.writeRefreshOutcome, { installation_id, ...outcome }),
+      decrypt: (enc) => decryptRefreshToken(enc, env.clientSecret),
+      encrypt: (plain) => encryptRefreshToken(plain, env.clientSecret),
+      request: async (refreshToken) => {
+        const resp = await fetch(GOOGLE_TOKEN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            refresh_token: refreshToken,
+            client_id: env.clientId,
+            client_secret: env.clientSecret,
+            grant_type: "refresh_token",
+          }).toString(),
+        });
+        let tok: any = null;
+        try { tok = await resp.json(); } catch { tok = null; }
+        return { ok: resp.ok, status: resp.status, tok };
+      },
+      force: args.force,
+      errors: {
+        noConnection: "No such Gmail connection for this account (or it is unconfirmed) — reconnect from the Apps tab",
+        undecryptable: "Stored token undecryptable (GOOGLE_OAUTH_CLIENT_SECRET rotated?) — disconnect and reconnect Gmail from the Apps tab",
+        reconnect: "reconnect Gmail from the Apps tab",
+      },
     });
-    if (!conn) {
-      return { ok: false, error: "No such Gmail connection for this account (or it is unconfirmed) — reconnect from the Apps tab" };
-    }
-    const refreshToken = await decryptRefreshToken(conn.refresh_token_enc, env.clientSecret);
-    if (!refreshToken) {
-      return {
-        ok: false,
-        error: "Stored token undecryptable (GOOGLE_OAUTH_CLIENT_SECRET rotated?) — disconnect and reconnect Gmail from the Apps tab",
-      };
-    }
-    let tok: any;
-    try {
-      const resp = await fetch(GOOGLE_TOKEN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          refresh_token: refreshToken,
-          client_id: env.clientId,
-          client_secret: env.clientSecret,
-          grant_type: "refresh_token",
-        }).toString(),
-      });
-      tok = await resp.json();
-    } catch {
-      return { ok: false, error: "Google token endpoint unreachable — retry; if it persists, reconnect Gmail from the Apps tab" };
-    }
-    if (!tok?.access_token) {
-      if (tok?.error === "invalid_grant") {
-        return { ok: false, error: "invalid_grant — access was revoked at Google; reconnect Gmail from the Apps tab" };
-      }
-      return { ok: false, error: tok?.error || "refresh_failed" };
-    }
-    // Google rotated the refresh token: persist the new one or the stored
-    // ciphertext goes permanently stale after Google retires the old.
-    if (tok.refresh_token) {
-      await ctx.runMutation(internalApi.googleOAuth.updateStoredRefreshToken, {
-        installation_id: conn._id,
-        refresh_token_enc: await encryptRefreshToken(String(tok.refresh_token), env.clientSecret),
-      });
-    }
-    return { ok: true, access_token: tok.access_token, expires_in: tok.expires_in };
+    if (!res.ok) return { ok: false, error: res.error };
+    return {
+      ok: true,
+      access_token: res.token,
+      expires_in: res.expires_at ? Math.max(0, Math.floor((res.expires_at - Date.now()) / 1000)) : undefined,
+    };
   },
 });
