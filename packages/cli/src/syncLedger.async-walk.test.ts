@@ -48,15 +48,20 @@ test("both walkers honor the includeFile filter and a missing baseDir", async ()
 
 test("async walker yields to the event loop mid-scan", async () => {
   const root = makeTree(400);
-  let ticks = 0;
-  const ticker = setInterval(() => { ticks++; }, 0);
+  let visited = 0;
+  let visitedAtYield = -1;
+  let probe: ReturnType<typeof setImmediate> | undefined;
   try {
-    await findUnsyncedFilesAsync(root);
+    const files = await findUnsyncedFilesAsync(root, undefined, () => {
+      if (++visited === 1) probe = setImmediate(() => { visitedAtYield = visited; });
+      return true;
+    });
+    expect(files).toHaveLength(400);
+    expect(visitedAtYield).toBeGreaterThan(0);
+    expect(visitedAtYield).toBeLessThan(visited);
   } finally {
-    clearInterval(ticker);
+    if (probe) clearImmediate(probe);
   }
-  // A blocking walk would let zero timer callbacks run before it returned.
-  expect(ticks).toBeGreaterThan(0);
 });
 
 test("async walker honors a dirFilter and skips the pruned subtrees entirely", async () => {
