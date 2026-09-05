@@ -4,6 +4,119 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CodexAppServer, approvalResultForMethod, threadForkTimeoutMsForBytes, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
 
+describe("CodexAppServer sandbox restatement", () => {
+  // Codex 0.153+ recomputes a restrictive managed permission profile for any
+  // request that names no sandbox, instead of inheriting the thread's. Two live
+  // sessions lost file and network access mid-task that way on 2026-09-04.
+  //
+  // Wire shape verified against codex-cli 0.153.3 `app-server generate-ts`:
+  // thread/start, thread/resume and thread/fork take `sandbox: SandboxMode`;
+  // turn/start takes `sandboxPolicy: SandboxPolicy`. Different fields, different
+  // types. A live probe confirmed the server accepts the wrong one silently.
+  //
+  // The client never invents a sandbox. It replays only a policy the server
+  // returned, so a restatement can never widen a thread's real access.
+  const FULL = { type: "dangerFullAccess" } as const;
+  const READONLY = { type: "readOnly", networkAccess: false } as const;
+  const WORKSPACE = {
+    type: "workspaceWrite", writableRoots: ["/Users/x/proj"], networkAccess: false,
+    excludeTmpdirEnvVar: false, excludeSlashTmp: false,
+  } as const;
+
+  const stubbed = (resolved: any = FULL) => {
+    const requests: Array<{ method: string; params: any }> = [];
+    const server = new CodexAppServer({ log: () => {} });
+    (server as any).sendRequest = async (method: string, params: any) => {
+      requests.push({ method, params });
+      if (method === "turn/start") return { turn: { id: "turn", items: [], status: "inProgress" } };
+      return { thread: { id: params.threadId ?? "thread" }, model: "gpt-test", sandbox: resolved };
+    };
+    return { server, requests };
+  };
+  const turns = (r: Array<{ method: string; params: any }>) => r.filter(x => x.method === "turn/start");
+
+  test("thread requests carry the caller's mode, turns carry the resolved policy", async () => {
+    const { server, requests } = stubbed(FULL);
+    await server.threadStart({ cwd: "/p", sandbox: "danger-full-access" });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "hi" }] });
+    expect(requests[0].params.sandbox).toBe("danger-full-access");
+    expect(requests[0].params.sandboxPolicy).toBeUndefined();
+    expect(turns(requests)[0].params.sandboxPolicy).toEqual(FULL);
+    expect(turns(requests)[0].params.sandbox).toBeUndefined();
+  });
+
+  test("every turn restates it, not just the first", async () => {
+    const { server, requests } = stubbed(FULL);
+    await server.threadStart({ cwd: "/p", sandbox: "danger-full-access" });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "a" }] });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "b" }] });
+    expect(turns(requests).map(r => r.params.sandboxPolicy)).toEqual([FULL, FULL]);
+  });
+
+  test("a read-only thread stays read-only", async () => {
+    const { server, requests } = stubbed(READONLY);
+    await server.threadStart({ cwd: "/p", sandbox: "read-only" });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "hi" }] });
+    expect(turns(requests)[0].params.sandboxPolicy).toEqual(READONLY);
+  });
+
+  test("workspace-write writable roots and network access survive verbatim", async () => {
+    const { server, requests } = stubbed(WORKSPACE);
+    await server.threadResume({ threadId: "thread", cwd: "/p", sandbox: "workspace-write" });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "hi" }] });
+    expect(turns(requests)[0].params.sandboxPolicy).toEqual(WORKSPACE);
+  });
+
+  // A caller that names no sandbox must be passed through untouched. Injecting a
+  // default here would widen a thread that is genuinely restricted.
+  test("resume and fork of an unknown thread never invent a sandbox", async () => {
+    const { server, requests } = stubbed(READONLY);
+    await server.threadResume({ threadId: "unknown-a", cwd: "/p" });
+    await server.threadFork({ threadId: "unknown-b", cwd: "/p" });
+    await server.threadStart({ cwd: "/p" });
+    expect(requests.map(r => r.params.sandbox)).toEqual([undefined, undefined, undefined]);
+  });
+
+  test("a turn on an unknown thread sends no policy rather than inventing one", async () => {
+    const { server, requests } = stubbed(FULL);
+    await server.turnStart({ threadId: "never-seen", input: [{ type: "text", text: "hi" }] });
+    expect(turns(requests)[0].params.sandboxPolicy).toBeUndefined();
+  });
+
+  test("an accepted explicit override wins and sticks", async () => {
+    const { server, requests } = stubbed(FULL);
+    await server.threadStart({ cwd: "/p", sandbox: "danger-full-access" });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "a" }], sandboxPolicy: READONLY });
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "b" }] });
+    expect(turns(requests).map(r => r.params.sandboxPolicy)).toEqual([READONLY, READONLY]);
+  });
+
+  // A rejected widening must not leak into the next implicit turn.
+  test("a REJECTED override does not poison the next turn", async () => {
+    const { server, requests } = stubbed(READONLY);
+    await server.threadStart({ cwd: "/p", sandbox: "read-only" });
+    const ok = (server as any).sendRequest;
+    (server as any).sendRequest = async () => { throw new Error("policy refused"); };
+    await expect(server.turnStart({
+      threadId: "thread", input: [{ type: "text", text: "a" }], sandboxPolicy: FULL,
+    })).rejects.toThrow("policy refused");
+    (server as any).sendRequest = ok;
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "b" }] });
+    expect(turns(requests).at(-1)!.params.sandboxPolicy).toEqual(READONLY);
+  });
+
+  test("a failed turn with no override keeps the remembered policy for the retry", async () => {
+    const { server, requests } = stubbed(FULL);
+    await server.threadStart({ cwd: "/p", sandbox: "danger-full-access" });
+    const ok = (server as any).sendRequest;
+    (server as any).sendRequest = async () => { throw new Error("transport died"); };
+    await expect(server.turnStart({ threadId: "thread", input: [{ type: "text", text: "a" }] })).rejects.toThrow("transport died");
+    (server as any).sendRequest = ok;
+    await server.turnStart({ threadId: "thread", input: [{ type: "text", text: "b" }] });
+    expect(turns(requests).at(-1)!.params.sandboxPolicy).toEqual(FULL);
+  });
+});
+
 describe("CodexAppServer protocol", () => {
   test("start, resume and fork export workspace ports without changing sandbox", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-worktree-env-"));

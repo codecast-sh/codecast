@@ -100,6 +100,7 @@ import {
   threadForkTimeoutMsForBytes,
   threadItemsToMessages,
   type ApprovalPolicy,
+  type SandboxMode,
   type ApprovalRequest,
   type ThreadItem,
 } from "./codexAppServer.js";
@@ -929,6 +930,17 @@ export function buildBlankLaunchArgs(
   }
   // cursor/gemini/pi: no configured args or permission flags yet.
   return [];
+}
+
+/**
+ * The sandbox a Codex thread should run under. Codex 0.153+ applies a
+ * restrictive managed permission profile to any request that names no sandbox,
+ * so "unset" is never safe to send. Deriving it from the approval policy keeps
+ * the two from drifting apart, which is what silently stripped live sessions of
+ * file and network access on 2026-09-04.
+ */
+function sandboxForApprovalPolicy(policy: ApprovalPolicy): SandboxMode {
+  return policy === "never" ? "danger-full-access" : "workspace-write";
 }
 
 function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
@@ -4592,7 +4604,7 @@ async function executeRemoteCommand(
           : null;
         if (agentType === "codex" && activeCodexAppServer) {
           try {
-            const sandbox = codexSkipApprovals ? "danger-full-access" as const : "workspace-write" as const;
+            const sandbox = sandboxForApprovalPolicy(codexApprovalPolicy);
             const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
             const resp = await startCodexThreadThenRecordStableContext(
               () => activeCodexAppServer.threadStart({
@@ -5480,7 +5492,7 @@ async function executeRemoteCommand(
                 ? { config: { model_reasoning_effort: resumeOptions.effort } }
                 : {}),
               approvalPolicy,
-              sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
+              sandbox: sandboxForApprovalPolicy(approvalPolicy),
             }, forkTimeoutMs);
             const realThreadId = forked.thread.id;
             remapConversationSession(sessionId, realThreadId, conversationId);
@@ -15370,12 +15382,16 @@ function markAppServerConversationResumable(
   if (!resolvedThreadId) return;
   const liveEntry = appServerThreads.get(resolvedThreadId);
   const previous = persistedAppServerThreads.get(conversationId);
+  // A thread the live map has forgotten still has a saved cwd and approval
+  // policy worth keeping: erasing them here is what left records that later
+  // resumed under whatever default Codex chose.
+  const carried = previous?.threadId === resolvedThreadId ? previous : undefined;
   persistedAppServerThreads.set(conversationId, {
-    ...(previous?.threadId === resolvedThreadId ? previous : {}),
+    ...(carried ?? {}),
     threadId: resolvedThreadId,
     updatedAt,
-    cwd: liveEntry?.cwd,
-    approvalPolicy: liveEntry?.approvalPolicy,
+    cwd: liveEntry?.cwd ?? carried?.cwd,
+    approvalPolicy: liveEntry?.approvalPolicy ?? carried?.approvalPolicy,
   });
   persistAppServerThreadRegistrations();
 }

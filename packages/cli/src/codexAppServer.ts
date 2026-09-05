@@ -7,6 +7,19 @@ import { withWorktreeConfig } from "./worktreeEnv.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+
+/**
+ * The resolved sandbox the server reports for a thread. Mirrors
+ * codex-cli 0.153.3 `v2/SandboxPolicy.ts`. Richer than SandboxMode: the
+ * workspaceWrite variant carries writable roots and network flags that a bare
+ * mode cannot reconstruct, which is why a turn override must replay a policy
+ * the server actually returned rather than one synthesized from a mode.
+ */
+export type SandboxPolicy =
+  | { type: "dangerFullAccess" }
+  | { type: "readOnly"; networkAccess: boolean }
+  | { type: "externalSandbox"; networkAccess: unknown }
+  | { type: "workspaceWrite"; writableRoots: string[]; networkAccess: boolean; excludeTmpdirEnvVar: boolean; excludeSlashTmp: boolean };
 export type ApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 export type TurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
 
@@ -27,6 +40,14 @@ export interface TurnStartParams {
   model?: string;
   cwd?: string;
   approvalPolicy?: ApprovalPolicy;
+  /** Codex 0.153+ recomputes a restrictive managed permission profile for any
+   *  turn that arrives without one, instead of inheriting what the thread was
+   *  created with, so every turn must restate the sandbox. The wire field here
+   *  is `sandboxPolicy` and it takes a full SandboxPolicy, NOT the `sandbox`
+   *  SandboxMode that thread/start, thread/resume and thread/fork take. Callers
+   *  may leave it unset: turnStart replays the policy the server reported for
+   *  this thread. */
+  sandboxPolicy?: SandboxPolicy;
 }
 
 export type UserInput =
@@ -59,7 +80,7 @@ export interface ThreadStartResponse {
   thread: { id: string; path?: string | null; forkedFromId?: string | null };
   cwd: string;
   model: string;
-  sandbox: unknown;
+  sandbox: SandboxPolicy;
   approvalPolicy: unknown;
 }
 
@@ -71,6 +92,9 @@ export interface ThreadResumeResponse {
   thread: { id: string; path?: string | null; forkedFromId?: string | null; status?: { type: string; activeFlags?: string[] }; turns?: Turn[] };
   cwd: string;
   model: string;
+  /** The policy the server resolved for the resumed thread. Present on
+   *  thread/resume as well as thread/start in codex-cli 0.153.3. */
+  sandbox: SandboxPolicy;
 }
 
 export interface ThreadForkResponse extends ThreadStartResponse {}
@@ -210,6 +234,11 @@ export class CodexAppServer extends EventEmitter {
   private pendingRequests = new Map<number | string, PendingRequest>();
   private turnAccumulators = new Map<string, TurnAccumulator>();
   private threadModels = new Map<string, string>();
+  /** The policy the SERVER resolved for each live thread, taken from the
+   *  thread/start, thread/resume and thread/fork responses. This is what a turn
+   *  override replays, so writable roots and network access survive verbatim
+   *  and a restatement can never widen a thread's real access. */
+  private threadPolicies = new Map<string, SandboxPolicy>();
   private restartDelay = 1000;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -263,12 +292,33 @@ export class CodexAppServer extends EventEmitter {
   async threadStart(params: ThreadStartParams): Promise<ThreadStartResponse> {
     const response = await this.sendRequest("thread/start", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
     this.threadModels.set(response.thread.id, response.model);
+    this.rememberPolicy(response.thread.id, response.sandbox);
     return response;
   }
 
   async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
     if (params.model) this.threadModels.set(params.threadId, params.model);
-    return this.sendRequest("turn/start", params, DEFAULT_TIMEOUT_MS) as Promise<TurnStartResponse>;
+    const sandboxPolicy = params.sandboxPolicy ?? this.threadPolicies.get(params.threadId);
+    const response = await this.sendRequest("turn/start", sandboxPolicy ? { ...params, sandboxPolicy } : params, DEFAULT_TIMEOUT_MS) as TurnStartResponse;
+    // Only a policy the server ACCEPTED becomes the thread's remembered one. A
+    // rejected override must not leak into the next implicit turn, which would
+    // replay access the server refused to grant.
+    if (params.sandboxPolicy) this.rememberPolicy(params.threadId, params.sandboxPolicy);
+    return response;
+  }
+
+  /** Records the policy the server resolved for a thread. Only a server-reported
+   *  or caller-supplied policy is ever stored, never one inferred from a mode,
+   *  so replaying it cannot widen access. */
+  private rememberPolicy(threadId: string, policy?: SandboxPolicy | null): void {
+    if (policy && typeof policy === "object" && typeof (policy as { type?: unknown }).type === "string") {
+      this.threadPolicies.set(threadId, policy);
+    }
+  }
+
+  /** The policy the server reported for a live thread. */
+  policyForThread(threadId: string): SandboxPolicy | undefined {
+    return this.threadPolicies.get(threadId);
   }
 
   async turnInterrupt(threadId: string, turnId: string): Promise<void> {
@@ -278,12 +328,14 @@ export class CodexAppServer extends EventEmitter {
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
     const response = await this.sendRequest("thread/resume", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadResumeResponse;
     this.threadModels.set(response.thread.id, response.model);
+    this.rememberPolicy(response.thread.id, response.sandbox);
     return response;
   }
 
   async threadFork(params: ThreadForkParams, timeoutMs = THREAD_START_TIMEOUT_MS): Promise<ThreadForkResponse> {
     const response = await this.sendRequest("thread/fork", withWorktreeConfig(params), timeoutMs) as ThreadForkResponse;
     this.threadModels.set(response.thread.id, response.model);
+    this.rememberPolicy(response.thread.id, response.sandbox);
     return response;
   }
 
