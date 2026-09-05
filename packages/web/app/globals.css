@@ -3498,7 +3498,7 @@ pre[class*="language-"] {
   padding: 10px 14px;
   border: 0 !important;
   border-radius: 18px;
-  background: var(--sol-bg-inset) !important;
+  background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)) !important;
   box-shadow: none;
 }
 
@@ -3528,7 +3528,7 @@ pre[class*="language-"] {
   padding: 10px 14px;
   border: 0 !important;
   border-radius: 18px;
-  background: color-mix(in srgb, var(--sol-bg-inset) 94%, transparent) !important;
+  background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)) !important;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--sol-text) 6%, transparent);
   backdrop-filter: blur(18px);
 }
@@ -3556,10 +3556,10 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
-  min-height: 68px;
-  padding: 14px 16px 12px;
+  min-height: 52px;
+  padding: 9px 12px 8px;
   border-color: var(--sol-border);
-  border-radius: 22px;
+  border-radius: 18px;
   background: var(--sol-card);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 8%, transparent), 0 8px 24px color-mix(in srgb, var(--sol-text) 6%, transparent);
 }
@@ -3570,6 +3570,7 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-cc-conversation] [data-sv-composer] textarea {
+  padding-block: 2px;
   font-family: var(--font-ui);
   font-size: 15px;
   line-height: 1.5;
@@ -3725,11 +3726,15 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] [data-sv-sec] {
   padding: 12px 12px 5px;
   font-family: var(--font-ui);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 550;
   letter-spacing: 0;
   text-transform: none;
   color: var(--sol-text-dim);
+}
+
+.minimal-style [data-sv-rail] [data-sv-sec] > span {
+  font-size: 12px;
 }
 
 .minimal-style [data-sv-rail] [data-sv-sec] .uppercase,
@@ -3752,7 +3757,9 @@ pre[class*="language-"] {
 
 .minimal-style [data-sv-rail] [data-sv-title] {
   color: var(--sol-text-secondary);
+  font-size: 15px;
   font-weight: 520;
+  line-height: 1.25;
   letter-spacing: -0.006em;
 }
 
@@ -3764,7 +3771,14 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] [data-sv-state],
 .minimal-style [data-sv-rail] [data-sv-summary] {
   color: var(--sol-text-muted);
+  font-size: 12.5px;
   font-weight: 400;
+  line-height: 1.45;
+}
+
+.minimal-style [data-sv-rail] [data-sv-state] > span:not([data-sv-status-chip]) {
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .minimal-style [data-sv-rail] [data-sv-status-chip] {
@@ -3772,12 +3786,15 @@ pre[class*="language-"] {
   border: 0;
   border-radius: 0;
   background: transparent;
+  font-size: 10px;
   letter-spacing: 0.02em;
 }
 
 .minimal-style [data-sv-rail] [data-sv-prompt] {
   color: var(--sol-text-muted) !important;
+  font-size: 12.5px;
   font-weight: 400;
+  line-height: 1.45;
 }
 
 .minimal-style [data-sv-rail] [data-sv-prompt] > span:first-child {
@@ -3786,7 +3803,22 @@ pre[class*="language-"] {
 
 .minimal-style [data-sv-rail] [data-sv-meta] {
   margin-top: 6px;
+  font-size: 11px;
   opacity: 0.86;
+}
+
+.minimal-style [data-sv-rail] [data-sv-meta] .text-\[10px\],
+.minimal-style [data-sv-rail] [data-sv-meta] .text-\[9px\] {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\] {
+  font-size: 12px;
+}
+
+.minimal-style [data-sv-rail] [data-schedstrip] .text-\[10px\] {
+  font-size: 11px;
 }
 
 .minimal-style [data-sv-rail] [data-sv-controls] {
@@ -3955,8 +3987,9 @@ pre[class*="language-"] {
   }
 
   .minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
-    min-height: 58px;
-    border-radius: 18px;
+    min-height: 50px;
+    padding: 8px 10px 7px;
+    border-radius: 16px;
   }
 
   .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"],
