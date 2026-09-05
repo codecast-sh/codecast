@@ -742,7 +742,11 @@ describe("classifyWorkState", () => {
   test("hard blocks outrank every rest verdict", () => {
     expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true, awaitingInput: true }))).toBe("needs_input");
     expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, isUnresponsive: true }))).toBe("needs_input");
-    expect(classifyWorkState(wsi({ isIdle: true, userDormant: true, awaitingInput: true }))).toBe("needs_input");
+    // The USER's verdict is triage, not a claim: it stands over the open ask
+    // they already saw, until the next activity expires the stamp.
+    expect(classifyWorkState(wsi({ isIdle: true, userRest: "dormant", awaitingInput: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ agentStatus: "stopped", isIdle: true, userRest: "done" }))).toBe("done");
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, userRest: "needs_input" }))).toBe("needs_input");
     expect(classifyWorkState(wsi({ isIdle: true, armedTriggerHome: true, isUnresponsive: true }))).toBe("needs_input");
     // A killed row is retired, whatever it declared.
     expect(classifyWorkState(wsi({ killed: true, agentStatus: "dormant", isIdle: true }))).toBe("idle");
@@ -750,7 +754,7 @@ describe("classifyWorkState", () => {
 
   test("structural + user dormancy: an armed inject trigger's home, or the user's park stamp", () => {
     expect(classifyWorkState(wsi({ isIdle: true, armedTriggerHome: true }))).toBe("dormant");
-    expect(classifyWorkState(wsi({ isIdle: true, userDormant: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ isIdle: true, userRest: "dormant" }))).toBe("dormant");
     // Dormant beats done: a session that both delivered and parked is parked.
     expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, armedTriggerHome: true }))).toBe("dormant");
     // …but a wake in flight is working, whatever the home's standing state.

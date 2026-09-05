@@ -2,12 +2,13 @@
 
 import { useCallback, useMemo } from "react";
 import { useInboxStore } from "../../store/inboxStore";
+import type { UserRest } from "@codecast/shared/contracts";
 import { overlayConversationId } from "../../store/workspace";
 import {
   animatedHideSession,
   type HideSessionOpts,
   undoableDeferSession,
-  undoableDormantSession,
+  undoableSetSessionRest,
   undoablePinSession,
 } from "../../store/undoActions";
 import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
@@ -56,16 +57,16 @@ export function useTriageActions(isOnInboxPage: boolean) {
     if (source === "key") noteTriageKeyUse();
   }, [isOnInboxPage, killWithNotice, closeOverlayIfCurrent]);
 
-  // Defer and dormant share one shape: stamp the row, then advance the
-  // selection to the next row in visual order (computed BEFORE the stamp —
-  // stamping reorders the list).
-  const park = useCallback((id: string, verb: "defer" | "dormant", source: TriageSource = "key") => {
+  // Defer and the rest verdicts (dormant / done / needs input) share one
+  // shape: stamp the row, then advance the selection to the next row in
+  // visual order (computed BEFORE the stamp — stamping reorders the list).
+  const park = useCallback((id: string, verb: "defer" | UserRest, source: TriageSource = "key") => {
     const store = useInboxStore.getState();
     const ordered = store.visualOrder();
     const idx = ordered.findIndex((s) => s._id === id);
     const next = ordered[idx + 1] ?? ordered.find((s) => s._id !== id);
     if (verb === "defer") undoableDeferSession(id);
-    else undoableDormantSession(id);
+    else undoableSetSessionRest(id, verb);
     if (!closeOverlayIfCurrent(id) && next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);

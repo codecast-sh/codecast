@@ -17,6 +17,8 @@ import {
   ArrowUpDown,
   Cloud,
   CopyMinus,
+  Eye,
+  EyeOff,
   FilePlus2,
   FolderPlus,
   FileCode2,
@@ -280,6 +282,9 @@ function VaultContent() {
   const clearRenameReport = useVaultStore((s) => s.clearRenameReport);
   const showAllFiles = useVaultStore((s) => s.showAllFiles);
   const setShowAllFiles = useVaultStore((s) => s.setShowAllFiles);
+  const showIgnoredFiles = useVaultStore((s) => s.showIgnoredFiles);
+  const setShowIgnoredFiles = useVaultStore((s) => s.setShowIgnoredFiles);
+  const isRepo = useVaultStore((s) => s.isRepo);
 
   const activePath = searchParams.get("f");
   // A local path as written somewhere else — a conversation, a CLI link —
@@ -699,6 +704,26 @@ function VaultContent() {
                       }`}
                     >
                       <FileCode2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {/* A repo root hides its build output, .gitignore names and
+                      tool dot-directories. This lifts that, dimmed and
+                      read-only; .git and node_modules stay out regardless. */}
+                  {!isRemote && isRepo && (
+                    <button
+                      type="button"
+                      title={
+                        showIgnoredFiles
+                          ? "Showing ignored files — click to hide them"
+                          : "Show ignored files (build output, .gitignore, dot-directories)"
+                      }
+                      aria-pressed={showIgnoredFiles}
+                      onClick={() => setShowIgnoredFiles(!showIgnoredFiles)}
+                      className={`transition-colors ${
+                        showIgnoredFiles ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
+                      }`}
+                    >
+                      {showIgnoredFiles ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                     </button>
                   )}
                 </div>
