@@ -717,6 +717,7 @@ export const create = mutation({
   args: {
     api_token: v.string(),
     title: v.string(),
+    client_key: v.optional(v.string()),
     description: v.optional(v.string()),
     task_type: v.optional(v.string()),
     status: v.optional(v.string()),
@@ -780,7 +781,7 @@ export const create = mutation({
       ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
     });
     const now = Date.now();
-    const short_id = await nextShortId(ctx.db, "ct");
+    const unkeyedShortId = args.client_key ? undefined : await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -816,12 +817,29 @@ export const create = mutation({
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
 
+    if (args.client_key) {
+      const existing = await ctx.db
+        .query("tasks")
+        .withIndex("by_client_key", (q) => q.eq("user_id", auth.userId).eq("client_key", args.client_key!))
+        .first();
+      if (existing) {
+        if (!(await canAccessTask(ctx, auth.userId, existing))) notFound("Task not found");
+        requireSameWorkspace(existing, db.workspace, "task");
+        if (existing.project_id !== project_id || existing.plan_id !== plan_id || existing.parent_id !== parent_id || existing.created_from_conversation !== created_from_conversation) {
+          throw new Error("Task client key belongs to a different context");
+        }
+        return { id: existing._id, short_id: existing.short_id };
+      }
+    }
+    const short_id = unkeyedShortId ?? await nextShortId(ctx.db, "ct");
+
     const id = await db.insert("tasks", {
       project_id,
       parent_id,
       plan_id,
       short_id,
       title: args.title,
+      client_key: args.client_key,
       description: args.description,
       task_type: (args.task_type || "task") as any,
       status: (args.status || "open") as any,

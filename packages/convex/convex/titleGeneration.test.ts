@@ -6,8 +6,7 @@ import {
   isLowSignalPrompt,
   maybeScheduleTitleGeneration,
   sampleEvenly,
-  shouldGenerateTitle,
-} from "./titleGeneration";
+  shouldGenerateTitle, cleanShortTitle } from "./titleGeneration";
 import { isRefusalProse } from "./idleSummary";
 
 describe("extractTitleJson", () => {
@@ -31,6 +30,29 @@ describe("extractTitleJson", () => {
   test("returns null for conversational responses — never a raw-text title", () => {
     expect(extractTitleJson("I need to wait for the session to resume.")).toBeNull();
     expect(extractTitleJson("Confirming: the fix works. Tests pass.")).toBeNull();
+  });
+});
+
+describe("short title", () => {
+  test("rides in the same JSON envelope as the title", () => {
+    const parsed = extractTitleJson('{"title": "Auth redirect fix", "short_title": "Auth redirect", "subtitle": "- done"}');
+    expect(parsed?.short_title).toBe("Auth redirect");
+  });
+
+  test("keeps a one- or two-word name and drops anything that is not one", () => {
+    expect(cleanShortTitle("Auth redirect")).toBe("Auth redirect");
+    expect(cleanShortTitle('"Chokidar".')).toBe("Chokidar");
+    // A whole title echoed back is not a name.
+    expect(cleanShortTitle("Investigate the non-resumable session root cause")).toBeUndefined();
+    expect(cleanShortTitle("Broker context render unification")).toBeUndefined();
+    expect(cleanShortTitle("")).toBeUndefined();
+    expect(cleanShortTitle(undefined)).toBeUndefined();
+  });
+
+  test("the prompt asks for it", () => {
+    const prompt = buildTitlePrompt({ messageText: "User: hi", messageCount: 2 });
+    expect(prompt).toContain("Short title:");
+    expect(prompt).toContain('"short_title"');
   });
 });
 

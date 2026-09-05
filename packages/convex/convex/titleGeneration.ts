@@ -47,13 +47,19 @@ export const setTitleAndSubtitle = internalMutation({
     // caller omits it and the conversation keeps its last good subtitle
     // (a stale summary beats refusal prose on the inbox card).
     subtitle: v.optional(v.string()),
+    // The session's short name, generated alongside the title. Optional so a
+    // model response without one leaves the last good name in place.
+    short_title: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return;
-    const patch: { title?: string; subtitle?: string } = {};
+    const patch: { title?: string; subtitle?: string; short_title?: string } = {};
     if (args.subtitle !== undefined) patch.subtitle = args.subtitle;
-    if (!conv.title_is_custom) patch.title = args.title;
+    if (!conv.title_is_custom) {
+      patch.title = args.title;
+      if (args.short_title !== undefined) patch.short_title = args.short_title;
+    }
     if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.conversation_id, patch);
   },
@@ -116,6 +122,7 @@ export const generateTitle = internalAction({
 
       const parsed = extractTitleJson(text);
       const title = parsed?.title?.trim();
+      const shortTitle = cleanShortTitle(parsed?.short_title);
 
       if (title && title.length < 200) {
         // The JSON fence stops refusals from replacing the whole output, but
@@ -129,6 +136,7 @@ export const generateTitle = internalAction({
           conversation_id: args.conversation_id,
           title,
           ...(subtitle !== undefined ? { subtitle } : {}),
+          ...(shortTitle ? { short_title: shortTitle } : {}),
         });
       } else {
         console.error("Title generation returned no usable JSON:", text.slice(0, 120));
@@ -136,6 +144,111 @@ export const generateTitle = internalAction({
     } catch (error) {
       console.error("Failed to generate title:", error);
     }
+  },
+});
+
+// Name-only pass for a session that already has a title but no short name:
+// asks for the short title alone from the title and subtitle it has, so a
+// backfill never re-rolls titles. A tenth of a title pass in tokens.
+export const generateShortTitle = internalAction({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return;
+    const conv = await ctx.runQuery(internal.titleGeneration.getConversationForShortTitle, {
+      conversation_id: args.conversation_id,
+    });
+    if (!conv?.title) return;
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 60,
+          temperature: 0,
+          messages: [{ role: "user", content: buildShortTitlePrompt(conv.title, conv.subtitle) }],
+        }),
+      });
+      if (!response.ok) {
+        console.error("Haiku API error (short title):", response.status, await response.text());
+        return;
+      }
+      const data = await response.json();
+      const shortTitle = cleanShortTitle(extractTitleJson(data.content?.[0]?.text?.trim() ?? "")?.short_title);
+      if (!shortTitle) return;
+      await ctx.runMutation(internal.titleGeneration.setShortTitle, {
+        conversation_id: args.conversation_id,
+        short_title: shortTitle,
+      });
+    } catch (error) {
+      console.error("Failed to generate short title:", error);
+    }
+  },
+});
+
+export const getConversationForShortTitle = internalQuery({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    return { title: conv.title, subtitle: conv.subtitle };
+  },
+});
+
+export const setShortTitle = internalMutation({
+  args: { conversation_id: v.id("conversations"), short_title: v.string() },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.short_title) return;
+    await ctx.db.patch(args.conversation_id, { short_title: args.short_title });
+  },
+});
+
+export function buildShortTitlePrompt(title: string, subtitle?: string): string {
+  return `Give this work session a short name: 1-2 words, 20 characters max. The NAME a teammate would say out loud to refer to it, never a generic word alone ("Fix", "Update"). Prefer the title's most specific noun.
+Examples: "Auth redirect" for "Auth redirect fix", "Chokidar" for "Replace chokidar", "Italy trip" for "Italy trip planning".
+
+Title: ${JSON.stringify(title)}${subtitle ? `
+Summary:
+${subtitle}` : ""}
+
+Output ONLY the JSON object, no markdown, no preamble:
+{"short_title": "..."}`;
+}
+
+// Backfill: schedule the name-only pass for titled conversations without a
+// short name, newest first from `cursor` (a creation-time ms). Loop until done:
+//   npx convex run titleGeneration:sweepMissingShortTitles '{"cursor": <ms>}'
+export const sweepMissingShortTitles = internalMutation({
+  args: {
+    cursor: v.number(),
+    batch: v.optional(v.number()),
+    spread_s: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batch = args.batch ?? 200;
+    const rows = await ctx.db
+      .query("conversations")
+      .withIndex("by_creation_time", (q) => q.lt("_creationTime", args.cursor))
+      .order("desc")
+      .take(batch);
+    let scheduled = 0;
+    for (const c of rows) {
+      if (c.short_title || !c.title || c.skip_title_generation) continue;
+      await ctx.scheduler.runAfter(
+        scheduled * (args.spread_s ?? 1) * 1000,
+        internal.titleGeneration.generateShortTitle,
+        { conversation_id: c._id },
+      );
+      scheduled++;
+    }
+    return {
+      scheduled,
+      scanned: rows.length,
+      cursor: rows.length ? rows[rows.length - 1]._creationTime : null,
+      done: rows.length < batch,
+    };
   },
 });
 
@@ -339,6 +452,8 @@ Title: 2-5 words max. Short noun phrase or verb phrase naming what the session A
 Examples: "Auth redirect fix", "Dark mode settings", "Replace chokidar", "Inbox card redesign", "FD leak debug", "Italy trip planning", "Q3 pricing research"
 Anti-examples (too verbose): "Investigate Non-Resumable Session Root Cause", "Implement agent-triggered community chat with leave option", "Add Sessions tab to mobile with chronological summaries"
 
+Short title: 1-2 words, 20 characters max. The NAME a teammate would say out loud to refer to this session, distinct from the title, never a generic word alone ("Fix", "Update"). Prefer the title's most specific noun. Examples: "Auth redirect" for "Auth redirect fix", "Chokidar" for "Replace chokidar", "Italy trip" for "Italy trip planning".
+
 Subtitle: Bullet points (2-4 lines) describing what the session covered. Each bullet starts with "- ". For coding work, cover what was built/fixed/changed, key files or components, and current state. For anything else, summarize what was asked and what was found or decided. The subtitle tracks the latest activity — recency belongs here, not in the title.
 Examples:
 "- Switched from chokidar to native fs.watch, cut FD usage 3x\n- Updated daemon.ts and fileWatcher.ts\n- Working, deployed"
@@ -348,7 +463,7 @@ Session with ${input.messageCount} messages:
 ${input.messageText}
 
 Do not respond to the conversation. Output ONLY the JSON object, no markdown, no preamble:
-{"title": "...", "subtitle": "..."}`;
+{"title": "...", "short_title": "...", "subtitle": "..."}`;
 }
 
 // Build the conversation excerpt fed to the title model. Two sections: the
@@ -391,7 +506,7 @@ export function buildTitleMessageContext(
 // here means skip the update; raw text must never become a title.
 export function extractTitleJson(
   text: string,
-): { title?: string; subtitle?: string } | null {
+): { title?: string; subtitle?: string; short_title?: string } | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
@@ -401,10 +516,25 @@ export function extractTitleJson(
     return {
       title: typeof parsed.title === "string" ? parsed.title : undefined,
       subtitle: typeof parsed.subtitle === "string" ? parsed.subtitle : undefined,
+      short_title: typeof parsed.short_title === "string" ? parsed.short_title : undefined,
     };
   } catch {
     return null;
   }
+}
+
+// A short title is a NAME: one or two words, no sentence punctuation, within
+// the budget every reference surface renders it in. Anything else (a whole
+// title echoed back, a stray quote, an empty value) is dropped so the pill
+// falls back to deriving a name from the title.
+export const SHORT_TITLE_MAX_CHARS = 22;
+export function cleanShortTitle(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim().replace(/^["'`]+|["'`.:;,]+$/g, "").trim();
+  if (!t) return undefined;
+  if (t.length > SHORT_TITLE_MAX_CHARS) return undefined;
+  if (t.split(/\s+/).length > 3) return undefined;
+  return t;
 }
 
 // Evenly sample `max` items, always keeping the first and last.

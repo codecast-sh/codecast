@@ -12,6 +12,8 @@ import {
   HANDOFF_MIRROR_DEV,
   type HandoffContext,
   type PreBootHandoffContext,
+  AGENT_TAB_KEY,
+  AGENT_TAB_EVENT,
 } from "./desktop";
 
 // A context that passes every gate; each test overrides one field to prove that
@@ -28,6 +30,7 @@ const PASSING: HandoffContext = {
   path: "/conversation/jx7c89",
   search: "",
   skippedUrl: null,
+  agentDriven: false,
 };
 
 describe("buildDesktopDeepLink", () => {
@@ -123,6 +126,11 @@ describe("shouldAttemptHandoff", () => {
     expect(shouldAttemptHandoff({ ...PASSING, foreground: false })).toBe(false);
   });
 
+  test("never fires in a tab an agent drives, foreground or not", () => {
+    expect(shouldAttemptHandoff({ ...PASSING, agentDriven: true })).toBe(false);
+    expect(shouldAttemptHandoff({ ...PASSING, agentDriven: true, foreground: false })).toBe(false);
+  });
+
   test("fires only on the production host — never local dev (agent tabs live there) or foreign hosts", () => {
     expect(shouldAttemptHandoff({ ...PASSING, host: "codecast.sh" })).toBe(true);
     expect(shouldAttemptHandoff({ ...PASSING, host: "www.codecast.sh" })).toBe(true);
@@ -167,6 +175,7 @@ describe("shouldAttemptPreBootHandoff", () => {
     path: "/conversation/jx7c89",
     search: "",
     skippedUrl: null,
+    agentDriven: false,
   };
 
   test("fires when the mirror says this browser owns the app", () => {
@@ -196,6 +205,7 @@ describe("shouldAttemptPreBootHandoff", () => {
     expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/share/abc" })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/", search: "?code=a&state=b" })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, skippedUrl: "/conversation/jx7c89" })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, agentDriven: true })).toBe(false);
   });
 });
 
@@ -273,7 +283,9 @@ describe("desktop window role", () => {
       anyInCall: false,
       peopleWindow: false,
       callPanel: false,
+      voiceWindow: false,
       facesOverlay: false,
+      peopleWall: false,
     });
   });
 
@@ -587,6 +599,7 @@ describe("preBootVerdict", () => {
     path: "/conversation/jx7c89",
     search: "",
     skippedUrl: null,
+    agentDriven: false,
   };
 
   test("hands off a foreground tab that passes the gate", () => {
@@ -595,6 +608,11 @@ describe("preBootVerdict", () => {
 
   test("holds a background tab whose only blocker is focus — it hands off once looked at", () => {
     expect(preBootVerdict({ ...PRE, foreground: false })).toBe("hold");
+  });
+
+  test("an agent's tab boots at once — never held, never handed off", () => {
+    expect(preBootVerdict({ ...PRE, agentDriven: true })).toBe("boot");
+    expect(preBootVerdict({ ...PRE, agentDriven: true, foreground: false })).toBe("boot");
   });
 
   test("boots when any permanent blocker applies, foreground or not", () => {
@@ -749,6 +767,42 @@ describe("runPreBootHandoff + bootAfterHandoffGate (jsdom)", () => {
     expect(boot).not.toHaveBeenCalled();
   });
 
+  test("a tab stamped by its driver before the first script boots at once, mirror or not", () => {
+    dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+    dom.window.sessionStorage.setItem(AGENT_TAB_KEY, "1");
+    focused = false;
+    const boot = mock(() => {});
+    runPreBootHandoff(["/assets/boot.js"]);
+    bootAfterHandoffGate(boot);
+    expect(boot).toHaveBeenCalledTimes(1);
+    expect(preloads()).toBe(1);
+    expect(screenShown()).toBe(false);
+  });
+
+  test("a held tab boots the moment its driver announces itself, and no later focus hands it off", async () => {
+    dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+    focused = false;
+    const boot = mock(() => {});
+    runPreBootHandoff(["/assets/boot.js"]);
+    bootAfterHandoffGate(boot);
+    expect(boot).not.toHaveBeenCalled();
+    expect(preloads()).toBe(0);
+    // The driver attached after the head parsed: it stamps the tab and fires
+    // the event (packages/cli/src/browser/observe.ts agentTabStampSource).
+    dom.window.sessionStorage.setItem(AGENT_TAB_KEY, "1");
+    dom.window.document.dispatchEvent(new dom.window.Event(AGENT_TAB_EVENT));
+    await Promise.resolve();
+    expect(boot).toHaveBeenCalledTimes(1);
+    expect(preloads()).toBe(1);
+    expect(screenShown()).toBe(false);
+    // The human glances at the agent's tab inside the arm window.
+    focused = true;
+    dom.window.dispatchEvent(new dom.window.Event("focus"));
+    await Promise.resolve();
+    expect(screenShown()).toBe(false);
+    expect(boot).toHaveBeenCalledTimes(1);
+  });
+
   test("a stale-page guard: the entry boots when no gate ran at all", () => {
     const boot = mock(() => {});
     bootAfterHandoffGate(boot);
@@ -841,6 +895,28 @@ describe("runPreBootHandoff + bootAfterHandoffGate (jsdom)", () => {
       expect(onLapse).toHaveBeenCalledTimes(1);
       Date.now = realNow;
     });
+  });
+});
+
+// The stamp is a three-way contract: the gate reads one key and one event,
+// and every driver — the CLI recorder (which the engine's init script and the
+// resident host reuse) and the extension's overlay script — must write those
+// exact names before any page script. The extension is plain JS with no
+// import from the CLI, so the names are pinned by text.
+describe("agent-tab stamp contract", () => {
+  const cliDir = join(import.meta.dir, "..", "..", "cli", "src", "browser");
+  const extDir = join(import.meta.dir, "..", "..", "browser-extension");
+
+  test("the CLI recorder (shared by the engine init script) exports the gate's names", () => {
+    const recorder = readFileSync(join(cliDir, "observe.ts"), "utf8");
+    expect(recorder).toContain(`export const AGENT_TAB_KEY = ${JSON.stringify(AGENT_TAB_KEY)};`);
+    expect(recorder).toContain(`export const AGENT_TAB_EVENT = ${JSON.stringify(AGENT_TAB_EVENT)};`);
+  });
+
+  test("the extension's overlay script writes the same key and fires the same event", () => {
+    const extension = readFileSync(join(extDir, "background.js"), "utf8");
+    expect(extension).toContain(`sessionStorage.setItem(${JSON.stringify(AGENT_TAB_KEY)}, "1")`);
+    expect(extension).toContain(`document.dispatchEvent(new Event(${JSON.stringify(AGENT_TAB_EVENT)}))`);
   });
 });
 

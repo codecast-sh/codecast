@@ -70,6 +70,7 @@ import { useTeamFeature } from "../../../lib/teamFeatures";
 import { MAX_TASK_DEPTH, directChildren, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, createTaskAndAdopt, setTaskParent } from "../../../lib/taskActions";
 import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
+import { DocDates } from "../../../components/DocDates";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -1131,7 +1132,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   <Link key={doc._id} href={`/docs/${doc._id}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors">
                     <FileText className="w-4 h-4 text-sol-violet flex-shrink-0" />
                     <span className="text-sm text-sol-text truncate">{doc.title}</span>
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-violet border-sol-violet/30 ml-auto">{doc.doc_type}</Badge>
+                    <DocDates doc={doc} className="text-[10px] text-sol-text-dim ml-auto" />
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-violet border-sol-violet/30">{doc.doc_type}</Badge>
                   </Link>
                 ))}
               </div>

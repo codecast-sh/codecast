@@ -23,6 +23,7 @@ import {
 } from "./executionBindings";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
+import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -162,7 +163,7 @@ export function canDaemonSeePendingMessage(
     status: string;
     delivery_protocol_version?: number;
   },
-  conversation: {
+  conversation: ConversationSafetyState & {
     user_id: Id<"users">;
     owner_device_id?: string;
     execution_protocol_state?: string;
@@ -175,6 +176,7 @@ export function canDaemonSeePendingMessage(
   // any owner mismatch, exactly as before.
   allowOfflineOwnerTakeover?: boolean
 ): boolean {
+  if (isConversationSafetyBlocked(conversation)) return false;
   // Absence is the only legacy marker. Quiescing and fenced conversations are
   // never permissive fallbacks, and a stamped row can never leak back into the
   // legacy poll even if a conversation projection is stale.
@@ -401,7 +403,7 @@ export async function enqueuePendingMessage(
   });
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
-  await requestRemoteWake(ctx, conversation);
+  if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
   // stashed, and killed flags all clear ("I messaged it, show it to me").
@@ -423,6 +425,7 @@ export async function enqueuePendingMessage(
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
     ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
+    ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
   });
 
   return messageId;
@@ -1394,10 +1397,20 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
     let waiting = 0;
     let notified = 0;
     const reflag = new Set<Id<"conversations">>();
+    const safetyBlocked = new Map<string, boolean>();
     for (const msg of candidates) {
       // Fenced rows use delivery attempts and permits; legacy elapsed-time
       // healing must never reinterpret their state or synthesize a retry.
       if (isFencedPendingMessage(msg)) continue;
+      const conversationId = String(msg.conversation_id);
+      if (!safetyBlocked.has(conversationId)) {
+        const conversation = await ctx.db.get(msg.conversation_id);
+        safetyBlocked.set(conversationId, !!conversation && isConversationSafetyBlocked(conversation));
+      }
+      if (safetyBlocked.get(conversationId)) {
+        waiting++;
+        continue;
+      }
       // Cross-user feedback runs regardless of the target's readiness: a teammate's message stuck
       // past the deadline should tell the sender whether it's merely delayed (target busy) or
       // failed (target offline). planCrossUserNotify no-ops on self-sends and already-notified rows.

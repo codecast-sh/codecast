@@ -176,3 +176,45 @@ test("queues a fresh switch after the daemon already claimed the earlier selecti
   expect(resumes).toHaveLength(2);
   expect(JSON.parse(resumes[1].args)).toMatchObject({ model: "gpt-6-astra", effort: "ultra" });
 });
+
+// The row's agent_type is a promise the daemon must keep. Switching a session
+// WITH history into a client whose transcript codecast cannot rebuild (grok,
+// pi, cursor, opencode) used to stamp the row, kill the pane, fail in the
+// daemon, and leave the old agent auto-resuming under the wrong label —
+// hiding fork and the model rail behind grok's capabilities on a Claude
+// session (2026-09-05). Refuse before any write.
+describe("switchSessionAgent refuses agents that cannot rebuild history", () => {
+  test("grok on a session with messages: no patch, no divider, no daemon command", async () => {
+    const db = seedConv();
+    await expect(
+      (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, agent_type: "grok" }),
+    ).rejects.toThrow(/Grok cannot take over/);
+
+    const conv = db._tables.conversations.find((r: any) => r._id === CONV);
+    expect(conv.agent_type).toBe("claude_code");
+    expect(conv.model).toBe("claude-sonnet-4-6");
+    expect(db._tables.messages.length).toBe(0);
+    expect(db._tables.daemon_commands.length).toBe(0);
+  });
+
+  test("grok on a blank session is a relaunch and goes through", async () => {
+    const db = seedConv({
+      conversations: [{
+        _id: CONV,
+        user_id: USER,
+        session_id: "sess-blank",
+        agent_type: "claude_code",
+        project_path: "/repo",
+        git_root: "/repo",
+        message_count: 0,
+        status: "active",
+        updated_at: 1,
+      }],
+    });
+    const result = await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, agent_type: "grok" });
+    expect(result.switched).toBe(true);
+    expect(result.blank).toBe(true);
+    const conv = db._tables.conversations.find((r: any) => r._id === CONV);
+    expect(conv.agent_type).toBe("grok");
+  });
+});

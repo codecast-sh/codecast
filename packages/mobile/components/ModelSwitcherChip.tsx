@@ -7,7 +7,7 @@ import { Pressable,
 import { Text } from '@/components/Themed';
 import { Feather } from '@expo/vector-icons';
 import { AGENT_MODEL_CONFIG, launchRailOptions, modelAgentKey } from '@codecast/shared/contracts';
-import { commitModelChange, modelOptionKey, effortGlyph } from '@codecast/web/lib/modelSwitch';
+import { commitModelChange, modelOptionKey, modelFitsAgent, effortGlyph } from '@codecast/web/lib/modelSwitch';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { Theme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '../constants/Theme';
 
@@ -40,11 +40,13 @@ export function ModelSwitcherChip({
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   const interactive = !!cfg && canEdit && (blank || cfg.midSession);
 
-  const modelKey = modelOptionKey(model, agentType);
+  const fits = modelFitsAgent(model, agentType);
+  const modelKey = modelOptionKey(fits ? model : undefined, agentType);
   const opt = cfg?.models.find((m) => m.key === modelKey);
   // Known models get their picker label ("Opus"); custom/unknown ids fall
-  // back to the raw id minus the claude- prefix.
-  const label = model
+  // back to the raw id minus the claude- prefix. A leftover from another
+  // agent (after an in-place switch) is not the current model.
+  const label = fits && model
     ? (opt && opt.key !== 'default' ? opt.label : model.replace(/^claude-/, ''))
     : 'Model';
   const glyph = effortGlyph(effort);

@@ -23,6 +23,8 @@
 // derived/enriched field for an entity that also lives in the store, route it
 // through these helpers.
 
+import { parseRepoObjectId } from "@codecast/shared/entities";
+
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
 type AssigneeInfo = { name: string; image?: string; github_username?: string } | null;
 
@@ -391,6 +393,24 @@ export function findEntityInStore(
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.
       return lookup(state.agentTasks, rawId);
+    case "pr": {
+      // Timeline rows the client already holds: by Convex id, else by the
+      // `owner/repo#482` reference.
+      const direct = state.pullRequests?.[rawId];
+      if (direct) return direct;
+      const ref = parseRepoObjectId(rawId);
+      if (ref?.type !== "pr" || !state.pullRequests) return undefined;
+      return Object.values<any>(state.pullRequests).find((row) => row?.number === ref.number && row?.repository === ref.repository);
+    }
+    case "commit": {
+      const direct = state.commits?.[rawId];
+      if (direct) return direct;
+      const ref = parseRepoObjectId(rawId);
+      if (ref?.type !== "commit" || !state.commits) return undefined;
+      return Object.values<any>(state.commits).find(
+        (row) => typeof row?.sha === "string" && row.sha.startsWith(ref.sha) && (!row.repository || row.repository === ref.repository),
+      );
+    }
     case "session": {
       const short = rawId.slice(0, 7).toLowerCase();
       return (
