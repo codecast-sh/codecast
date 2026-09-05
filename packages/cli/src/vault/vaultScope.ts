@@ -180,6 +180,17 @@ export function clearRepoScopeCache(): void {
  */
 export function isVaultPathIgnored(root: string, relPath: string): boolean {
   if (isVaultIgnoredPath(relPath)) return true;
+  return isVaultPathRepoIgnored(root, relPath);
+}
+
+/**
+ * The repo half of the rule on its own: build output, tool dot-directories and
+ * the root .gitignore's names. This is what "show ignored files" lifts — the
+ * always-ignored set (isVaultIgnoredPath) is never lifted, because .git and
+ * node_modules are not files anyone browses, and listing them would blow the
+ * scan cap before the tree reached anything the user asked for.
+ */
+export function isVaultPathRepoIgnored(root: string, relPath: string): boolean {
   // path.resolve, not realVaultRoot: this runs once per entry of every scan,
   // and a realpathSync per entry would be twenty thousand syscalls on a large
   // tree. A symlinked root just gets its own cache entry, which is harmless —
@@ -335,11 +346,19 @@ export function realVaultRoot(root: string): string {
  *
  * Existence is NOT checked; callers decide whether a missing file is a 404 or a
  * file to create.
+ *
+ * `allowIgnored` admits what the repo rules hide (a listing from
+ * `scanVault(root, { includeIgnored: true })`), for READS only. The always-
+ * ignored set and every traversal/symlink rule still apply.
  */
-export function resolveVaultPath(root: string, relPath: string): string | null {
+export function resolveVaultPath(
+  root: string,
+  relPath: string,
+  opts: { allowIgnored?: boolean } = {},
+): string | null {
   const rel = normalizeVaultPath(relPath);
   if (rel === null) return null;
-  if (rel !== "" && isVaultPathIgnored(root, rel)) return null;
+  if (rel !== "" && (opts.allowIgnored ? isVaultIgnoredPath(rel) : isVaultPathIgnored(root, rel))) return null;
 
   const realRoot = realVaultRoot(root);
   const target = rel === "" ? realRoot : path.join(realRoot, ...rel.split("/"));
@@ -398,16 +417,43 @@ export function vaultContentType(relPath: string): string {
  * directory (so empty folders render), sorted by path. Symlinks are skipped — the same rule
  * resolveVaultPath enforces, so nothing appears in a scan that a fetch would
  * then refuse.
+ *
+ * `includeIgnored` lists what the repo rules hide as well, each such entry
+ * flagged `ignored: true` so the browser can dim it and keep it out of the
+ * notes layer. A flag on the entry rather than a second list: the tree is one
+ * tree, and the reader decides what an ignored row means. Once a directory is
+ * ignored everything under it is (the rule is on segments), so the flag is
+ * inherited down the walk rather than recomputed per entry.
+ *
+ * Two rules keep that mode from drowning the vault in what it lifts:
+ *  - Ignored entries have their OWN budget. The cap exists to bound the
+ *    response, and with one shared cap a repo's build caches pushed real notes
+ *    off the end of the sorted list (codecast: 187 notes became 90). Whatever
+ *    the ignored half does, the default half is exactly what the plain scan
+ *    returns.
+ *  - A nested git checkout is listed as a folder and never entered. Worktrees
+ *    and agent workspaces under a repo are whole copies of it; they are other
+ *    vaults, not this vault's ignored files, and descending into them is where
+ *    17 copies of every doc came from.
  */
-export async function scanVault(root: string): Promise<VaultFileEntry[]> {
+export async function scanVault(
+  root: string,
+  opts: { includeIgnored?: boolean; maxEntries?: number } = {},
+): Promise<VaultFileEntry[]> {
   const realRoot = realVaultRoot(root);
+  const cap = opts.maxEntries ?? MAX_ENTRIES;
   const out: VaultFileEntry[] = [];
-  let queue: { abs: string; rel: string; depth: number }[] = [{ abs: realRoot, rel: "", depth: 0 }];
+  const ignoredOut: VaultFileEntry[] = [];
+  let queue: { abs: string; rel: string; depth: number; ignored: boolean }[] = [
+    { abs: realRoot, rel: "", depth: 0, ignored: false },
+  ];
 
-  while (queue.length > 0 && out.length < MAX_ENTRIES) {
+  while (queue.length > 0 && (out.length < cap || ignoredOut.length < cap)) {
     const batch = queue.splice(0, SCAN_CONCURRENCY);
     const next: typeof queue = [];
     await Promise.all(batch.map(async (dir) => {
+      // A full bucket is not descended into: nothing under it could be listed.
+      if ((dir.ignored ? ignoredOut : out).length >= cap) return;
       let entries: fs.Dirent[];
       try {
         entries = await fsp.readdir(dir.abs, { withFileTypes: true });
@@ -417,25 +463,38 @@ export async function scanVault(root: string): Promise<VaultFileEntry[]> {
       for (const entry of entries) {
         if (entry.isSymbolicLink()) continue;
         const rel = dir.rel === "" ? entry.name : `${dir.rel}/${entry.name}`;
-        if (isVaultPathIgnored(realRoot, rel)) continue;
+        if (isVaultIgnoredPath(rel)) continue;
+        const ignored = dir.ignored || isVaultPathRepoIgnored(realRoot, rel);
+        if (ignored && !opts.includeIgnored) continue;
+        const bucket = ignored ? ignoredOut : out;
+        if (bucket.length >= cap) continue;
+        const flag = ignored ? { ignored: true as const } : {};
         const abs = path.join(dir.abs, entry.name);
         if (entry.isDirectory()) {
           const stat = await fsp.stat(abs).catch(() => null);
           if (!stat) continue;
-          out.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: 0, dir: true });
-          if (dir.depth + 1 < MAX_DEPTH) next.push({ abs, rel, depth: dir.depth + 1 });
+          bucket.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: 0, dir: true, ...flag });
+          if (ignored && (await isNestedCheckout(abs))) continue;
+          if (dir.depth + 1 < MAX_DEPTH) next.push({ abs, rel, depth: dir.depth + 1, ignored });
         } else if (entry.isFile()) {
           const stat = await fsp.stat(abs).catch(() => null);
           if (!stat) continue;
-          out.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size });
+          bucket.push({ path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size, ...flag });
         }
       }
     }));
     queue = next.concat(queue);
   }
 
-  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return out.slice(0, MAX_ENTRIES);
+  const byPath = (a: VaultFileEntry, b: VaultFileEntry) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  return out.slice(0, cap).concat(ignoredOut.slice(0, cap)).sort(byPath);
+}
+
+/** A directory that is itself a git checkout (a worktree's .git is a FILE, so
+ *  "exists" is the test). Only asked of ignored directories: the default scan
+ *  must stay byte-identical to what it was. */
+async function isNestedCheckout(abs: string): Promise<boolean> {
+  return fsp.stat(path.join(abs, ".git")).then(() => true, () => false);
 }
 
 

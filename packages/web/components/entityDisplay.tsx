@@ -9,9 +9,11 @@ import {
   entityRoute,
   isConvexId,
   entityTypeFromId,
-  entityReferenceLabel,
+  entityReferenceLabel, entityShortLabel,
+  parseRepoObjectId,
   type EntityType,
 } from "../lib/entityLinks";
+import { repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { findEntityInStore, resolveAssigneeInfo } from "../lib/liveEntities";
 import { useInboxStore } from "../store/inboxStore";
 import { FormattedSummary } from "./FormattedSummary";
@@ -54,6 +56,28 @@ export const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: 
   low: { icon: ArrowDown, color: "text-sol-blue", label: "Low" },
 };
 
+/** `3 files +12 -4` — the change footprint of a pull request or commit. Nothing when nothing is known. */
+export function DiffStat({
+  additions,
+  deletions,
+  files,
+  className = "",
+}: {
+  additions?: number | null;
+  deletions?: number | null;
+  files?: number | null;
+  className?: string;
+}) {
+  if (additions == null && deletions == null && files == null) return null;
+  return (
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-[10px] ${className}`}>
+      {files != null && <span className="text-sol-text-dim">{files} file{files === 1 ? "" : "s"}</span>}
+      {additions != null && additions > 0 && <span className="text-sol-green">+{additions}</span>}
+      {deletions != null && deletions > 0 && <span className="text-sol-red">-{deletions}</span>}
+    </span>
+  );
+}
+
 export const TYPE_LABEL: Record<EntityType, string> = {
   task: "Task",
   plan: "Plan",
@@ -61,6 +85,8 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   doc: "Doc",
   project: "Project",
   trigger: "Trigger",
+  pr: "Pull request",
+  commit: "Commit",
 };
 
 /**
@@ -68,7 +94,10 @@ export const TYPE_LABEL: Record<EntityType, string> = {
  * `{ id }`, a short id by `{ short_id }`. Sessions store a 7-char short id, so
  * we trim to that when the id is short. doc/project only ever carry Convex ids.
  */
-export function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?: string } {
+export function entityQueryArgs(
+  type: EntityType,
+  id: string,
+): { short_id?: string; id?: string; repository?: string; number?: number; sha?: string } {
   // Only a genuine 32-char Convex id may be resolved by `{ id }` (db.get). A
   // longer-than-short-id but non-Convex string (e.g. a garbled /plans/<id> URL)
   // would otherwise be sent to db.get and throw "Invalid ID length"; routing it
@@ -76,6 +105,12 @@ export function entityQueryArgs(type: EntityType, id: string): { short_id?: stri
   if (isConvexId(id)) return { id };
   if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
   if (type === "task" || type === "plan" || type === "trigger") return { short_id: id.toLowerCase() };
+  if (type === "pr" || type === "commit") {
+    // `owner/repo#482` → { repository, number }; `owner/repo@sha` → { repository, sha }.
+    const ref = parseRepoObjectId(id);
+    if (ref?.type === "pr") return { repository: ref.repository, number: ref.number };
+    if (ref?.type === "commit") return { repository: ref.repository, sha: ref.sha };
+  }
   return { id };
 }
 
@@ -203,6 +238,8 @@ export type EntityResolution = {
   status: string | undefined;
   /** What the reference is CALLED — title, else short id, else type name. */
   label: string;
+  /** The object's short NAME, for a compact (repeat) mention. */
+  shortLabel: string;
   /** In-app route for the object (falls back to the raw id pre-resolution). */
   href: string;
 };
@@ -234,6 +271,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const isPlan = type === "plan";
   const isSession = type === "session";
   const isTrigger = type === "trigger";
+  const isRepoObject = type === "pr" || type === "commit";
 
   const queryArgs = type ? entityQueryArgs(type, rawId) : null;
   const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
@@ -246,7 +284,13 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // docs/projects are only ever addressed by a full Convex id.
   const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
   const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
-  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : undefined;
+  // A pull request or commit reference resolves by repository and number/sha,
+  // or by Convex id. No-throw for the same client/deploy-skew reason as
+  // triggers: a `owner/repo#482` in prose must read as text, not crash.
+  const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
+  const { data: pullRequest } = useQueryNoThrow(api.pull_requests.webGet, type === "pr" && repoObjectArgs ? repoObjectArgs : "skip");
+  const { data: commit } = useQueryNoThrow(api.commits.webGet, type === "commit" && repoObjectArgs ? repoObjectArgs : "skip");
+  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "pr" ? pullRequest : type === "commit" ? commit : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -264,18 +308,26 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // prefers its display_title — the generated short name, not the whole
   // prompt's first line.
   const resolvedTitle: string | undefined =
-    (isTrigger ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
-  const label = entityReferenceLabel({
+    (isTrigger ? entity?.display_title : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
+  const labelArgs = {
     title: resolvedTitle,
     shortId: entity?.short_id,
     rawId,
     typeLabel: type ? TYPE_LABEL[type] : null,
-  });
+  };
+  const label = entityReferenceLabel(labelArgs);
+  // Sessions carry a generated short name (title generation writes
+  // `short_title`); everything else derives one from its title.
+  const shortLabel = entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title });
 
   // Route that opens this entity. Prefer the resolved Convex id; fall back to
   // the raw id so the link still works in the brief window before the query
-  // resolves.
-  const href = entityRoute(type ?? "session", entity?._id ?? rawId) ?? "#";
+  // resolves. A repository object routes by its repository and number/sha,
+  // never by Convex id (no such page), so the resolved row supplies the
+  // reference when the raw id was a Convex id.
+  // The commit page matches the sha exactly, so the route carries the full one.
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : entity?._id ?? rawId;
+  const href = entityRoute(type ?? "session", routeId) ?? "#";
 
-  return { rawId, type, entity, served: served !== undefined, status: entity?.status, label, href };
+  return { rawId, type, entity, served: served !== undefined, status: entity?.status, label, shortLabel, href };
 }

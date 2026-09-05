@@ -2,11 +2,14 @@ import { mutation, query, internalMutation, internalQuery, type QueryCtx, type M
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { enqueueCloudSpawn } from "./cloud";
+import { isConversationSafetyBlocked, safetyBlockPatch } from "./conversationSafety";
+import { onFreshApiErrorPark } from "./accountSwitch";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere, findConversationByAnyRef } from "./conversationSessionLookup";
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus } from "@codecast/shared/contracts";
+import { PATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import {
   openTasksVouchForWaiting,
   OPEN_TASKS_FRESH_MS,
@@ -45,8 +48,8 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, formatAgentSwitchNotice, findModelOption } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively } from "@codecast/shared/contracts";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -467,8 +470,8 @@ async function firstDivergentPreview(
 ): Promise<string | undefined> {
   const rows = await ctx.db
     .query("messages")
-    .withIndex("by_conversation_timestamp", (q: any) =>
-      q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "user").gt("timestamp", afterTs)
     )
     .order("asc")
     .take(40);
@@ -498,12 +501,16 @@ async function computeOriginDivergentPreviews(
     originLineId: Id<"conversations"> | undefined,
   ) => {
     if (!originLineId) return;
+    const seen = new Set<string>();
     for (const fork of forks) {
       const uuid = fork.parent_message_uuid;
-      if (!uuid || out[uuid]) continue;
+      if (!uuid || seen.has(uuid) || out[uuid]) continue;
+      seen.add(uuid);
       const fp = await ctx.db
         .query("messages")
-        .withIndex("by_message_uuid", (q: any) => q.eq("message_uuid", uuid))
+        .withIndex("by_conversation_uuid", (q: any) =>
+          q.eq("conversation_id", originLineId).eq("message_uuid", uuid)
+        )
         .first();
       if (!fp) continue;
       const preview = await firstDivergentPreview(ctx, originLineId, fp.timestamp);
@@ -717,13 +724,12 @@ async function findChildConversations(
     .take(CHILDREN_LIMIT);
 
   const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
-  // Each preview costs a separate messages query. Convex budgets ~4k system
-  // operations per function; a session with thousands of spawned children blew
-  // straight through it ("too many system operations" timeouts). Cap the N+1 —
-  // allChildren is newest-first, so the newest children keep their previews.
-  const PREVIEW_LIMIT = 300;
+  const PREVIEW_LIMIT = 24;
   const firstMessagePreviews = new Map<string, string>();
-  for (const child of subagentChildren.slice(0, PREVIEW_LIMIT)) {
+  const previewChildren = subagentChildren
+    .filter((child: any) => !child.parent_message_uuid)
+    .slice(0, PREVIEW_LIMIT);
+  await Promise.all(previewChildren.map(async (child: any) => {
     const firstMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
@@ -733,7 +739,7 @@ async function findChildConversations(
       const cleaned = content.replace(/<[^>]+>/g, "").trim();
       firstMessagePreviews.set(child._id as string, cleaned.slice(0, 150));
     }
-  }
+  }));
 
   const children = allChildren
     .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
@@ -749,10 +755,8 @@ async function findChildConversations(
       .filter((c: any) => c.parent_message_uuid)
       .map((c: any) => [c.parent_message_uuid as string, c._id as string])
   );
-  for (const msg of messages) {
-    if (msg.message_uuid && childByParentUuid.has(msg.message_uuid)) {
-      map[msg.message_uuid] = childByParentUuid.get(msg.message_uuid)!;
-    }
+  for (const [uuid, childId] of childByParentUuid) {
+    map[uuid] = childId;
   }
 
   // Build agent name -> child conversation ID map from stored subagent_description
@@ -793,15 +797,14 @@ async function findChildConversations(
     }
 
     const matchedChildIds = new Set([...Object.values(map), ...Object.values(agentNameMap)]);
-    if (matchedChildIds.size < subagentChildren.length) {
-      // Bounded newest-first scan, NOT .collect(): collecting a 7k-message
-      // transcript here was the other half of the operation-budget timeout.
-      // Recent messages hold the spawns most likely to still need matching.
+    if (unmappedChildren.some((child: any) => !matchedChildIds.has(child._id))) {
       const allParentMessages = await ctx.db
         .query("messages")
-        .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId))
+        .withIndex("by_conversation_role_timestamp", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("role", "assistant")
+        )
         .order("desc")
-        .take(2000);
+        .take(200);
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
@@ -1326,6 +1329,7 @@ export const webGet = query({
       _id: conv._id,
       short_id: conv.short_id,
       title: conv.title,
+      short_title: conv.short_title,
       status: conv.status,
       message_count: conv.message_count,
       project_path: conv.project_path,
@@ -1358,6 +1362,10 @@ export const webGet = query({
       // branch line come straight off the doc, no extra reads.
       image_preview_url: conv.image_preview_url ?? null,
       git_branch: conv.git_branch ?? null,
+      git_commit_hash: conv.git_commit_hash ?? null,
+      git_ahead: conv.git_ahead ?? null,
+      git_behind: conv.git_behind ?? null,
+      git_dirty: conv.git_dirty ?? null,
     };
   },
 });
@@ -2667,6 +2675,7 @@ export const listConversations = query({
             user_id: c.user_id,
             visibility_mode: visibilityMode,
             title,
+            short_title: c.short_title || null,
             subtitle: c.subtitle || null,
             author_name: authorName,
             author_avatar: authorAvatar,
@@ -2697,6 +2706,7 @@ export const listConversations = query({
             user_id: c.user_id,
             visibility_mode: visibilityMode,
             title: fullTitle,
+            short_title: c.short_title || null,
             subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
             // Row thumbnail (see schema.image_preview_url) — full/detailed
             // visibility only, so restricted teammates don't leak image URLs.
@@ -2733,6 +2743,12 @@ export const listConversations = query({
             git_root: c.git_root || null,
             git_branch: c.git_branch || null,
             git_remote_url: c.git_remote_url || null,
+            // The header's prompt line: HEAD, distance from upstream, dirtiness
+            // (conversations.updateGitState).
+            git_commit_hash: c.git_commit_hash || null,
+            git_ahead: c.git_ahead ?? null,
+            git_behind: c.git_behind ?? null,
+            git_dirty: c.git_dirty ?? null,
             is_favorite: c.is_favorite || false,
             profile_pinned_at: c.profile_pinned_at,
             fork_count: c.fork_count || 0,
@@ -2851,6 +2867,7 @@ export const listConversations = query({
           user_id: c.user_id,
           visibility_mode: visibilityMode,
           title: fullTitle,
+          short_title: c.short_title || null,
           subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
           first_user_message: visibilityMode === "full" ? firstUserMessage : null,
           first_assistant_message: visibilityMode === "full" ? firstAssistantMessage : null,
@@ -2882,6 +2899,12 @@ export const listConversations = query({
           git_root: c.git_root || null,
           git_branch: c.git_branch || null,
           git_remote_url: c.git_remote_url || null,
+          // The header's prompt line: HEAD, distance from upstream, dirtiness
+          // (conversations.updateGitState).
+          git_commit_hash: c.git_commit_hash || null,
+          git_ahead: c.git_ahead ?? null,
+          git_behind: c.git_behind ?? null,
+          git_dirty: c.git_dirty ?? null,
           is_favorite: c.is_favorite || false,
           profile_pinned_at: c.profile_pinned_at,
           fork_count: c.fork_count || 0,
@@ -5481,6 +5504,28 @@ export const forkConversation = mutation({
 // fork (no messageID) matches the copy, but a mid-history fork that couldn't resolve
 // that messageID must NOT go through the API (it would fork the parent's FULL history
 // while the copy shows a truncated one); it falls through to the honest blank spawn.
+// A fork the daemon runs through the client's OWN resume-flag fork (registry
+// `forkCmd`, e.g. grok). The client copies its whole session state, so this is
+// honest only at the tip and only for a plain same-agent fork whose parent has a
+// session id the client can resume; the parent's transcript must be on the
+// parent's machine, so a cloud fork (worktree on another host) is excluded.
+// Extracted for unit testing.
+export function nativeForkEligible(opts: {
+  isPlainFork: boolean;
+  daemonAgentType: string;
+  sourceSessionId?: string;
+  atTip: boolean;
+  cloud: boolean;
+}): boolean {
+  return opts.isPlainFork && opts.atTip && !opts.cloud &&
+    typeof opts.sourceSessionId === "string" && opts.sourceSessionId.length > 0 &&
+    agentForksNatively(opts.daemonAgentType);
+}
+
+// Clients with a native fork need a real UUID for the child (grok's --session-id
+// rejects anything else); a caller-supplied key of another shape is replaced.
+const UUID_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function opencodeApiForkEligible(opts: {
   isPlainFork: boolean;
   daemonAgentType: string;
@@ -5646,10 +5691,32 @@ export const forkFromMessage = mutation({
     const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
     const isCrossAgentSwitch = !!args.target_agent_type && args.target_agent_type !== original.agent_type;
     const titlePrefix = isCrossAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
-    const forkSessionId = args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`;
     // The daemon_command is deferred so it can't race a half-copied fork. It
     // gets inserted by advanceForkCopy when fork_status flips to "complete".
     const daemonAgentType = fromConvexAgentType(agentType);
+    // Refuse up front what the daemon could not honor, so no row is written for
+    // a branch that would never carry its history: a fork into a client whose
+    // transcript codecast cannot rebuild, or a mid-history fork on a client that
+    // can only copy its whole context (native fork). The UI hides these
+    // affordances from the same registry facts; this is the API's guard.
+    const targetLabel = AGENT_CLIENTS[daemonAgentType].displayName;
+    if (isCrossAgentSwitch && !canSessionBecomeAgent(agentType, original.message_count)) {
+      throw new Error(`${targetLabel} cannot take over an existing session's history; start a new ${targetLabel} session instead`);
+    }
+    if (!atTip && !agentForksFromAnyMessage(agentType)) {
+      throw new Error(`${targetLabel} can only fork from the latest message`);
+    }
+    const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
+    const isNativeFork = nativeForkEligible({
+      isPlainFork,
+      daemonAgentType,
+      sourceSessionId: original.session_id,
+      atTip,
+      cloud: !!args.cloud_device_id,
+    });
+    const forkSessionId = isNativeFork
+      ? (args.session_id && UUID_SESSION_ID_RE.test(args.session_id) ? args.session_id : crypto.randomUUID())
+      : (args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`);
 
     // A fork defaults to the same visibility a fresh session in this directory
     // would get: re-resolve from the forker's directory mappings rather than
@@ -5678,7 +5745,6 @@ export const forkFromMessage = mutation({
     // Fast path applies when the fork's history is the parent's transcript
     // verbatim AND the same claude binary will resume it — the daemon copies
     // the parent's JSONL instead of waiting for the server copy + rebuild.
-    const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
     const fastPathEligible = atTip && isPlainFork && daemonAgentType === "claude" &&
       (original.agent_type === "claude_code" || !original.agent_type) && !args.cloud_device_id;
     // opencode forks through its serve sidecar: POST /session/:id/fork mints a
@@ -5747,6 +5813,9 @@ export const forkFromMessage = mutation({
       // Copy-the-JSONL hints. The deferred (post-copy) command may also use
       // them: copy-first is cache-stable even when the rebuild would be safe.
       ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
+      // Native fork (registry forkCmd): the daemon launches the client's own
+      // fork of the parent; it needs the parent's session id.
+      ...(isNativeFork ? { parent_session_id: original.session_id } : {}),
       // opencode API fork: carry the parent's real ses_ id so the daemon can call
       // OpencodeServer.fork(parent) and resume the minted id (see daemon resume_session).
       // fork_message_id (partial forks only) truncates the fork to match the copy.
@@ -5761,7 +5830,12 @@ export const forkFromMessage = mutation({
     };
     await ctx.db.patch(newConversationId, {
       short_id: newConversationId.toString().slice(0, 7),
-      fork_daemon_args: JSON.stringify(forkDaemonArgs),
+      // A native fork gets no deferred resume at copy completion: the immediate
+      // fork_session below is the only command that can launch it (the daemon
+      // cannot rebuild the client's transcript), and a second resume while the
+      // branch's seed is mid-delivery re-clears delivery state and injects the
+      // seed twice.
+      ...(isNativeFork ? {} : { fork_daemon_args: JSON.stringify(forkDaemonArgs) }),
     });
 
     // At-tip forks don't need the server-side message copy to start the
@@ -5772,7 +5846,10 @@ export const forkFromMessage = mutation({
     // reconstituting a truncated fork from the half-copied export. The
     // deferred resume_session emitted at copy completion is the safety net
     // (resuming an already-attached session reuses the live tmux pane).
-    if (fastPathEligible) {
+    // A native fork needs no server copy either — the client copies its own
+    // state — so it launches immediately the same way, and it is the fork's
+    // only daemon command (see fork_daemon_args above).
+    if (fastPathEligible || isNativeFork) {
       await ctx.db.insert("daemon_commands", {
         user_id: userId,
         command: "fork_session",
@@ -5815,6 +5892,26 @@ export const forkFromMessage = mutation({
   },
 });
 
+type TreeNode = {
+  id: string;
+  short_id?: string;
+  title: string;
+  message_count: number;
+  parent_message_uuid?: string;
+  started_at: number;
+  status: string;
+  agent_type?: string;
+  is_current: boolean;
+  // The prompt that started THIS branch: the first user message after the
+  // fork point. Sibling forks share a title, so this is what actually
+  // tells them apart in the branch map.
+  branch_label?: string;
+  // Messages on this branch after the fork point (the branch's own work,
+  // excluding history inherited from the parent).
+  branch_message_count?: number;
+  children: TreeNode[];
+};
+
 export const getConversationTree = query({
   args: {
     conversation_id: v.string(),
@@ -5846,26 +5943,6 @@ export const getConversationTree = query({
     }
 
     // Recursively build tree from root
-    type TreeNode = {
-      id: string;
-      short_id?: string;
-      title: string;
-      message_count: number;
-      parent_message_uuid?: string;
-      started_at: number;
-      status: string;
-      agent_type?: string;
-      is_current: boolean;
-      // The prompt that started THIS branch: the first user message after the
-      // fork point. Sibling forks share a title, so this is what actually
-      // tells them apart in the branch map.
-      branch_label?: string;
-      // Messages on this branch after the fork point (the branch's own work,
-      // excluding history inherited from the parent).
-      branch_message_count?: number;
-      children: TreeNode[];
-    };
-
     // First real user prompt out of a small message window, tags/whitespace
     // stripped. Slash-command wrappers (<command-message>…) reduce to their
     // inner text, which still reads usefully ("commit and deploy…").
@@ -6699,7 +6776,7 @@ export const feedForCLI = query({
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
         .first();
       if (managed) managedMap.set(conv._id.toString(), managed);
-      if (managed && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
+      if (managed && managed.agent_status !== "hibernated" && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
         liveStatusMap.set(conv._id.toString(), managed.agent_status);
       }
     }
@@ -6753,7 +6830,7 @@ export const feedForCLI = query({
         now,
       });
       let awaitingInput = false;
-      if (!activity.isIdle && (conv.message_count || 0) > 0 && isLive) {
+      if (((!activity.isIdle && isLive) || agentStatus === "hibernated") && (conv.message_count || 0) > 0) {
         const lastMsg = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
@@ -6771,12 +6848,14 @@ export const feedForCLI = query({
         isUnresponsive: activity.isUnresponsive,
         messageCount: conv.message_count || 0,
         killed: !!conv.inbox_killed_at,
-        userDormant: isUserDormant(conv),
+        userRest: userRestOf(conv),
         armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
         armedLoopHome: isArmedLoopHome(conv, now),
         armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
         declaredStatus: conv.thread_state_status ?? null,
+        pendingApiError: conv.pending_api_error === true,
+        sessionError: !!conv.session_error,
       });
       workStateMap.set(conv._id.toString(), ws);
       return ws;
@@ -6789,6 +6868,8 @@ export const feedForCLI = query({
     const stateFilter = normalizeWorkStateFilter(args.state);
     if (stateFilter === "pinned") {
       filteredConversations = filteredConversations.filter(c => !!c.inbox_pinned_at);
+    } else if (stateFilter === "hibernated") {
+      filteredConversations = filteredConversations.filter(c => managedMap.get(c._id.toString())?.agent_status === "hibernated");
     } else if (stateFilter === "live") {
       filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
     } else if (stateFilter) {
@@ -7765,6 +7846,7 @@ const INBOX_PINNED_CHILDREN_SCAN = 20;
 type InboxSessionMaps = {
   agentStatusMap: Map<string, AgentStatus>;
   agentStatusUpdatedAtMap: Map<string, number>;
+  hibernatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
   agentStartedAtMap: Map<string, number>;
@@ -7833,6 +7915,7 @@ async function buildUserSessionMaps(
 
   const agentStatusMap = new Map<string, any>();
   const agentStatusUpdatedAtMap = new Map<string, number>();
+  const hibernatedAtMap = new Map<string, number>();
   const tmuxSessionMap = new Map<string, string>();
   const permissionModeMap = new Map<string, string>();
   const agentStartedAtMap = new Map<string, number>();
@@ -7849,6 +7932,7 @@ async function buildUserSessionMaps(
     if (s.open_tasks !== undefined && s.open_tasks_at !== undefined) openTasksMap.set(cid, { tasks: s.open_tasks, at: s.open_tasks_at });
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
+    if (s.hibernated_at !== undefined) hibernatedAtMap.set(cid, s.hibernated_at);
     // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
     // (consumers pass liveConvIds membership as heartbeatAlive) so it can weigh
     // the conversation's own activity — a lapsed heartbeat on a session that is
@@ -7858,7 +7942,7 @@ async function buildUserSessionMaps(
 
   const userDaemonAlive = userDaemonAliveAt({ latestHeartbeat }, now);
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
+  return { agentStatusMap, agentStatusUpdatedAtMap, hibernatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -7868,6 +7952,7 @@ async function buildUserSessionMaps(
 const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   agentStatusMap: new Map(),
   agentStatusUpdatedAtMap: new Map(),
+  hibernatedAtMap: new Map(),
   tmuxSessionMap: new Map(),
   permissionModeMap: new Map(),
   agentStartedAtMap: new Map(),
@@ -7903,6 +7988,7 @@ async function mergeForeignConversationLiveness(
     if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
     if (managed.agent_started_at !== undefined) maps.agentStartedAtMap.set(cid, managed.agent_started_at);
     if (managed.open_tasks !== undefined && managed.open_tasks_at !== undefined) maps.openTasksMap.set(cid, { tasks: managed.open_tasks, at: managed.open_tasks_at });
+    if (managed.hibernated_at !== undefined) maps.hibernatedAtMap.set(cid, managed.hibernated_at);
     if (!managed.agent_status) continue;
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
@@ -8055,7 +8141,7 @@ async function enrichInboxSessionRow(
   // would miss exactly the blocked sessions we care about. The order("desc")
   // read below is authoritative.
   let awaitingInput = false;
-  if (!skip?.auq && !isIdle && conv.message_count > 0) {
+  if (!skip?.auq && (!isIdle || agentStatus === "hibernated") && conv.message_count > 0) {
     const lastMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q: any) =>
@@ -8197,6 +8283,7 @@ async function enrichInboxSessionRow(
     // The is_idle inputs, on the enriched row too (the CLI and liveness-on
     // clients), so every channel that carries is_idle carries what derived it.
     agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(conv._id.toString()) ?? null,
+    hibernated_at: maps.hibernatedAtMap.get(conv._id.toString()) ?? null,
     last_heartbeat: maps.lastHeartbeatMap.get(conv._id.toString()) ?? null,
     last_role_is_user: activity.lastRoleIsUser,
     auq_open: awaitingInput,
@@ -8206,17 +8293,20 @@ async function enrichInboxSessionRow(
     is_connected: !!daemonAlive,
     has_pending: hasPending,
     is_deferred: !!deferred,
-    // The user's park gesture, current per isUserDormant, and the settle
-    // classifier's verdict, current per isSettleVerdictCurrent — the client's
-    // sessionRestState reads these next to agent_status to place a settled row
-    // in Needs Input / Done / Dormant exactly as classifyWorkState does.
-    is_dormant: isUserDormant(conv),
-    inbox_dormant_at: conv.inbox_dormant_at ?? null,
+    // The user's own rest verdict, current per userRestOf (the raw stamp rides
+    // along so the client re-checks currency as updated_at moves), and the
+    // settle classifier's verdict, current per isSettleVerdictCurrent — the
+    // client's sessionRestState reads these next to agent_status to place a
+    // settled row in Needs Input / Done / Dormant exactly as classifyWorkState does.
+    user_rest: userRestOf(conv),
+    inbox_rest: userRestStampOf(conv)?.rest ?? null,
+    inbox_rest_at: userRestStampOf(conv)?.at ?? null,
     settle_verdict: isSettleVerdictCurrent(conv) ? (conv.settle_verdict ?? null) : null,
     is_pinned: pinned,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
     inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    inbox_snoozed_until: conv.inbox_snoozed_until ?? null,
     inbox_stash_hidden: conv.inbox_stash_hidden ?? null,
     // The retired marker: classifyWorkState uses it to keep a killed row out of
     // the Working bucket no matter what stale flags it still carries.
@@ -8364,8 +8454,16 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     inbox_pinned_at: null,
     inbox_dismissed_at: child.inbox_dismissed_at ?? null,
     inbox_stashed_at: child.inbox_stashed_at ?? null,
+    inbox_snoozed_until: child.inbox_snoozed_until ?? null,
     inbox_stash_hidden: child.inbox_stash_hidden ?? null,
     inbox_killed_at: child.inbox_killed_at ?? null,
+    // The child's own rest verdict, carried like every other stamp above (the
+    // is_deferred/is_pinned twins over it are hardcoded because a child never
+    // holds those). Without these three the verdict is write-only on a
+    // subagent row: stored by the dispatch, dropped by every read.
+    user_rest: userRestOf(child),
+    inbox_rest: userRestStampOf(child)?.rest ?? null,
+    inbox_rest_at: userRestStampOf(child)?.at ?? null,
     agent_status: childAgentStatus,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
@@ -8532,6 +8630,14 @@ export async function scanInboxConversations(
     .order("desc")
     .take(INBOX_WINDOW_CAP + 1), "inbox_stashed_at", "stashed");
 
+  const snoozedConversationsQ = topLevelWindow((isSubagent) => ctx.db
+    .query("conversations")
+    .withIndex("by_user_live_snoozed", (q: any) =>
+      q.eq("user_id", userId).eq("is_subagent", isSubagent).eq("inbox_killed_at", undefined).gt("inbox_snoozed_until", 0)
+    )
+    .order("desc")
+    .take(INBOX_WINDOW_CAP + 1), "inbox_snoozed_until", "snoozed");
+
   // Sessions this user OWNS — run by another member's account (e.g. Mr Bot) but
   // assigned to them — surface in the OWNER's inbox alongside their own.
   // Explicit assignment outranks default team visibility: routing a session into
@@ -8557,8 +8663,8 @@ export async function scanInboxConversations(
   // queries, whose latency was almost entirely sequential await depth (each
   // await is a db round trip; under load the sum crossed the system-op
   // timeout: "Your request timed out performing too many system operations").
-  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, ownerRows] =
-    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, ownerRowsQ]);
+  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows] =
+    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ]);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
@@ -8574,6 +8680,7 @@ export async function scanInboxConversations(
   );
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
+  for (const c of snoozedConversations) byId.set(c._id.toString(), c);
 
   // Hydrate only the owned conversations the window scans above didn't already
   // fetch (an owned session of my OWN is usually in the recent window — the get
@@ -8584,7 +8691,7 @@ export async function scanInboxConversations(
   );
   for (const conv of ownerHydrated) {
     if (!conv) continue;
-    if ((conv.updated_at ?? 0) < sessionWindowCutoff) continue;
+    if ((conv.updated_at ?? 0) < sessionWindowCutoff && !conv.inbox_snoozed_until) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
     byId.set(conv._id.toString(), conv);
   }
@@ -8990,6 +9097,7 @@ type LivenessFields = {
   // The is_idle inputs (ct-47609), so a replica re-derives idleness,
   // responsiveness and the status trust at its own clock (shared deriveLiveAt).
   agent_status_updated_at: number | null;
+  hibernated_at?: number | null;
   last_heartbeat: number | null;
   last_role_is_user: boolean;
   auq_open: boolean;
@@ -9347,6 +9455,7 @@ function deriveLivenessAt(
     has_pending_messages: !!conv.has_pending_messages,
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
     inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    inbox_snoozed_until: conv.inbox_snoozed_until ?? null,
     agent_status: maps.agentStatusMap.get(cid) ?? null,
     agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(cid) ?? null,
     last_heartbeat: maps.lastHeartbeatMap.get(cid) ?? null,
@@ -9381,6 +9490,7 @@ function deriveLivenessAt(
     // un-backfilled rows — exactly the input the park rule needs (C1).
     last_turn_allows_park: rowLastTurnAllowsPark({ last_message_preview: reads.lastUserMessage }),
     agent_status_updated_at: facts.agent_status_updated_at,
+    hibernated_at: maps.hibernatedAtMap.get(cid) ?? null,
     last_heartbeat: facts.last_heartbeat,
     last_role_is_user: facts.last_role_is_user,
     auq_open: facts.auq_open,
@@ -9410,7 +9520,7 @@ async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps
   }
   const reads: LivenessRowReads = { lastMsgRole, lastUserMessage, auqOpen: false };
   const base = deriveLivenessAt(conv, maps, reads, null, now);
-  if (!base.is_idle && conv.message_count > 0) {
+  if ((!base.is_idle || base.agent_status === "hibernated") && conv.message_count > 0) {
     if (lastMsg === undefined) lastMsg = await newestMessage(ctx, conv._id);
     reads.auqOpen = isOpenAskUserQuestion(lastMsg);
   }
@@ -9639,12 +9749,14 @@ export function tallyInboxRows(
     id: string;
     session_id: string;
     title: string;
+    short_title: string | null;
     project_path: string | null;
     updated_at: string;
     ts: number;
     message_count: number;
     agent_type?: string;
     agent_status?: string;
+    hibernated_at?: number | null;
     work_state: WorkState;
     // The projection placement (shared placeInboxRow) and the fold flag, next
     // to the verdict the CLI has always tallied.
@@ -9705,7 +9817,7 @@ export function tallyInboxRows(
     const work_state: WorkState = s.work_state;
     const bucket: InboxBucket = s.bucket;
     if (!work_state || !bucket) throw new Error(`tallyInboxRows: row ${s._id} is not stamped with a projection`);
-    const is_live = !!s.is_connected;
+    const is_live = !!s.is_connected && s.agent_status !== "hibernated";
 
     counts.total++;
     counts[work_state]++;
@@ -9716,18 +9828,21 @@ export function tallyInboxRows(
 
     if (opts.stateFilter === "pinned" && !s.is_pinned) continue;
     if (opts.stateFilter === "live" && !is_live) continue;
-    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && work_state !== opts.stateFilter) continue;
+    if (opts.stateFilter === "hibernated" && s.agent_status !== "hibernated") continue;
+    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && opts.stateFilter !== "hibernated" && work_state !== opts.stateFilter) continue;
 
     rows.push({
       id: s._id,
       session_id: s.session_id,
       title: s.title || s.last_user_message || "New Session",
+      short_title: s.short_title || null,
       project_path: s.project_path || null,
       updated_at: new Date(s.updated_at).toISOString(),
       ts: s.updated_at,
       message_count: s.message_count || 0,
       agent_type: s.agent_type,
       agent_status: s.agent_status,
+      hibernated_at: s.hibernated_at ?? null,
       work_state,
       bucket,
       below_fold: !!s.below_fold,
@@ -10169,6 +10284,44 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
   return { sessions };
 }
 
+/**
+ * The daemon reporting a session checkout's live git state: HEAD, branch,
+ * distance from upstream, dirtiness. Written only when something moved, so an
+ * idle session never touches its hot row; the header renders it as a prompt
+ * line (branch, sha, ahead/behind, dirty marker), each part linking into the
+ * repository pages.
+ */
+export const updateGitState = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.string(),
+    git_commit_hash: v.optional(v.string()),
+    git_branch: v.optional(v.string()),
+    // The origin URL: a session that started before the daemon recorded one
+    // (or whose checkout gained a remote later) learns its repository here.
+    git_remote_url: v.optional(v.string()),
+    git_ahead: v.optional(v.number()),
+    git_behind: v.optional(v.number()),
+    git_dirty: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<{ updated: boolean }> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!convId) return { updated: false };
+    const conv = await ctx.db.get(convId);
+    if (!conv || conv.user_id !== userId) return { updated: false };
+    const next: Record<string, unknown> = {};
+    for (const key of ["git_commit_hash", "git_branch", "git_remote_url", "git_ahead", "git_behind", "git_dirty"] as const) {
+      const value = args[key];
+      if (value !== undefined && (conv as any)[key] !== value) next[key] = value;
+    }
+    if (Object.keys(next).length === 0) return { updated: false };
+    await ctx.db.patch(convId, { ...next, git_state_at: Date.now() });
+    return { updated: true };
+  },
+});
+
 export const setSessionError = mutation({
   args: {
     conversation_id: v.string(),
@@ -10183,12 +10336,14 @@ export const setSessionError = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id !== userId) return;
+    if (isConversationSafetyBlocked(conv)) return;
+    const safetyPatch = safetyBlockPatch(conv, [{ role: "assistant", content: args.error }], Date.now());
     // A "couldn't start / no local checkout" error is impossible if the session
     // is actually running. Reject stale error writes (device-agnostic, so it holds
     // even for un-upgraded daemons) when a live managed session exists — that's a
     // second machine lacking the checkout racing the one that already started it.
     // Clearing the error (error=undefined) always passes through.
-    if (args.error && !args.force) {
+    if (args.error && !args.force && !safetyPatch) {
       const managed = await ctx.db
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
@@ -10198,7 +10353,9 @@ export const setSessionError = mutation({
     }
     await ctx.db.patch(convId, {
       session_error: args.error,
+      ...safetyPatch,
     });
+    if (safetyPatch) await onFreshApiErrorPark(ctx, conv.user_id, "safety");
   },
 });
 
@@ -10521,7 +10678,7 @@ export const cliResumeSession = mutation({
     // A pane nobody can see is the same problem here as on restart: the card
     // comes back to the inbox before its agent does.
     const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
-    const { deduplicated } = await enqueueResumeSession(ctx, conv);
+    const { deduplicated, command_id } = await enqueueResumeSession(ctx, conv);
     // Re-queue stranded messages so the resume actually delivers them — the
     // same reason users.resumeSession does it.
     await resetConversationPendingMessages(ctx, conv._id);
@@ -10529,6 +10686,7 @@ export const cliResumeSession = mutation({
     return {
       ...sessionCommandResult(conv),
       deduplicated,
+      command_id,
       was_hidden: wasHidden,
       rearmed_schedules: rearmed,
     };
@@ -10552,11 +10710,12 @@ export const cliHibernateSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await resolveCommandableSession(ctx, userId, args.session, "hibernate");
-    const { deduplicated } = await enqueueHibernateSession(ctx, conv);
+    const { deduplicated, command_id } = await enqueueHibernateSession(ctx, conv);
 
     return {
       ...sessionCommandResult(conv),
       deduplicated,
+      command_id,
     };
   },
 });
@@ -10680,12 +10839,7 @@ export const setThreadState = mutation({
     const text = normalizeThreadState(args.text ?? "");
 
     if (!text) {
-      await ctx.db.patch(conv._id, {
-        thread_state: undefined,
-        thread_state_at: undefined,
-        thread_state_msg_count: undefined,
-        thread_state_status: undefined,
-      });
+      await ctx.db.patch(conv._id, clearedThreadStateFields());
       return { ok: true as const, short_id: shortId, cleared: true as const, state: null, previous_state: previous };
     }
 
@@ -10814,7 +10968,7 @@ export const drainStaleDismiss = internalMutation({
 
       for (const conv of result.page) {
         if (conv.inbox_dismissed_at) continue;
-        if (conv.inbox_pinned_at) continue;
+        if (conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
         await ctx.db.patch(conv._id, { inbox_dismissed_at: now });
       }
 
@@ -10840,16 +10994,7 @@ export const drainStaleDismiss = internalMutation({
   },
 });
 
-const PATCHABLE_FIELDS = new Set([
-  "inbox_dismissed_at",
-  "inbox_deferred_at",
-  "inbox_dormant_at",
-  "inbox_pinned_at",
-  "draft_message",
-  "project_path",
-  "git_root",
-  "agent_type",
-]);
+const PATCHABLE_FIELDS = new Set<string>(PATCHABLE_CONVERSATION_FIELDS);
 
 export const patchConversation = mutation({
   args: {
@@ -11117,6 +11262,18 @@ export const switchSessionAgent = mutation({
       throw new Error("Nothing to switch");
     }
 
+    // A switch on a session with history is a rebuild of that history as the
+    // new agent (the daemon writes the target client's transcript from the
+    // server copy). Refuse BEFORE stamping the row when the target cannot be
+    // rebuilt — otherwise agent_type names an agent the daemon then fails to
+    // launch, and every capability gate downstream (fork, model rail) reads
+    // the lie while the old agent quietly resumes.
+    const blank = (conv.message_count ?? 0) === 0;
+    if (agentChanged && !canSessionBecomeAgent(args.agent_type, conv.message_count)) {
+      const label = AGENT_CLIENTS[fromConvexAgentType(args.agent_type)].displayName;
+      throw new Error(`${label} cannot take over an existing session's history; start a new ${label} session instead`);
+    }
+
     const patch: Record<string, any> = { updated_at: Date.now() };
     if (agentChanged) {
       patch.agent_type = args.agent_type;
@@ -11142,7 +11299,6 @@ export const switchSessionAgent = mutation({
 
     await ctx.db.patch(conv._id, patch);
     const updated = { ...conv, ...patch } as Doc<"conversations">;
-    const blank = (conv.message_count ?? 0) === 0;
     const midSession = launchCfg?.midSession === true;
     const reconstitutes = !blank && (agentChanged || !midSession);
 

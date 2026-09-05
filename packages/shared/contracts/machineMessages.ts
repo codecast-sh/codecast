@@ -1,3 +1,5 @@
+import { isSessionUpdateBatch } from "./sessionUpdates";
+
 // Detection of user-role messages that machinery delivered into a session
 // rather than a human typing them: cross-session `cast send` wrappers,
 // inter-agent teammate broadcasts (Claude Code SendMessage), scheduled-task
@@ -19,6 +21,23 @@ export function stripInjectionNoise(text: string): string {
     .replace(/^[\x00-\x1f\s]+/, "");
 }
 
+export function isTurnInterruptionNotice(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  const text = stripInjectionNoise(rawContent);
+  return text.startsWith("<turn_aborted>")
+    || text.startsWith("The user interrupted the previous turn on purpose.");
+}
+
+export function isAgentContextMessage(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  const text = stripInjectionNoise(rawContent);
+  return /^<(?:recommended_plugins|environment_context|INSTRUCTIONS|collaboration_mode|app-context)>/.test(text)
+    || /^<permissions(?:\s|>)/.test(text)
+    // Codex opens a session (or a project without an AGENTS.md) with a
+    // "# Project context\nWorking directory: <cwd>" user turn, unflagged.
+    || /^# (?:AGENTS\.md instructions|Project context)(?:\s|$)/.test(text);
+}
+
 // Lightweight detection that a user message is actually an inbound
 // session→session message (delivered by `cast send`). Keys off the OPENING tag
 // only, so it still fires on a truncated preview (last_message_preview is
@@ -26,6 +45,35 @@ export function stripInjectionNoise(text: string): string {
 export function isSessionMessage(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
   return /^<session-message\s+from="/.test(stripInjectionNoise(rawContent));
+}
+
+// A person typing into a session that is not their own — the dashboard's
+// composer on a teammate's or a bot's session (CollabComposer →
+// performSessionSend `direct`). Wrapped so the receiving agent knows a human
+// wrote it and who; it is NOT machine-delivered, so previews, the Typed
+// counter and the idle notification all treat it as the person's own words.
+//
+//   <user-message from="Ashot Petrosian">
+//   the body
+//   </user-message>
+export function formatUserMessage(fromName: string, body: string): string {
+  return `<user-message from="${fromName.replace(/"/g, "'")}">\n${body}\n</user-message>`;
+}
+
+export function isUserMessage(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  return /^<user-message\s+from="/.test(stripInjectionNoise(rawContent));
+}
+
+// Sender name and body. Tolerates a missing close tag (a preview sliced
+// mid-message) and the newline-to-space collapse of a tmux-injected echo that
+// never matched its pending row, so the body is trimmed rather than framed.
+export function parseUserMessage(rawContent: string | null | undefined): { from: string; body: string } | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  const m = text.match(/^<user-message\s+from="([^"]*)"[^>]*>([\s\S]*?)(?:<\/user-message>\s*$|$)/);
+  if (!m) return null;
+  return { from: m[1].trim(), body: m[2].trim() };
 }
 
 // The multi-agent harness wraps a message from another agent in
@@ -84,7 +132,7 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
 // scheduled-task injection, a harness task notification, or a team-chat
 // mention waking the anchor.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionUpdateBatch(rawContent) || isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

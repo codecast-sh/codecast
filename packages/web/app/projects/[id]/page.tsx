@@ -52,6 +52,7 @@ import {
   History,
   Megaphone,
 } from "lucide-react";
+import { DocDates } from "../../../components/DocDates";
 
 const api = _api as any;
 
@@ -198,7 +199,7 @@ function DocRow({ doc }: { doc: DocItem }) {
         {doc.title || "Untitled"}
       </span>
       <span className="text-[10px] text-sol-text-dim flex-shrink-0 capitalize">{doc.doc_type}</span>
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fmtAge(doc.updated_at)}</span>
+      <DocDates doc={doc} className="text-[10px] text-sol-text-dim flex-shrink-0" />
     </Link>
   );
 }

@@ -11,6 +11,8 @@ mkdir -p "$OUTPUT_DIR"
 # bundles daemon.ts directly, so no pre-compiled daemon.js intermediate is needed.
 bash scripts/guard-no-src-shadow.sh
 
+bun test src/daemonPid.test.ts src/daemonPid.cli.test.ts
+
 # The daemon build id must match the source it is stamped from. Both release
 # paths (deploy.sh and cut-cli-release.yml) run this script, so one check line
 # covers both. It only verifies: the finalize workflow rejects a release whose

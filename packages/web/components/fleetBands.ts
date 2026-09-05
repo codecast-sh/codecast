@@ -52,6 +52,7 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // A message on its way to the agent reads as running, whatever the stale
   // status claims — the same precedence the pending_send overlay gives in-flight.
   if (inFlight(s, opts)) return "running";
+  if (s.inbox_snoozed_until && s.inbox_snoozed_until <= opts.now) return "needsYou";
   // Concrete blockers only. Deliberately NOT isSessionHardBlocked: its "dead
   // agent with output" arm counts every cleanly finished session ("stopped" +
   // idle is the NORMAL end state of a run), which floods this band and makes
@@ -164,6 +165,7 @@ export function fleetSessionSig(s: InboxSession): string {
     // the fleet counts, and must wake subscribers between coarse ticks.
     s.inbox_dismissed_at ? 1 : 0,
     s.inbox_stashed_at ? 1 : 0,
+    s.inbox_snoozed_until ?? 0,
     s.is_pinned ? 1 : 0,
     (s as any).is_anchor ? 1 : 0,
     s.awaiting_input ? 1 : 0,
