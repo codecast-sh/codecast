@@ -243,12 +243,13 @@ export function findUnsyncedFiles(
 export async function findUnsyncedFilesAsync(
   baseDir: string,
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000,
-  includeFile?: (filePath: string) => boolean,
+  includeFile?: (filePath: string, observation?: import("./fsWalk.js").WalkFile) => boolean,
   // Which directories to enter (fsWalk semantics). The daemon passes the
   // watcher's rule so a sweep skips every tool-results/memory/checkpoint dir
   // instead of reading and discarding them (3947 dirs for 7918 files on one
   // machine, most of them out of scope).
   dirFilter?: (relativeDirPath: string) => boolean,
+  policy?: import("./workers/scanTypes.js").ScanPolicy,
 ): Promise<string[]> {
   const ledger = store.getAll();
   const positions = loadPositions();
@@ -258,10 +259,12 @@ export async function findUnsyncedFilesAsync(
     baseDir,
     {
       dirFilter,
-      fileFilter: (rel) => rel.endsWith(".jsonl") && (!includeFile || includeFile(path.join(baseDir, rel))),
+      policy,
+      observeCwd: !!policy && !!includeFile,
+      fileFilter: (rel) => rel.endsWith(".jsonl") && (!!policy || !includeFile || includeFile(path.join(baseDir, rel))),
     },
     (f) => {
-      if (isUnsynced(f.path, f.stat, now, maxAgeMs, ledger, positions)) unsynced.push(f.path);
+      if ((!includeFile || includeFile(f.path, f)) && isUnsynced(f.path, f.stat, now, maxAgeMs, ledger, positions)) unsynced.push(f.path);
     },
   );
   return unsynced;

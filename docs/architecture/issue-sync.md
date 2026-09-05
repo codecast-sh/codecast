@@ -178,8 +178,25 @@ Both write `external.synced_at`, `external.field_ts`, and `last_error` on
 failure. Failures are logged, never retried in a loop: the 15 minute reconcile
 (S6) is the retry.
 
-Tokens: Linear via `oauthConnectors.getAccessTokenForTeam`; GitHub via
-`githubApp.getInstallationToken` for the installation covering the repo.
+Tokens: Linear via `oauthConnectors.getFreshAccessTokenForTeam`, which
+refreshes the 24 hour access token ahead of `access_expires_at` and stores
+the rotated refresh token in the same write; a refused refresh lands on the
+connection's `last_error` and parks the source with a "reconnect" message.
+The refresh is single flight: a caller claims a lease (`refresh_lease_id`
+plus `refresh_lease_until`, the agent task lease shape; the claim itself is
+a compare and swap on the access ciphertext) before talking to the provider,
+and concurrent callers wait for the row to change instead of spending the
+same refresh token twice. A success write is judged by the ciphertext: it
+lands only if no newer pair arrived meanwhile, and then it is the newest
+pair whoever holds the lease, so it releases the lease. A failure write is
+judged by the lease id: only the current claimant may park the connection,
+so a late failure from an expired claim or from before a reconnect stamps
+nothing. A refused write never hands out the pair it fetched: the caller
+re-reads and returns what the row holds, and a disconnected connection
+yields no credentials at all.
+GitHub via `githubApp.getInstallationToken` for the installation covering
+the repo. The reconcile retries parked sources every tick, and a successful
+sync flips a parked source back to active.
 
 ## S6. Inbound
 

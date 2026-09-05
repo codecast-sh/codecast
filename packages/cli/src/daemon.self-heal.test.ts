@@ -38,6 +38,13 @@ describe("shouldSelfHeal", () => {
     // Loop time past the bar counts even when the wall gap is shorter.
     expect(shouldSelfHeal(THRESHOLD + 1, false, THRESHOLD, THRESHOLD + 1)).toBe(true);
   });
+
+  test("post-wake dead timers recover after three missed ticks instead of five minutes", () => {
+    expect(shouldSelfHeal(979_000, false, THRESHOLD, 90_000)).toBe(false);
+    expect(shouldSelfHeal(979_000, false, THRESHOLD, 90_001)).toBe(true);
+    expect(shouldSelfHeal(979_000, true, THRESHOLD, 308_000)).toBe(false);
+    expect(shouldSelfHeal(90_001, false, THRESHOLD, 90_001)).toBe(false);
+  });
 });
 
 describe("buildLaunchdKickstartCommand", () => {

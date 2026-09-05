@@ -2910,6 +2910,9 @@ http.route({
         session_id,
         direction,
         target_agent_type,
+        cloud_device_id: body.cloud_device_id,
+        cloud_project_path: body.cloud_project_path,
+        cloud_worktree: body.cloud_worktree,
       });
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -4267,6 +4270,7 @@ cliRoute("/cli/sessions/resume", async (ctx, body) => ctx.runMutation(api.conver
 // wake on the next message. `cast wake` posts to /cli/sessions/resume above.
 // body: { api_token, session }.
 cliRoute("/cli/sessions/hibernate", async (ctx, body) => ctx.runMutation(api.conversations.cliHibernateSession, body));
+cliRoute("/cli/sessions/command-results", async (ctx, body) => ctx.runQuery((api as any).sessionCommands.results, body));
 
 // Restart (cast restart <session>): kill the agent and resume it through the
 // daemon's resume ladder — the web header's "Restart session", from a shell.
