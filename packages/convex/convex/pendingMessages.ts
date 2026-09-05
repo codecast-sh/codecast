@@ -423,6 +423,7 @@ export async function enqueuePendingMessage(
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
     ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
+    ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
   });
 
   return messageId;

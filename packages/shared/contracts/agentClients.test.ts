@@ -4,6 +4,11 @@ import {
   AGENT_LAUNCH_OPTIONS,
   launchRailOptions,
   agentSupportsExecutionTransport,
+  agentSupportsFork,
+  agentReconstitutes,
+  agentForksFromAnyMessage,
+  agentForksNatively,
+  canSessionBecomeAgent,
   capabilitySupport,
   fromConvexAgentType,
   InvalidExecutionAgentTypeError,
@@ -351,5 +356,65 @@ describe("agentFileTargets path templates", () => {
         expect(p.includes("\\")).toBe(false);
       }
     }
+  });
+});
+
+// Fork and switch gates are registry facts, read by the web (per-message fork
+// control, switch menu, palette), the mutations (forkFromMessage,
+// switchSessionAgent) and the daemon (native fork branch, reconstitution).
+// One wrong flag here would show a fork control that fabricates a context-less
+// session, or stamp an agent on a row the daemon then cannot launch — the
+// grok-labelled Claude session of 2026-09-05.
+describe("fork and switch capability helpers", () => {
+  it("offers fork for claude/codex/opencode/grok and hides it for cursor/gemini/pi", () => {
+    expect(agentSupportsFork("claude_code")).toBe(true);
+    expect(agentSupportsFork("codex")).toBe(true);
+    expect(agentSupportsFork("opencode")).toBe(true);
+    expect(agentSupportsFork("grok")).toBe(true);
+    expect(agentSupportsFork("cursor")).toBe(false);
+    expect(agentSupportsFork("gemini")).toBe(false);
+    expect(agentSupportsFork("pi")).toBe(false);
+  });
+
+  it("forks from any message only where the history can be rebuilt or cut by API", () => {
+    expect(agentForksFromAnyMessage("claude_code")).toBe(true);
+    expect(agentForksFromAnyMessage("codex")).toBe(true);
+    expect(agentForksFromAnyMessage("opencode")).toBe(true);
+    // grok copies its whole context natively: tip only.
+    expect(agentForksFromAnyMessage("grok")).toBe(false);
+    expect(agentForksFromAnyMessage("pi")).toBe(false);
+  });
+
+  it("grok is the native-fork client and declares the resume-flag command", () => {
+    expect(agentForksNatively("grok")).toBe(true);
+    expect(agentForksNatively("claude_code")).toBe(false);
+    expect(agentForksNatively("opencode")).toBe(false);
+    expect(AGENT_CLIENTS.grok.forkCmd!("parent-id", "child-id")).toBe(
+      "grok --resume parent-id --fork-session --session-id child-id",
+    );
+  });
+
+  it("a native-fork client never also claims a rebuildable transcript", () => {
+    for (const d of Object.values(AGENT_CLIENTS)) {
+      if (d.forkCmd) expect(d.capabilities.reconstitute).not.toBe(true);
+      if (d.forkCmd) expect(d.capabilities.fork).toBe(true);
+    }
+  });
+
+  it("reconstitution is claude, codex and gemini — the daemon's transcript writers", () => {
+    expect(agentReconstitutes("claude_code")).toBe(true);
+    expect(agentReconstitutes(undefined)).toBe(true);
+    expect(agentReconstitutes("codex")).toBe(true);
+    expect(agentReconstitutes("gemini")).toBe(true);
+    for (const t of ["cursor", "opencode", "pi", "grok"]) expect(agentReconstitutes(t)).toBe(false);
+  });
+
+  it("a blank session can become any agent; one with history only a rebuildable one", () => {
+    expect(canSessionBecomeAgent("grok", 0)).toBe(true);
+    expect(canSessionBecomeAgent("grok", undefined)).toBe(true);
+    expect(canSessionBecomeAgent("grok", 12)).toBe(false);
+    expect(canSessionBecomeAgent("pi", 1)).toBe(false);
+    expect(canSessionBecomeAgent("codex", 12)).toBe(true);
+    expect(canSessionBecomeAgent("claude_code", 12)).toBe(true);
   });
 });

@@ -237,10 +237,21 @@ export function buildNonClaudeResumeCommand(
     grokPermFlags?: string | null;
     model?: string;
     effort?: string;
+    /** Launch the client's NATIVE fork of this parent instead of a plain resume:
+     *  the registry `forkCmd` copies the parent's session state under
+     *  `sessionId`. Only clients declaring `forkCmd` can take it. */
+    forkFromSessionId?: string;
   } = {},
 ): string | null {
   if (agentType === "claude") return null;
-  const base = AGENT_CLIENTS[agentType].resumeCmd(sessionId);
+  const client = AGENT_CLIENTS[agentType];
+  let base: string;
+  if (opts.forkFromSessionId) {
+    if (!client.forkCmd) throw new Error(`${agentType} has no native fork command`);
+    base = client.forkCmd(opts.forkFromSessionId, sessionId);
+  } else {
+    base = client.resumeCmd(sessionId);
+  }
   const modelFlags: string[] = [];
   appendModelEffortFlags(modelFlags, {
     agentType,
