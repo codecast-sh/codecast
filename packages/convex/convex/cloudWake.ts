@@ -118,7 +118,10 @@ export function cloudWakeFailure(error: unknown) {
   ].includes(code) };
 }
 
-export async function performCloudWake(ctx: any, args: WakeRequest, start = startCloudInstance) {
+export async function performCloudWake(ctx: any, args: WakeRequest, start = startCloudInstance): Promise<
+  | { claimed: false; reason: string }
+  | { claimed: true; error?: string; retryable?: boolean; requestId?: string }
+> {
   const claimed = await ctx.runMutation(refs().claim, args);
   if (!claimed.claimed) return claimed;
   let outcome: { error?: string; retryable?: boolean; requestId?: string };
