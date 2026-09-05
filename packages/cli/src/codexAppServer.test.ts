@@ -132,7 +132,7 @@ describe("CodexAppServer sandbox restatement", () => {
 
     // Invalidated BEFORE the write, and disk must not claim the old broader one.
     expect(invalidated).toEqual(["thread"]);
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   test("timeout after a narrowing leaves the policy unspecified, not the old one", async () => {
@@ -145,7 +145,7 @@ describe("CodexAppServer sandbox restatement", () => {
 
     expect(server.hasPendingPolicyChange("thread")).toBe(false);
     expect(server.policyForThread("thread")).toBeUndefined();
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   test("a dropped connection is ambiguous too, and does not restore the old policy", async () => {
@@ -155,7 +155,7 @@ describe("CodexAppServer sandbox restatement", () => {
     await expect(server.turnStart({
       threadId: "thread", input: [{ type: "text", text: "a" }], sandboxPolicy: READONLY,
     })).rejects.toThrow("terminated");
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   test("an EXPLICIT refusal is authoritative, so the old policy remains valid", async () => {
@@ -190,7 +190,7 @@ describe("CodexAppServer sandbox restatement", () => {
 
     // The second call finished; the first is still in flight and still owns the mark.
     expect(server.hasPendingPolicyChange("thread")).toBe(true);
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
 
     releaseFirst({ turn: { id: "t", items: [], status: "inProgress" } });
     await first;
@@ -198,7 +198,7 @@ describe("CodexAppServer sandbox restatement", () => {
     // for this thread, so an older response may not resolve the uncertainty. The
     // policy stays unknown and a resume sends none, which is restrictive.
     expect(server.hasPendingPolicyChange("thread")).toBe(false);
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   // A=FULL and B=READONLY both in flight. A is accepted while B is still
@@ -223,7 +223,7 @@ describe("CodexAppServer sandbox restatement", () => {
     await a;
     // A settled, but B is newer and still unresolved.
     expect(server.hasPendingPolicyChange("thread")).toBe(true);
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
 
     failB(new Error("Request turn/start timed out after 1ms"));
     await expect(b).rejects.toThrow("timed out");
@@ -232,7 +232,7 @@ describe("CodexAppServer sandbox restatement", () => {
     // come back from A's earlier acceptance or from the record.
     expect(server.hasPendingPolicyChange("thread")).toBe(false);
     expect(server.policyForThread("thread")).toBeUndefined();
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   // Same stale-response guard at the other entry point. A resume knows its
@@ -271,7 +271,7 @@ describe("CodexAppServer sandbox restatement", () => {
     void server.threadResume({ threadId: "thread", cwd: "/p" });
     await Promise.resolve();
     expect(invalidated).toEqual(["thread"]);
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   test("a failed resume leaves the policy unknown rather than reverting", async () => {
@@ -280,7 +280,7 @@ describe("CodexAppServer sandbox restatement", () => {
     (server as any).sendRequest = async () => { throw new Error("Request thread/resume timed out after 1ms"); };
     await expect(server.threadResume({ threadId: "thread", cwd: "/p" })).rejects.toThrow("timed out");
     expect(server.policyForThread("thread")).toBeUndefined();
-    expect(disk(server, "thread", FULL)).toBeUndefined();
+    expect(disk(server, "thread", FULL)).toBeNull();
   });
 
   test("an implicit turn never touches an override's pending mark", async () => {

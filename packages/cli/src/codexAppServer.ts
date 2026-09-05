@@ -227,6 +227,7 @@ export interface CodexAppServerOptions {
   log: (msg: string) => void;
   onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   codexBinary?: string;
+  defaultPermissions?: () => Pick<ThreadStartParams, "sandbox" | "approvalPolicy">;
 }
 
 interface PendingRequest {
@@ -335,12 +336,14 @@ export class CodexAppServer extends EventEmitter {
   private log: (msg: string) => void;
   private onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   private codexBinary: string;
+  private defaultPermissions?: CodexAppServerOptions["defaultPermissions"];
 
   constructor(opts: CodexAppServerOptions) {
     super();
     this.log = opts.log;
     this.onApproval = opts.onApproval;
     this.codexBinary = opts.codexBinary || "codex";
+    this.defaultPermissions = opts.defaultPermissions;
   }
 
   start(): void {
@@ -378,10 +381,20 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadStart(params: ThreadStartParams): Promise<ThreadStartResponse> {
-    const response = await this.sendRequest("thread/start", withWorktreeConfig(params), THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
+    const response = await this.sendRequest("thread/start", withWorktreeConfig(this.withDefaultPermissions(params)), THREAD_START_TIMEOUT_MS) as ThreadStartResponse;
     this.threadModels.set(response.thread.id, response.model);
     this.rememberPolicy(response.thread.id, response.sandbox, this.nextPolicyGeneration(response.thread.id));
     return response;
+  }
+
+  private withDefaultPermissions<T extends ThreadStartParams>(params: T): T {
+    const defaults = this.defaultPermissions?.();
+    if (!defaults) return params;
+    return {
+      ...params,
+      sandbox: params.sandbox ?? defaults.sandbox,
+      approvalPolicy: params.approvalPolicy ?? defaults.approvalPolicy,
+    };
   }
 
   async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
@@ -511,6 +524,14 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
+    const knownPolicy = this.policyForThread(params.threadId);
+    if (!params.sandbox && knownPolicy) {
+      const known = sandboxResumeParams(knownPolicy);
+      params = { ...params, sandbox: known.sandbox ?? "read-only", config: { ...known.config, ...params.config } };
+    }
+    params = this.withDefaultPermissions(this.isPolicyInvalidated(params.threadId) && !params.sandbox
+      ? { ...params, sandbox: "read-only" }
+      : params);
     // Unlike start and fork, a resume already knows its thread id, so its
     // generation must be taken BEFORE the request goes out. Taking it after the
     // await would make a slow response the newest by definition, letting it
@@ -539,7 +560,7 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async threadFork(params: ThreadForkParams, timeoutMs = THREAD_START_TIMEOUT_MS): Promise<ThreadForkResponse> {
-    const response = await this.sendRequest("thread/fork", withWorktreeConfig(params), timeoutMs) as ThreadForkResponse;
+    const response = await this.sendRequest("thread/fork", withWorktreeConfig(this.withDefaultPermissions(params)), timeoutMs) as ThreadForkResponse;
     this.threadModels.set(response.thread.id, response.model);
     this.rememberPolicy(response.thread.id, response.sandbox, this.nextPolicyGeneration(response.thread.id));
     return response;

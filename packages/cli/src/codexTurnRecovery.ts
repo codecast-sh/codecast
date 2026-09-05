@@ -1,35 +1,41 @@
-import { sandboxResumeParams, type ApprovalPolicy, type SandboxPolicy, type ThreadResumeParams, type ThreadResumeResponse, type Turn } from "./codexAppServer.js";
+import { sandboxResumeParams, type ApprovalPolicy, type SandboxMode, type SandboxPolicy, type ThreadResumeParams, type ThreadResumeResponse, type Turn } from "./codexAppServer.js";
 
 export type PersistedCodexThread = {
   threadId: string;
   updatedAt: number;
   cwd?: string;
   approvalPolicy?: ApprovalPolicy;
+  sandbox?: SandboxMode;
   /** The policy the server reported for this thread, recorded so a restart can
-   *  reproduce it exactly. A coarse mode cannot carry workspace roots or
-   *  network access, so the policy is what gets persisted. */
-  sandboxPolicy?: SandboxPolicy;
+   *  reproduce it exactly. Preferred over `sandbox`, which is a coarse mode and
+   *  cannot carry workspace roots or network access. */
+  sandboxPolicy?: SandboxPolicy | null;
   activeTurnId?: string;
   recoveryAttempts?: number;
 };
 
 /**
  * Params to bring a saved thread back, reproducing the policy it actually ran
- * under. A record with no recorded policy sends no sandbox at all: an unknown
- * prior sandbox stays unspecified rather than guessed, because naming a mode we
- * cannot justify would widen a thread that was deliberately restricted. Losing
- * access is recoverable; granting it silently is not.
+ * under. A recorded `sandboxPolicy` is authoritative and restores writable roots
+ * and network access; a legacy record carrying only the coarse `sandbox` mode
+ * replays that mode, which is the most the protocol can express for it.
+ *
+ * A record with NEITHER may be an invalidation from an older version and resumes read-only.
+ * A null policy records invalidation and must resume read-only, even when a
+ * stale coarse mode or the configured default grants broader access.
  */
 export function codexResumeParams(
   record: PersistedCodexThread,
   approvalPolicy: ApprovalPolicy,
 ): ThreadResumeParams {
   const fromPolicy = sandboxResumeParams(record.sandboxPolicy);
+  const sandbox = record.sandboxPolicy === null ? "read-only" : fromPolicy.sandbox
+    ?? (record.sandboxPolicy ? "read-only" : record.sandbox ?? "read-only");
   return {
     threadId: record.threadId,
     ...(record.cwd ? { cwd: record.cwd } : {}),
     approvalPolicy,
-    ...(fromPolicy.sandbox ? { sandbox: fromPolicy.sandbox } : {}),
+    ...(sandbox ? { sandbox } : {}),
     ...(fromPolicy.config ? { config: fromPolicy.config } : {}),
   };
 }
@@ -38,18 +44,18 @@ export function codexResumeParams(
  * What to write to disk as a thread's policy. This is the production decision,
  * shared by every persist site in the daemon.
  *
- * While an override is in flight the answer is `undefined`, never the previous
+ * While an override is in flight the answer is `null`, never the previous
  * value. The previous value is the BROADER one, so reusing it would let a crash
  * or a lost response restore access the thread may no longer have. A record with
- * no policy resumes with no sandbox, which is restrictive: the safe direction.
+ * a null policy resumes read-only. Older versions also used absence for invalidation.
  */
 export function persistedPolicyFor(input: {
   pending: boolean;
   invalidated?: boolean;
   live?: SandboxPolicy;
-  previous?: SandboxPolicy;
-}): SandboxPolicy | undefined {
-  if (input.pending || input.invalidated) return undefined;
+  previous?: SandboxPolicy | null;
+}): SandboxPolicy | null | undefined {
+  if (input.pending || input.invalidated) return null;
   return input.live ?? input.previous;
 }
 
@@ -69,10 +75,11 @@ export function persistedPolicyFor(input: {
 export function applyPolicyInPlace(
   record: PersistedCodexThread | undefined,
   threadId: string,
-  policy: SandboxPolicy | undefined,
+  policy: SandboxPolicy | null | undefined,
 ): boolean {
   if (!record || record.threadId !== threadId) return false;
-  record.sandboxPolicy = policy;
+  record.sandboxPolicy = policy ?? null;
+  delete record.sandbox;
   return true;
 }
 
