@@ -964,6 +964,7 @@ export class SyncService {
     title: string;
     description?: string;
     planShortId?: string;
+    clientKey?: string;
   }): Promise<string | null> {
     await this.throttle();
     return this.guarded(async () => {
@@ -979,6 +980,7 @@ export class SyncService {
           source: "plan_mode",
           conversation_id: params.sessionId,
           plan_id: params.planShortId,
+          ...(params.clientKey ? {client_key: params.clientKey} : {}),
         }
       );
       return result?.short_id || null;
@@ -1396,6 +1398,16 @@ export class SyncService {
 
   async getConversationOwner(conversationId: string): Promise<string | null> {
     return (await this.getConversationOwnerInfo(conversationId))?.ownerDeviceId ?? null;
+  }
+
+  async isWorktreeShared(conversationId: string, worktreePath: string): Promise<boolean> {
+    const rows = await this.client.query("cloud:hostSessions" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+    });
+    if (!Array.isArray(rows)) throw new Error("Worktree ownership query returned no roster");
+    return rows.some((row: any) => row.conversation_id !== conversationId &&
+      (row.project_path === worktreePath || row.project_path?.startsWith(worktreePath + "/")));
   }
 
   /**
@@ -1840,10 +1852,10 @@ export class SyncService {
   // hibernatedAt: a number stamps the park, null clears it, undefined leaves the
   // field alone — so a resume can undo the park in the same write that reports
   // the session is back.
-  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<void> {
-    if (!this.apiToken) return;
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<boolean> {
+    if (!this.apiToken) return false;
     try {
-      await this.mutate(
+      const result = await this.mutate(
         "managedSessions:updateAgentStatus" as any,
         {
           conversation_id: conversationId,
@@ -1858,7 +1870,8 @@ export class SyncService {
           ...(hibernatedAt !== undefined ? { hibernated_at: hibernatedAt } : {}),
         }
       );
-    } catch {}
+      return result?.applied === true;
+    } catch { return false; }
   }
 
   async listManagedSessions(): Promise<Array<{

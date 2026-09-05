@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parsePublishedPageUrl, parseMessageRefUrl, messageRefPayload } from "./entityLinks";
+import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseMessageRefUrl, messageRefPayload } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
 
@@ -108,6 +108,63 @@ function promoteMessageLinks(node: any) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// First mention vs. repeat
+//
+// Prose that names the same object several times ("X flagged it, X's owner,
+// routed back to X") renders every mention as a full-title pill, and the line
+// stops reading as a sentence. A reader only needs the title ONCE; after that
+// the object's short name is enough. The count is taken here, on the syntax
+// tree, so it is deterministic per message body and independent of React's
+// render order (a mount-time counter would double-claim under strict mode and
+// drift on partial re-renders).
+//
+// Each reference link/code node gets `data-ref-nth` (1 = first mention). A
+// mention the author wrote as `@[Title id]` is `data-ref-named`: they asked
+// for the name in the sentence, so it always renders in full.
+// ---------------------------------------------------------------------------
+
+export const REF_NTH_ATTR = "data-ref-nth";
+export const REF_NAMED_ATTR = "data-ref-named";
+
+/** The identity a reference counts under, or null for a non-reference node. */
+function referenceKey(node: any): string | null {
+  if (node?.type === "link" && typeof node.url === "string") {
+    if (node.url.startsWith("entity://")) {
+      const ref = node.url.slice(9).toLowerCase();
+      // Dates and message refs are not objects a reader needs introduced once.
+      if (ref.startsWith("date:") || ref.startsWith("msg:")) return null;
+      return ref;
+    }
+    const parsed = parseEntityUrl(node.url);
+    if (parsed) return parsed.id.toLowerCase();
+    return null;
+  }
+  if (node?.type === "inlineCode" && typeof node.value === "string" && isEntityId(node.value)) {
+    return node.value.trim().toLowerCase();
+  }
+  return null;
+}
+
+function stamp(node: any, props: Record<string, string>) {
+  node.data = { ...node.data, hProperties: { ...node.data?.hProperties, ...props } };
+}
+
+function numberMentions(tree: any) {
+  const seen = new Map<string, number>();
+  const walk = (node: any) => {
+    const key = referenceKey(node);
+    if (key) {
+      const nth = (seen.get(key) ?? 0) + 1;
+      seen.set(key, nth);
+      stamp(node, { [REF_NTH_ATTR]: String(nth) });
+      return;
+    }
+    if (Array.isArray(node?.children)) node.children.forEach(walk);
+  };
+  walk(tree);
+}
+
 export function remarkEntityIds() {
   return (tree: any) => {
     promoteMessageLinks(tree);
@@ -142,6 +199,7 @@ export function remarkEntityIds() {
               type: "link",
               url: `entity://${entityId.toLowerCase()}`,
               children: [{ type: "text", value: entityId.toLowerCase() }],
+              data: { hProperties: { [REF_NAMED_ATTR]: "1" } },
             };
           }
           if (entityId && entityId.startsWith("doc:")) {
@@ -153,6 +211,7 @@ export function remarkEntityIds() {
               type: "link",
               url: `entity://${entityId}`,
               children: [{ type: "text", value: entityId }],
+              data: { hProperties: { [REF_NAMED_ATTR]: "1" } },
             };
           }
           return {
@@ -195,6 +254,7 @@ export function remarkEntityIds() {
       ],
     ], { ignore: ['link', 'inlineCode'] });
     hoistEmbeds(tree);
+    numberMentions(tree);
   };
 }
 

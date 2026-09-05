@@ -10,6 +10,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
 import { claudeProjectDirName } from "./projectPathResolver.js";
+import { buildCodexImportContext, type CodexImportItem } from "./codexImportContext.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -508,6 +509,19 @@ export function resumeEffortFlagFromFile(jsonlPath: string, extraFlags: string):
 export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
   sessionId?: string;
+  /** Where the regenerated session runs. See generatedSessionCwd. */
+  cwd?: string;
+}
+
+// The cwd stamped into a regenerated transcript. An explicit caller cwd wins,
+// then the conversation's recorded project path. process.cwd() is the fallback
+// for the CLI (a `cast` command runs where the user stands) and is exactly
+// wrong under the daemon, whose cwd is `/` (launchd): a rollout stamped with
+// `/` resumes into Codex's "Choose working directory" picker. Daemon callers
+// therefore resolve the cwd up front (regenerationCwd) and refuse when there is
+// none, rather than letting this fallback write a rollout nobody can resume.
+export function generatedSessionCwd(data: ExportResult, options: { cwd?: string }): string {
+  return options.cwd || data.conversation.project_path || process.cwd();
 }
 
 type ExportedToolResult = NonNullable<ExportedMessage["tool_results"]>[number];
@@ -534,7 +548,7 @@ export function generateClaudeCodeJsonl(
 ): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
   const sessionId = options.sessionId || uuidv4();
-  const cwd = data.conversation.project_path || process.cwd();
+  const cwd = generatedSessionCwd(data, options);
   let parentUuid: string | null = null;
   let expectedToolUseIds = new Set<string>();
 
@@ -702,6 +716,12 @@ function mapToolName(name: string): string {
 
 export interface GenerateCodexJsonlOptions {
   sessionId?: string;
+  /** Where the regenerated session runs. See generatedSessionCwd. */
+  cwd?: string;
+}
+
+export function normalizeCodexCallId(id: string): string {
+  return id.length <= 64 ? id : crypto.createHash("sha256").update(id).digest("hex");
 }
 
 export function generateCodexJsonl(
@@ -710,10 +730,17 @@ export function generateCodexJsonl(
 ): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
   const sessionId = options.sessionId || uuidv4();
-  const cwd = data.conversation.project_path || process.cwd();
+  const cwd = generatedSessionCwd(data, options);
   const startTime = data.conversation.started_at;
+  const model = data.conversation.agent_type === "codex" ? data.conversation.model || undefined : undefined;
+  const push = (entry: { timestamp: string; type: string; payload: unknown; isMeta?: boolean }) => {
+    lines.push(JSON.stringify({
+      ...entry,
+      ...(options.sessionId && entry.type === "response_item" ? { isMeta: true } : {}),
+    }));
+  };
 
-  lines.push(JSON.stringify({
+  push({
     timestamp: startTime, type: "session_meta",
     payload: {
       id: sessionId, timestamp: startTime, cwd,
@@ -721,25 +748,25 @@ export function generateCodexJsonl(
       model_provider: "openai",
       base_instructions: { text: "You are Codex, a coding agent.", source: "built-in" },
     },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: {
       type: "message", role: "developer",
       content: [{ type: "input_text", text: `<permissions instructions>\nFilesystem sandboxing: sandbox_mode is danger-full-access. approval_policy is never.\n</permissions instructions>` }],
     },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `# Project context\nWorking directory: ${cwd}` }] },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `<environment_context>\n  <cwd>${cwd}</cwd>\n  <shell>bash</shell>\n</environment_context>` }] },
-  }));
+  });
 
   for (const msg of data.messages) {
     if (isServerMetaMessage(msg)) continue;
@@ -748,60 +775,70 @@ export function generateCodexJsonl(
     if (msg.role === "user") {
       if (msg.tool_results && msg.tool_results.length > 0) {
         for (const tr of msg.tool_results) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
-          }));
+            payload: { type: "function_call_output", call_id: normalizeCodexCallId(tr.tool_use_id), output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
+          });
         }
       } else {
         if (msg.content) {
-          lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } }));
-          lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } }));
-          lines.push(JSON.stringify({
+          push({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } });
+          push({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } });
+          if (model) push({
             timestamp: ts, type: "turn_context",
             payload: {
               cwd, approval_policy: "never", sandbox_policy: { type: "danger-full-access" },
-              model: "gpt-5.2-codex", personality: "friendly",
-              collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
+              model, personality: "friendly",
+              collaboration_mode: { mode: "code", settings: { model, reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
               effort: "high", summary: "auto",
             },
-          }));
+          });
         }
       }
     } else if (msg.role === "assistant") {
       if (msg.thinking) {
-        lines.push(JSON.stringify({
+        push({
           timestamp: ts, type: "response_item",
           payload: { type: "reasoning", summary: [{ type: "summary_text", text: msg.thinking.slice(0, 500) }], content: null, encrypted_content: null },
-        }));
+        });
       }
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: tc.id },
-          }));
+            payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: normalizeCodexCallId(tc.id) },
+          });
         }
       }
       if (msg.content) {
-        lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: msg.content }] } }));
-        lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: msg.content } }));
+        push({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: msg.content }] } });
+        push({ timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: msg.content } });
       }
       // Inline tool_results from incremental sync
       if (msg.tool_results && msg.tool_results.length > 0) {
         for (const tr of msg.tool_results) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
-            payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
-          }));
+            payload: { type: "function_call_output", call_id: normalizeCodexCallId(tr.tool_use_id), output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
+          });
         }
       }
-      lines.push(JSON.stringify({
+      push({
         timestamp: ts, type: "event_msg",
         payload: { type: "token_count", info: null, rate_limits: { primary: { used_percent: 0.0, window_minutes: 300, resets_at: 0 }, secondary: { used_percent: 0.0, window_minutes: 10080, resets_at: 0 }, credits: { has_credits: false, unlimited: false, balance: null }, plan_type: null } },
-      }));
+      });
     }
   }
+
+  const responseItems = lines.flatMap(line => {
+    const entry = JSON.parse(line);
+    return entry.type === "response_item" ? [entry.payload as CodexImportItem] : [];
+  });
+  const replacementHistory = buildCodexImportContext(responseItems, data.conversation.id);
+  if (replacementHistory) lines.push(JSON.stringify({
+    timestamp: data.conversation.updated_at, type: "compacted",
+    payload: { message: "", replacement_history: replacementHistory },
+  }));
 
   return { jsonl: lines.join("\n") + "\n", sessionId };
 }

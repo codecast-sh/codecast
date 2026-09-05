@@ -75,8 +75,7 @@ export interface BridgeState {
   hostPid?: number;
   startedAt?: number;
   /** Is the extension on the socket right now? Written by the host process,
-   *  true only while it holds a proven extension connection. With a live
-   *  hostPid this is what makes the real Chrome the default (real.ts). */
+   *  true only while it holds a proven extension connection. */
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;
@@ -255,6 +254,8 @@ export interface BridgeHostStatus {
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionProtocol?: number;
+  /** The host's own protocol; differs from the extension's while a store update is in review. */
+  protocol?: number;
 }
 
 /** Ask a running host whether the extension is connected. */
@@ -384,7 +385,35 @@ export function startBridgeHost(opts: {
     return r;
   };
 
-  const listTabs = async (): Promise<BridgeTab[]> => (await extCall("tabs.list", {}, 10_000)).tabs as BridgeTab[];
+  // Every tab in the human's Chrome, cast tabs first. `/json/list` serves this
+  // whole list so `cast browser tabs` can name where a session's tabs sit.
+  // Tabs this host created for a client, known the moment tabs.create answers:
+  // the extension stamps ownership a beat after Chrome fires the created event,
+  // so the event alone can arrive looking like the human's.
+  const castTabs = new Set<number>();
+  const isCast = (t: BridgeTab) => castTabs.has(t.tabId) || (t.owned ?? !!t.group);
+  // Target.targetCreated goes to discovering clients once per tab, whichever
+  // arrives first: the extension's created event or the createTarget reply.
+  const announced = new Set<number>();
+  const announce = (t: BridgeTab): void => {
+    if (announced.has(t.tabId)) return;
+    announced.add(t.tabId);
+    for (const c of clients) if (c.discover) sendJson(c.ws, { method: "Target.targetCreated", params: { targetInfo: targetInfo(t) } });
+  };
+  const listTabs = async (): Promise<BridgeTab[]> => {
+    const tabs = (await extCall("tabs.list", {}, 10_000)).tabs as BridgeTab[];
+    return [...tabs.filter(isCast), ...tabs.filter((t) => !isCast(t))];
+  };
+  // What the CDP face discovers: cast tabs only. An engine that connects over
+  // CDP attaches to every page it is told about before it does anything else
+  // (measured: agent-browser attached to 11 of 53 tabs in list order and died
+  // on the twelfth), so telling it about the human's tabs put a debugger on
+  // each of them for the length of every command, and one frozen or discarded
+  // tab of the human's stalled every client for the whole attach budget. A
+  // session acts only on tabs it opened; hiding the rest is that rule enforced
+  // at the face where it was being broken. An extension older than the
+  // `owned` flag reports a group only for groups it created, the same tabs.
+  const discoverableTabs = async (): Promise<BridgeTab[]> => (await listTabs()).filter(isCast);
 
   // Ids by which a tab is known to CDP clients. Sessions attach by tabId; a
   // tab is released to the human (debugger detached, banner gone) only when
@@ -455,13 +484,17 @@ export function startBridgeHost(opts: {
       }
       case "tab": {
         const t = msg.tab as BridgeTab;
-        if (msg.kind === "removed") dropTab(t.tabId, "target closed");
-        for (const c of clients) {
-          if (!c.discover) continue;
-          if (msg.kind === "created") sendJson(c.ws, { method: "Target.targetCreated", params: { targetInfo: targetInfo(t) } });
-          else if (msg.kind === "removed") sendJson(c.ws, { method: "Target.targetDestroyed", params: { targetId: targetIdOfTab(t.tabId) } });
-          else sendJson(c.ws, { method: "Target.targetInfoChanged", params: { targetInfo: targetInfo(t) } });
+        if (msg.kind === "removed") {
+          dropTab(t.tabId, "target closed");
+          castTabs.delete(t.tabId);
+          announced.delete(t.tabId);
+          // Destroyed goes out unconditionally: a target a client never heard of is ignored.
+          for (const c of clients) if (c.discover) sendJson(c.ws, { method: "Target.targetDestroyed", params: { targetId: targetIdOfTab(t.tabId) } });
+          return;
         }
+        if (!isCast(t)) return; // the human's tabs are not on the CDP face
+        if (msg.kind === "created") announce(t);
+        else for (const c of clients) if (c.discover) sendJson(c.ws, { method: "Target.targetInfoChanged", params: { targetInfo: targetInfo(t) } });
         return;
       }
       case "detached":
@@ -484,12 +517,12 @@ export function startBridgeHost(opts: {
           jsVersion: "",
         };
       case "Target.getTargets":
-        return { targetInfos: (await listTabs()).map(targetInfo) };
+        return { targetInfos: (await discoverableTabs()).map(targetInfo) };
       case "Target.setDiscoverTargets": {
         const on = !!params?.discover;
         if (on && !client.discover) {
           // Chrome replays the existing targets on enable; clients rely on it.
-          for (const t of await listTabs()) {
+          for (const t of await discoverableTabs()) {
             sendJson(client.ws, { method: "Target.targetCreated", params: { targetInfo: targetInfo(t) } });
           }
         }
@@ -541,7 +574,11 @@ export function startBridgeHost(opts: {
           15_000,
         );
         if (group) client.group = group;
-        return { targetId: targetIdOfTab(r.tabId as number) };
+        const tabId = r.tabId as number;
+        castTabs.add(tabId);
+        const created = (await listTabs()).find((t) => t.tabId === tabId);
+        if (created) announce(created);
+        return { targetId: targetIdOfTab(tabId) };
       }
       case "Target.closeTarget": {
         const tabId = tabIdOfTarget(String(params?.targetId ?? ""));

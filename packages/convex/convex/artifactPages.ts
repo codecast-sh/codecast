@@ -22,13 +22,9 @@ const LOGO_ARROW =
 const BUBBLE_PATH = `<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`;
 const PIN_PATH = `<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>`;
 
-export function escAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-export function escHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+import { escAttr, escHtml } from "./htmlEscape";
+import { MD_THEME_CSS } from "./artifactMarkdown";
+export { escAttr, escHtml };
 
 // Every icon we inject is built here, and its size rides in an INLINE STYLE,
 // never in the width/height attributes alone. The bar and its panels live in
@@ -1665,7 +1661,7 @@ export function editorPage(o: {
 }): string {
   const isMd = o.kind === "markdown";
   const previewEl = isMd
-    ? `<div id="pv" class="mdprev" aria-label="Preview"></div>`
+    ? `<style>${MD_THEME_CSS}</style><div id="pv" class="md" aria-label="Preview"></div>`
     : `<iframe id="pv" sandbox="allow-scripts" title="Preview"></iframe>`;
   const extra = `
   .edcard { padding: 0; display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 420px; overflow: hidden; }
@@ -1674,17 +1670,9 @@ export function editorPage(o: {
   .dirty { color: var(--coral); font-weight: 600; white-space: nowrap; }
   .split { display: flex; flex: 1; min-height: 0; }
   #ed { flex: 1; min-width: 0; border: 0; outline: none; resize: none; padding: 14px;
-    font: 12.5px/1.55 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); background: #fff; }
+    font: 12.5px/1.55 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); background: var(--card); }
   #pv { flex: 1; min-width: 0; border: 0; border-left: 1px solid rgba(0,0,0,.08); background: var(--bg); }
-  div#pv { overflow-y: auto; padding: 20px 24px; font: 16px/1.65 Charter, Georgia, "Times New Roman", serif; color: #23231f; }
-  div#pv h1, div#pv h2, div#pv h3, div#pv h4 { font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.25; }
-  div#pv h1 { font-size: 24px; } div#pv h2 { font-size: 18px; } div#pv h3 { font-size: 15px; }
-  div#pv pre { background: #fff; border: 1px solid rgba(0,0,0,.08); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12.5px; }
-  div#pv code { font: 13px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
-  div#pv pre code { background: none; padding: 0; }
-  div#pv blockquote { margin: 0; padding: 2px 14px; border-left: 3px solid var(--coral); color: var(--mut); }
-  div#pv a { color: var(--blue); }
-  div#pv img { max-width: 100%; }
+  div#pv.md { overflow-y: auto; padding: 24px 28px; background: var(--md-bg); font-size: 15.5px; }
   #nm { width: 140px; padding: 6px 9px; font-size: 12px; }
   #tgl { display: none; }
   @media (max-width: 900px) {
@@ -1808,56 +1796,4 @@ ${topRow(`${o.title} — edit`, o.shareUrl, "← Back")}
   });
 })();</script>`;
   return pageShell(`${o.title} — edit`, body, extra);
-}
-
-/** Reading theme wrapping rendered markdown. The result is the stored artifact
- * document, so it goes through brandArtifactHtml at serve time like any HTML.
- * Auto dark mode via prefers-color-scheme; the injected bar reads the
- * effective background luminance and adapts on its own. */
-export function mdDocumentHtml(o: { title: string; bodyHtml: string }): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>${escHtml(o.title)}</title>
-<style>
-  :root { --ink: #23231f; --mut: #52524e; --coral: #e86c5d; --blue: #1a63c4; --bg: #faf9f7;
-    --card: #ffffff; --line: rgba(0,0,0,.1); --codebg: rgba(0,0,0,.05); }
-  @media (prefers-color-scheme: dark) {
-    :root { --ink: #e8e6e1; --mut: #a8a69f; --blue: #6ca0e8; --bg: #161513;
-      --card: #1e1d1a; --line: rgba(255,255,255,.12); --codebg: rgba(255,255,255,.08); }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-    font: 400 16px/1.65 Charter, Georgia, "Times New Roman", serif;
-    -webkit-font-smoothing: antialiased; }
-  ::selection { background: rgba(232,108,93,.3); }
-  main { max-width: 720px; margin: 0 auto;
-    padding: 40px calc(20px + env(safe-area-inset-right)) 80px calc(20px + env(safe-area-inset-left)); }
-  h1, h2, h3, h4 { font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.25; color: var(--ink); }
-  h1 { font-size: 26px; margin: 0 0 18px; } h2 { font-size: 19px; margin: 34px 0 10px; } h3 { font-size: 16px; margin: 26px 0 8px; }
-  h4 { font-size: 14px; margin: 22px 0 6px; }
-  p { margin: 0 0 14px; }
-  a { color: var(--blue); text-underline-offset: 2px; }
-  code { font: 13px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; background: var(--codebg); padding: 1px 5px; border-radius: 4px; }
-  pre { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow-x: auto; }
-  pre code { background: none; padding: 0; }
-  blockquote { margin: 0 0 14px; padding: 2px 18px; border-left: 3px solid var(--coral); color: var(--mut); }
-  ul, ol { padding-left: 26px; margin: 0 0 14px; }
-  li { margin: 3px 0; }
-  li::marker { color: var(--coral); }
-  img { max-width: 100%; border-radius: 6px; }
-  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 0 0 16px; display: block; overflow-x: auto; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  th { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 12px; }
-  hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0; }
-</style>
-</head>
-<body>
-<main>
-${o.bodyHtml}
-</main>
-</body>
-</html>`;
 }

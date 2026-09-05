@@ -5,6 +5,7 @@ import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessCommit } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
+import { extractRepoFromRemoteUrl, normalizeRepository } from "@codecast/shared/contracts";
 
 export const addCommit = mutation({
   args: {
@@ -61,7 +62,7 @@ export const addCommit = mutation({
       files_changed: args.files_changed,
       insertions: args.insertions,
       deletions: args.deletions,
-      repository: args.repository,
+      repository: normalizeRepository(args.repository),
       pr_number: args.pr_number,
       files: args.files,
     });
@@ -199,6 +200,44 @@ export const getCommitBySha = query({
   },
 });
 
+/**
+ * One commit for a reference surface (an inline pill, a shared-object card,
+ * `cast link`): by Convex id, or by sha — full or abbreviated — with the
+ * repository as a tie-breaker, the two halves of the `owner/repo@1a2b3c4`
+ * reference. An abbreviated sha is a prefix walk over the by_sha index. Null,
+ * never a throw, when nothing matches or the caller may not read it.
+ */
+export const webGet = query({
+  args: {
+    id: v.optional(v.id("commits")),
+    repository: v.optional(v.string()),
+    sha: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    let commit: any = null;
+    if (args.id) {
+      commit = await ctx.db.get(args.id);
+    } else if (args.sha) {
+      const sha = args.sha.trim().toLowerCase();
+      const repository = args.repository ? normalizeRepository(args.repository) : undefined;
+      const candidates =
+        sha.length === 40
+          ? await ctx.db.query("commits").withIndex("by_sha", (q) => q.eq("sha", sha)).collect()
+          : await ctx.db
+              .query("commits")
+              .withIndex("by_sha", (q) => q.gte("sha", sha).lt("sha", sha + "\uffff"))
+              .take(20);
+      // A transcript-written commit may carry no repository; the sha alone
+      // still names it. A row that names a different repository does not.
+      commit = candidates.find((c) => !repository || !c.repository || c.repository === repository) ?? null;
+    }
+    if (!commit) return null;
+    return (await accessibleCommits(ctx, userId, [commit]))[0] ?? null;
+  },
+});
+
 export const getCommitsByRepository = query({
   args: {
     repository: v.string(),
@@ -209,7 +248,7 @@ export const getCommitsByRepository = query({
     if (!userId) return [];
     const commits = await ctx.db
       .query("commits")
-      .withIndex("by_repository", (q) => q.eq("repository", args.repository))
+      .withIndex("by_repository", (q) => q.eq("repository", normalizeRepository(args.repository)))
       .collect();
 
     commits.sort((a, b) => b.timestamp - a.timestamp);
@@ -252,7 +291,8 @@ export const getCommitsForTimeline = query({
     }
 
     if (args.repository) {
-      filtered = filtered.filter((c) => c.repository === args.repository);
+      const repository = normalizeRepository(args.repository);
+      filtered = filtered.filter((c) => c.repository === repository);
     }
 
     return (await accessibleCommits(ctx, userId, filtered)).slice(0, limit);
@@ -269,15 +309,7 @@ export const getUserGitHubToken = internalQuery({
   },
 });
 
-function extractRepoFromRemoteUrl(remoteUrl: string): string | null {
-  const sshMatch = remoteUrl.match(/git@github\.com:([^/]+\/[^/.]+)(?:\.git)?$/);
-  if (sshMatch) return sshMatch[1];
 
-  const httpsMatch = remoteUrl.match(/https?:\/\/github\.com\/([^/]+\/[^/.]+)(?:\.git)?$/);
-  if (httpsMatch) return httpsMatch[1];
-
-  return null;
-}
 
 export const getUserActiveRepositories = internalQuery({
   args: {},
@@ -473,7 +505,7 @@ export const commitFilesState = internalQuery({
     // session knew the checkout, not the remote. That is missing information,
     // not a mismatch, so it does not disqualify the row. Only a row that names
     // a DIFFERENT repository is somebody else's commit.
-    if (commit.repository && commit.repository !== args.repository) return null;
+    if (commit.repository && commit.repository !== normalizeRepository(args.repository)) return null;
 
     return {
       commit_id: commit._id,
@@ -516,7 +548,7 @@ export const applyCommitFiles = internalMutation({
       insertions: args.additions,
       deletions: args.deletions,
     };
-    if (!commit.repository && args.repository) patch.repository = args.repository;
+    if (!commit.repository && args.repository) patch.repository = normalizeRepository(args.repository);
     if (!commit.author_login && args.author_login) patch.author_login = args.author_login;
     if (!commit.author_avatar_url && args.author_avatar_url) {
       patch.author_avatar_url = args.author_avatar_url;

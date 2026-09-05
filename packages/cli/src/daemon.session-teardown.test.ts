@@ -16,6 +16,7 @@ import {
   summarizeReapSkips,
   tmuxSessionIsSinglePane,
   transcriptTailLastRealTimestamp,
+  trackSessionPaneForTests,
 } from "./daemon.js";
 import { SyncService, isMissingFunctionError, resetLifecycleQueryLatch, shouldProbeLifecycleQuery } from "./syncService.js";
 import type { ConversationLifecycle } from "./syncService.js";
@@ -324,13 +325,17 @@ describe("derivedPaneNamesForConversation", () => {
 describe("clearSessionTrackingForKill", () => {
   test("clears every per-session map the kill path owns", () => {
     const sid = "22222222-3333-4444-8555-666666666666";
-    registerManagedStartedSession("jx7trackedconv0000000000000000000", sid, "cc-claude-trackingtest");
-    expect(sessionKillTrackingSnapshot(sid).pane).toBe(true);
+    try {
+      registerManagedStartedSession("jx7trackedconv0000000000000000000", sid, "cc-claude-trackingtest");
+      expect(sessionKillTrackingSnapshot(sid).pane).toBe(true);
 
-    clearSessionTrackingForKill(sid);
-    expect(sessionKillTrackingSnapshot(sid)).toEqual({
-      pane: false, resumeInFlight: false, resumeInFlightStarted: false, restarting: false, process: false,
-    });
+      clearSessionTrackingForKill(sid);
+      expect(sessionKillTrackingSnapshot(sid)).toEqual({
+        pane: false, resumeInFlight: false, resumeInFlightStarted: false, restarting: false, process: false,
+      });
+    } finally {
+      trackSessionPaneForTests(sid, null);
+    }
   });
 
   test("is a no-op for an unknown or missing session id", () => {
@@ -350,14 +355,18 @@ describe("clearSessionTrackingForKill", () => {
     // A conversation id whose derived cc-<agent>-* names cannot exist, and a
     // session id no live pane is stamped with — so the sweep matches nothing.
     const convId = "jx7nosuchconversation000000000000";
-    registerManagedStartedSession(convId, sid, "cc-claude-zeropanetest");
-    expect(sessionKillTrackingSnapshot(sid).pane).toBe(true);
+    try {
+      registerManagedStartedSession(convId, sid, "cc-claude-zeropanetest");
+      expect(sessionKillTrackingSnapshot(sid).pane).toBe(true);
 
-    const killed = await killLocalPanesForConversation(convId, sid, "TEST");
-    expect(killed).toBe(0);
-    // Proof the unconditional clear ran: clearSessionTrackingForKill empties every
-    // map in one body (covered above), so the pane bit flipping is the whole set.
-    expect(sessionKillTrackingSnapshot(sid).pane).toBe(false);
+      const killed = await killLocalPanesForConversation(convId, sid, "TEST");
+      expect(killed).toBe(0);
+      // Proof the unconditional clear ran: clearSessionTrackingForKill empties every
+      // map in one body (covered above), so the pane bit flipping is the whole set.
+      expect(sessionKillTrackingSnapshot(sid).pane).toBe(false);
+    } finally {
+      trackSessionPaneForTests(sid, null);
+    }
   });
 });
 

@@ -21,7 +21,7 @@ import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { CallOverlay } from '@/components/calls/CallOverlay';
-import { startCallKitBridge, republishVoipToken } from '@/lib/calls/callKit';
+import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
 
 
 // Keychain failures must degrade to "signed out", never hang auth: a rejected
@@ -263,6 +263,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // The PushKit token often arrives before sign-in on a cold start; publish
   // it once auth is up so invites route through APNs VoIP.
   useEffect(() => {
+    notifyCallKitAuth(isAuthenticated);
     if (isAuthenticated) republishVoipToken();
   }, [isAuthenticated]);
 

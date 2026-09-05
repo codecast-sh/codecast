@@ -7,7 +7,6 @@ import { internal, api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { marked } from "marked";
 import {
   MAX_ARTIFACT_BYTES,
   newSlug,
@@ -24,8 +23,8 @@ import {
   sourcePage,
   diffPage,
   editorPage,
-  mdDocumentHtml,
 } from "./artifactPages";
+import { renderMarkdownDocument } from "./artifactMarkdown";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -184,10 +183,6 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-async function renderMarkdown(md: string, title: string): Promise<string> {
-  const bodyHtml = await marked.parse(md, { async: true });
-  return mdDocumentHtml({ title, bodyHtml });
-}
 
 /** Inject <base> right after <head> for bundle docs so relative asset URLs
  * resolve under the slug (and under _v/N/ for past versions). */
@@ -271,7 +266,7 @@ export const publish = httpAction(async (ctx, request) => {
     if (kind === "markdown") {
       sourceText = content as string;
       contentHash = await sha256Hex(sourceText);
-      docHtml = await renderMarkdown(sourceText, title);
+      docHtml = await renderMarkdownDocument(sourceText, title);
     } else if (kind === "bundle") {
       const seen = new Set<string>();
       let entryHtml: string | null = null;
@@ -593,7 +588,7 @@ export async function applyEditVersion(
   let sourceStorageId;
   if (kind === "markdown") {
     contentHash = await sha256Hex(content);
-    docHtml = await renderMarkdown(content, artifact.title);
+    docHtml = await renderMarkdownDocument(content, artifact.title);
     sourceStorageId = await ctx.storage.store(new Blob([content], { type: "text/markdown; charset=utf-8" }));
   } else {
     docHtml = content;
