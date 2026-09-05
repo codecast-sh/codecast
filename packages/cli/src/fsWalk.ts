@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { timeSyncFs } from "./slowSync.js";
 
 /**
@@ -97,6 +98,7 @@ export async function walkDirs(
       return; // vanished or unreadable: nothing under it to report
     }
     const { depth, files, subdirs } = splitDir(root, dir, dirDepth, entries, opts);
+    await yieldToEventLoop();
     await onDir(files);
     for (let i = 0; i < subdirs.length; i += DIR_BATCH) {
       await Promise.all(subdirs.slice(i, i + DIR_BATCH).map((sub) => walkDir(sub, depth)));
@@ -135,6 +137,7 @@ export async function walkFiles(
 ): Promise<void> {
   await walkDirs(root, opts, async (files) => {
     for (let i = 0; i < files.length; i += STAT_BATCH) {
+      if (i > 0) await yieldToEventLoop();
       await Promise.all(files.slice(i, i + STAT_BATCH).map(async (f) => {
         try {
           const stat = await fs.promises.stat(f.path);
