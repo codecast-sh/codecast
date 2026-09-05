@@ -284,7 +284,7 @@ export function buildLinuxCast(onProgress: (m: string) => void): { indexJs: stri
     timeout: 300_000,
   });
   return {
-    indexJs: path.join(cliRoot, "dist", "index.js"),
+    indexJs: path.join(cliRoot, "dist", "main.js"),
     daemonJs: path.join(cliRoot, "dist", "daemon.js"),
   };
 }

@@ -3,34 +3,28 @@
 // Control mode is a line-based text protocol over the client's stdio: command
 // replies arrive framed by `%begin`/`%end` (or `%error`) lines, and
 // notifications (`%output`, `%exit`, `%pause`, ...) arrive between blocks.
-// Pane output in `%output` lines is octal-escaped per BYTE (`\015`, `\033`,
-// UTF-8 multibyte sequences become one escape per byte), so unescaping must
-// produce a Buffer — decoding to a string first would mangle multibyte text.
+// Pane output mixes raw UTF-8 with octal-escaped bytes (`\015`, `\033`), so
+// unescaping must produce a Buffer — decoding to a string first would mangle
+// characters split between output messages.
 
 /** Unescape tmux control-mode `%output` data (`\ooo` octal escapes) into raw bytes. */
-export function unescapeControlData(data: string): Buffer {
-  const out = Buffer.alloc(data.length);
+export function unescapeControlData(data: string | Buffer): Buffer {
+  const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+  const out = Buffer.alloc(bytes.length);
   let w = 0;
-  for (let i = 0; i < data.length; i++) {
-    const ch = data.charCodeAt(i);
-    if (ch === 0x5c /* \ */ && i + 3 < data.length) {
-      const o1 = data.charCodeAt(i + 1) - 0x30;
-      const o2 = data.charCodeAt(i + 2) - 0x30;
-      const o3 = data.charCodeAt(i + 3) - 0x30;
+  for (let i = 0; i < bytes.length; i++) {
+    const ch = bytes[i]!;
+    if (ch === 0x5c /* \ */ && i + 3 < bytes.length) {
+      const o1 = bytes[i + 1]! - 0x30;
+      const o2 = bytes[i + 2]! - 0x30;
+      const o3 = bytes[i + 3]! - 0x30;
       if (o1 >= 0 && o1 <= 7 && o2 >= 0 && o2 <= 7 && o3 >= 0 && o3 <= 7) {
         out[w++] = (o1 << 6) | (o2 << 3) | o3;
         i += 3;
         continue;
       }
     }
-    // Non-ASCII chars can't appear unescaped in %output, but be lossless anyway.
-    if (ch < 0x80) {
-      out[w++] = ch;
-    } else {
-      const bytes = Buffer.from(data[i]!, "utf8");
-      bytes.copy(out, w);
-      w += bytes.length;
-    }
+    out[w++] = ch;
   }
   return out.subarray(0, w);
 }
@@ -72,13 +66,14 @@ export class ControlModeParser {
     while ((idx = this.buf.indexOf(0x0a)) >= 0) {
       let end = idx;
       if (end > 0 && this.buf[end - 1] === 0x0d) end--;
-      const line = this.buf.subarray(0, end).toString("utf8");
+      const line = this.buf.subarray(0, end);
       this.buf = this.buf.subarray(idx + 1);
       this.handleLine(line, emit);
     }
   }
 
-  private handleLine(line: string, emit: (ev: ControlEvent) => void): void {
+  private handleLine(bytes: Buffer, emit: (ev: ControlEvent) => void): void {
+    const line = bytes.toString("utf8");
     if (this.inBlock) {
       if (line.startsWith("%end ")) {
         this.inBlock = false;
@@ -102,7 +97,7 @@ export class ControlModeParser {
     if (line.startsWith("%output ")) {
       const sp = line.indexOf(" ", 8);
       if (sp > 0) {
-        emit({ type: "output", paneId: line.slice(8, sp), data: unescapeControlData(line.slice(sp + 1)) });
+        emit({ type: "output", paneId: line.slice(8, sp), data: unescapeControlData(bytes.subarray(sp + 1)) });
       }
       return;
     }
@@ -111,7 +106,7 @@ export class ControlModeParser {
       const colon = line.indexOf(" : ");
       const sp = line.indexOf(" ", 17);
       if (colon > 0 && sp > 0) {
-        emit({ type: "output", paneId: line.slice(17, sp), data: unescapeControlData(line.slice(colon + 3)) });
+        emit({ type: "output", paneId: line.slice(17, sp), data: unescapeControlData(bytes.subarray(colon + 3)) });
       }
       return;
     }

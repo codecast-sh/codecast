@@ -1,4 +1,5 @@
 import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import type { UserRest } from "@codecast/shared/contracts";
 import { broadcastGesture } from "./gestureBridge";
 import { pushUndo, showUndoToast } from "./undoStack";
 import { declareViewNav } from "./viewNav";
@@ -210,33 +211,41 @@ export function undoableDeferSession(id: string) {
   });
 }
 
-export function undoableDormantSession(id: string) {
+export const USER_REST_LABEL: Record<UserRest, string> = {
+  needs_input: "Needs input",
+  done: "Done",
+  dormant: "Dormant",
+};
+
+export function undoableSetSessionRest(id: string, rest: UserRest) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
-  const wasDormant = session?.is_dormant;
-  const wasDormantAt = session?.inbox_dormant_at ?? null;
+  const wasRest = session?.user_rest ?? null;
+  const wasInboxRest = session?.inbox_rest ?? null;
+  const wasRestAt = session?.inbox_rest_at ?? null;
   const prevConvo = state.conversations[id]
     ? { ...state.conversations[id] }
     : null;
 
-  useInboxStore.getState().dormantSession(id);
+  useInboxStore.getState().setSessionRest(id, rest);
 
   pushUndo({
-    label: `Dormant ${label}`,
+    label: `${USER_REST_LABEL[rest]} ${label}`,
     undo: () => {
       const store = useInboxStore.getState();
       const newSessions = { ...store.sessions };
       if (newSessions[id]) {
-        newSessions[id] = { ...newSessions[id], is_dormant: wasDormant, inbox_dormant_at: wasDormantAt };
+        newSessions[id] = { ...newSessions[id], user_rest: wasRest, inbox_rest: wasInboxRest, inbox_rest_at: wasRestAt };
       }
       const newConvos = { ...store.conversations };
       if (prevConvo) {
         newConvos[id] = prevConvo;
       }
       const newPending = { ...store.pending };
-      delete newPending[`sessions:${id}:is_dormant`];
-      delete newPending[`sessions:${id}:inbox_dormant_at`];
+      delete newPending[`sessions:${id}:user_rest`];
+      delete newPending[`sessions:${id}:inbox_rest`];
+      delete newPending[`sessions:${id}:inbox_rest_at`];
 
       useInboxStore.setState({
         sessions: newSessions,
@@ -244,11 +253,11 @@ export function undoableDormantSession(id: string) {
         pending: newPending,
       });
       store.applyUndoPatches({
-        conversations: { [id]: { inbox_dormant_at: wasDormantAt } },
+        conversations: { [id]: { inbox_rest: wasInboxRest, inbox_rest_at: wasRestAt } },
       });
     },
     redo: () => {
-      useInboxStore.getState().dormantSession(id);
+      useInboxStore.getState().setSessionRest(id, rest);
     },
   });
 }

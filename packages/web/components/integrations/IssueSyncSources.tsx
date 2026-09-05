@@ -156,7 +156,7 @@ function SourceRow({ source }: { source: any }) {
             parts={[
               source.project_id ? (
                 <Link to={`/projects/${source.project_id}`} className="hover:text-sol-cyan hover:underline">
-                  {source.project_name ?? "project"}
+                  {source.project_title ?? source.project_name ?? "project"}
                 </Link>
               ) : (
                 "project pending"
