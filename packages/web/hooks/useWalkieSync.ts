@@ -35,6 +35,7 @@ import {
 } from "../lib/calls/walkie";
 import { dmRoomEmptied, otherJoinedLive, senderHearingFrom, useWalkieStatus } from "./useWalkie";
 import { machineDoorNow, subscribeMachineDoor, walkieDoorOpen } from "../lib/calls/walkieDoor";
+import { voiceHostElsewhere } from "../lib/desktop";
 import { readJoinPrefs } from "../lib/calls/joinPrefs";
 import { setCamera } from "../lib/calls/callManager";
 import { soundWalkieJoined } from "../lib/sounds";
@@ -85,9 +86,12 @@ export function useWalkieSync(): void {
 
   const callsOn = !!s.callConfig?.enabled;
   const callSig = `${s.call?.roomKey ?? ""}:${s.call?.phase ?? ""}`;
+  // The host hears for the whole app; a remote's copy of the same rows would
+  // only be a subscription nobody reads.
+  const hears = !machine.leader ? false : true;
   const { data: bursts } = useQueryNoThrow(
     api.chat.listLiveVoiceBursts,
-    isAuthenticated && callsOn && channelIds.length > 0 ? { channel_ids: channelIds } : "skip",
+    isAuthenticated && callsOn && hears && channelIds.length > 0 ? { channel_ids: channelIds } : "skip",
   );
 
   // The snooze runs out on a clock rather than on an event, so the door has to

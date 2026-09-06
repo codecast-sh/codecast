@@ -29,9 +29,11 @@
 import {
   getIdleMs,
   getLastDesktopActivityAt,
+  hasVoiceHost,
   installDesktopInputTracker,
   isElectron,
   isNotificationLeader,
+  isVoiceHost,
   subscribeWindowRole,
 } from "../desktop";
 
@@ -132,11 +134,8 @@ export function machineInputAt(windows: DoorWindow[], now: number): number {
  * same millisecond still agree, and so the answer never depends on the order a
  * scan happened to return.
  *
- * The desktop does not use this: its shell elects a leader across real OS
- * windows (electron/notificationRouter chooseLeader, which prefers the people
- * window, then the focused one, then main) and that election is already what
- * decides which window SOUNDS. Reusing it is what keeps the strip and the sound
- * in the same window by construction rather than by coincidence.
+ * The desktop does not use this: it has a voice host, or failing that the
+ * shell's own leader election across real OS windows (`ownsTheDesktop`).
  */
 export function chooseDoorWindow(windows: DoorWindow[], now: number): string | null {
   let best: DoorWindow | null = null;
@@ -218,8 +217,23 @@ function compute(now: number): MachineDoor {
   const shared = Math.max(local, machineInputAt(readWindows(), now));
   const inPageIdle = shared > 0 ? now - shared : Number.MAX_SAFE_INTEGER;
   const idleMs = Math.min(inPageIdle, osIdleMs ?? Number.MAX_SAFE_INTEGER);
-  const leader = isElectron() ? isNotificationLeader() : ownsTheBrowser(now);
+  const leader = isElectron() ? ownsTheDesktop() : ownsTheBrowser(now);
   return { atMachine: atTheMachine(idleMs), leader };
+}
+
+/**
+ * WHICH WINDOW SPEAKS FOR THE APP, on the desktop.
+ *
+ * The voice host, when the shell keeps one: it is the window that holds the
+ * microphone for every burst and every call, so a burst heard anywhere else
+ * would be a seat taken in a renderer the call can never grow in — the re-join
+ * this whole arrangement exists to end. On a shell without one, the shell's
+ * notification leader (the buddy list if there is one, else wherever the
+ * person is looking), which is what decides which window SOUNDS.
+ */
+function ownsTheDesktop(): boolean {
+  if (hasVoiceHost()) return isVoiceHost();
+  return isNotificationLeader();
 }
 
 function ownsTheBrowser(now: number): boolean {

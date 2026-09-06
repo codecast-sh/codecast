@@ -77,6 +77,7 @@ export function CallFaces({
   tier,
   held,
   onSetSize,
+  onHide,
 }: {
   /** How many circles: one, or the whole room. */
   mode: FacesMode;
@@ -86,6 +87,9 @@ export function CallFaces({
   held: boolean;
   /** Change the window's size, including back to the stage. */
   onSetSize: (size: CallWindowSize) => void;
+  /** Put the circles away without hanging up (a join that never landed, in
+   *  the voice host). Without this the shell hides the window. */
+  onHide?: () => void;
 }) {
   // Only what the circles paint. The phase, the camera flag and the rest of the
   // call slice belong to CallPanel now, and subscribing to them here would
@@ -160,8 +164,9 @@ export function CallFaces({
     const gesture = callWindowLeaveGesture(held);
     if (gesture.hangUp) void leaveCall();
     setCallOutlivesWindow(false);
+    if (onHide && !gesture.hangUp) return onHide();
     void closeCallPanel({ ended: gesture.ended });
-  }, [held]);
+  }, [held, onHide]);
 
   const diameter = TIER_DIAMETER[tier];
   const speaking = useMemo(() => new Set<string>(call.speaking ?? []), [call.speaking]);
