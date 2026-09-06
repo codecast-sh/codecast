@@ -78,6 +78,34 @@ export function registerHashedAssets(app: Hono, distDir: string) {
   });
 }
 
+// Vite emits these next to index.html under STABLE names, so unlike a hashed
+// chunk a cached copy is never superseded — the same URL has to answer with the
+// new build's bytes. sw.js is the dangerous one: the service worker decides
+// which bundle every EXISTING client runs, so a stale one pins clients to the
+// bundle it precached, and neither a reload nor registration.update() rescues
+// them while an intermediary keeps answering with the old script.
+//
+// The origin has to say so out loud. Serving these with no Cache-Control at all
+// is not neutral: Cloudflare then applies its own four-hour browser TTL and
+// caches the file at the edge. That is how codecast.sh kept serving a worker
+// precaching the previous day's bundle for 95 minutes after a healthy deploy
+// (2026-09-06) — the HTML had already moved to the new chunk, so only clients
+// that had never installed the worker got the new build.
+//
+// workbox-<hash>.js is deliberately absent: its name carries the hash, so it
+// stays immutable like any other build artifact.
+export const STABLE_ENTRY_POINTS = new Set(["/sw.js", "/registerSW.js", "/manifest.webmanifest"]);
+
+// Register BEFORE the static file handler: it wraps whatever serves the file
+// and replaces the caching policy on the way out.
+export function registerStableEntryPoints(app: Hono) {
+  app.use("*", async (c, next) => {
+    if (!STABLE_ENTRY_POINTS.has(new URL(c.req.url).pathname)) return next();
+    await next();
+    c.res.headers.set("Cache-Control", "no-store, must-revalidate");
+  });
+}
+
 // Register AFTER the static file handler and BEFORE the SPA shell fallback: any
 // build artifact that static serving did not find is missing, not a route.
 export function registerMissingArtifactGuard(app: Hono) {
