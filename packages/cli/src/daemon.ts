@@ -218,9 +218,9 @@ import {
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
+import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport, LivenessVerdict } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { authorizesTeardown, verdictFromProbe, confineToOwningDevice, findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -11665,6 +11665,16 @@ export type TmuxLiveState =
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
+// What the pane's TEXT is allowed to say about liveness. "unknown" is a
+// statement about OUR vocabulary, not about the pane — text classification is a
+// positive whitelist and can never be complete — so it maps to `unverifiable`
+// and authorizes nothing. Only the bare-shell shapes are an observed exit.
+export function livenessFromTmuxState(state: TmuxLiveState): LivenessVerdict {
+  if (state === "exited") return "exited";
+  if (state === "unknown") return "unverifiable";
+  return "live";
+}
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -13038,53 +13048,53 @@ async function healSqueezedAgentWindows(): Promise<number> {
 const DEAD_PANE_ERROR = "SESSION_EXITED: no agent process in the pane";
 
 /**
- * Positive evidence that a pane exists and has NO agent process in its tree.
+ * Does this pane still hold an agent? The answer is a LivenessVerdict, so the
+ * uncertain cases stay uncertain instead of being rounded down to death.
  *
- * The asymmetry is deliberate and load-bearing: a `true` here authorizes tearing
- * the pane down, so every uncertain path must return `false`. A failed tmux
- * probe, an unreadable process tree, a pane that has already vanished — none of
- * those are evidence of death, and treating them as such would kill live panes
- * on a transient hiccup. Only "the pane is there, and nothing agent-shaped is
- * running under it" returns true.
+ * `exited` is the only answer that authorizes tearing the pane down, and it
+ * takes positive evidence: the pane is demonstrably there, and nothing
+ * agent-shaped runs under it. A failed tmux probe, an unreadable process tree, a
+ * pane pid we could not parse, a machine with no tmux at all — all
+ * `unverifiable`, because killing a live pane on a transient hiccup is the
+ * expensive mistake. A missing pane is handled by the callers that recreate it,
+ * and must never be reported as "alive but empty".
  *
  * This is the check that makes recovery total. Pane TEXT can only be classified
  * against shapes we have already seen, so `classifyTmuxLiveState` will always
  * have an unknown case; process liveness has no vocabulary to fall outside of.
  */
-async function paneHasNoAgent(target: string): Promise<boolean> {
+async function panePresenceVerdict(target: string): Promise<LivenessVerdict> {
   const bare = target.split(":")[0];
-  if (!bare || !hasTmux()) return false;
-  try {
-    // The pane must demonstrably exist. A missing one is handled by the callers
-    // that recreate it, and must not be reported as "alive but empty".
+  if (!bare || !hasTmux()) return "unverifiable";
+  return verdictFromProbe(async () => {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
       { timeout: 3000, killSignal: "SIGKILL" },
     );
     const panePid = parseInt(stdout.trim().split("\n")[0] ?? "", 10);
-    if (!Number.isInteger(panePid)) return false;
-    return (await findAgentPidInTree(panePid)) === null;
-  } catch {
-    return false;
-  }
+    if (!Number.isInteger(panePid)) return "unverifiable";
+    return (await findAgentPidInTree(panePid)) === null ? "exited" : "live";
+  });
 }
 
 /**
  * Is `pid` reachable through `target`'s pane — that is, is the pane's shell one
- * of its ancestors?
+ * of its ancestors? The verdict is about the ROUTE: `live` when the pane can
+ * reach the process, `exited` when the process has demonstrably left the pane's
+ * tree (an orphan reparented to init has `1` as its whole chain, so it can never
+ * match a pane), `unverifiable` for every question we could not ask.
  *
  * Walks UP from the process rather than down from the pane: the chain is short
- * and bounded, and it answers the question directly. An orphan reparented to
- * init has `1` as its whole chain, so it can never match a pane.
+ * and bounded, and it answers the question directly.
  *
- * Uncertainty returns `true` (assume the pane does own it). A false negative
- * here would discard a perfectly good route to a live agent, which is the more
- * expensive mistake: the orphan case is rare, a broken ps read is not.
+ * Only `exited` authorizes reaping the orphan, and that is deliberate. Acting on
+ * a broken `ps` read would discard a perfectly good route to a live agent, which
+ * is the more expensive mistake: the orphan case is rare, a broken ps read is not.
  */
-async function paneOwnsPid(target: string, pid: number): Promise<boolean> {
+async function paneRouteVerdict(target: string, pid: number): Promise<LivenessVerdict> {
   const bare = target.split(":")[0];
-  if (!bare || !hasTmux() || !Number.isInteger(pid)) return true;
-  try {
+  if (!bare || !hasTmux() || !Number.isInteger(pid)) return "unverifiable";
+  return verdictFromProbe(async () => {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
       { timeout: 3000, killSignal: "SIGKILL" },
@@ -13092,19 +13102,17 @@ async function paneOwnsPid(target: string, pid: number): Promise<boolean> {
     const panePids = new Set(
       stdout.trim().split("\n").map(s => parseInt(s.trim(), 10)).filter(Number.isInteger),
     );
-    if (panePids.size === 0) return true;
+    if (panePids.size === 0) return "unverifiable";
     let cur = pid;
     for (let hop = 0; hop < 12 && cur > 1; hop++) {
-      if (panePids.has(cur)) return true;
+      if (panePids.has(cur)) return "live";
       const { stdout: out } = await execAsync(`ps -o ppid= -p ${cur} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
       const parent = parseInt(out.trim(), 10);
-      if (!Number.isInteger(parent) || parent === cur) return true;
+      if (!Number.isInteger(parent) || parent === cur) return "unverifiable";
       cur = parent;
     }
-    return false;
-  } catch {
-    return true;
-  }
+    return "exited";
+  });
 }
 
 /**
@@ -13271,7 +13279,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
 
     // Corrective states: cap total time and bail if our key didn't move the state.
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
-      if (await paneHasNoAgent(target)) throw new Error(DEAD_PANE_ERROR);
+      if (authorizesTeardown(await panePresenceVerdict(target))) throw new Error(DEAD_PANE_ERROR);
       throw new Error(`AGENT_NOT_READY: live state '${state}' did not settle within ${STUCK_BUDGET_MS}ms`);
     }
 
@@ -13290,7 +13298,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
         // that there is nobody to press it AT: a dead pane's shell echoes a new
         // prompt for every Enter, so the state "never settles" forever. Ask the
         // process tree before blaming the UI.
-        if (await paneHasNoAgent(target)) throw new Error(DEAD_PANE_ERROR);
+        if (authorizesTeardown(await panePresenceVerdict(target))) throw new Error(DEAD_PANE_ERROR);
         throw new Error(`AGENT_STUCK_${state.toUpperCase()}: corrective input did not change live state`);
       }
     } else {
@@ -13307,7 +13315,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
       // answers the question that actually matters and cannot be out of
       // vocabulary: if no agent lives in this pane, the pane is dead whatever it
       // renders. Report that as the terminating state so the caller recreates it.
-      if (await paneHasNoAgent(target)) {
+      if (authorizesTeardown(await panePresenceVerdict(target))) {
         log(`Unrecognized live UI in ${target} AND no agent process in the pane — treating as exited: ${region.replace(/\s+/g, " ").slice(0, 160)}`);
         throw new Error(DEAD_PANE_ERROR);
       }
@@ -15816,7 +15824,7 @@ const SESSION_CIRCUIT_BREAKER_TRANSIENT_COOLDOWN_MS = 15_000; // 15s — transie
 // The classifier and the process probe together cover every failure we know how
 // to name, and that is exactly why this exists: it covers the ones we don't.
 //
-// The residual case is a pane that still HAS an agent process, so `paneHasNoAgent`
+// The residual case is a pane that still HAS an agent process, so `panePresenceVerdict`
 // says nothing is wrong, whose UI we cannot classify — a hung TUI, a redraw we've
 // never seen, a future client's screen. Backing off and retrying into it produces
 // the same verdict forever, which is precisely the shape of the ct-48187 wedge:
@@ -18180,7 +18188,7 @@ async function resolveLiveTmuxTarget(
     // was never reached at all.
     //
     // A pane is only a route to a process if it is an ancestor of that process.
-    if (pane && !(await paneOwnsPid(pane, proc.pid))) {
+    if (pane && authorizesTeardown(await paneRouteVerdict(pane, proc.pid))) {
       log(`[ORPHAN] ${shortId(sessionId)} pid=${proc.pid} holds ${proc.tty} but is not in ${pane}'s process tree — pane cannot reach it`);
       await reapOrphanedAgent(sessionId, proc.pid, pane);
       sessionProcessCache.delete(sessionId);
@@ -18784,7 +18792,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           // bare-shell exit is transient (an identical resume succeeds moments later once
           // any prior holder is gone), so the delivery loop's short-cooldown retry path
           // takes over instead of locking the session for 5 minutes.
-          if (classifyTmuxLiveState(extractTmuxLiveRegion(agentPane)) === "exited") {
+          if (authorizesTeardown(livenessFromTmuxState(classifyTmuxLiveState(extractTmuxLiveRegion(agentPane))))) {
             logDelivery(`Auto-resume EXITED for ${shortId}: resume dropped to a bare shell, aborting (transient). Pane: ${agentPane.slice(-200)}`);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             return false;
@@ -21676,16 +21684,40 @@ async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promis
   }
 }
 
-// Decide whether the stale-status watchdog should mark a session "completed".
-// The watchdog's job is to catch sessions that ended without a SessionEnd hook,
-// using idle time as a proxy for "the agent died". But a live agent simply
-// waiting for the user's next prompt is indistinguishable from a dead one by
-// time alone — so we ONLY reap when the agent process is genuinely gone. Marking
-// a live, idle-waiting session completed flips its conversation to "stopped" in
-// the UI and stops the web from streaming the next turn until a manual reload
-// (root cause of "tmux messages didn't sync to the web UI" after an idle gap).
-// `hasLiveAgentProcess` is a positive signal only; when no process is found we
-// fall back to the original time-based behavior (never more aggressive).
+// What the stale-status watchdog knows about a session whose status file has
+// gone quiet. The watchdog's job is to catch sessions that ended without a
+// SessionEnd hook, using idle time as a proxy for "the agent died". But a live
+// agent simply waiting for the user's next prompt is indistinguishable from a
+// dead one by time alone — so a found process is `live` and ends it there.
+// Marking a live, idle-waiting session completed flips its conversation to
+// "stopped" in the UI and stops the web from streaming the next turn until a
+// manual reload (root cause of "tmux messages didn't sync to the web UI" after
+// an idle gap).
+//
+// With no process found, the age is the evidence: below the threshold nothing
+// has been established either way (`unverifiable`), past it this device's own
+// process table is the positive absence that `exited` requires.
+//
+// `hasLiveAgentProcess` must come from a probe that COMPLETED — a probe that
+// threw answers nothing, and feeding its failure in here as `false` would let
+// a broken `ps` read reap a live session.
+export function staleSessionLivenessVerdict(args: {
+  status: string | undefined;
+  ageMs: number;
+  hasLiveAgentProcess: boolean;
+  idleStaleMs?: number;
+  activeStaleMs?: number;
+}): LivenessVerdict {
+  if (args.hasLiveAgentProcess) return "live";
+  const idleStaleMs = args.idleStaleMs ?? 10 * 60 * 1000;
+  const activeStaleMs = args.activeStaleMs ?? 30 * 60 * 1000;
+  const threshold =
+    args.status === "idle" || args.status === "stopped" ? idleStaleMs : activeStaleMs;
+  return args.ageMs >= threshold ? "exited" : "unverifiable";
+}
+
+// The watchdog's teardown gate, kept as its own name because that is what the
+// caller and its regression suite ask.
 export function shouldMarkSessionCompleted(args: {
   status: string | undefined;
   ageMs: number;
@@ -21693,12 +21725,7 @@ export function shouldMarkSessionCompleted(args: {
   idleStaleMs?: number;
   activeStaleMs?: number;
 }): boolean {
-  if (args.hasLiveAgentProcess) return false;
-  const idleStaleMs = args.idleStaleMs ?? 10 * 60 * 1000;
-  const activeStaleMs = args.activeStaleMs ?? 30 * 60 * 1000;
-  const threshold =
-    args.status === "idle" || args.status === "stopped" ? idleStaleMs : activeStaleMs;
-  return args.ageMs >= threshold;
+  return authorizesTeardown(staleSessionLivenessVerdict(args));
 }
 
 function startWatchdog(
@@ -21782,7 +21809,17 @@ function startWatchdog(
           // Stale by time — but is the agent actually gone, or just idling for
           // the user? Only reap when no live process remains (see predicate).
           const liveProcess = await findSessionProcess(sessionId, detectSessionAgentType(sessionId)).catch(() => null);
-          if (!shouldMarkSessionCompleted({ status: data.status, ageMs, hasLiveAgentProcess: !!liveProcess, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS })) continue;
+          const verdict = staleSessionLivenessVerdict({ status: data.status, ageMs, hasLiveAgentProcess: !!liveProcess, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS });
+          if (!authorizesTeardown(verdict)) continue;
+          // Why: a session MOVED to another machine leaves its status file here,
+          // and this device's process table says nothing about an agent running
+          // over there — only the owning device may report an exit. An owner
+          // lookup that fails is not permission either; the next sweep retries
+          // (ct-49557).
+          const ownership = await deps.syncService.getConversationOwnerInfo(convId)
+            .then((info) => !ownedByAnotherLiveDevice(info))
+            .catch(() => false);
+          if (!authorizesTeardown(confineToOwningDevice(verdict, ownership))) continue;
           log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
           deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
           sendAgentStatus(deps.syncService, convId, sessionId, "stopped");

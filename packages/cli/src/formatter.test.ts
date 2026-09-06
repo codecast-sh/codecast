@@ -43,6 +43,40 @@ function result(sessions: any[], counts: Record<string, number> = {}) {
   };
 }
 
+// The liveness glyph is a three-way verdict, not a boolean. A row whose last
+// word from its device was "I am working", with no heartbeat behind it now, is
+// unverifiable: its daemon stopped answering and nobody watched the agent end.
+// Printing it as an ordinary settled row is the rounding-down that
+// @codecast/shared/contracts liveness.ts exists to stop (ct-49557).
+describe("formatMonitor marks unverifiable liveness", () => {
+  const badgeLine = (s: Record<string, any>) =>
+    strip(formatMonitor(result([session(s)]), { all: true }))
+      .split("\n")
+      .find((l) => l.includes("Ship the thing")) ?? "";
+
+  test("a live row keeps the filled dot", () => {
+    expect(badgeLine({ is_live: true, agent_status: "working" })).toContain("●");
+  });
+
+  test("mid-work with no heartbeat prints the dim ?", () => {
+    const line = badgeLine({ is_live: false, agent_status: "working" });
+    expect(line).toContain("?");
+    expect(line).not.toContain("○");
+  });
+
+  test("a settled row keeps the hollow ring", () => {
+    const line = badgeLine({ is_live: false, agent_status: "idle" });
+    expect(line).toContain("○");
+    expect(line).not.toContain("?");
+  });
+
+  test("a killed row was torn down, not lost — hollow ring, no ?", () => {
+    const line = badgeLine({ is_live: false, is_killed: true, agent_status: "working" });
+    expect(line).toContain("○");
+    expect(line).not.toContain("?");
+  });
+});
+
 describe("formatMonitor renders the killed marker", () => {
   test("a killed row is badged `killed`", () => {
     const out = strip(formatMonitor(result([session({ is_killed: true })]), { all: true }));

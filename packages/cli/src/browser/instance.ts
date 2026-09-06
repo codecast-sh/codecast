@@ -139,6 +139,11 @@ export function clearState(): void {
   }
 }
 
+// Same three states as LivenessVerdict (@codecast/shared/contracts, liveness.ts),
+// under older names: "unresponsive" is that type's `unverifiable` and "dead" is
+// its `exited`. Two vocabularies for one rule is exactly what the shared type
+// exists to end; folding this module into it is ct-49625, kept out of ct-49557
+// so the daemon consolidation and the browser sweep stay separately reviewable.
 export type Liveness = "live" | "unresponsive" | "dead";
 
 /**
