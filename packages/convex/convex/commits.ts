@@ -200,6 +200,44 @@ export const getCommitBySha = query({
   },
 });
 
+/**
+ * One commit for a reference surface (an inline pill, a shared-object card,
+ * `cast link`): by Convex id, or by sha — full or abbreviated — with the
+ * repository as a tie-breaker, the two halves of the `owner/repo@1a2b3c4`
+ * reference. An abbreviated sha is a prefix walk over the by_sha index. Null,
+ * never a throw, when nothing matches or the caller may not read it.
+ */
+export const webGet = query({
+  args: {
+    id: v.optional(v.id("commits")),
+    repository: v.optional(v.string()),
+    sha: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    let commit: any = null;
+    if (args.id) {
+      commit = await ctx.db.get(args.id);
+    } else if (args.sha) {
+      const sha = args.sha.trim().toLowerCase();
+      const repository = args.repository ? normalizeRepository(args.repository) : undefined;
+      const candidates =
+        sha.length === 40
+          ? await ctx.db.query("commits").withIndex("by_sha", (q) => q.eq("sha", sha)).collect()
+          : await ctx.db
+              .query("commits")
+              .withIndex("by_sha", (q) => q.gte("sha", sha).lt("sha", sha + "\uffff"))
+              .take(20);
+      // A transcript-written commit may carry no repository; the sha alone
+      // still names it. A row that names a different repository does not.
+      commit = candidates.find((c) => !repository || !c.repository || c.repository === repository) ?? null;
+    }
+    if (!commit) return null;
+    return (await accessibleCommits(ctx, userId, [commit]))[0] ?? null;
+  },
+});
+
 export const getCommitsByRepository = query({
   args: {
     repository: v.string(),
@@ -498,24 +536,44 @@ export const applyCommitFiles = internalMutation({
     repository: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const commit = await ctx.db.get(args.commit_id);
-    if (!commit) return { ok: false };
-
-    // The counts from a push payload are often zero, so the real ones from the
-    // commit endpoint replace them. Author identity is only filled in when the
-    // row is missing it, since the ingest path may know better.
-    const patch: Record<string, any> = {
-      files: args.files,
-      files_changed: args.files.length,
-      insertions: args.additions,
-      deletions: args.deletions,
-    };
-    if (!commit.repository && args.repository) patch.repository = normalizeRepository(args.repository);
-    if (!commit.author_login && args.author_login) patch.author_login = args.author_login;
-    if (!commit.author_avatar_url && args.author_avatar_url) {
-      patch.author_avatar_url = args.author_avatar_url;
-    }
-    await ctx.db.patch(args.commit_id, patch);
-    return { ok: true };
+    return await applyCommitFilesTo(ctx, args);
   },
 });
+
+/**
+ * Write a commit's diff onto its row. Shared by the GitHub fetch above and
+ * by a teammate's daemon answering the same need from a checkout
+ * (repos.answerLocalRead), so both paths leave an identical row.
+ */
+export async function applyCommitFilesTo(
+  ctx: { db: any },
+  args: {
+    commit_id: Id<"commits">;
+    files: { filename: string; status: string; additions: number; deletions: number; changes: number; patch?: string }[];
+    additions: number;
+    deletions: number;
+    author_login?: string;
+    author_avatar_url?: string;
+    repository?: string;
+  },
+): Promise<{ ok: boolean }> {
+  const commit = await ctx.db.get(args.commit_id);
+  if (!commit) return { ok: false };
+
+  // The counts from a push payload are often zero, so the real ones from the
+  // commit endpoint replace them. Author identity is only filled in when the
+  // row is missing it, since the ingest path may know better.
+  const patch: Record<string, any> = {
+    files: args.files,
+    files_changed: args.files.length,
+    insertions: args.additions,
+    deletions: args.deletions,
+  };
+  if (!commit.repository && args.repository) patch.repository = normalizeRepository(args.repository);
+  if (!commit.author_login && args.author_login) patch.author_login = args.author_login;
+  if (!commit.author_avatar_url && args.author_avatar_url) {
+    patch.author_avatar_url = args.author_avatar_url;
+  }
+  await ctx.db.patch(args.commit_id, patch);
+  return { ok: true };
+}
