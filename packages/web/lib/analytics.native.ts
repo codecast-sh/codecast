@@ -5,10 +5,13 @@
 // that call track() (e.g. the synclog crawl healed metric) become no-ops here —
 // the prod removal signal is measured on web/desktop, where the crawls run
 // against the full workspace anyway.
+import type { CodecastEventName, CodecastEventProps } from "@codecast/shared/analytics";
+
 export function initAnalytics() {}
 export function identifyUser(_userId: string, _traits?: Record<string, unknown>) {}
 export function resetUser() {}
-export function track(_event: string, _properties?: Record<string, unknown>) {}
+// Same signature as the web twin so a shared hook typechecks in both programs.
+export function track<N extends CodecastEventName>(_event: N, _properties: CodecastEventProps<N>) {}
 export type AnalyticsPlatform = "desktop" | "web" | "mobile";
 export function getPlatform(): AnalyticsPlatform { return "mobile"; }
 export function captureError(_error: Error, _context?: Record<string, unknown>) {}

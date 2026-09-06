@@ -9,6 +9,7 @@ import {
   claimErrorKey,
   setupErrorToasts as setupPlatformErrorToasts,
 } from "@platform/analytics/errors";
+import { CODECAST_EVENTS, type CodecastEventName, type CodecastEventProps } from "@codecast/shared/analytics";
 
 type AnalyticsRuntime = typeof import("@platform/analytics/web-runtime");
 
@@ -56,6 +57,11 @@ export function initAnalytics(): Promise<void> {
       environment: META_ENV.DEV ? "development" : "production",
       platform: getPlatform(),
       appName: "codecast",
+      // The catalog is enforced at the track boundary inside the package: an
+      // event it does not describe is dropped, and a session stops sending
+      // after 1000 events. A browser that sets Do Not Track loads no PostHog
+      // at all. See packages/shared/analytics/events.ts (ct-49565).
+      catalog: CODECAST_EVENTS,
     });
     runtime = analytics;
     for (const call of queuedCalls.splice(0)) call(analytics);
@@ -71,7 +77,10 @@ export function resetUser() {
   withAnalytics((analytics) => analytics.resetUser());
 }
 
-export function track(event: string, properties?: Record<string, unknown>) {
+// Only an event the catalog names, with the properties it declares. The runtime
+// check inside the package is the backstop; this signature is what stops a typo
+// or a renamed property from reaching a build at all.
+export function track<N extends CodecastEventName>(event: N, properties: CodecastEventProps<N>) {
   withAnalytics((analytics) => analytics.track(event, properties));
 }
 

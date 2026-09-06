@@ -21,6 +21,7 @@ import {
   isWorkingSetWindow,
   type WorkingSetWindow,
 } from "@codecast/shared/contracts";
+import type { CodecastEventName, CodecastEventProps } from "@codecast/shared/analytics";
 import {
   anyOverlayActive,
   collectInboxOverlayDeps,
@@ -288,8 +289,10 @@ export function emptyHeartbeatCounters(): InboxHeartbeatCounters {
 }
 
 export type InboxDigestComparerIO = {
-  platform: string;
-  track: (event: string, properties: Record<string, unknown>) => void;
+  platform: "web" | "desktop" | "mobile";
+  // The catalog signature, so the four events below are checked here at compile
+  // time and not only where lib/analytics sends them (ct-49565).
+  track: <N extends CodecastEventName>(event: N, properties: CodecastEventProps<N>) => void;
   /** Hydrate exactly these ids into the store (the missing-bodies heal). */
   fetchByIds: (ids: string[]) => Promise<void>;
   /** One sessionsLiveness `_probe` applied through the overlay applier. */

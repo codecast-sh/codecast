@@ -6,10 +6,14 @@
   "scripts": {
     "test": "bun test"
   },
+  "dependencies": {
+    "@platform/analytics": "file:../../platform/packages/analytics"
+  },
   "main": "./index.ts",
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
+    "./analytics": "./analytics/index.ts",
     "./encryption": "./encryption/index.ts",
     "./contracts": "./contracts/index.ts",
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",

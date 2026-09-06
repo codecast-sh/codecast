@@ -47,6 +47,11 @@ for target in "${targets[@]}"; do
   echo "  -> $outfile"
 done
 
+# The CLI ships no analytics transport, so no PostHog key belongs in these
+# binaries. A key here would mean telemetry was wired up outside the event
+# catalog, the burst cap and the DO_NOT_TRACK opt out (ct-49565).
+node ../../scripts/ci/verify-telemetry-key.mjs --target cli --require
+
 # Re-sign the macOS binaries with a stable Developer ID identity. bun's
 # --compile output is ad-hoc, linker-signed (Identifier=a.out), so its
 # code-signing identity IS the content hash — every release looks like a

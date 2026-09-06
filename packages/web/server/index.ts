@@ -1,6 +1,12 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createServerAnalytics } from "@platform/analytics/server";
+import {
+  CODECAST_EVENTS,
+  TELEMETRY_DISABLED_VAR,
+  type CodecastEventName,
+  type CodecastEventProps,
+} from "@codecast/shared/analytics";
 import { Hono } from "hono";
 import { readFile } from "fs/promises";
 import { join } from "path";
@@ -23,9 +29,23 @@ const DIST_DIR = join(import.meta.dirname, "../dist");
 // package sends a random distinct_id with $process_person_profile false.
 const POSTHOG_KEY = process.env.VITE_POSTHOG_KEY;
 const analytics = POSTHOG_KEY
-  ? createServerAnalytics({ posthogKey: POSTHOG_KEY, source: "web_server" })
+  ? createServerAnalytics({
+      posthogKey: POSTHOG_KEY,
+      source: "web_server",
+      // Catalog, per-process cap and the DO_NOT_TRACK/CI opt out all live at
+      // the boundary inside the package (ct-49565).
+      catalog: CODECAST_EVENTS,
+      env: process.env,
+      optOutVars: [TELEMETRY_DISABLED_VAR],
+    })
   : null;
-function phCapture(event: string, properties: Record<string, unknown> = {}) {
+// Say it out loud at boot. Both ways of ending up silent — no key, or a CI
+// variable set on the host — otherwise look exactly like a healthy server that
+// simply has nothing to report (ct-49565).
+if (!analytics) console.warn("[analytics] VITE_POSTHOG_KEY is unset — the web server captures nothing");
+else if (analytics.optedOut)
+  console.warn(`[analytics] DO_NOT_TRACK, ${TELEMETRY_DISABLED_VAR} or a CI variable is set — the web server captures nothing`);
+function phCapture<N extends CodecastEventName>(event: N, properties: CodecastEventProps<N>) {
   // Fire and forget; the send swallows its own failures.
   void analytics?.capturePersonless(event, properties);
 }

@@ -90,6 +90,18 @@ jobs:
         working-directory: packages/web
         run: bun test
 
+      - name: Unit tests (shared/analytics — the event catalog)
+        working-directory: packages/shared
+        # Web, mobile, Convex and the web server all validate against this one
+        # catalog, so a shape that drifts here silences a funnel everywhere.
+        run: bun test analytics/
+
+      - name: Unit tests (telemetry write-key build gate)
+        # The gate guards the case where a build with no VITE_POSTHOG_KEY ships
+        # green and reports nothing. Nothing is built in this job, so this runs
+        # the gate's own tests; the gate itself runs inside `bun run build`.
+        run: bun test scripts/ci/
+
       - name: Unit tests (shared/tasks)
         working-directory: packages/shared
         # Scoped to the tasks suite: the package has other pre-existing test
