@@ -34,8 +34,8 @@ describe("linked subagent nesting", () => {
     expect(ids(placed.subsByParent.get("parent") ?? [])).toEqual(["child"]);
   });
 
-  it("honors explicit stash and kill on a child", () => {
-    for (const stamp of [{ inbox_stashed_at: now }, { inbox_killed_at: now }]) {
+  it("honors explicit stash, kill and snooze on a child", () => {
+    for (const stamp of [{ inbox_stashed_at: now }, { inbox_killed_at: now }, { inbox_snoozed_until: now + 60_000 }]) {
       expect(sessionStructuralSig({ ...child, ...stamp })).not.toBe(sessionStructuralSig(child));
       const placed = place([parent, { ...child, ...stamp }]);
       expect(placed.subsByParent.get("parent") ?? []).toEqual([]);
@@ -58,4 +58,15 @@ describe("linked subagent nesting", () => {
     expect(ids(placed.dismissed)).toEqual(["child"]);
   });
 
+  it("keeps a snoozed parent and its child out of active sections until wake", () => {
+    const until = now + 60_000;
+    const rows = [{ ...parent, inbox_snoozed_until: until }, { ...child, inbox_snoozed_until: until }];
+    const placed = place(rows);
+    expect(ids(placed.snoozed)).toEqual(["parent"]);
+    expect(placed.working).toEqual([]);
+    expect(placed.subsByParent.size).toBe(0);
+    const awake = placeSections(Object.fromEntries(rows.map(row => [row._id, row])), new Set(), undefined, { now: until + 60_000 });
+    expect(ids(awake.subsByParent.get("parent") ?? [])).toEqual(["child"]);
+    expect(awake.snoozed).toEqual([]);
+  });
 });

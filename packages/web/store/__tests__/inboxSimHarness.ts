@@ -921,7 +921,7 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
   userParks: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.mutate(id, { inbox_dormant_at: vnow });
+    s.mutate(id, { inbox_rest: rng() < 0.5 ? "dormant" : rng() < 0.5 ? "done" : "needs_input", inbox_rest_at: vnow });
   },
   apiErrorBanner: (s, rng) => {
     const id = memberIds(s, rng);

@@ -164,6 +164,7 @@ export function placeSections(
     dormant: rows(placed.dormant),
     working: rows(placed.working),
     stashed: rows(placed.stashed),
+    snoozed: rows(placed.snoozed),
     dismissed: rows(placed.dismissed),
     subsByParent: rowMap(placed.subsByParent),
     forksByParent: rowMap(placed.forksByParent),

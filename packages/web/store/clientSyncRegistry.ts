@@ -1,3 +1,5 @@
+import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
 export type HydrationPhase = "critical" | "deferred";
@@ -128,16 +130,9 @@ export const CLIENT_SYNC_REGISTRY = {
     dispatchTable: {
       table: "conversations",
       kind: "collection",
-      fields: [
-        "inbox_dismissed_at",
-        "inbox_stashed_at",
-        "inbox_stash_hidden",
-        "inbox_pinned_at",
-        "inbox_deferred_at",
-        "inbox_dormant_at",
-        "title",
-        "is_favorite",
-      ],
+      // The manifest is the single source shared with the server's patch gate
+      // (contracts/conversationFields), so the two allowlists cannot disagree.
+      fields: [...DISPATCHABLE_CONVERSATION_FIELDS],
     },
   },
   conversations: {
@@ -382,6 +377,24 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["agentTasks.webList"],
   },
+  // The roster's blind spot, filled: triggers armed under ANOTHER account (a
+  // remote daemon's bot login) that drive a conversation the viewer can see.
+  // webList is indexed by user_id, so it can never carry them; the client names
+  // the candidate conversations off its own armed_trigger_kind stamps and asks
+  // webListForConversations for exactly those (components/triggerTasks.ts,
+  // foreignTriggerConvIds). A separate key because the query returns the
+  // COMPLETE set for the ids it was asked about — snapshot, like webList — and
+  // two snapshot feeders would delete each other's rows out of one collection.
+  // localFirst like agentTasks: the management verbs work on a foreign trigger
+  // too (only delete is owner-only, getManageableTask), so pause/resume/run-now
+  // flip this draft and need the same field protection until the echo lands.
+  foreignTriggers: {
+    persistence: { kind: "collection", key: "foreignTriggers" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: {},
+    feeds: ["agentTasks.webListForConversations"],
+  },
   // Issue sync sources (issue_sync_sources, docs/architecture/issue-sync.md
   // S1.3): the Linear teams/projects and GitHub repos a workspace imports,
   // one row per codecast project. listSources returns the COMPLETE visible
@@ -473,7 +486,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "commits" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha"],
+    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation"],
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.
@@ -481,7 +494,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber"],
+    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber", "pull_requests.getPRsForConversation"],
   },
   // Code comments (review_comments): a comment on a file and line in a repo,
   // with or without a PR. Each feed is a window onto the table (one PR's set,
@@ -522,6 +535,11 @@ export const CLIENT_SYNC_REGISTRY = {
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
   // stops heartbeating leaves. Readers additionally hide rows whose
   // last_heartbeat is stale, so a persisted row can't outlive its window.
+  sessionCommands: {
+    persistence: { kind: "collection", key: "sessionCommands", perWindow: true },
+    sync: { isDelta: true },
+    feeds: ["sessionCommands.results"],
+  },
   managedSessions: {
     persistence: { kind: "collection", key: "managedSessions" },
     hydration: { phase: "deferred" },
@@ -905,6 +923,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   threadUnread: "shared",
   pageThreads: "shared",
   agentTasks: "shared",
+  foreignTriggers: "shared",
   agentTaskRuns: "shared",
   issueSyncSources: "shared",
   workflows: "shared",
@@ -918,6 +937,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   codeComments: "shared",
   externalEvents: "shared",
   managedSessions: "shared",
+  sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
   pendingMessageStatus: "shared",

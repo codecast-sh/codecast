@@ -52,9 +52,11 @@ describe("the rest verdict (classifySession.rest over the shared classifier)", (
     expect(sessionRestState(mk("a"))).toBe("needs_input");
   });
 
-  it("the user's park stamp files as dormant, and dormant beats done", () => {
-    expect(sessionRestState(mk("a", { is_dormant: true }))).toBe("dormant");
-    expect(sessionRestState(mk("a", { is_dormant: true, agent_status: "done" }))).toBe("dormant");
+  it("the user's rest verdict files the row where they put it, over the agent's own", () => {
+    expect(sessionRestState(mk("a", { user_rest: "dormant" }))).toBe("dormant");
+    expect(sessionRestState(mk("a", { user_rest: "dormant", agent_status: "done" }))).toBe("dormant");
+    expect(sessionRestState(mk("a", { user_rest: "done" }))).toBe("done");
+    expect(sessionRestState(mk("a", { user_rest: "needs_input", agent_status: "done" }))).toBe("needs_input");
   });
 
   it("a blocked pin outranks the classifier's soft verdict", () => {
@@ -73,18 +75,26 @@ describe("the rest verdict (classifySession.rest over the shared classifier)", (
 });
 
 describe("classifySession.rest", () => {
-  it("a hard block is needs_input whatever verdict the row carries", () => {
+  it("a hard block is needs_input whatever verdict the MACHINE produced", () => {
     for (const s of [
       mk("q", { agent_status: "dormant", awaiting_input: true }),
       mk("p", { agent_status: "done", is_idle: false, awaiting_input: true }),
-      mk("e", { is_dormant: true, pending_api_error: true }),
+      mk("e", { agent_status: "dormant", pending_api_error: true }),
       mk("b", { agent_status: "permission_blocked", settle_verdict: "done" }),
-      mk("d", { agent_status: "stopped", is_dormant: true }),
+      mk("d", { agent_status: "stopped", thread_state_status: "done" }),
     ]) {
       const c = classifySession(s);
       expect(c.waiting).toBe(true);
       expect(c.rest).toBe("needs_input");
     }
+  });
+
+  it("the USER's verdict is triage and stands over a hard block until the next activity", () => {
+    // The 2026-09-05 report: a dead agent (stopped, with output) parked as
+    // dormant stayed under Needs Input because the dead-agent rule ran first.
+    expect(classifySession(mk("d", { agent_status: "stopped", user_rest: "dormant" })).rest).toBe("dormant");
+    expect(classifySession(mk("e", { user_rest: "done", pending_api_error: true })).rest).toBe("done");
+    expect(classifySession(mk("q", { user_rest: "needs_input", agent_status: "done" })).rest).toBe("needs_input");
   });
 
   it("a settle with a rest verdict is still `waiting` (settled) — the verdict refines the section", () => {
@@ -102,7 +112,7 @@ describe("placeSections rest sections", () => {
       shipped: mk("shipped", { agent_status: "done" }),
       parked: mk("parked", { agent_status: "dormant" }),
       watching: mk("watching", { agent_status: "waiting" }),
-      userParked: mk("userParked", { is_dormant: true }),
+      userParked: mk("userParked", { user_rest: "dormant" }),
       judged: mk("judged", { settle_verdict: "done" }),
       busy: mk("busy", { is_idle: false, agent_status: "working" }),
     });

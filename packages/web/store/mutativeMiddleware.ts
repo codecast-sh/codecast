@@ -356,7 +356,7 @@ const CODECAST_PLATFORM_CONFIG: PlatformConfig = {
   viewGuard: VIEW_GUARD,
   receiptContinuations: RECEIPT_CONTINUATIONS,
   storageWatchdogHint:
-    'usually another Codecast tab holding the database open across a schema upgrade — look for a Dexie "blocked" warning above',
+    'check for IndexedDB errors or a Dexie "blocked" warning above; a slow write alone does not identify the cause',
 };
 
 export function mutativeMiddleware(

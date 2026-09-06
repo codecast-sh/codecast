@@ -1,4 +1,5 @@
 import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import type { UserRest } from "@codecast/shared/contracts";
 import { broadcastGesture } from "./gestureBridge";
 import { pushUndo, showUndoToast } from "./undoStack";
 import { declareViewNav } from "./viewNav";
@@ -169,124 +170,110 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
 
 }
 
-export function undoableDeferSession(id: string) {
-  const state = useInboxStore.getState();
-  const session = state.sessions[id];
-  const label = session?.title || "session";
-  const wasDeferred = session?.is_deferred;
-  const prevConvo = state.conversations[id]
-    ? { ...state.conversations[id] }
-    : null;
+export const USER_REST_LABEL: Record<UserRest, string> = {
+  needs_input: "Needs input",
+  done: "Done",
+  dormant: "Dormant",
+};
 
-  useInboxStore.getState().deferSession(id);
+// The fields one gesture stamps, named once. `session` is what the action
+// writes on the session row (its derived twin included); `conversation` is the
+// stamps the undo both restores locally and dispatches back to the server.
+type GestureFields = {
+  session: readonly string[];
+  conversation: readonly string[];
+};
+
+// Absent reads back as null, never undefined: a field the gesture SET has to
+// travel as an explicit tombstone or the dispatch drops it from the patch and
+// the server keeps the value we are undoing.
+function previousValues(row: Record<string, any> | undefined, fields: readonly string[]) {
+  const prev: Record<string, any> = {};
+  for (const field of fields) prev[field] = row?.[field] ?? null;
+  return prev;
+}
+
+// Every triage gesture that stamps fields (defer, a rest verdict, pin) is the
+// same four moves: snapshot the fields, stamp them, and offer an undo that puts
+// them back on the session row, on the conversation meta and on the server,
+// releasing the pending locks the stamp took. Only the field names, the label
+// and the action itself differ, so those are the arguments — and `apply` is
+// both the gesture and its redo, which is why they can never drift apart.
+//
+// Naming the fields in ONE place is also what keeps an undo honest: each of
+// these actions clears a snooze on the way (clearSessionSnoozeInDraft), and the
+// hand-written versions of defer and pin restored their own field while leaving
+// the snooze cleared — undoing a gesture used to silently eat a snooze.
+function undoableFieldGesture(
+  id: string,
+  fields: GestureFields,
+  label: string,
+  apply: () => void,
+  afterUndo?: (store: StoreState) => void,
+) {
+  const state = useInboxStore.getState();
+  const prevSession = previousValues(state.sessions[id], fields.session);
+  const prevConversation = previousValues(state.conversations[id], fields.conversation);
+
+  apply();
 
   pushUndo({
-    label: `Defer ${label}`,
+    label,
     undo: () => {
       const store = useInboxStore.getState();
-      const newSessions = { ...store.sessions };
-      if (newSessions[id]) {
-        newSessions[id] = { ...newSessions[id], is_deferred: wasDeferred };
-      }
-      const newConvos = { ...store.conversations };
-      if (prevConvo) {
-        newConvos[id] = prevConvo;
-      }
-      const newPending = { ...store.pending };
-      delete newPending[`sessions:${id}:is_deferred`];
+      const sessions = { ...store.sessions };
+      if (sessions[id]) sessions[id] = { ...sessions[id], ...prevSession };
+      const conversations = { ...store.conversations };
+      if (conversations[id]) conversations[id] = { ...conversations[id], ...prevConversation };
+      const pending = { ...store.pending };
+      for (const field of fields.session) delete pending[`sessions:${id}:${field}`];
 
-      useInboxStore.setState({
-        sessions: newSessions,
-        conversations: newConvos,
-        pending: newPending,
-      });
-      store.applyUndoPatches({
-        conversations: { [id]: { inbox_deferred_at: prevConvo?.inbox_deferred_at ?? null } },
-      });
+      useInboxStore.setState({ sessions, conversations, pending });
+      store.applyUndoPatches({ conversations: { [id]: prevConversation } });
+      afterUndo?.(store);
     },
-    redo: () => {
-      useInboxStore.getState().deferSession(id);
-    },
+    redo: apply,
   });
 }
 
-export function undoableDormantSession(id: string) {
-  const state = useInboxStore.getState();
-  const session = state.sessions[id];
-  const label = session?.title || "session";
-  const wasDormant = session?.is_dormant;
-  const wasDormantAt = session?.inbox_dormant_at ?? null;
-  const prevConvo = state.conversations[id]
-    ? { ...state.conversations[id] }
-    : null;
+const DEFER_FIELDS: GestureFields = {
+  session: ["is_deferred", "inbox_deferred_at", "inbox_snoozed_until"],
+  conversation: ["inbox_deferred_at", "inbox_snoozed_until"],
+};
 
-  useInboxStore.getState().dormantSession(id);
+const REST_FIELDS: GestureFields = {
+  session: ["user_rest", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until"],
+  conversation: ["inbox_rest", "inbox_rest_at", "inbox_snoozed_until"],
+};
 
-  pushUndo({
-    label: `Dormant ${label}`,
-    undo: () => {
-      const store = useInboxStore.getState();
-      const newSessions = { ...store.sessions };
-      if (newSessions[id]) {
-        newSessions[id] = { ...newSessions[id], is_dormant: wasDormant, inbox_dormant_at: wasDormantAt };
-      }
-      const newConvos = { ...store.conversations };
-      if (prevConvo) {
-        newConvos[id] = prevConvo;
-      }
-      const newPending = { ...store.pending };
-      delete newPending[`sessions:${id}:is_dormant`];
-      delete newPending[`sessions:${id}:inbox_dormant_at`];
+const PIN_FIELDS: GestureFields = {
+  session: ["is_pinned", "inbox_pinned_at", "inbox_snoozed_until"],
+  conversation: ["inbox_pinned_at", "inbox_snoozed_until"],
+};
 
-      useInboxStore.setState({
-        sessions: newSessions,
-        conversations: newConvos,
-        pending: newPending,
-      });
-      store.applyUndoPatches({
-        conversations: { [id]: { inbox_dormant_at: wasDormantAt } },
-      });
-    },
-    redo: () => {
-      useInboxStore.getState().dormantSession(id);
-    },
-  });
+const sessionTitle = (id: string) => useInboxStore.getState().sessions[id]?.title || "session";
+
+export function undoableDeferSession(id: string) {
+  undoableFieldGesture(id, DEFER_FIELDS, `Defer ${sessionTitle(id)}`, () =>
+    useInboxStore.getState().deferSession(id));
+}
+
+export function undoableSetSessionRest(id: string, rest: UserRest) {
+  undoableFieldGesture(id, REST_FIELDS, `${USER_REST_LABEL[rest]} ${sessionTitle(id)}`, () =>
+    useInboxStore.getState().setSessionRest(id, rest));
 }
 
 export function undoablePinSession(id: string) {
   const state = useInboxStore.getState();
-  const session = state.sessions[id];
-  const label = session?.title || "session";
-  const wasPinned = session?.is_pinned;
+  const wasPinned = !!state.sessions[id]?.is_pinned;
   const prevPinnedAt = state.conversations[id]?.inbox_pinned_at ?? null;
 
-  useInboxStore.getState().pinSession(id);
-
-  const actionLabel = wasPinned ? `Unpin ${label}` : `Pin ${label}`;
-
-  pushUndo({
-    label: actionLabel,
-    undo: () => {
-      const store = useInboxStore.getState();
-      const newSessions = { ...store.sessions };
-      if (newSessions[id]) {
-        newSessions[id] = { ...newSessions[id], is_pinned: wasPinned };
-      }
-      const newConvos = { ...store.conversations };
-      if (newConvos[id]) {
-        newConvos[id] = { ...newConvos[id], inbox_pinned_at: prevPinnedAt };
-      }
-      const newPending = { ...store.pending };
-      delete newPending[`sessions:${id}:is_pinned`];
-
-      useInboxStore.setState({
-        sessions: newSessions,
-        conversations: newConvos,
-        pending: newPending,
-      });
-      store.applyUndoPatches({
-        conversations: { [id]: { inbox_pinned_at: prevPinnedAt } },
-      });
+  undoableFieldGesture(
+    id,
+    PIN_FIELDS,
+    wasPinned ? `Unpin ${sessionTitle(id)}` : `Pin ${sessionTitle(id)}`,
+    () => useInboxStore.getState().pinSession(id),
+    (store) => {
       // pinSession broadcast the flip, so a sibling now holds the PINNED row;
       // undoing without announcing leaves it there, and that stale row both
       // re-puts the undone pin into shared IDB and inverts the sibling's next
@@ -295,14 +282,11 @@ export function undoablePinSession(id: string) {
       // when the server echo matches it, and applyUndoPatches dispatches this
       // same value. redo() calls pinSession, which broadcasts on its own.
       broadcastGesture(
-        { kind: "pin", id, pinned: !!wasPinned, pinnedAt: prevPinnedAt, ts: Date.now() },
+        { kind: "pin", id, pinned: wasPinned, pinnedAt: prevPinnedAt, ts: Date.now() },
         bridgeUserId(store),
       );
     },
-    redo: () => {
-      useInboxStore.getState().pinSession(id);
-    },
-  });
+  );
 }
 
 export function undoableRenameSession(id: string, title: string) {
