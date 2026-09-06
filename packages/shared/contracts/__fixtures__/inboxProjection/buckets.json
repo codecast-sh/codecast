@@ -707,6 +707,110 @@
         "working",
         false
       ]
+    },
+    "sort_at": {
+      "anchorblockedz130000000000000000": -2100000,
+      "anchordeadz100000000000000000000": -2160000,
+      "anchorquietz11000000000000000000": -2040000,
+      "apierrorz80000000000000000000000": -1200000,
+      "askchildliftz1200000000000000000": -1680000,
+      "blankz50000000000000000000000000": -1620000,
+      "completedcontentz160000000000000": -2220000,
+      "deadblankz9000000000000000000000": -1320000,
+      "deadz400000000000000000000000000": -1260000,
+      "declaredblockedz1500000000000000": -1020000,
+      "declareddonez1200000000000000000": -180000,
+      "declareddormantz1500000000000000": -300000,
+      "dismissedz9000000000000000000000": -1920000,
+      "forkchildz9000000000000000000000": -2460000,
+      "hibernatedaskz130000000000000000": -7200000,
+      "hibernatedstashedz17000000000000": -7200000,
+      "hibernatedz100000000000000000000": -7200000,
+      "killedpinnedz1200000000000000000": -1980000,
+      "loopfreshz9000000000000000000000": 3600000,
+      "loopoverduez11000000000000000000": -720000,
+      "midgracez80000000000000000000000": -30000,
+      "needsinputz100000000000000000000": -120000,
+      "oncehomedonez1200000000000000000": -540000,
+      "oncehomeneedsz130000000000000000": -600000,
+      "ownpromptz9000000000000000000000": -1080000,
+      "permissionz100000000000000000000": -1140000,
+      "pinnedneedsz11000000000000000000": -1740000,
+      "pinnedworkingz130000000000000000": -1800000,
+      "queueddeadz100000000000000000000": -1500000,
+      "queuedz6000000000000000000000000": -1440000,
+      "quietunansweredz1500000000000000": -1560000,
+      "rowdonenodaemonz1500000000000000": -240000,
+      "settledonecurrentz17000000000000": -900000,
+      "settledonestalez1500000000000000": -960000,
+      "snoozeduez9000000000000000000000": -3456000000,
+      "snoozedz700000000000000000000000": 86400000,
+      "standinghomehumanlastz2100000000": -480000,
+      "standinghomez1200000000000000000": -420000,
+      "stashedz700000000000000000000000": -1860000,
+      "unresponsivenotidlez190000000000": -10800000,
+      "unresponsivez1200000000000000000": -1380000,
+      "userdormantstalez160000000000000": -840000,
+      "userdormantz11000000000000000000": -780000,
+      "waitingz700000000000000000000000": -360000,
+      "workingz700000000000000000000000": -60000
+    },
+    "sort_order": {
+      "done": [
+        "declareddonez1200000000000000000",
+        "rowdonenodaemonz1500000000000000",
+        "settledonecurrentz17000000000000"
+      ],
+      "dormant": [
+        "loopfreshz9000000000000000000000",
+        "declareddormantz1500000000000000",
+        "waitingz700000000000000000000000",
+        "standinghomez1200000000000000000",
+        "oncehomedonez1200000000000000000",
+        "userdormantz11000000000000000000",
+        "hibernatedz100000000000000000000"
+      ],
+      "needs_input": [
+        "needsinputz100000000000000000000",
+        "standinghomehumanlastz2100000000",
+        "oncehomeneedsz130000000000000000",
+        "loopoverduez11000000000000000000",
+        "userdormantstalez160000000000000",
+        "settledonestalez1500000000000000",
+        "declaredblockedz1500000000000000",
+        "ownpromptz9000000000000000000000",
+        "permissionz100000000000000000000",
+        "apierrorz80000000000000000000000",
+        "deadz400000000000000000000000000",
+        "unresponsivez1200000000000000000",
+        "queueddeadz100000000000000000000",
+        "anchorblockedz130000000000000000",
+        "anchordeadz100000000000000000000",
+        "completedcontentz160000000000000",
+        "forkchildz9000000000000000000000",
+        "hibernatedaskz130000000000000000",
+        "unresponsivenotidlez190000000000",
+        "snoozeduez9000000000000000000000"
+      ],
+      "new": [
+        "deadblankz9000000000000000000000",
+        "blankz50000000000000000000000000"
+      ],
+      "pinned": [
+        "pinnedneedsz11000000000000000000",
+        "pinnedworkingz130000000000000000",
+        "killedpinnedz1200000000000000000"
+      ],
+      "stashed": [
+        "stashedz700000000000000000000000",
+        "hibernatedstashedz17000000000000"
+      ],
+      "working": [
+        "midgracez80000000000000000000000",
+        "workingz700000000000000000000000",
+        "queuedz6000000000000000000000000",
+        "quietunansweredz1500000000000000"
+      ]
     }
   }
 }

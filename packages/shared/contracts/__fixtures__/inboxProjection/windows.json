@@ -286,6 +286,46 @@
         "needs_input",
         false
       ]
+    },
+    "sort_at": {
+      "dismissedoldrowz1500000000000000": -3456000000,
+      "dismissedoldstampz17000000000000": -18000000,
+      "dismissedrecentz1500000000000000": -14400000,
+      "everythingz100000000000000000000": -28800000,
+      "horizonedgeinz130000000000000000": -2592000000,
+      "killeddismissedpinnedz2100000000": -3456000000,
+      "ownedrecentz11000000000000000000": -25200000,
+      "pinfailedz9000000000000000000000": -3600000,
+      "pinoldz6000000000000000000000000": -3456000000,
+      "pinrecentz9000000000000000000000": -10800000,
+      "recentcompletedz1500000000000000": -7200000,
+      "recentonlyz100000000000000000000": -3600000,
+      "stashedoldrowz130000000000000000": -3456000000,
+      "stashedrecentz130000000000000000": -21600000
+    },
+    "sort_order": {
+      "dismissed": [
+        "dismissedrecentz1500000000000000",
+        "dismissedoldstampz17000000000000",
+        "everythingz100000000000000000000",
+        "dismissedoldrowz1500000000000000",
+        "killeddismissedpinnedz2100000000"
+      ],
+      "needs_input": [
+        "recentonlyz100000000000000000000",
+        "recentcompletedz1500000000000000",
+        "ownedrecentz11000000000000000000",
+        "horizonedgeinz130000000000000000"
+      ],
+      "pinned": [
+        "pinfailedz9000000000000000000000",
+        "pinrecentz9000000000000000000000",
+        "pinoldz6000000000000000000000000"
+      ],
+      "stashed": [
+        "stashedrecentz130000000000000000",
+        "stashedoldrowz130000000000000000"
+      ]
     }
   }
 }

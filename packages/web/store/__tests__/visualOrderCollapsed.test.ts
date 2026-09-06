@@ -249,8 +249,11 @@ describe("computeVisualOrder yourMove mirrors the panel's your-move sections", (
     computeVisualOrder(state, { yourMove: true }).map(tag);
   // stale: claims "working" but went quiet two days ago → the net files it in
   // NEEDS INPUT above the fresh idle row (queues sort oldest first).
-  const staleWorking = session("stale", { is_idle: false, agent_status: "working", updated_at: Date.now() - 2 * DAY });
-  const idleFresh = session("idle", { is_idle: true, updated_at: Date.now() - DAY });
+  // The status stamp goes back with the row's activity: the queue orders by when
+  // the state STARTED (shared inboxSortTime, ct-49550), and a row that has been
+  // quiet for two days did not have its status change a minute ago.
+  const staleWorking = session("stale", { is_idle: false, agent_status: "working", updated_at: Date.now() - 2 * DAY, agent_status_updated_at: Date.now() - 2 * DAY });
+  const idleFresh = session("idle", { is_idle: true, updated_at: Date.now() - DAY, agent_status_updated_at: Date.now() - DAY });
   const working = session("wk", { is_idle: false, agent_status: "working" });
   const withStale = { ...baseState, sessions: byId([staleWorking, idleFresh, working]) };
 

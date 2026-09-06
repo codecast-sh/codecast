@@ -23,6 +23,9 @@ import {
   rideLeadPlacements,
   inWorkingSet,
   inboxEpoch,
+  inboxSortTime,
+  inboxSortTimeOfRow,
+  INBOX_CREATE_GRACE_MS,
   isHardBlocked,
   placeInboxRow,
   placeProjectableRow,
@@ -31,6 +34,7 @@ import {
   shouldShowInInbox,
   type InboxBucket,
   type InboxPlacementInput,
+  type InboxSortTimeInput,
   type RollupRow,
   type WorkingSetRow,
 } from "./inboxProjection";
@@ -523,9 +527,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 6", () => {
+  test("the caps are the single source and the version is 8", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(6);
+    expect(INBOX_PROJECTION_VERSION).toBe(8);
   });
 });
 
@@ -701,5 +705,126 @@ describe("deriveLiveAt: one idle rule at any instant", () => {
         expect(live(r, a)).toEqual(live(r, b - 1));
       }
     }
+  });
+});
+
+// ── The sort time inside a bucket (ct-49550) ────────────────────────────────
+
+describe("inboxSortTime — one stamp per class", () => {
+  const MIN = 60_000;
+  const sort = (partial: Partial<InboxSortTimeInput>, now = EPOCH) =>
+    inboxSortTime({ work_state: "needs_input", ...partial } as InboxSortTimeInput, now);
+
+  // The table: which stamp each class reads when every stamp is present, and
+  // which one it falls back to as the ones above it go missing. Written as
+  // (class, row facts) → the event the order must name.
+  const CASES: Array<{ name: string; input: Partial<InboxSortTimeInput>; at: number }> = [
+    // needs_input: when the state started, whatever the last turn did.
+    { name: "needs_input reads the status start", input: { work_state: "needs_input", statusStartedAt: EPOCH - MIN, turnCompletedAt: EPOCH - HOUR, activityAt: EPOCH - 3 * HOUR }, at: EPOCH - MIN },
+    { name: "needs_input with no daemon falls back to activity", input: { work_state: "needs_input", activityAt: EPOCH - 3 * HOUR }, at: EPOCH - 3 * HOUR },
+    // done: when the turn ended — the stamp outlives later status writes.
+    { name: "done reads the completed turn", input: { work_state: "done", turnCompletedAt: EPOCH - MIN, statusStartedAt: EPOCH - HOUR, activityAt: EPOCH - 3 * HOUR }, at: EPOCH - MIN },
+    { name: "done without the turn stamp falls back to the status start", input: { work_state: "done", statusStartedAt: EPOCH - HOUR, activityAt: EPOCH - 3 * HOUR }, at: EPOCH - HOUR },
+    // working: the most recent PRIOR attention event, so a session that just
+    // came back from a settle outranks one grinding for an hour.
+    { name: "working reads the previous turn's end", input: { work_state: "working", turnCompletedAt: EPOCH - MIN, statusStartedAt: EPOCH - 30 * MIN, activityAt: EPOCH }, at: EPOCH - MIN },
+    { name: "working that never settled falls back to when it started working", input: { work_state: "working", statusStartedAt: EPOCH - 30 * MIN, activityAt: EPOCH }, at: EPOCH - 30 * MIN },
+    // dormant: the wake it parks on.
+    { name: "dormant reads the named wake", input: { work_state: "dormant", wakeAt: EPOCH + HOUR, statusStartedAt: EPOCH - MIN, activityAt: EPOCH - MIN }, at: EPOCH + HOUR },
+    { name: "dormant with no named wake reads when it parked", input: { work_state: "dormant", statusStartedAt: EPOCH - MIN, activityAt: EPOCH - 3 * HOUR }, at: EPOCH - MIN },
+    // idle: blank or retired — plain recency.
+    { name: "idle reads plain recency", input: { work_state: "idle", activityAt: EPOCH - HOUR, statusStartedAt: EPOCH - MIN, turnCompletedAt: EPOCH - MIN }, at: EPOCH - HOUR },
+  ];
+
+  for (const c of CASES) {
+    test(c.name, () => {
+      expect(sort(c.input).at).toBe(c.at);
+    });
+  }
+
+  test("every class but dormant orders newest first", () => {
+    for (const ws of ["needs_input", "done", "working", "idle"] as const) {
+      const fresh = sort({ work_state: ws, statusStartedAt: EPOCH - MIN, turnCompletedAt: EPOCH - MIN, activityAt: EPOCH - MIN });
+      const old = sort({ work_state: ws, statusStartedAt: EPOCH - HOUR, turnCompletedAt: EPOCH - HOUR, activityAt: EPOCH - HOUR });
+      expect(fresh.key).toBeLessThan(old.key);
+    }
+  });
+
+  test("dormant orders by the soonest wake, and an unnamed wake files after every named one", () => {
+    const soon = sort({ work_state: "dormant", wakeAt: EPOCH + MIN });
+    const later = sort({ work_state: "dormant", wakeAt: EPOCH + HOUR });
+    expect(soon.key).toBeLessThan(later.key);
+    const unnamedFresh = sort({ work_state: "dormant", statusStartedAt: EPOCH - MIN });
+    const unnamedStale = sort({ work_state: "dormant", statusStartedAt: EPOCH - HOUR });
+    expect(unnamedFresh.key).toBeLessThan(unnamedStale.key);
+    expect(later.key).toBeLessThan(unnamedFresh.key);
+  });
+
+  // A session the user just started has none of the events above, so ambient
+  // output on older rows would push it out of sight (Orca CREATE_GRACE_MS).
+  test("a brand new session holds the top of a freshest-first list for the grace, then rejoins", () => {
+    const createdAt = EPOCH - MIN;
+    const born = (now: number) => sort({ work_state: "working", statusStartedAt: EPOCH - 3 * HOUR, activityAt: EPOCH - 3 * HOUR, createdAt }, now);
+    const busy = sort({ work_state: "working", turnCompletedAt: EPOCH - MIN });
+    expect(born(EPOCH).key).toBeLessThan(busy.key);
+    expect(born(EPOCH).key).toBe(-(createdAt + INBOX_CREATE_GRACE_MS));
+    // Past the window the floor lifts and the row's own stamp speaks again.
+    const after = createdAt + INBOX_CREATE_GRACE_MS;
+    expect(born(after).key).toBe(-(EPOCH - 3 * HOUR));
+    // Two sessions inside the window keep their creation order.
+    const older = sort({ work_state: "working", createdAt: createdAt - MIN }, EPOCH);
+    expect(sort({ work_state: "working", createdAt }, EPOCH).key).toBeLessThan(older.key);
+  });
+
+  // The stamp itself never moves: a queue the reader clears top-down orders by
+  // it, and a floor that lifts a row in a freshest-first list would sink it
+  // there — where a brand new row belongs anyway.
+  test("the grace floors the key only, never the stamp", () => {
+    const createdAt = EPOCH - MIN;
+    expect(sort({ work_state: "needs_input", statusStartedAt: EPOCH - 3 * HOUR, createdAt }, EPOCH).at).toBe(EPOCH - 3 * HOUR);
+  });
+
+  test("the grace never applies to a named wake: the future is a fact, not a floor", () => {
+    const parked = sort({ work_state: "dormant", wakeAt: EPOCH + HOUR, createdAt: EPOCH - MIN }, EPOCH);
+    expect(parked).toEqual({ at: EPOCH + HOUR, key: EPOCH + HOUR });
+  });
+
+  // An Infinity off a corrupted row would pin the session to the top of its
+  // group forever; a zero or a missing stamp means "no such event".
+  test("a non-finite or absent stamp reads as no event", () => {
+    expect(sort({ work_state: "done", turnCompletedAt: Infinity, statusStartedAt: EPOCH - HOUR }).at).toBe(EPOCH - HOUR);
+    expect(sort({ work_state: "done", turnCompletedAt: NaN, activityAt: EPOCH - HOUR }).at).toBe(EPOCH - HOUR);
+    expect(sort({ work_state: "done" }).at).toBe(0);
+    expect(sort({ work_state: "working", createdAt: Infinity }, EPOCH).key).toBe(0);
+  });
+});
+
+describe("inboxSortTimeOfRow — the replicated fields the sort reads", () => {
+  test("the stamps come off the row exactly once, for web, mobile and the server alike", () => {
+    const r = row("s", {
+      updated_at: EPOCH - 3 * HOUR,
+      started_at: EPOCH - 3 * DAY,
+      agent_status_updated_at: EPOCH - 2 * HOUR,
+      turn_completed_at: EPOCH - HOUR,
+    });
+    expect(inboxSortTimeOfRow(r, "needs_input", EPOCH).at).toBe(EPOCH - 2 * HOUR);
+    expect(inboxSortTimeOfRow(r, "done", EPOCH).at).toBe(EPOCH - HOUR);
+    expect(inboxSortTimeOfRow(r, "idle", EPOCH).at).toBe(EPOCH - 3 * HOUR);
+  });
+
+  test("a snooze and a live loop are named wakes; an armed trigger's next run is not replicated", () => {
+    const base = { updated_at: EPOCH - HOUR, agent_status_updated_at: EPOCH - HOUR };
+    expect(inboxSortTimeOfRow(row("z", { ...base, inbox_snoozed_until: EPOCH + HOUR }), "dormant", EPOCH).at).toBe(EPOCH + HOUR);
+    expect(inboxSortTimeOfRow(row("l", { ...base, loop_state: { status: "armed", wakeup_at: EPOCH + 2 * HOUR, event_at: EPOCH - HOUR } }), "dormant", EPOCH).at).toBe(EPOCH + 2 * HOUR);
+    // A cancelled loop names no time: the row files with the unnamed wakes.
+    const cancelled = inboxSortTimeOfRow(row("c", { ...base, loop_state: { status: "cancelled", wakeup_at: EPOCH + 2 * HOUR, event_at: EPOCH - HOUR } }), "dormant", EPOCH);
+    expect(cancelled.at).toBe(EPOCH - HOUR);
+    expect(cancelled.key).toBeGreaterThan(EPOCH + 2 * HOUR);
+    expect(inboxSortTimeOfRow(row("t", { ...base, armed_trigger_kind: "standing" }), "dormant", EPOCH).at).toBe(EPOCH - HOUR);
+  });
+
+  test("a brand new row floors its key on started_at", () => {
+    const r = row("n", { updated_at: EPOCH - 2 * DAY, started_at: EPOCH - 60_000 });
+    expect(inboxSortTimeOfRow(r, "idle", EPOCH).key).toBe(-(EPOCH - 60_000 + INBOX_CREATE_GRACE_MS));
   });
 });
