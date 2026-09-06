@@ -43,6 +43,19 @@ case "$BUMP_TYPE" in
   patch) PATCH=$((PATCH + 1)) ;;
 esac
 NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+# Same trap as the CLI: the bump is arithmetic on a local file, so a checkout
+# behind main computes a version that is already live, and this script would
+# publish older bytes under it and hand the fleet that floor. latest-mac.yml in
+# R2 is what electron-updater reads through dl.codecast.sh. (ct-49566)
+# Two commands, not a pipe: `set -e` ignores a failing left-hand side, and a
+# download that quietly produced nothing would compare against an empty string.
+aws s3 cp "s3://$R2_BUCKET/desktop/latest-mac.yml" /tmp/codecast-published-latest-mac.yml \
+  --endpoint-url "$R2_ENDPOINT"
+PUBLISHED_VERSION=$(awk '/^version:/ {print $2; exit}' /tmp/codecast-published-latest-mac.yml)
+bun "$REPO_ROOT/scripts/ci/release-version-gate.ts" \
+  --channel "Desktop" --published "$PUBLISHED_VERSION" --next "$NEW_VERSION"
+
 jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
 
 echo "=== Releasing Codecast Desktop v$NEW_VERSION (was v$OLD_VERSION) ==="
