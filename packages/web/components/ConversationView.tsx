@@ -252,7 +252,7 @@ import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
-import { pendingBannerState, pendingRetryClientId, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { pendingBannerState, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 
@@ -8008,14 +8008,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  // Retry affordance for a message stuck in the optimistic/pending state: if
-  // the agent never echoes it back (born-dead session, dropped delivery), the
-  // row renders pending-striped forever with no way out. After a grace period
-  // surface "Retry" right on the message — it fires the same kill & restart as
-  // the header dropdown, and restartSession re-pends this conversation's
-  // failed/injected messages so the daemon re-delivers this exact message into
-  // the revived session. Optimistic rows only exist for the local sender, so
-  // visibility here implies the viewer owns the conversation.
   const [retryVisible, setRetryVisible] = useState(false);
   const [retryState, setRetryState] = useState<"idle" | "inflight" | "sent">("idle");
   // Set on click; drives the live progress subscription below. Never cleared
@@ -8025,7 +8017,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const [retryStartsSession, setRetryStartsSession] = useState(false);
   const retrying = retryState !== "idle";
   useWatchEffect(() => {
-    if (retryState !== "sent") return;
+    if (retryState === "idle") return;
     const timer = setTimeout(() => setRetryState("idle"), 30_000);
     return () => clearTimeout(timer);
   }, [retryState]);
@@ -8084,9 +8076,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     conversationId && isConvexId(conversationId) ? conversationId : null,
     !!isPending,
   );
-  const messageReachedSession = conversationPending?.status === "injected" || conversationPending?.status === "delivered";
+  const messageReachedSession = pendingMessageReachedSession(messageId, conversationPending);
   const bannerState = pendingBannerState(agentStatus, {
-    retryEligible: retryVisible,
+    retryEligible: retryVisible && pendingMessageCanRetry(content),
     restartInFlight: retrying,
     idleGraceElapsed,
     bootGraceElapsed,
@@ -8123,17 +8115,12 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     if (retryStage?.tone === "error" && retryState === "sent") setRetryState("idle");
   }, [retryStage?.tone, retryState]);
   const handleRetryRestart = async () => {
-    if (!conversationId || retryState === "inflight") return;
+    if (!conversationId || retryState === "inflight" || !pendingMessageCanRetry(content)) return;
     setRetryState("inflight");
     setRetryStartsSession(!isPending || !agentStatus);
     setRetryClickedAt(Date.now());
     setRetryWaitingLong(false);
     try {
-      // A still-pending optimistic message may have stranded client-side before
-      // its durable send ever reached the server (e.g. a pre-send enrichment
-      // stalled). Re-issue the send first — it's idempotent on client_id
-      // (messageId IS the optimistic clientId), so it creates the missing
-      // pending row or no-ops against an existing one.
       const retryClientId = pendingRetryClientId(messageId);
       if (isPending && retryClientId && isConvexId(conversationId) && content.trim()) {
         // Replay the row's own send args (dispatched bytes + image ids): the
@@ -8144,8 +8131,27 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         const pendingRow = (useInboxStore.getState().pendingMessages[conversationId] || [])
           .find((m) => m._clientId === messageId || m._id === messageId);
         const send = pendingRow ? pendingRowSendArgs(pendingRow) : { content, imageIds: undefined, uploading: false };
-        if (!send.uploading) {
+        if (send.uploading) {
+          setRetryState("idle");
+          toast.info("Your attachment is still uploading");
+          return;
+        }
+        const status = await useInboxStore.getState().retryPendingMessage(conversationId, { clientId: retryClientId });
+        if (!status) throw new Error("The retry service is unavailable. Your message is still saved.");
+        if (status === "not_found") {
           useInboxStore.getState().sendMessage(conversationId, send.content || content, send.imageIds, retryClientId);
+        } else if (status === "cancelled" || status === "delivered" || status === "injected") {
+          setRetryState("idle");
+          toast.info(status === "cancelled" ? "This message was cancelled" : "This message has already reached the session");
+          return;
+        }
+      } else if (isPending && messageId.startsWith("serverpending_")) {
+        const status = await useInboxStore.getState().retryPendingMessage(conversationId, { messageId: messageId.slice("serverpending_".length) });
+        if (!status) throw new Error("The retry service is unavailable. Your message is still saved.");
+        if (status !== "pending") {
+          setRetryState("idle");
+          toast.info(status === "not_found" || status === "cancelled" ? "This message is no longer queued" : "This message has already reached the session");
+          return;
         }
       }
       // If the session is alive (any heartbeating agent_status — idle, working,
@@ -8166,7 +8172,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       setRetryState("sent");
     } catch (err) {
       setRetryState("idle");
-      toast.error(`Restart failed: ${err instanceof Error ? err.message : String(err)}`);
+      captureException(err);
+      toast.error(`Retry failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -13663,7 +13670,7 @@ const ConversationViewInner = (
       const norm = normalizePendingContent(serverPending.content);
       if (norm && !seenContent.has(norm)) {
         toAdd.push({
-          _id: `serverpending_${pendingConvId}`,
+          _id: `serverpending_${serverPending.message_id}`,
           role: 'user',
           content: serverPending.content,
           timestamp: serverPending.created_at,
