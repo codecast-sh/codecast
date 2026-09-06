@@ -172,7 +172,8 @@ jobs:
           osascript <<'APPLESCRIPT' &
           tell application "System Events"
             repeat 1800 times
-              tell process "CoreServicesUIAgent"
+              if exists process "CoreServicesUIAgent" then
+                tell process "CoreServicesUIAgent"
                 repeat with dialogWindow in windows
                   if exists button "Open" of dialogWindow then
                     set labels to value of static texts of dialogWindow as text
@@ -181,7 +182,8 @@ jobs:
                     end if
                   end if
                 end repeat
-              end tell
+                end tell
+              end if
               delay 0.2
             end repeat
           end tell
