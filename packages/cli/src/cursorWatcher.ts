@@ -1,8 +1,9 @@
 import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
-import { Database } from "bun:sqlite";
-import { timeSyncFs } from "./slowSync.js";
+import { daemonWorkersEnabled } from "./workers/bridge.js";
+import { collectScan, yieldScanBatch } from "./workers/scanClient.js";
+import type { ScanJob, ScanRow } from "./workers/scanTypes.js";
 
 export interface CursorSessionEvent {
   sessionId: string;
@@ -92,12 +93,9 @@ export class CursorWatcher extends EventEmitter {
   private pollInterval: NodeJS.Timeout | null = null;
   private cursorPath: string;
   private workspaceStates: Map<string, WorkspaceState> = new Map();
-  // Newest mtime of each workspace's state.vscdb (or its WAL) at the last
-  // successful check. Opening a SQLite file and running two queries is real
-  // I/O; doing it for every workspace every 2s pinned the loop whenever the
-  // disk was busy. A file nobody wrote to since the last look cannot hold new
-  // chat rows, so it is skipped on a stat alone.
-  private dbMtimes: Map<string, number> = new Map();
+  private dbMtimes: Map<string, string> = new Map();
+  private generation = 0;
+  private pollRoot = "";
   private pollFrequencyMs: number;
   private isFirstPoll: boolean = true;
   // Circuit breaker: suppress error logging for workspaces that fail repeatedly
@@ -129,6 +127,7 @@ export class CursorWatcher extends EventEmitter {
       return;
     }
 
+    this.generation++;
     this.emit("ready");
 
     this.pollInterval = setInterval(() => {
@@ -139,6 +138,7 @@ export class CursorWatcher extends EventEmitter {
   }
 
   stop(): void {
+    this.generation++;
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
@@ -162,125 +162,79 @@ export class CursorWatcher extends EventEmitter {
   }
 
   private async pollWorkspacesOnce(workspaceStoragePath: string): Promise<void> {
+    if (this.pollRoot !== workspaceStoragePath) {
+      this.pollRoot = workspaceStoragePath;
+      this.generation++;
+      this.dbMtimes.clear();
+      this.workspaceStates.clear();
+      this.workspaceErrorCounts.clear();
+      this.isFirstPoll = true;
+    }
+    const generation = this.generation, home = process.env.HOME;
+    const current = () => generation === this.generation && home === process.env.HOME && this.pollRoot === workspaceStoragePath;
     try {
-      const workspaceDirs = await fs.promises.readdir(workspaceStoragePath);
+      const rows = await this.readCursorRows({ name: "cursorWorkspaces", root: workspaceStoragePath });
+      if (!current()) return;
+      const rootError = rows.find(row => row.type === "cursorError" && row.path === workspaceStoragePath);
+      if (rootError?.type === "cursorError") throw Object.assign(new Error(rootError.message), { code: rootError.code });
+      const workspaces = rows.filter((row): row is Extract<ScanRow, {type:"cursorWorkspaceDb"}> => row.type === "cursorWorkspaceDb");
+      const present = new Set(workspaces.map(row => row.path));
+      for (const key of this.dbMtimes.keys()) if (!present.has(key)) this.dbMtimes.delete(key);
       if (this.isFirstPoll) {
-        console.log(`[CursorWatcher] Found ${workspaceDirs.length} workspace directories`);
-      }
-
-      // Build list of workspaces with their db paths and mtimes. Stats are
-      // batched so a machine with hundreds of workspaces does not serialize
-      // two syscalls per workspace behind each other's latency.
-      const workspaces: { hash: string; dbPath: string; mtime: number }[] = [];
-      const statMtime = async (workspaceHash: string) => {
-        const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
-        // A missing DB (ENOENT) skips the workspace; so does any other stat error.
-        const main = await fs.promises.stat(dbPath).catch(() => null);
-        if (!main) return;
-        // In WAL mode a write lands in state.vscdb-wal first; the main file's
-        // mtime only moves on checkpoint.
-        const wal = await fs.promises.stat(`${dbPath}-wal`).catch(() => null);
-        workspaces.push({ hash: workspaceHash, dbPath, mtime: Math.max(main.mtimeMs, wal?.mtimeMs ?? 0) });
-      };
-      const STAT_BATCH = 16;
-      for (let i = 0; i < workspaceDirs.length; i += STAT_BATCH) {
-        await Promise.all(workspaceDirs.slice(i, i + STAT_BATCH).map(statMtime));
-      }
-
-      // Sort by mtime descending (newest first) on first poll
-      if (this.isFirstPoll) {
-        workspaces.sort((a, b) => b.mtime - a.mtime);
+        workspaces.sort((a, b) => b.mtimeMs - a.mtimeMs);
         this.isFirstPoll = false;
       }
-
-      for (const workspace of workspaces) {
-        if (this.dbMtimes.get(workspace.hash) === workspace.mtime) continue;
-        try {
-          await this.checkWorkspaceForChanges(workspace.hash, workspace.dbPath);
-          this.dbMtimes.set(workspace.hash, workspace.mtime);
-          // Reset error count on success
-          this.workspaceErrorCounts.delete(workspace.hash);
-        } catch (err) {
-          const count = (this.workspaceErrorCounts.get(workspace.hash) || 0) + 1;
-          this.workspaceErrorCounts.set(workspace.hash, count);
-          // Only emit errors until threshold, then suppress to avoid log flooding
-          if (count <= CursorWatcher.ERROR_SUPPRESS_THRESHOLD) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            const suffix = count === CursorWatcher.ERROR_SUPPRESS_THRESHOLD ? " (suppressing further errors for this workspace)" : "";
-            this.emit("error", new Error(`Failed to check workspace ${workspace.hash}: ${error.message}${suffix}`));
+      for (const row of rows) if (row.type === "cursorError") this.workspaceReadError(path.basename(path.dirname(row.path)), new Error(row.message));
+      const changed = workspaces.filter(row => this.dbMtimes.get(row.path) !== row.identity);
+      for (let i = 0; i < changed.length; i += 128) {
+        const batch = changed.slice(i, i + 128);
+        const observations = await this.readCursorRows({ name: "cursorDatabases", paths: batch.map(row => row.path) });
+        if (!current()) return;
+        for (const workspace of batch) {
+          const hash = path.basename(path.dirname(workspace.path));
+          const observation = observations.find(row => (row.type === "cursorDb" || row.type === "cursorError") && row.path === workspace.path);
+          if (observation?.type !== "cursorDb") {
+            this.workspaceReadError(hash, new Error(observation?.type === "cursorError" ? observation.message : "Cursor observation missing"));
+            continue;
           }
+          this.checkWorkspaceForChanges(hash, observation);
+          if (!current()) return;
+          this.dbMtimes.set(workspace.path, workspace.identity);
+          this.workspaceErrorCounts.delete(hash);
         }
+        await yieldScanBatch();
+        if (!current()) return;
       }
     } catch (err) {
-      // Access revoked mid-run (System Settings toggle): stop polling instead
-      // of failing every 2s, and let the daemon record the denial.
+      if (!current()) return;
       if (isTccDeniedError(err)) {
         this.stop();
         this.emit("denied");
         return;
       }
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.emit("error", error);
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
     }
   }
 
-  private async getWorkspaceFolderPath(workspaceStorageDir: string): Promise<string | null> {
-    const workspaceJsonPath = path.join(workspaceStorageDir, "workspace.json");
-    try {
-      // A workspace without the file (ENOENT) has no folder to name.
-      const content = await fs.promises.readFile(workspaceJsonPath, "utf-8");
-      const data = JSON.parse(content);
+  private async readCursorRows(job: ScanJob): Promise<ScanRow[]> {
+    if (daemonWorkersEnabled()) return collectScan(job);
+    const { scanPages } = await import("./workers/scanJobs.js");
+    const rows: ScanRow[] = [];
+    for await (const page of scanPages(job)) { rows.push(...page); await yieldScanBatch(); }
+    return rows;
+  }
 
-      // workspace.json contains { "folder": "file:///path/to/folder" }
-      // or { "workspace": "file:///path/to/workspace.code-workspace" }
-      const folderUri = data.folder || data.workspace;
-      if (!folderUri) {
-        return null;
-      }
-
-      // Convert file:// URI to path
-      if (folderUri.startsWith("file://")) {
-        const decoded = decodeURIComponent(folderUri.slice(7));
-        // On Windows, remove leading slash from /C:/path
-        if (process.platform === "win32" && decoded.match(/^\/[A-Z]:/i)) {
-          return decoded.slice(1);
-        }
-        return decoded;
-      }
-
-      return folderUri;
-    } catch {
-      return null;
+  private workspaceReadError(hash: string, error: Error): void {
+    const count = (this.workspaceErrorCounts.get(hash) || 0) + 1;
+    this.workspaceErrorCounts.set(hash, count);
+    if (count <= CursorWatcher.ERROR_SUPPRESS_THRESHOLD) {
+      const suffix = count === CursorWatcher.ERROR_SUPPRESS_THRESHOLD ? " (suppressing further errors for this workspace)" : "";
+      this.emit("error", new Error(`Failed to check workspace ${hash}: ${error.message}${suffix}`));
     }
   }
 
-  // bun:sqlite is synchronous, so the open plus two queries is the one block
-  // of sync work this watcher keeps; it is timed under its own name so a slow
-  // disk names the workspace DB, not the poll.
-  private readChatMaxRowId(dbPath: string): number | null {
-    return timeSyncFs("cursorWatcher.sqlite", dbPath, () => {
-      const db = new Database(dbPath, { readonly: true });
-      try {
-        const tableExists = db
-          .query<{ name: string }, []>(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'"
-          )
-          .get();
-        if (!tableExists) return null;
-        const maxRowIdResult = db
-          .query<{ maxRowId: number | null }, []>(
-            "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
-          )
-          .get();
-        return maxRowIdResult?.maxRowId ?? 0;
-      } finally {
-        db.close();
-      }
-    });
-  }
-
-  private async checkWorkspaceForChanges(workspaceHash: string, dbPath: string): Promise<void> {
-    const maxRowId = this.readChatMaxRowId(dbPath);
+  private checkWorkspaceForChanges(workspaceHash: string, observation: Extract<ScanRow, {type:"cursorDb"}>): void {
+    const {maxRowId, path: dbPath} = observation;
     if (maxRowId === null) return;
 
     const state = this.workspaceStates.get(workspaceHash);
@@ -293,8 +247,7 @@ export class CursorWatcher extends EventEmitter {
     }
     if (!emitting) return;
 
-    // Get actual workspace folder path from workspace.json; only an emit needs it.
-    const actualPath = (await this.getWorkspaceFolderPath(path.dirname(dbPath))) || workspaceHash;
+    const actualPath = observation.workspacePath || workspaceHash;
     if (!state) {
       console.log(`[CursorWatcher] Emitting session for ${workspaceHash} (${actualPath}), maxRowId=${maxRowId}`);
     }

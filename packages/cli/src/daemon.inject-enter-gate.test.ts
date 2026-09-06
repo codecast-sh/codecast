@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { awaitTmuxComposerPayload, drainTmuxComposer, tmuxWatchablePrefix } from "./daemon.js";
+import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, drainTmuxComposer, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
 
 // ct-40212 / ct-47277: a painted composer does not prove stdin is being read,
 // and a foreign probe character typed to prove it can outrace any screen-based
@@ -214,13 +214,58 @@ describe("awaitTmuxComposerPayload", () => {
 });
 
 describe("drainTmuxComposer", () => {
-  test("sends three blind C-a/C-k cycles", async () => {
+  const CYCLE = ["C-a", "C-k", "BSpace"];
+  // Pane whose composer shows `draft` (multi-line drafts render as
+  // continuation lines under the glyph, then the box rule).
+  const paneWith = (draft: string) =>
+    `⏺ done\n${"─".repeat(20)}\n❯ ${draft.split("\n").join("\n  ")}\n${"─".repeat(20)}\n  ⏵⏵ bypass permissions on`;
+  const fakeExec = (captures: string[]) => {
     const sends: string[] = [];
+    let captureCount = 0;
     const exec = async (args: Args): Promise<{ stdout: string }> => {
       if (args[0] === "send-keys") sends.push(args[args.length - 1]);
+      if (args[0] === "capture-pane") return { stdout: captures[Math.min(captureCount++, captures.length - 1)] };
       return { stdout: "" };
     };
-    await drainTmuxComposer("t:0.0", exec as any);
-    expect(sends).toEqual(["C-a", "C-k", "C-a", "C-k", "C-a", "C-k"]);
+    return { exec, sends, captured: () => captureCount };
+  };
+
+  test("three cycles of C-a/C-k/BSpace, then stops once the prompt reads empty", async () => {
+    const f = fakeExec([paneWith("")]);
+    await drainTmuxComposer("t:0.0", f.exec as any);
+    expect(f.sends).toEqual([...CYCLE, ...CYCLE, ...CYCLE]);
+    expect(f.captured()).toBe(1);
+  });
+
+  test("keeps cycling while a multi-line draft is still visible", async () => {
+    // A 7-line <session-message> draft: the first two checks still show text.
+    const f = fakeExec([paneWith("<session-message>\nline\nline\nline"), paneWith("<session-message>"), paneWith("")]);
+    await drainTmuxComposer("t:0.0", f.exec as any);
+    expect(f.sends.length).toBe(9 * CYCLE.length);
+    expect(f.sends.filter(k => k === "BSpace").length).toBe(9);
+    expect(f.captured()).toBe(3);
+  });
+
+  test("gives up after DRAIN_MAX_CYCLES when the prompt never empties", async () => {
+    const f = fakeExec([paneWith("stuck")]);
+    await drainTmuxComposer("t:0.0", f.exec as any);
+    expect(f.sends.length).toBe(DRAIN_MAX_CYCLES * CYCLE.length);
+  });
+
+  test("a glyphless pane ends the drain after the first check", async () => {
+    const f = fakeExec(["no prompt here"]);
+    await drainTmuxComposer("t:0.0", f.exec as any);
+    expect(f.sends.length).toBe(3 * CYCLE.length);
+  });
+});
+
+describe("tmuxComposerText", () => {
+  test("returns the prompt line plus continuation lines up to the box rule", () => {
+    const pane = `⏺ done\n${"─".repeat(20)}\n❯ first\n  second\n${"─".repeat(20)}\n  status`;
+    expect(tmuxComposerText(pane)).toBe(" first\n  second");
+  });
+  test("empty composer reads blank; glyphless pane reads null", () => {
+    expect(tmuxComposerText(`❯ \n${"─".repeat(20)}`)?.trim()).toBe("");
+    expect(tmuxComposerText("nothing")).toBeNull();
   });
 });

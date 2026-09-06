@@ -103,12 +103,13 @@ function readTranscriptCwd(filePath: string): string | undefined {
 export function isTranscriptFileInSyncScope(
   filePath: string,
   config?: Config,
+  observedCwd?: string | null,
 ): boolean {
   if (isTestScratchPath(filePath)) return false;
   if (isClaudeTranscriptOutOfWatchScope(filePath)) return false;
   if (!config) return true;
 
-  const recordedCwd = readTranscriptCwd(filePath);
+  const recordedCwd = observedCwd !== undefined ? observedCwd : readTranscriptCwd(filePath);
   // A selected-project configuration must fail closed when a new/partial file
   // has not recorded its cwd yet. The live watcher can reconsider it once the
   // cwd row arrives; diagnostics must not "repair" it into a zombie ledger row.
@@ -148,10 +149,10 @@ export async function performReconciliation(
   // thousands of files, and a sync scan pinned the loop for the whole read.
   await walkFiles(
     claudeProjectsDir,
-    { dirFilter: watchDirFilter, fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
+    { observeCwd: true, policy: { dirs: "claudeWatch", files: "reconciliation" }, dirFilter: watchDirFilter, fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
     (f) => {
       if (now - f.stat.mtimeMs >= maxAgeMs) return;
-      if (!isTranscriptFileInSyncScope(f.path, config)) return;
+      if (!isTranscriptFileInSyncScope(f.path, config, f.cwd)) return;
       recentFiles.push({ path: f.path, mtime: f.stat.mtimeMs });
     },
   );

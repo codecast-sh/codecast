@@ -71,3 +71,26 @@ export function enumerateAgentHomeDirs(home = process.env.HOME): string[] {
   }
   return Array.from(dirs);
 }
+
+export async function enumerateLocalRootsAsync(home: string, started: string[] = []): Promise<string[]> {
+  const missing = (error: unknown) => ['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException)?.code ?? '');
+  const roots = new Set<string>();
+  for (const parent of PROJECT_PARENT_DIRS) {
+    const parentPath = path.join(home, parent);
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(parentPath, { withFileTypes: true }); } catch (error) { if (!missing(error)) throw error; continue; }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || !entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const full = path.join(parentPath, entry.name);
+      try { if ((await fs.promises.stat(full)).isDirectory()) roots.add(full); } catch (error) { if (!missing(error)) throw error; }
+    }
+  }
+  const combined = new Set([...roots].slice(0, MAX_PROJECT_ROOTS));
+  for (const name of AGENT_HOME_DIRS) {
+    try { const real = await fs.promises.realpath(path.join(home, name)); if ((await fs.promises.stat(real)).isDirectory()) combined.add(real); } catch (error) { if (!missing(error)) throw error; }
+  }
+  for (const p of started) {
+    try { if ((await fs.promises.stat(p)).isDirectory()) combined.add(p); } catch (error) { if (!missing(error)) throw error; }
+  }
+  return [...combined].slice(0, MAX_PROJECT_ROOTS);
+}

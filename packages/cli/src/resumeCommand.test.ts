@@ -17,6 +17,7 @@ import {
   resolveResumeAgentType,
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
+  grokStableRulesFragment,
 } from "./resumeCommand.js";
 
 function tmpDir(prefix: string): string {
@@ -522,5 +523,53 @@ describe("model choices on native resume", () => {
 
   test("does not interpolate an unknown model into the shell", () => {
     expect(buildNonClaudeResumeCommand("pi", "session123", { model: "openai/gpt;touch /tmp/injected" })).toBe("pi --session session123");
+  });
+});
+
+// A native fork is the registry forkCmd with the same trailing flags a plain
+// resume gets (args, permission flags, model/effort) — grok's `--fork-session`
+// copies the parent's session bundle under the new uuid (live-verified).
+describe("buildNonClaudeResumeCommand native fork", () => {
+  const parent = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+  const child = "e1d4009c-ee25-4e8e-9090-5671b3a134e6";
+
+  test("grok forks through --resume <parent> --fork-session --session-id <child>", () => {
+    expect(buildNonClaudeResumeCommand("grok", child, { forkFromSessionId: parent })).toBe(
+      `grok --resume ${parent} --fork-session --session-id ${child}`,
+    );
+  });
+
+  test("grok fork keeps the resume flag tail (args + permission mode)", () => {
+    expect(
+      buildNonClaudeResumeCommand("grok", child, {
+        forkFromSessionId: parent,
+        grokArgs: "--fullscreen",
+        grokPermFlags: "--permission-mode bypassPermissions",
+      }),
+    ).toBe(`grok --resume ${parent} --fork-session --session-id ${child} --fullscreen --permission-mode bypassPermissions`);
+  });
+
+  test("a client without forkCmd refuses a native fork instead of resuming the parent", () => {
+    expect(() => buildNonClaudeResumeCommand("pi", child, { forkFromSessionId: parent })).toThrow(/native fork/);
+    expect(() => buildNonClaudeResumeCommand("codex", child, { forkFromSessionId: parent })).toThrow(/native fork/);
+  });
+});
+
+// grok's stable feed rides `--rules` as a shell substitution of a daemon-written
+// file: the text never enters argv, and the path must be shell-safe.
+describe("grok stable rules fragment", () => {
+  test("appends --rules with a cat substitution of the feed file", () => {
+    expect(grokStableRulesFragment("/Users/me/.codecast/stable-rules/conv_1.md")).toBe(' --rules "$(cat /Users/me/.codecast/stable-rules/conv_1.md)"');
+    expect(grokStableRulesFragment(undefined)).toBe("");
+  });
+  test("refuses a path that could break out of the substitution", () => {
+    expect(() => grokStableRulesFragment("/tmp/x); rm -rf ~ #.md")).toThrow(/shell-safe/);
+    expect(() => grokStableRulesFragment("/tmp/with space.md")).toThrow(/shell-safe/);
+  });
+  test("a grok resume carries the fragment after the permission flags; other clients never do", () => {
+    const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    expect(buildNonClaudeResumeCommand("grok", id, { grokPermFlags: "--permission-mode bypassPermissions", stableRulesFile: "/tmp/feed.md" }))
+      .toBe(`grok --resume ${id} --permission-mode bypassPermissions --rules "$(cat /tmp/feed.md)"`);
+    expect(buildNonClaudeResumeCommand("pi", id, { stableRulesFile: "/tmp/feed.md" })).toBe(`pi --session ${id}`);
   });
 });

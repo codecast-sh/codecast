@@ -57,6 +57,7 @@ export class CursorTranscriptWatcher extends EventEmitter {
 
     this.watcher = new RecursiveWatcher({
       path: this.historyPath,
+      scanPolicy: { dirs: "cursor", files: "cursor" },
       filter: isCursorTranscriptPath,
       // A project dir holds canvases, mcps and terminals next to
       // agent-transcripts; only the transcript subtree can hold a match.
@@ -79,10 +80,14 @@ export class CursorTranscriptWatcher extends EventEmitter {
   }
 
   // Files the watcher's priming walk found (one walk serves both), newest first.
-  private emitExistingFilesSorted(files: WalkFile[]): void {
+  private async emitExistingFilesSorted(files: WalkFile[]): Promise<void> {
+    const watcher = this.watcher;
     const matched = files.filter((f) => isCursorTranscriptPath(f.rel));
     matched.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-    for (const file of matched) {
+    for (let i = 0; i < matched.length; i++) {
+      if (i % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.watcher !== watcher) return;
+      const file = matched[i];
       this.handleFileEvent(file.path, "add");
     }
   }

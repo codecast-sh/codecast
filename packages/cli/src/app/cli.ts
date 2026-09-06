@@ -12,7 +12,7 @@
  *
  * Every verb attaches to that page over CDP and reads the app's own handles
  * (window.__CODECAST_BUILD, __syncActivity, __syncReplication, __navLog, and
- * the dev-only __inboxStore), so nothing here scrapes the DOM for state.
+ * __inboxStore), so nothing here scrapes the DOM for state.
  */
 import { Command } from "commander";
 import * as fs from "node:fs";
@@ -472,7 +472,7 @@ async function doctor(o: TargetOpts & { json?: boolean }, deps: PublishDeps): Pr
     }
   }
   add("handles", pr.devHandles ? "pass" : "warn",
-    pr.devHandles ? "dev handles present (__inboxStore); store-level verbs available" : "production bundle: no __inboxStore, drive through the UI only");
+    pr.devHandles ? "store handle present (__inboxStore); store-level verbs available" : "no __inboxStore on the page (a bundle from before the handle shipped in prod); drive through the UI only");
   add("signed in", pr.signedIn ? "pass" : "fail",
     pr.signedIn
       ? pr.user ? `${pr.user.email ?? pr.user.name ?? "?"} (${pr.user.id})` : "token present (identity unreadable without dev handles)"

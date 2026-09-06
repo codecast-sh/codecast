@@ -229,7 +229,9 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       "of reading back through it. First line: what this session is working on, plain\n" +
       "and unlabeled. You own it: rewrite it whenever the answer changes, and clear it\n" +
       "when it stops being true. The dashboard shows how many messages have passed\n" +
-      "since you wrote it, so a stale state is visible as stale.\n\n" +
+      "since you wrote it, so a stale state is visible as stale. A message from the\n" +
+      "human takes the pin down on its own (your declaration of who acts next has\n" +
+      "been answered); a send from another session or a trigger wake leaves it.\n\n" +
       "Subcommands:\n" +
       "  cast state                     Print the pinned state of this session\n" +
       "  cast state \"<text>\"            Pin (or replace) the state\n" +

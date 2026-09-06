@@ -87,6 +87,8 @@ describe.skipIf(!runtime)("doctor stub agent", () => {
       env: { ...process.env, DOCTOR_BOOT_TOKEN: "boot-feed" },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    let stdout = "";
+    child.stdout.on("data", (d) => { stdout += d; });
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += d; });
 
@@ -94,7 +96,7 @@ describe.skipIf(!runtime)("doctor stub agent", () => {
       // Wait for bootstrap (registry + 2 JSONL lines).
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
-        if (fs.existsSync(registryPath) && fs.existsSync(jsonlPath)) break;
+        if (stdout.includes("❯ ") && fs.existsSync(registryPath) && fs.existsSync(jsonlPath)) break;
         await new Promise((r) => setTimeout(r, 50));
       }
       expect(fs.existsSync(registryPath)).toBe(true);
@@ -111,7 +113,7 @@ describe.skipIf(!runtime)("doctor stub agent", () => {
         if (lines.length >= 4) break;
         await new Promise((r) => setTimeout(r, 50));
       }
-      expect(lines.length).toBeGreaterThanOrEqual(4);
+      expect({ lines: lines.length, stdout, stderr, runtime, exit: child.exitCode }).toMatchObject({ lines: 4 });
 
       // The production parser must accept every line and see the round trip.
       const messages = parseSessionFile(lines.join("\n") + "\n");
@@ -139,4 +141,74 @@ describe.skipIf(!runtime)("doctor stub agent", () => {
     }
     expect(stderr).toBe("");
   }, 20_000);
+});
+
+describe("doctor tmux reap safety", () => {
+  test.each([null, 0, NaN])("refuses an unknown live server PID %s", async livePid => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const killed: number[][] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, [], {
+      snapshotProcessTable: () => [{ pid: 100, ppid: 1, uid: 501, command: "tmux new-session" }],
+      liveTmuxServerPid: async () => livePid,
+      uid: () => 501,
+      selfPid: 999,
+      killProcessTree: async pids => { killed.push(pids); return { terminated: 0, killed: 0 }; },
+    });
+    expect(killed).toEqual([]);
+    expect(result).toMatchObject({ skip: true, detail: "tmux reap skipped: tmux-unreachable" });
+  });
+
+  test("refuses an unknown user", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const killed: number[][] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, [], {
+      snapshotProcessTable: () => [{ pid: 100, ppid: 1, uid: 501, command: "tmux new-session" }],
+      liveTmuxServerPid: async () => 100,
+      uid: () => undefined,
+      selfPid: 999,
+      killProcessTree: async pids => { killed.push(pids); return { terminated: 0, killed: 0 }; },
+    });
+    expect(killed).toEqual([]);
+    expect(result).toMatchObject({ skip: true, detail: "tmux reap skipped: owner-unknown" });
+  });
+
+  test("preserves the hosting server, live server, foreign users and ownerless processes", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const { parseProcessTable } = await import("./processTable.js");
+    const killed: number[][] = [];
+    const cleanup: string[] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 bun doctor\n300 1 502 tmux new-session\n400 1 tmux new-session"),
+      liveTmuxServerPid: async () => 100,
+      uid: () => 501,
+      selfPid: 201,
+      killProcessTree: async pids => { killed.push(pids); return { terminated: 0, killed: 0 }; },
+    });
+    expect(killed).toEqual([]);
+    expect(cleanup).toEqual([]);
+    expect(result.detail).toContain("skipped self-hosting server(s) 200");
+    expect(result).toMatchObject({ skip: true });
+  });
+
+  test("only reaps a positively identified stale generation", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const { parseProcessTable } = await import("./processTable.js");
+    const killed: number[][] = [];
+    const cleanup: string[] = [];
+    await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 claude"),
+      liveTmuxServerPid: async () => 100,
+      uid: () => 501,
+      selfPid: 999,
+      killProcessTree: async pids => { killed.push(pids); return { terminated: pids.length, killed: 0 }; },
+    });
+    expect(killed).toEqual([[201, 200]]);
+    expect(cleanup).toEqual(["reaped stale tmux server(s) 200"]);
+  });
+});
+
+test("doctor runtime can capture a real child's stdout before using it as a measurement", () => {
+  const result = spawnSync(process.execPath, ["-e", "process.stdout.write('doctor-runtime-ready')"], { encoding: "utf-8" });
+  expect(result.stdout, "Subprocess capture failed; invoke this file with an explicit ./ path, not a Bun discovery filter").toBe("doctor-runtime-ready");
+  expect(result.status).toBe(0);
 });

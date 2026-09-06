@@ -453,6 +453,14 @@ describe("argvSessionId", () => {
     expect(argvSessionId("claude -r 3d2a9117-83fc-47ef-9993-5180b2cf7017")).toBe("3d2a9117-83fc-47ef-9993-5180b2cf7017");
     expect(argvSessionId("claude --session-id=c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00 --chrome")).toBe("c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00");
   });
+  test("a native fork declares the child (--session-id), not the parent it resumes", () => {
+    const parent = "e1d4009c-ee25-4e8e-9090-5671b3a134e6";
+    const child = "9bea2246-353d-492a-923d-302f763392f2";
+    expect(argvSessionId(`grok --resume ${parent} --fork-session --session-id ${child} --permission-mode bypassPermissions`)).toBe(child);
+    expect(argvSessionId(`claude --resume ${parent} --fork-session --session-id ${child}`)).toBe(child);
+    // A plain resume still names the resumed session.
+    expect(argvSessionId(`grok --resume ${parent} --permission-mode bypassPermissions`)).toBe(parent);
+  });
   test("reads codex resume <id> only right after the codex binary", () => {
     expect(argvSessionId("node /opt/homebrew/bin/codex resume 019fb73a-a740-7000-8000-000000000000")).toBe("019fb73a-a740-7000-8000-000000000000");
     // "resume" inside a prompt argument is just a word.
