@@ -31,6 +31,8 @@ import { targetFlags as browserTargetFlags } from "../browser/bridge/commands.js
 import { runVerb } from "../browser/cliEngine.js";
 import { connectToTab, evaluateOn, type EvalOutcome, type PageCtx } from "../browser/pageEval.js";
 import { readState } from "../browser/instance.js";
+import { defaultShotPath } from "../browser/shotFile.js";
+import { secureTempFile, TEMP_FILE_MODE } from "../tempFiles.js";
 import { repoRootFor } from "../gitPlane.js";
 import type { PublishDeps } from "../publish.js";
 
@@ -791,11 +793,15 @@ async function asUser(who: string | undefined, o: TargetOpts & { restore?: boole
 
 async function shot(pathArg: string | undefined, o: TargetOpts & { inline?: boolean }, deps: PublishDeps): Promise<void> {
   const target = await targetFor(o, deps);
-  const out = pathArg ?? path.join(os.tmpdir(), `cast-app-${Date.now()}.png`);
+  // The shared scratch policy: a 0700 directory of ours, the file owner-only,
+  // swept after a day (tempFiles.ts, ct-49556). A screenshot of the app shows
+  // whatever the human was signed into.
+  const out = pathArg ?? defaultShotPath("png");
   fs.mkdirSync(path.dirname(out), { recursive: true });
   await withPage(target, async (at) => {
     const res = await at.conn.send<{ data: string }>("Page.captureScreenshot", { format: "png" }, at.sessionId, 20_000);
-    fs.writeFileSync(out, Buffer.from(res.data, "base64"));
+    fs.writeFileSync(out, Buffer.from(res.data, "base64"), { mode: TEMP_FILE_MODE });
+    secureTempFile(out);
   });
   console.log(`${OK} ${out}`);
   if (o.inline !== false) console.log(inlineImageMarker(path.resolve(out)));

@@ -27,17 +27,18 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
   ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isRealSession,
-  realSessionKey, runEngine, runEngineJson,
+  parseEngineJson, realSessionKey, runEngine, runEngineJson,
 } from "./engine.js";
 import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags } from "./bridge/real.js";
 import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
-import { matchRefs, nearMatches } from "./snapshot.js";
+import { engineSnapshotJson, matchRefs, nearMatches, type EngineSnapshotPayload } from "./snapshot.js";
+import { defaultShotPath, imageSize, shotJson, SHOT_TEMP_KIND } from "./shotFile.js";
+import { agentTempPath, secureTempFile } from "../tempFiles.js";
 import { ensurePinnedTab } from "./pinnedTab.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
@@ -177,7 +178,7 @@ function engineAutoShotSource(o: Ctx): AutoShotSource {
   return {
     tabKey: `engine:${o.session}`,
     capture: async () => {
-      const out = path.join(os.tmpdir(), `cast-autoshot-${process.pid}.jpg`);
+      const out = agentTempPath(SHOT_TEMP_KIND, `cast-autoshot-${process.pid}.jpg`);
       const res = runEngine(["screenshot", out, "--screenshot-format", "jpeg", "--screenshot-quality", "60"], {
         ...o,
         timeoutMs: 20_000,
@@ -201,7 +202,7 @@ function engineAutoShotSource(o: Ctx): AutoShotSource {
  */
 const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: string }> = [
   { verb: "open", args: "[args...]", desc: "Navigate to a URL (--new-tab for a second page)" },
-  { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs (-i interactive only, -s <sel> scope, -c compact, -d <n> depth, -u link urls)" },
+  { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs (-i interactive only, -s <sel> scope, -c compact, -d <n> depth, -u link urls, --json for {url, refs, text})" },
   { verb: "read", args: "[args...]", desc: 'The page, or a URL, as clean readable text (--outline, --filter <text>) — best for "what does this page say"' },
   { verb: "click", args: "[args...]", desc: "Click an element (#e42 ref or CSS selector)" },
   { verb: "type", args: "[args...]", desc: "Type into an element (--submit presses Enter after)" },
@@ -569,6 +570,23 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   const shot = !args.includes("--no-shot");
   const forwarded = args.filter((a) => a !== "--no-capture" && a !== "--no-shot");
 
+  // `snapshot --json`: the engine already answers JSON, so this reshapes its
+  // reply rather than reimplementing it — dropping the launch-lifecycle
+  // envelope and emitting the one shape both drivers use, refs plus text.
+  if (verb === "snapshot" && forwarded.includes("--json")) {
+    const call = translate(verb, forwarded.filter((a) => a !== "--json"), recallFind(session))[0];
+    try {
+      const data = runEngineJson<EngineSnapshotPayload>(call.args, o);
+      console.log(JSON.stringify(engineSnapshotJson(data)));
+      return 0;
+    } catch (err) {
+      const msg = (err as Error).message;
+      process.stderr.write(`${msg}\n`);
+      await emitFailureBlock(engineSource(o), msg, { disabled: !capture });
+      return 1;
+    }
+  }
+
   // Did translate() have to reach for the last find? Then a failure may just
   // be that ref going stale (a re-render, a route change since the find) —
   // re-find by the remembered words and retry once before reporting.
@@ -840,18 +858,27 @@ function findRefs(text: string, o: Ctx, opts: { lenient?: boolean } = {}): { hit
   return { hits: hits.map((h) => h.line), near: near.map((h) => h.line), total: items.length };
 }
 
+/** What the engine answers a `screenshot --json` with. Never the image itself. */
+interface EngineShotPayload {
+  path?: string;
+  annotations?: Array<{ number: number; ref: string; role: string; name: string; box?: unknown }>;
+}
+
 /** `shot`: screenshot to a file, inline in the conversation, optionally shared. */
 async function takeShot(
   pathArg: string | undefined,
-  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; selector?: string; extra?: string[] },
+  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; selector?: string; json?: boolean; extra?: string[] },
   c: Ctx,
   deps: PublishDeps,
 ): Promise<string> {
-  const out = pathArg ?? path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
+  // Ours, and 0700 — a screenshot shows whatever the page showed, and the old
+  // default put that in a world-readable /tmp forever (tempFiles.ts, ct-49556).
+  const out = pathArg ?? defaultShotPath("png");
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const extra = [...(o.extra ?? [])];
   if (o.full) extra.push("--full-page");
   if (o.annotate) extra.push("--annotate");
+  if (o.json) extra.push("--json");
   // The engine's screenshot takes `[selector] [path]`: a selector (or ref)
   // clips the capture to that element — one region readable at full size,
   // no post-hoc cropping.
@@ -861,6 +888,28 @@ async function takeShot(
     die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
   }
   if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
+  // The engine created the file, so the mode is set after the fact.
+  secureTempFile(out);
+
+  const bytes = fs.statSync(out).size;
+
+  if (o.json) {
+    const payload = ((): EngineShotPayload => {
+      try {
+        return parseEngineJson<EngineShotPayload>(res);
+      } catch {
+        return {};
+      }
+    })();
+    console.log(JSON.stringify(shotJson({
+      file: out,
+      bytes,
+      ...measureShot(out, c),
+      annotations: payload.annotations,
+      url: o.share ? (await uploadOne(deps, out, o.alt || "screenshot")).url : undefined,
+    })));
+    return out;
+  }
 
   // The legend mapping each [N] label to a snapshot ref is the point of an
   // annotated shot; it arrives on the engine's stdout.
@@ -870,7 +919,6 @@ async function takeShot(
     }
   }
 
-  const bytes = fs.statSync(out).size;
   console.log(`${OK} ${out} (${formatBytes(bytes)})`);
   // The codecast-specific half: put the picture in the conversation, under
   // the command that took it, the way an extension screenshot appears.
@@ -884,6 +932,25 @@ async function takeShot(
     console.log(img.markdown);
   }
   return out;
+}
+
+/** Pixel size from the file we just wrote, plus the page's device pixel ratio.
+ *  Only `--json` pays for the extra engine call the ratio costs. */
+function measureShot(out: string, c: Ctx): { size: { width: number; height: number } | null; scale: number | null } {
+  let size: { width: number; height: number } | null = null;
+  try {
+    size = imageSize(fs.readFileSync(out));
+  } catch {
+    /* a size we cannot read is reported as null, never as a guess */
+  }
+  let scale: number | null = null;
+  try {
+    const r = runEngineJson<{ result?: unknown }>(["eval", "devicePixelRatio"], c);
+    if (typeof r?.result === "number") scale = r.result;
+  } catch {
+    /* same */
+  }
+  return { size, scale };
 }
 
 /**
@@ -1097,6 +1164,7 @@ The human's real Chrome instead of the clone (they want to watch, or a site figh
     .option("--share", "Also upload it and print a link you can paste elsewhere")
     .option("--alt <text>", "Caption for the shared image — say what it shows")
     .option("--no-inline", "Do not show the image in the conversation")
+    .option("--json", "Print {path, width, height, scale} instead — the file, never its bytes")
     .allowUnknownOption(true)
     .action(async (pathArg: string | undefined, o: any, cmd: any) => {
       // Anything we do not recognise belongs to the engine, not to us. Only

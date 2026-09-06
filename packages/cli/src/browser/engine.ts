@@ -293,7 +293,17 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
  * changes shape only this function moves.
  */
 export function runEngineJson<T = any>(args: string[], opts: EngineOptions = {}): T {
-  const res = runEngine([...args, "--json"], opts);
+  return parseEngineJson<T>(runEngine([...args, "--json"], opts));
+}
+
+/**
+ * The `data` out of one `--json` run the caller already made.
+ *
+ * Split from runEngineJson so a command that needs the run's other output too
+ * — `shot --annotate --json`, whose legend and file both come from one
+ * screenshot — parses the envelope the same way instead of running twice.
+ */
+export function parseEngineJson<T = any>(res: EngineRun): T {
   const text = res.stdout.trim();
   if (!text) {
     throw new Error(res.stderr.trim() || `the browser engine returned nothing (exit ${res.status})`);

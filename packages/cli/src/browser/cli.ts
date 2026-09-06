@@ -18,7 +18,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import { browserSocketUrl, CdpConnection, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
@@ -35,7 +34,7 @@ import { BrowserNotLive, explainConnectionLoss, isTabUnresponsive } from "./reco
 import {
   browserHome, clonePath, cloneProfile, formatBytes, keepsOwnLogin, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
-import { matchRefs, nearMatches, snapshotPage } from "./snapshot.js";
+import { matchRefs, nearMatches, snapshotJson, snapshotPage } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
   screenshot, scroll, selectOption, setViewport, type, uploadFiles,
@@ -43,7 +42,8 @@ import {
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { emitFailureContext } from "./capture.js";
 import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
-import { writeShotFile } from "./shotFile.js";
+import { defaultShotPath, imageSize, shotJson, writeShotFile } from "./shotFile.js";
+import { TEMP_FILE_MODE } from "../tempFiles.js";
 import { autoShotsEnabled, cdpAutoShotSource, clearAutoShots, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
 import { registerEngineCommands } from "./cliEngine.js";
@@ -729,14 +729,16 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--interactive", "Only clickable/typable elements — much cheaper")
     .option("--max-chars <n>", "Truncate beyond this many characters", "40000")
     .option("--no-frames", "Skip child frames")
+    .option("--json", "Print {url, refs, text} instead of the human layout")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; tab?: string }) => {
+    .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; json?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page, {
           interactiveOnly: o.interactive,
           maxChars: parseInt(o.maxChars, 10),
           frames: o.frames,
         });
+        if (o.json) return console.log(JSON.stringify(snapshotJson(snap)));
         console.log(pageLine(snap.url, snap.title));
         console.log("");
         console.log(snap.text || fmt.muted("(nothing in the accessibility tree — the page may still be loading)"));
@@ -792,14 +794,16 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--alt <text>", "Caption for the shared image — say what it shows")
     .option("--no-inline", "Do not show the image in the conversation")
     .option("--jpeg", "JPEG instead of PNG — much smaller for photos")
+    .option("--json", "Print {path, width, height, scale} instead — the file, never its bytes")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { full?: boolean; ref?: string; out?: string; viewports?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; tab?: string; real?: boolean; clone?: boolean }) => {
+    .action(async (o: { full?: boolean; ref?: string; out?: string; viewports?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; json?: boolean; tab?: string; real?: boolean; clone?: boolean }) => {
       await act(o, async (page, state) => {
         if (o.viewports) {
           // One shot per named viewport, emitted together so the thread renders
           // them as a single side-by-side comparison row. Restores what the tab
           // had before: its pinned emulation, or the real window.
           if (o.ref) die("--ref does not combine with --viewports", "an element ref is only meaningful at the viewport it was snapshotted in");
+          if (o.json) die("--json does not combine with --viewports", "--json describes one file; a viewport row is several");
           return runViewportRow(pageViewportCapture(page), o.viewports, state.viewportByTab?.[page.targetId], o, deps)
             .catch((err) => die(err.message, err instanceof ViewportArgError ? err.hint : undefined));
         }
@@ -808,12 +812,23 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           ref: o.ref ? parseInt(o.ref.replace(/^#?e/, ""), 10) : undefined,
           format: o.jpeg ? "jpeg" : "png",
         });
-        const out =
-          o.out ??
-          path.join(os.tmpdir(), `cast-shot-${Date.now()}.${o.jpeg ? "jpg" : "png"}`);
+        const out = o.out ?? defaultShotPath(o.jpeg ? "jpg" : "png");
         // Puts the picture in the conversation under this command's output,
         // the way an extension screenshot appears. `--no-inline` opts out.
-        const abs = writeShotFile(buf, out, o);
+        const abs = writeShotFile(buf, out, { ...o, quiet: o.json });
+        if (o.json) {
+          // The path and the size, never the pixels (shotFile.ts, ct-49556).
+          const written = fs.readFileSync(out);
+          const scale = (await evaluate(page, `devicePixelRatio`)) as unknown;
+          console.log(JSON.stringify(shotJson({
+            file: out,
+            bytes: written.length,
+            size: imageSize(written),
+            scale: typeof scale === "number" ? scale : null,
+            url: o.share ? (await uploadOne(deps, out, o.alt || "screenshot")).url : undefined,
+          })));
+          return;
+        }
         if (abs) console.log(inlineImageMarker(abs));
         if (o.share) {
           // Same upload path as `cast image`, so the URL renders inline for the
@@ -1170,13 +1185,13 @@ A step with no ref uses whatever the last \`find\` matched.`,
           // so a batched shot behaves identically — downscale, inline marker.
           capture: async (args) => {
             const buf = await screenshot(page, { fullPage: args.includes("--full") });
-            const out = path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
+            const out = defaultShotPath("png");
             let bytes = buf;
             if (bytes.length > MAX_IMAGE_SIZE) {
               const smaller = downscaleWithSips(bytes, "image/png");
               if (smaller && smaller.length < bytes.length) bytes = smaller;
             }
-            fs.writeFileSync(out, bytes);
+            fs.writeFileSync(out, bytes, { mode: TEMP_FILE_MODE });
             return out;
           },
           navigate: async (url) => {
