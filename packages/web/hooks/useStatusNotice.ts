@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from "react";
+import { useWatchEffect } from "./useWatchEffect";
+import { type ReactNode } from "react";
 import { create } from "zustand";
 import type { LucideIcon } from "lucide-react";
 
@@ -42,8 +43,8 @@ export const useStatusNoticeStore = create<NoticeStore>((set) => ({
  */
 export function useStatusNotice(id: string, notice: StatusNotice | null) {
   const set = useStatusNoticeStore((s) => s.set);
-  useEffect(() => {
+  useWatchEffect(() => {
     set(id, notice);
   }, [id, notice, set]);
-  useEffect(() => () => set(id, null), [id, set]);
+  useWatchEffect(() => () => set(id, null), [id, set]);
 }

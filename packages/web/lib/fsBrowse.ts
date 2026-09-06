@@ -7,7 +7,8 @@
 // failure (other machine, daemon down, old daemon without the route) collapses
 // to "no listing", and the picker falls back to recents alone.
 
-import { useEffect, useMemo, useState } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useMemo, useState } from "react";
 import type { ConvexReactClient } from "convex/react";
 import { getTerminalEndpoint, isOverrideEndpoint, termHttpBase, type TerminalEndpoint } from "./terminal/endpoint";
 import { splitDirQuery, type DiskListing } from "./utils";
@@ -118,7 +119,7 @@ export function useDirListing(
     home: undefined,
   });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!dir) {
       setState((s) => (s.listing ? { ...s, listing: null } : s));
       return;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -164,7 +164,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   // up, the sound is not. And the dock bounces for as long as the card is up.
   const quiet = !!s.currentUser && s.currentUser.status === "busy";
   const inviteId = invite?._id ?? null;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!ringing || !inviteId) return;
     setRingAttention(true);
     let t: ReturnType<typeof setInterval> | null = null;
@@ -274,7 +274,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
 
   // And the mirror: the walkie's engine publishes on its own moves, but a
   // mute or a camera moves the call slice without the walkie noticing.
-  useEffect(() => {
+  useWatchEffect(() => {
     publishVoiceMirror();
   }, [call.phase, call.roomKey, call.muted, call.camera, call.micDenied]);
 
@@ -336,7 +336,7 @@ const CALL_WINDOW_BRIDGE = {
  */
 function WalkieStripHost({ onShape }: { onShape: (size: CallWindowSize) => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  useMountEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const measure = () => {
@@ -349,7 +349,7 @@ function WalkieStripHost({ onShape }: { onShape: (size: CallWindowSize) => void 
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  });
   return (
     <div className="dark voice-walkie-window">
       <div ref={ref} className="voice-walkie-card">
@@ -366,7 +366,7 @@ function WalkieStripHost({ onShape }: { onShape: (size: CallWindowSize) => void 
  */
 function RingCardHost({ invite, onAnswer, onDecline }: { invite: RingInvite; onAnswer: () => void; onDecline: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const measure = () => {

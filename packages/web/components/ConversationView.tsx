@@ -13,7 +13,7 @@ import { dragCarriesPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, lazy, Suspense, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, lazy, Suspense, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -5834,7 +5834,7 @@ const OPEN_TAB_ICON = (
 function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
   const convex = useConvex();
   const castTabId = tab.kind === "cast" ? tab.tabId : null;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (castTabId) prefetchBrowserFocusEndpoint(convex);
   }, [castTabId, convex]);
   if (tab.kind === "extension") {

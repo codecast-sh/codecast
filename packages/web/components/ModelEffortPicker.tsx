@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -227,7 +228,7 @@ export function HeaderModelControl({
   const ownerDeviceId = live?.ownerDeviceId;
   const [picked, setPicked] = useState<{ model?: string; effort?: string } | null>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!picked) return;
     const modelAck = picked.model === undefined
       || modelOptionKey(storeModel, agentType) === (picked.model === "default" ? "default" : picked.model);
@@ -237,7 +238,7 @@ export function HeaderModelControl({
   }, [picked, storeModel, storeEffort, agentType]);
 
   // Agent switch: drop a pick aimed at the previous agent's catalog.
-  useEffect(() => { setPicked(null); }, [agentType]);
+  useWatchEffect(() => { setPicked(null); }, [agentType]);
 
   const blank = (messageCount ?? 0) === 0;
   const overlayModel = picked?.model !== undefined
