@@ -8245,6 +8245,7 @@ program
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
+  .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -8303,10 +8304,40 @@ program
 
       const { formatReadResult } = await import("./formatter.js");
       console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line }));
+
+      // Opt-in, never automatic: reading a session from the CLI is often a
+      // glance at someone else's work, and silently clearing their unread dot
+      // in the web inbox would be a write nobody asked for.
+      if (options.ack) {
+        const ack = await cliPost("/cli/session/ack", { conversation_id: parsedId });
+        console.log(`${c.dim}  marked read${ack?.acknowledged_at ? ` at ${new Date(ack.acknowledged_at).toLocaleString()}` : ""}${c.reset}`);
+      }
     } catch (error) {
       console.error("Read failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
+  });
+
+program
+  .command("unread")
+  .description(
+    "Mark a session unread — leave it lit in the web and mobile inbox\n\n" +
+    "The inverse of opening it. A session is unread when it has moved since you\n" +
+    "last looked at it; this says so by hand, and the next visit clears it.\n\n" +
+    "Examples:\n" +
+    "  cast unread jx70ntf                 # leave that session lit\n" +
+    "  cast read jx70ntf --ack             # …and the other direction"
+  )
+  .argument("<conversation-id>", "Conversation ID, short ID, or a share URL")
+  .option("--json", "Machine-readable output")
+  .action(async (conversationId: string, options: any) => {
+    const { conversationId: parsedId } = parseConversationRef(conversationId);
+    const result = await cliPost("/cli/session/unread", { conversation_id: parsedId });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`${c.green}✓${c.reset} marked unread ${c.dim}${conversationId}${c.reset}`);
   });
 
 // Map a local agent session id to its codecast conversation id via the endpoint

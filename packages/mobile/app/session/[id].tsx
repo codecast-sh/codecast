@@ -24,6 +24,7 @@ import { MessageTickRail, MessageListButton } from '@/components/session/Message
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
+import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
 import { PulsingDot } from '@/components/SessionItem';
@@ -3473,6 +3474,11 @@ export default function SessionDetailScreen() {
       }
     }, [id]),
   );
+
+  // Server-backed read mark: clears this session's unread dot on every device
+  // of this viewer's, but only while the screen is focused and the app is in
+  // the foreground.
+  useAckActiveSession(typeof id === "string" && id !== DESIGN_MOCK_ID ? id : null);
 
   const flatListRef = useRef<FlatList>(null);
   const loadCooldownRef = useRef(false);

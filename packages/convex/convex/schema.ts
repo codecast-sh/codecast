@@ -1155,6 +1155,36 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_conversation", ["user_id", "conversation_id"]),
 
+  // One row per (user, conversation): where the viewer's attention stopped.
+  // Same reasoning as bucket_assignments above — conversations are hot shared
+  // docs, a read mark is per-user and cold, so it lives off the row and ships
+  // on its own query.
+  //
+  // Unread is DERIVED, never stored: acknowledged_at < conversations.updated_at.
+  // That is the same "a stamp any later activity silently expires" contract as
+  // inbox_rest_at (see userRestOf), which is what makes an agent re-reporting
+  // the same state free — nothing bumps updated_at — while a real new turn
+  // re-lights the card. Every replica re-derives from the same two numbers, so
+  // web, mobile and the CLI cannot disagree.
+  //
+  // No `workspace` key: a read mark is never shared, so user_id IS the access
+  // (the same choice thread_reads, bucket_assignments and bookmarks make).
+  session_reads: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    // Forward-only. Written only while the conversation is the active view
+    // under page presence (see useAckActiveConversation).
+    acknowledged_at: v.number(),
+    // The manual "mark unread" gesture: unread whatever the stamps say, until
+    // the next presence ack clears it.
+    manual_unread: v.optional(v.boolean()),
+    updated_at: v.number(),
+  })
+    // Newest-touched first: the client carries a bounded window of marks, and
+    // the ones it needs are the sessions it has looked at most recently.
+    .index("by_user_updated", ["user_id", "updated_at"])
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
+
   decisions: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),

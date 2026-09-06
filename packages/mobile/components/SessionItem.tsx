@@ -173,7 +173,7 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-export function SessionItem({ session, onPress, onPin, onLongPress }: { session: SessionData; onPress: () => void; onPin?: () => void; onLongPress?: () => void }) {
+export function SessionItem({ session, isUnread, onPress, onPin, onLongPress }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; onLongPress?: () => void }) {
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
   const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
@@ -219,7 +219,10 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           {session.is_favorite && (
             <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
           )}
-          <RNText style={styles.conversationTitle} numberOfLines={1}>
+          {/* Unread carries by WEIGHT plus a leading dot — the same two signals
+              the web card and the chat rail use, never a count. */}
+          {isUnread && <RNView style={styles.unreadDot} />}
+          <RNText style={[styles.conversationTitle, isUnread && styles.conversationTitleUnread]} numberOfLines={1}>
             {cleanTitle(session.title)}
           </RNText>
         </RNView>
@@ -338,8 +341,9 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   );
 }
 
-export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLongPress }: {
+export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress }: {
   session: SessionData;
+  isUnread?: boolean;
   onPress: () => void;
   onDismiss: () => void;
   onPin?: () => void;
@@ -450,7 +454,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
+      <SessionItem session={session} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
     </RNAnimated.View>
   );
 
@@ -570,6 +574,16 @@ export const styles = StyleSheet.create({
     fontWeight: '500',
     color: Theme.text,
     flex: 1,
+  },
+  conversationTitleUnread: {
+    fontWeight: '700',
+  },
+  unreadDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.cyan,
+    marginRight: 5,
   },
   rightMeta: {
     flexDirection: 'row',

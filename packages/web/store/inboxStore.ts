@@ -74,6 +74,8 @@ import {
   fnv1a32Update,
   FNV1A32_OFFSET,
   WORKING_SET_RECENCY_MS,
+  isSessionUnread,
+  type SessionActivityFacts,
   type InboxBucket,
   type InboxTally,
   type InboxTruncation,
@@ -1022,6 +1024,17 @@ export type BucketAssignmentItem = {
   updated_at: number;
 };
 
+// One row per (user, conversation): where this viewer's attention stopped.
+// Unread is never stored — it is isSessionUnread(mark, session.updated_at),
+// re-derived at render so an ack and a new turn cannot disagree.
+export type SessionReadItem = {
+  _id: string;
+  conversation_id: string;
+  acknowledged_at: number;
+  manual_unread?: boolean;
+  updated_at: number;
+};
+
 // The decision queue: one explicit question an agent handed its human via
 // `cast decide` (session_decisions table). Answering is local-first — the
 // resolution fields flip on the draft and ride the generic patch rail; the
@@ -1088,6 +1101,102 @@ export function convBucketMap(assignments: Record<string, BucketAssignmentItem>)
   const map: Record<string, string | undefined> = {};
   for (const a of Object.values(winner)) map[a.conversation_id] = a.bucket_id ?? undefined;
   return map;
+}
+
+// conversation_id → the viewer's read mark. Same two-rows-per-conversation
+// problem as convBucketMap (an optimistic `sessionread-` stub alongside the
+// real server row), resolved the same way: real beats stub, then newer wins.
+export function sessionReadMap(reads: Record<string, SessionReadItem>): Record<string, SessionReadItem> {
+  const winner: Record<string, SessionReadItem> = {};
+  for (const r of Object.values(reads)) {
+    const prev = winner[r.conversation_id];
+    if (prev) {
+      const realness = Number(isConvexId(r._id)) - Number(isConvexId(prev._id));
+      if (realness < 0 || (realness === 0 && (r.updated_at ?? 0) <= (prev.updated_at ?? 0))) continue;
+    }
+    winner[r.conversation_id] = r;
+  }
+  return winner;
+}
+
+// The same lookup inside a draft, for the optimistic write path.
+function findSessionReadInDraft(
+  draft: { sessionReads: Record<string, SessionReadItem> },
+  conversationId: string,
+): SessionReadItem | undefined {
+  let best: SessionReadItem | undefined;
+  for (const id in draft.sessionReads) {
+    const row = draft.sessionReads[id];
+    if (row?.conversation_id !== conversationId) continue;
+    if (!best) { best = row; continue; }
+    const realness = Number(isConvexId(row._id)) - Number(isConvexId(best._id));
+    if (realness > 0 || (realness === 0 && (row.updated_at ?? 0) > (best.updated_at ?? 0))) best = row;
+  }
+  return best;
+}
+
+/** Which sessions are lit for this viewer, derived from the marks, the rows'
+ *  own updated_at, and the local "last opened" record as the fallback for a
+ *  session with no server mark yet. Derived once per list render and handed to
+ *  each card as a scalar prop — a per-card selector over sessionReads would
+ *  re-scan the collection on every heartbeat notification. */
+export function sessionUnreadMap(state: {
+  sessions: Record<string, InboxSession>;
+  sessionReads: Record<string, SessionReadItem>;
+  _lastViewedAt: Record<string, number>;
+}): Record<string, boolean> {
+  const marks = sessionReadMap(state.sessionReads);
+  const out: Record<string, boolean> = {};
+  for (const id in state.sessions) {
+    const session = state.sessions[id];
+    if (!session) continue;
+    if (isSessionUnread({
+      ...sessionActivityFacts(session),
+      mark: marks[id],
+      localViewedAt: state._lastViewedAt[id],
+    })) out[id] = true;
+  }
+  return out;
+}
+
+/** The three row facts the read model reads, pulled off an inbox row. One
+ *  place, so the card's comparison and the ack's stamp are the same number —
+ *  acknowledging anything else leaves a card that cannot be cleared. */
+export function sessionActivityFacts(row: {
+  updated_at?: number;
+  turn_completed_at?: number | null;
+  agent_status_boundary?: boolean | null;
+} | undefined | null): SessionActivityFacts {
+  return {
+    updatedAt: row?.updated_at ?? 0,
+    turnCompletedAt: row?.turn_completed_at ?? null,
+    statusBoundary: row?.agent_status_boundary ?? null,
+  };
+}
+
+// Wake signature for unread, memoized by the three input refs. A list
+// subscribes to THIS, never to the raw collections: `sessions` hands back a
+// new ref on every ~1s liveness heartbeat, but updated_at moves only on real
+// activity, so the signature string stays identical and nothing re-renders
+// (store/wakeSig.ts — same rule sessionsWakeSig follows). It cannot ride
+// sessionsWakeSig itself: that signature deliberately omits updated_at.
+let _unreadSigSessions: unknown;
+let _unreadSigReads: unknown;
+let _unreadSigViewed: unknown;
+let _unreadSig = "";
+export function sessionUnreadWakeSig(state: {
+  sessions: Record<string, InboxSession>;
+  sessionReads: Record<string, SessionReadItem>;
+  _lastViewedAt: Record<string, number>;
+}): string {
+  if (state.sessions === _unreadSigSessions
+    && state.sessionReads === _unreadSigReads
+    && state._lastViewedAt === _unreadSigViewed) return _unreadSig;
+  _unreadSigSessions = state.sessions;
+  _unreadSigReads = state.sessionReads;
+  _unreadSigViewed = state._lastViewedAt;
+  _unreadSig = Object.keys(sessionUnreadMap(state)).sort().join(",");
+  return _unreadSig;
 }
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
@@ -4834,6 +4943,23 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   /** The Threads page's session read mark: "seen up to the current message
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
+
+  // -- Session unread (server-backed, per viewer) --
+  /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
+   *  is derived from these against each session's updated_at, never stored. */
+  sessionReads: Record<string, SessionReadItem>;
+  /** "I am looking at this session now." Called only while the conversation is
+   *  the active view AND the reader is present (useAckActiveConversation);
+   *  `at` is the session's own updated_at so the optimistic mark is exactly
+   *  what the server writes. Clears any manual unread flag. */
+  ackSessionRead: (conversationId: string, at?: number) => void;
+  /** "Leave this one lit." Survives every later change; the next presence ack
+   *  is what clears it. */
+  markSessionUnread: (conversationId: string) => void;
+  /** The dispatching halves of the two above. Called only by them — the guards
+   *  live in the plain wrappers so a no-op never reaches the outbox. */
+  writeSessionAck: (conversationId: string, stamp: number) => void;
+  writeSessionUnread: (conversationId: string) => void;
   createBucket: (opts: { name: string; color?: string }, continuation?: DurableCreateContinuation) => Promise<{ bucketId: string }>;
   /** Local-first team create: a stub team row and the active team switch land
    *  in the same tick; resolves the REAL team id once the server answers, and
@@ -7350,6 +7476,66 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const count = this.conversations[id]?.message_count ?? this.sessions[id]?.message_count;
     if (typeof count === "number") this._seenMessageCount[id] = count;
     this._seenUpToAt[id] = Date.now();
+  }),
+
+  // -- Session unread --
+  sessionReads: {},
+  // Plain, not an action: an action() always dispatches, and the ack fires on
+  // every presence change and every re-render of the open session. The guard
+  // here is what makes "the agent re-reported the same state" literally free —
+  // no draft, no outbox entry, no mutation.
+  ackSessionRead: (conversationId: string, at?: number) => {
+    if (!conversationId) return;
+    const now = Date.now();
+    // The session's own activity watermark is what the card compares against,
+    // so acknowledging exactly that value is what makes the dot go out. Never
+    // ahead of the clock: a future stamp would swallow turns not yet landed.
+    const stamp = Math.min(at && at > 0 ? at : now, now);
+    const existing = findSessionReadInDraft(get(), conversationId);
+    if (existing && existing.acknowledged_at >= stamp && !existing.manual_unread) return;
+    get().writeSessionAck(conversationId, stamp);
+  },
+  writeSessionAck: action(function (this: Draft, conversationId: string, stamp: number) {
+    const now = Date.now();
+    const existing = findSessionReadInDraft(this, conversationId);
+    if (existing) {
+      if (existing.acknowledged_at < stamp) existing.acknowledged_at = stamp;
+      // Mirror the server's projection exactly (it omits a false flag), so
+      // field protection reconciles by === instead of freezing forever.
+      delete existing.manual_unread;
+      existing.updated_at = now;
+    } else {
+      const stubId = `sessionread-${conversationId}`;
+      this.sessionReads[stubId] = {
+        _id: stubId,
+        conversation_id: conversationId,
+        acknowledged_at: stamp,
+        updated_at: now,
+      };
+    }
+  }),
+  markSessionUnread: (conversationId: string) => {
+    if (!conversationId) return;
+    // Already lit by hand: nothing to say again.
+    if (findSessionReadInDraft(get(), conversationId)?.manual_unread) return;
+    get().writeSessionUnread(conversationId);
+  },
+  writeSessionUnread: action(function (this: Draft, conversationId: string) {
+    const now = Date.now();
+    const existing = findSessionReadInDraft(this, conversationId);
+    if (existing) {
+      existing.manual_unread = true;
+      existing.updated_at = now;
+    } else {
+      const stubId = `sessionread-${conversationId}`;
+      this.sessionReads[stubId] = {
+        _id: stubId,
+        conversation_id: conversationId,
+        acknowledged_at: 0,
+        manual_unread: true,
+        updated_at: now,
+      };
+    }
   }),
 
   // =====================

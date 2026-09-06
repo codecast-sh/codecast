@@ -12,6 +12,9 @@ export * from "./agentClients";
 export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./workState";
+// Session unread: one predicate over (acknowledged_at, conversations.updated_at)
+// so web, mobile and the CLI light the same cards.
+export * from "./sessionRead";
 export * from "./loopState";
 export * from "./threadState";
 export * from "./apiErrorBanner";
