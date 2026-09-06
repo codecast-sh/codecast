@@ -182,6 +182,7 @@ export interface Workspace {
 
 /** Options accepted by acquire(). */
 export interface AcquireOptions {
+  inputRoot?: string;
   /** Override branch name (default: `codecast/<name>`). */
   branch?: string;
   /** Override resource index (default: auto-allocated). */
