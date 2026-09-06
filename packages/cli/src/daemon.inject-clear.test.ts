@@ -18,8 +18,12 @@
 // Test is skipped automatically when `tmux` or `claude` isn't on PATH so
 // vanilla `bun test` runs without the integration dependency.
 
+// FIRST import, and it must stay first: this file spawns real client TUIs, and
+// they belong on a private tmux server rather than beside the panes the daemon
+// is driving for real work. The daemon reads the environment that selects the
+// server at module load. See isolatedTmuxServer.ts.
+import { killIsolatedTmuxServer } from "./test-helpers/isolatedTmuxServer.js";
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,13 +31,21 @@ import { randomUUID } from "node:crypto";
 import { injectViaTmux, TEST_SCRATCH_DIRNAME } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
+import {
+  hasBinary,
+  seedClaudeHome,
+  waitForRecorded,
+  sweepStaleSessions,
+  assertRealClaudeHomeUntouched,
+  MATRIX_CLIENTS,
+  MATRIX_TMUX_PREFIX,
+  matrixClientAvailable,
+  spawnClientPane,
+  startFakeModelEndpoint,
+  deliverToPane,
+} from "./test-helpers/messagingHarness.js";
 
-function hasBin(name: string): boolean {
-  const r = spawnSync("which", [name], { encoding: "utf8" });
-  return r.status === 0 && !!r.stdout.trim();
-}
-
-const CAN_RUN = hasBin("tmux") && hasBin("claude");
+const CAN_RUN = hasBinary("tmux") && hasBinary("claude");
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -62,10 +74,10 @@ function getUserMessages(jsonlPath: string): string[] {
   return out;
 }
 
-function jsonlPathFor(projectDir: string, sessionUuid: string): string {
+function jsonlPathFor(homeDir: string, projectDir: string, sessionUuid: string): string {
   const real = fs.realpathSync(projectDir);
   const encoded = claudeProjectDirName(real);
-  return path.join(os.homedir(), ".claude", "projects", encoded, `${sessionUuid}.jsonl`);
+  return path.join(homeDir, ".claude", "projects", encoded, `${sessionUuid}.jsonl`);
 }
 
 describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () => {
@@ -77,6 +89,10 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
   // conversation.
   const scratchRoot = path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME);
   const projectDir = path.join(scratchRoot, `inject_clear-${process.pid}-${Date.now()}`);
+  // claude runs under a HOME of its own, so its transcript lands here and the
+  // human's ~/.claude/projects is neither written to nor deleted from. The
+  // scratch marker in the project path still keeps the daemon from syncing it.
+  const claudeHome = path.join(scratchRoot, `inject_clear_home-${process.pid}-${Date.now()}`);
   const target = `${tmuxSession}:0.0`;
   let jsonlPath = "";
 
@@ -84,13 +100,14 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     tmuxRun(["kill-session", "-t", tmuxSession]);
     if (fs.existsSync(projectDir)) fs.rmSync(projectDir, { recursive: true });
     fs.mkdirSync(projectDir, { recursive: true });
-    jsonlPath = jsonlPathFor(projectDir, sessionUuid);
+    seedClaudeHome(claudeHome, projectDir);
+    jsonlPath = jsonlPathFor(claudeHome, projectDir, sessionUuid);
 
     // --bare skips hooks/plugins/auto-memory. Invalid API key keeps the test
     // hermetic — the model call will fail with "Not logged in", but the user
     // input is still written to the JSONL, which is the only thing we assert on.
     const cmd =
-      `cd ${projectDir} && ANTHROPIC_API_KEY=sk-invalid-injection-test ` +
+      `cd ${projectDir} && HOME=${claudeHome} ANTHROPIC_API_KEY=sk-invalid-injection-test ` +
       `claude --bare --permission-mode=bypassPermissions --dangerously-skip-permissions ` +
       `--session-id=${sessionUuid}`;
     tmux(["new", "-d", "-s", tmuxSession, "-x", "200", "-y", "50", cmd]);
@@ -162,19 +179,17 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     // available for debugging. Only clean it up on success path.
     if (process.env.KEEP_INJECT_TEST_ARTIFACTS !== "1") {
       if (fs.existsSync(projectDir)) fs.rmSync(projectDir, { recursive: true });
+      // The transcript, and the second one Claude Code writes under a session
+      // id of its own choosing, both live inside this run's temp home, so one
+      // removal takes everything. (Before the home was sandboxed, missing that
+      // second transcript left a directory under the real ~/.claude/projects on
+      // every run — 157 had piled up by 2026-07-30.)
+      if (fs.existsSync(claudeHome)) fs.rmSync(claudeHome, { recursive: true });
       // Remove the shared scratch root too, but only if no concurrent run still
       // has a session dir under it.
       if (fs.existsSync(scratchRoot) && fs.readdirSync(scratchRoot).length === 0) {
         fs.rmdirSync(scratchRoot);
       }
-      // Remove the whole transcript directory, not just jsonlPath: Claude Code
-      // also writes a second transcript under a session id of its own choosing,
-      // so the old "delete nothing, rmdir if empty" never fired and every run
-      // left another directory under ~/.claude/projects behind (157 had piled up
-      // by 2026-07-30). Safe to remove wholesale — the directory name encodes
-      // this run's unique project path, so nothing else writes there.
-      const projectsDir = path.dirname(jsonlPath);
-      if (fs.existsSync(projectsDir)) fs.rmSync(projectsDir, { recursive: true });
     }
   });
 
@@ -224,4 +239,62 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     // the stale prompt text, which the strict-equality assertion will catch.
     expect(second).toBe("follow-up content");
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// The same guarantee, once per installed client (the D0 matrix, ct-49536)
+//
+// A composer holding a draft is not a claude-only situation: the person at the
+// keyboard types into any of these TUIs while a message is in flight, and the
+// pre-paste drain is a blind C-a/C-k that each client's line editor answers its
+// own way. So this runs the same shape — foreign text at the prompt, then an
+// injection over it — against every client whose binary is installed, and
+// self-skips the rest. The endpoint rejects from the first request so each turn
+// ends immediately and the pane is idle for the next case; the busy pane is the
+// matrix's own mid-turn scenario, not this one.
+// ---------------------------------------------------------------------------
+
+describe("stale composer draft is cleared for every installed client", () => {
+  afterAll(() => {
+    sweepStaleSessions(MATRIX_TMUX_PREFIX);
+    // Takes the whole private server with it, so a pane orphaned by a thrown
+    // test cannot outlive the run.
+    killIsolatedTmuxServer();
+    assertRealClaudeHomeUntouched();
+  });
+
+  for (const client of MATRIX_CLIENTS) {
+    test.skipIf(!matrixClientAvailable(client))(
+      `${client}: an injection over a typed draft records only the payload`,
+      async () => {
+        const endpoint = await startFakeModelEndpoint();
+        endpoint.reject();
+        const pane = spawnClientPane(client, { endpointUrl: endpoint.url });
+        try {
+          // Deliver once the ordinary way, so the pane is provably up and
+          // consuming input before the draft goes in.
+          const primer = `matrix-primer-${randomUUID().slice(0, 8)}`;
+          await deliverToPane(pane, primer);
+          await waitForRecorded(pane, primer, { timeoutMs: 30_000 });
+
+          // The stale draft: typed at the prompt, never submitted.
+          const draft = "STALE-DRAFT-";
+          tmuxRun(["send-keys", "-t", pane.target, "-l", draft]);
+          await sleep(1_000);
+
+          const payload = `matrix-clean-${randomUUID().slice(0, 8)}: follow-up content`;
+          await deliverToPane(pane, payload);
+          await waitForRecorded(pane, payload, { timeoutMs: 30_000 });
+
+          // Nothing the client recorded may carry the draft: a missed drain
+          // submits "STALE-DRAFT-<payload>" as one message.
+          expect(pane.userMessages().filter((m) => m.includes(draft))).toEqual([]);
+        } finally {
+          try { pane.tearDown(); } catch {}
+          endpoint.close();
+        }
+      },
+      240_000,
+    );
+  }
 });

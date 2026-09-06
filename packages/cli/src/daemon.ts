@@ -11682,6 +11682,29 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // "No, exit": the agent quits, the resume loops, and the message never lands
   // (17 panes found dead on this on 2026-08-21).
   if (/Quick safety check|trust this folder|Is this a project you created/i.test(region)) return "trust";
+  // Codex asks the same question with a numbered menu (verified against codex
+  // 0.153.4 in an untrusted directory):
+  //
+  //   > You are in /private/tmp/…/untrusted-project
+  //     Do you trust the contents of this directory? …
+  //   › 1. Yes, continue
+  //     2. No, quit
+  //     Press enter to continue
+  //
+  // Why: without this rule the shape fell through to update_menu below — a
+  // numbered cursor row plus that footer — and the corrective sent Escape, which
+  // is this dialog's "No, quit". A cold codex pane in a directory codex has not
+  // seen parked and the delivery deferred until the budget ran out (ct-49609).
+  // Matched on the OPTION WORDING, not on the question: the live region is the
+  // last few lines below the box separators, and codex renders the question five
+  // lines above the options, so it is out of view by the time we classify. The
+  // "Yes, continue"/"No, quit" pair is codex's own trust wording — the update
+  // menu offers "Update now"/"Skip", and an AskUserQuestion menu the agent
+  // raised does not offer to quit — so the pair cannot claim another menu.
+  if (/^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Yes,\s*continue\b/im.test(region)
+    && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*No,\s*quit\b/im.test(region)) {
+    return "trust";
+  }
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -13191,11 +13214,24 @@ export type TrustPromptStep =
  * option. Everything uncertain returns "none", which presses nothing.
  */
 export function planTrustPromptStep(lines: string[]): TrustPromptStep {
-  const CURSOR = /^\s*[❯>]\s*\S/;
-  const AFFIRMATIVE = /^\s*[❯>]?\s*Yes\b/i;
+  // › is codex's cursor glyph, and its options are numbered ("› 1. Yes,
+  // continue"), so both patterns have to tolerate a number between the cursor
+  // and the option text or the codex dialog reads as "no affirmative option"
+  // and we press nothing forever (ct-49609). Claude numbers its options too on
+  // some builds ("❯ 1. Yes, I trust this folder").
+  const CURSOR = /^\s*[❯›>]\s*\S/;
+  const AFFIRMATIVE = /^\s*[❯›>]?\s*(?:\d+[.)]\s*)?Yes\b/i;
   const yesIdx = lines.findIndex(l => AFFIRMATIVE.test(l));
   if (yesIdx < 0) return { action: "none", reason: "no affirmative option on the pane" };
-  const cursorIdx = lines.findIndex(l => CURSOR.test(l));
+  // The cursor NEAREST the affirmative option, not the first one on the pane:
+  // codex prints "> You are in <cwd>" five lines above the menu, and reading
+  // that as the highlight sent Down keystrokes at a dialog whose cursor was
+  // already on "Yes". The menu's cursor is inside the option list, and the
+  // affirmative option is in that list, so proximity picks it (ct-49609).
+  const cursorIdx = lines.reduce(
+    (best, line, i) => (CURSOR.test(line) && (best < 0 || Math.abs(i - yesIdx) < Math.abs(best - yesIdx)) ? i : best),
+    -1,
+  );
   if (cursorIdx < 0) return { action: "none", reason: "cannot see which option is highlighted" };
   if (cursorIdx === yesIdx) return { action: "confirm", option: lines[yesIdx].trim() };
   const delta = yesIdx - cursorIdx;

@@ -517,6 +517,70 @@ describe("agent update menu", () => {
   });
 });
 
+// ── Codex first-launch trust dialog (ct-49609) ─────────────────────────────
+// Verbatim `tmux capture-pane -p -J -S -25` from a cold `codex 0.153.4` pane
+// launched in an untrusted directory on a private tmux server (the ASCII-art
+// splash above the welcome line is elided; it holds no separator run, so the
+// extracted live region is identical either way — the first test proves it).
+//
+// It looks like the update menu — a numbered option row carrying the '›'
+// cursor, footer "Press enter to continue" — so it classified update_menu and
+// the corrective sent Escape, which is this dialog's "No, quit". A cold codex
+// pane in a directory codex had not seen parked and delivery deferred until the
+// budget ran out.
+const CODEX_TRUST_PANE = `
+  Welcome to Codex, OpenAI's command-line coding agent
+
+> You are in /private/tmp/codecast-test-tmux/ct49609b-37849/untrusted-project
+
+  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt
+  injection. Trusting the directory allows project-local config, hooks, and exec policies to load.
+
+› 1. Yes, continue
+  2. No, quit
+
+  Press enter to continue`;
+
+describe("codex trust dialog", () => {
+  test("the question itself is out of the live region — only the options are in view", () => {
+    // Why the classifier keys on the option wording rather than the question:
+    // codex renders the question five lines above the menu, and the live region
+    // is the tight tail (no box separators on this pane).
+    const region = extractTmuxLiveRegion(CODEX_TRUST_PANE);
+    expect(region).not.toContain("Do you trust the contents of this directory?");
+    expect(region.split("\n")).toEqual([
+      "",
+      "› 1. Yes, continue",
+      "  2. No, quit",
+      "",
+      "  Press enter to continue",
+    ]);
+  });
+
+  test("classifies as trust, not update_menu", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_TRUST_PANE))).toBe("trust");
+  });
+
+  test("the corrective answers Enter on the Yes row, never Escape", () => {
+    expect(planTrustPromptStep(CODEX_TRUST_PANE.split("\n"))).toEqual({
+      action: "confirm",
+      option: "› 1. Yes, continue",
+    });
+  });
+
+  test("'> You are in <cwd>' is not mistaken for the highlight", () => {
+    // That line carries a bare '>' five rows above the menu. Read as the
+    // highlight it sent Down keystrokes at a dialog already sitting on "Yes".
+    const onQuit = CODEX_TRUST_PANE.replace("› 1. Yes, continue", "  1. Yes, continue")
+      .replace("  2. No, quit", "› 2. No, quit");
+    expect(planTrustPromptStep(onQuit.split("\n"))).toEqual({ action: "move", key: "Up", times: 1 });
+  });
+
+  test("codex's update menu is untouched by the trust rule", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_UPDATE_MENU_PANE))).toBe("update_menu");
+  });
+});
+
 // ── Deferral is finite (ct-48187) ──────────────────────────────────────────
 describe("noteUnresolvablePane", () => {
   test("rebuilds only after the threshold, counting well-spaced failures", () => {
