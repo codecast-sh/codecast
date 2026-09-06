@@ -162,7 +162,13 @@ function BlobContent({
     );
   }
 
-  if (!blob.data) return blob.missing ? <p className="p-6 text-sm text-sol-text-muted">This file is unavailable at this ref.</p> : <LoadingSkeleton />;
+  if (!blob.data) {
+    if (blob.missing) return <p className="p-6 text-sm text-sol-text-muted">This file is unavailable at this ref.</p>;
+    // No GitHub App covers this repository: a teammate's machine that holds
+    // a checkout is answering, which takes a moment and needs it awake.
+    if (blob.pending) return <p className="p-6 text-sm text-sol-text-muted">Reading this file from a teammate's checkout. It arrives as soon as their machine answers.</p>;
+    return <LoadingSkeleton />;
+  }
 
   const lineCount = blob.data.content.split("\n").length;
 

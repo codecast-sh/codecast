@@ -30,6 +30,7 @@ import {
 import { RepoWindowControl } from "./RepoWindowControl";
 import { cn } from "../../lib/utils";
 import { repoShortcutAllowed } from "../../lib/repoContent";
+import { RepoFileFinder } from "./RepoFileFinder";
 
 export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "search";
 
@@ -173,6 +174,9 @@ export function RepoHeader({
 
   return (
     <header ref={setBand} className="repo-band border-b border-sol-border/60 shrink-0">
+      {/* Every repository page carries this header, so mounting the finder here
+          is what makes `t` work on all of them, GitHub's own behaviour. */}
+      <RepoFileFinder repository={repository} refName={refName} family={family} anchorRef={bandRef} />
       <div className="flex items-center gap-3 px-4 pt-3 pb-2 flex-wrap">
         <h1 className="repo-rise flex items-baseline gap-1 min-w-0" style={{ ["--d" as string]: "0ms" }}>
           <Link href="/repo" className="text-[13px] text-sol-text-muted hover:text-sol-text transition-colors">

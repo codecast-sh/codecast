@@ -68,7 +68,7 @@ export function RepoPageShell({ repository, children }: { repository: string; ch
   if (family === "standalone") {
     if (mode === "public" && publicMeta.data?.private !== false) {
       if (!publicMeta.ready) return <div className="h-screen bg-sol-bg"><LoadingSkeleton /></div>;
-      return <RepoUnavailable />;
+      return <RepoUnavailable signedIn={signedIn} repository={repository} />;
     }
     return <RepoTransportProvider mode={mode}><StandaloneRepoShell repository={repository}>{children}</StandaloneRepoShell></RepoTransportProvider>;
   }
@@ -77,18 +77,38 @@ export function RepoPageShell({ repository, children }: { repository: string; ch
     <AuthGuard>
       <DashboardLayout>
         <RepoTransportProvider mode="convex"><div className="h-[calc(100vh-56px)]">
-          {access.allowed === false ? <RepoUnavailable /> : children}
+          {access.allowed === false ? <RepoUnavailable signedIn={signedIn} repository={repository} /> : children}
         </div></RepoTransportProvider>
       </DashboardLayout>
     </AuthGuard>
   );
 }
 
-function RepoUnavailable() {
-  return <main className="min-h-full flex flex-col items-center justify-center bg-sol-bg text-sol-text gap-4 px-6 py-16">
+/**
+ * Two honest reasons a repository page has nothing to show. Signed out: the
+ * repository is not public, so signing in is the way forward. Signed in: nobody
+ * has connected it — no GitHub App installation covers it and no teammate runs
+ * sessions in a checkout of it that is shared with the team — and signing in
+ * again would change nothing, so the page says what would.
+ */
+function RepoUnavailable({ signedIn, repository }: { signedIn: boolean; repository: string }) {
+  return <main className="min-h-full flex flex-col items-center justify-center bg-sol-bg text-sol-text gap-4 px-6 py-16 text-center">
     <LogoMark size={24} monochrome />
-    <h1 className="font-serif text-2xl">Repository unavailable</h1>
-    <p className="text-sm text-sol-text-muted">Sign in with an account that has access to continue.</p>
-    <Link href="/login" className="rounded border border-sol-border px-4 py-2 text-sm text-sol-blue">Sign in</Link>
+    <h1 className="font-serif text-2xl">{signedIn ? "Nobody has connected this repository" : "Repository unavailable"}</h1>
+    {signedIn ? (
+      <>
+        <p className="max-w-md text-sm text-sol-text-muted">
+          No GitHub App installation your teams have covers <span className="font-mono text-sol-text">{repository}</span>, and no teammate
+          publishes a checkout of it. A session run in a checkout that is shared with your team publishes it automatically; installing the
+          GitHub App adds pull requests, checks and every file on demand.
+        </p>
+        <Link href="/settings/integrations" className="rounded border border-sol-border px-4 py-2 text-sm text-sol-blue">Integrations</Link>
+      </>
+    ) : (
+      <>
+        <p className="text-sm text-sol-text-muted">Sign in with an account that has access to continue.</p>
+        <Link href="/login" className="rounded border border-sol-border px-4 py-2 text-sm text-sol-blue">Sign in</Link>
+      </>
+    )}
   </main>;
 }

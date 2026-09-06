@@ -19,6 +19,8 @@ export type RepoRead<T> = {
   data: T | undefined;
   /** The cache row exists and holds nothing for this request. */
   missing: boolean;
+  /** No installation covers the repository, so a teammate's checkout was asked and has not answered yet. */
+  pending: boolean;
   ready: boolean;
   error: Error | undefined;
 };
@@ -48,16 +50,22 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
   const { isAuthenticated } = useConvexAuth();
   const live = mode === "convex" && access.allowed === true && isAuthenticated ? args : null;
   const key = repoBrowseKey(access.scope, publicKind, args);
-  const ensure = useAction(ensureRef as never) as (a: unknown) => Promise<unknown>;
-  const [failure, setFailure] = useState<{ key: string | null; error?: Error }>({ key: null });
+  const ensure = useAction(ensureRef as never) as (a: unknown) => Promise<{ requested?: boolean } | undefined>;
+  // What the ensure for this key is doing: still running, answered by GitHub
+  // (nothing to note), handed to a teammate's daemon (`requested`), or failed.
+  const [failure, setFailure] = useState<{ key: string | null; ensuring?: boolean; requested?: boolean; error?: Error }>({ key: null });
   const requestKey = live ? key : null;
   useWatchEffect(() => {
     if (!live) return;
     let cancelled = false;
-    setFailure({ key });
-    void ensure(live).catch((e: unknown) => {
-      if (!cancelled) setFailure({ key, error: e instanceof Error ? e : new Error(String(e)) });
-    });
+    setFailure({ key, ensuring: true });
+    void ensure(live)
+      .then((result) => {
+        if (!cancelled) setFailure({ key, requested: !!result?.requested });
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setFailure({ key, error: e instanceof Error ? e : new Error(String(e)) });
+      });
     return () => { cancelled = true; };
   }, [requestKey, ensure]);
   const select = useCallback((value: unknown) => {
@@ -73,9 +81,14 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
   const viaPublic = usePublicRepoRead<T>(mode === "public" ? publicRepoUrl(repository, publicKind, params) : null);
   if (mode === "public") return viaPublic;
   const visible = access.allowed === true && !feed.error && !(failure.key === key && failure.error);
+  // An empty answer is "missing" only once nothing is still on its way: while
+  // the ensure runs, or while a teammate's daemon holds the request, the
+  // absence is a wait, not a verdict.
+  const inFlight = failure.key === key && (!!failure.ensuring || !!failure.requested);
   return {
     data: visible && row?.value != null ? row.value as T : undefined,
-    missing: visible && row?.value === null,
+    missing: visible && row?.value === null && !inFlight,
+    pending: visible && row?.value == null && failure.key === key && !!failure.requested,
     ready: visible && row !== undefined,
     error: access.error ?? feed.error ?? (failure.key === key ? failure.error : undefined),
   };
@@ -154,6 +167,7 @@ export function useRepoTree(
   return {
     data: arrived ? read.data : undefined,
     missing: arrived && read.missing,
+    pending: read.pending,
     ready: arrived && read.ready,
     error: read.error,
     notFound: active.notFound,

@@ -103,6 +103,8 @@ export function clearPublicRepoCache() {
 export type PublicRead<T> = {
   data: T | undefined;
   missing: boolean;
+  /** Always false here: the public route answers from the cache and never asks a checkout. */
+  pending: boolean;
   ready: boolean;
   error: Error | undefined;
 };
@@ -130,6 +132,7 @@ export function usePublicRepoRead<T>(url: string | null): PublicRead<T> {
   return {
     data: result?.data as T | undefined,
     missing: !!result?.missing,
+    pending: false,
     ready: result !== undefined,
     error: result?.error,
   };

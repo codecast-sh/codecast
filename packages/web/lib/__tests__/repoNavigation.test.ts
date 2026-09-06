@@ -34,3 +34,28 @@ describe('repository entry points', () => {
     expect(taskRepository({external: {provider: 'github'}})).toBeNull();
   });
 });
+
+import { githubLocationHref } from "../repoNavigation";
+
+describe("githubLocationHref", () => {
+  test("maps GitHub places onto the app's repository pages", () => {
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast")).toBe("/repo/codecast-sh/codecast");
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/tree/main/packages/web")).toBe("/repo/codecast-sh/codecast/tree/main?path=packages%2Fweb");
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/blob/main/packages/web/x.ts#L10-L20")).toBe("/repo/codecast-sh/codecast/blob/main?path=packages%2Fweb%2Fx.ts#L10-L20");
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/blob/main/README.md#L3")).toBe("/repo/codecast-sh/codecast/blob/main?path=README.md#L3");
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/commits/main")).toBe("/repo/codecast-sh/codecast/commits/main");
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/compare/main...feat/x")).toBe("/repo/codecast-sh/codecast/compare/main...feat%2Fx");
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/pulls")).toBe("/repo/codecast-sh/codecast/pulls");
+  });
+
+  test("the standalone family stays standalone", () => {
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/tree/main", "standalone")).toBe("/r/codecast-sh/codecast/tree/main");
+  });
+
+  test("objects and foreign links are not places", () => {
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/pull/482")).toBeNull();
+    expect(githubLocationHref("https://github.com/codecast-sh/codecast/commit/aa57b85ee")).toBeNull();
+    expect(githubLocationHref("https://example.com/codecast-sh/codecast")).toBeNull();
+    expect(githubLocationHref(undefined)).toBeNull();
+  });
+});

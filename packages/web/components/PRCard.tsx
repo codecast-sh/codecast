@@ -1,14 +1,8 @@
 import { useState } from "react";
+import Link from "next/link";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-
-type PRFile = {
-  filename: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  changes: number;
-  patch?: string;
-};
+import { FileDiffList, type DiffFile } from "./FileDiffView";
+import { prPageHref } from "../lib/repoView";
 
 type PRCardProps = {
   _id: Id<"pull_requests">;
@@ -24,7 +18,7 @@ type PRCardProps = {
   deletions?: number;
   changed_files?: number;
   commits_count?: number;
-  files?: PRFile[];
+  files?: DiffFile[];
   created_at: number;
   updated_at: number;
   merged_at?: number;
@@ -77,83 +71,6 @@ function StateIcon({ state }: { state: "open" | "closed" | "merged" }) {
   );
 }
 
-function FileDiffView({ file }: { file: PRFile }) {
-  const [expanded, setExpanded] = useState(false);
-  const lines = file.patch?.split("\n") || [];
-  const previewLines = lines.slice(0, 10);
-  const hasMore = lines.length > 10;
-
-  return (
-    <div className="border-t border-sol-border/30">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 py-2 flex items-center justify-between hover:bg-sol-bg-alt/30 transition-colors text-left"
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-            file.status === "added" ? "bg-sol-green/20 text-sol-green" :
-            file.status === "removed" ? "bg-sol-red/20 text-sol-red" :
-            file.status === "renamed" ? "bg-sol-yellow/20 text-sol-yellow" :
-            "bg-sol-blue/20 text-sol-blue"
-          }`}>
-            {file.status}
-          </span>
-          <span className="font-mono text-xs text-sol-text-secondary truncate">
-            {file.filename}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 text-[10px] font-mono flex-shrink-0">
-          {file.additions > 0 && <span className="text-sol-green">+{file.additions}</span>}
-          {file.deletions > 0 && <span className="text-sol-red">-{file.deletions}</span>}
-          <svg
-            className={`w-3 h-3 text-sol-text-dim transition-transform ${expanded ? 'rotate-180' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </div>
-      </button>
-
-      {expanded && file.patch && (
-        <div className="bg-sol-bg/50 px-3 py-2 overflow-x-auto">
-          <pre className="font-mono text-[11px] leading-relaxed">
-            {(hasMore && !expanded ? previewLines : lines).map((line, idx) => {
-              let lineClass = "text-sol-text-muted";
-              let prefix = " ";
-              if (line.startsWith("+") && !line.startsWith("+++")) {
-                lineClass = "text-sol-green bg-sol-green/10";
-                prefix = "+";
-              } else if (line.startsWith("-") && !line.startsWith("---")) {
-                lineClass = "text-sol-red bg-sol-red/10";
-                prefix = "-";
-              } else if (line.startsWith("@@")) {
-                lineClass = "text-sol-cyan";
-              } else if (line.startsWith("diff") || line.startsWith("index") || line.startsWith("---") || line.startsWith("+++")) {
-                lineClass = "text-sol-text-dim";
-              }
-              return (
-                <div key={idx} className={`${lineClass} whitespace-pre`}>
-                  {line}
-                </div>
-              );
-            })}
-          </pre>
-          {hasMore && !expanded && (
-            <button
-              onClick={() => setExpanded(true)}
-              className="text-[10px] text-sol-cyan hover:underline mt-1"
-            >
-              Show {lines.length - 10} more lines...
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function PRCard(props: PRCardProps) {
   const [expanded, setExpanded] = useState(false);
   const githubUrl = `https://github.com/${props.repository}/pull/${props.number}`;
@@ -171,15 +88,13 @@ export function PRCard(props: PRCardProps) {
         <StateIcon state={props.state} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <a
-              href={githubUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <Link
+              href={prPageHref(props.repository, props.number)}
               className="font-mono text-xs text-sol-cyan hover:underline"
               onClick={(e) => e.stopPropagation()}
             >
               #{props.number}
-            </a>
+            </Link>
             <span className="text-xs text-sol-text-secondary truncate">
               {props.title}
             </span>
@@ -241,20 +156,7 @@ export function PRCard(props: PRCardProps) {
             </div>
           )}
 
-          {props.files && props.files.length > 0 ? (
-            <div className="divide-y divide-sol-border/30">
-              <div className="px-3 py-1.5 bg-sol-bg/20 text-[10px] text-sol-text-dim font-medium">
-                Changed files ({props.files.length})
-              </div>
-              {props.files.map((file, idx) => (
-                <FileDiffView key={idx} file={file} />
-              ))}
-            </div>
-          ) : (
-            <div className="px-3 py-3 text-xs text-sol-text-dim text-center">
-              No file changes synced yet
-            </div>
-          )}
+          <FileDiffList files={props.files} emptyText="No file changes synced yet" />
 
           <div className="px-3 py-2 bg-sol-bg/20 flex items-center justify-between">
             <a

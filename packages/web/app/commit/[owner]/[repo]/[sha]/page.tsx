@@ -266,6 +266,10 @@ function CommitWithoutFiles({ repository, sha }: { repository: string; sha: stri
     <div className="h-full flex flex-col items-center justify-center px-6 text-center text-sol-text-muted">
       {fetchFiles.pending ? (
         <p className="text-[13px]">Reading this commit's diff from GitHub.</p>
+      ) : fetchFiles.reason === "requested" ? (
+        // No GitHub App covers this repository: a teammate's checkout was
+        // asked, and the commit row updates itself when the answer lands.
+        <p className="text-[13px]">Reading this commit's diff from a teammate's checkout. It arrives as soon as their machine answers.</p>
       ) : (
         <>
           <p className="text-[13px] mb-1">

@@ -1,5 +1,51 @@
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
-import { formatLineHash, parseLineHash, repoBlobHref, repoHomeHref, repoTreeHref } from "./repoView";
+import { parseGitHubLocationUrl } from "@codecast/shared/entities";
+import {
+  formatLineHash,
+  parseLineHash,
+  repoBlobHref,
+  repoBranchesHref,
+  repoCommitsHref,
+  repoCompareHref,
+  repoHomeHref,
+  repoPullsHref,
+  repoTagsHref,
+  repoTreeHref,
+  type RepoRouteFamily,
+} from "./repoView";
+
+/**
+ * The codecast page for a GitHub URL that names a place in a repository — the
+ * repository, a tree or file at a ref (with its line range), a commit list, a
+ * compare range, or the branches, tags and pulls lists. Null for anything else,
+ * including pull request and commit URLs, which are objects and render as
+ * pills (parseEntityUrl). This is how a pasted github.com link opens inside
+ * the app instead of leaving it.
+ */
+export function githubLocationHref(href: string | undefined | null, family: RepoRouteFamily = "app"): string | null {
+  const loc = parseGitHubLocationUrl(href);
+  if (!loc) return null;
+  const { repository } = loc;
+  switch (loc.kind) {
+    case "repo":
+      return repoHomeHref(repository, family);
+    case "tree":
+      return repoTreeHref(repository, loc.ref ?? "HEAD", loc.path, family);
+    case "blob":
+      return repoBlobHref(repository, loc.ref ?? "HEAD", loc.path ?? "", family)
+        + formatLineHash(loc.line ? { start: loc.line, end: loc.endLine ?? loc.line } : null);
+    case "commits":
+      return repoCommitsHref(repository, loc.ref ?? "HEAD", { path: loc.path, family });
+    case "compare":
+      return repoCompareHref(repository, loc.base ?? "", loc.head ?? "", family);
+    case "branches":
+      return repoBranchesHref(repository, family);
+    case "tags":
+      return repoTagsHref(repository, family);
+    case "pulls":
+      return repoPullsHref(repository, family);
+  }
+}
 
 const repositoryPattern = /^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/i;
 
