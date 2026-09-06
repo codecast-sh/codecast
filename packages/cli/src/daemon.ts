@@ -160,8 +160,8 @@ import {
   PASTE_END,
   PASTE_START,
   clientAcceptsBracketedPaste,
+  deliverTextIntoPane,
   pasteAndSubmitText,
-  pasteTextIntoPane as pasteTextIntoPaneWith,
   prepareInjectedContent,
 } from "./tmuxPaste.js";
 import { formatFeedResults } from "./formatter.js";
@@ -13352,8 +13352,10 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
-async function pasteTextIntoPane(target: string, text: string, bracketed = true): Promise<void> {
-  await pasteTextIntoPaneWith(tmuxExec, target, text, bracketed);
+// Composer entry for one client: a tmux buffer paste, or typed keys for a
+// client whose composer reads the machine's clipboard on a paste (ct-49607).
+async function deliverIntoPane(target: string, text: string, bracketed = true, agentType?: AgentClientId): Promise<void> {
+  await deliverTextIntoPane(tmuxExec, target, text, { bracketed, agentType });
 }
 
 // Post-submit verification: closed loop until the pasted message provably
@@ -13572,13 +13574,19 @@ export async function drainTmuxComposer(
 // when the composer never converges within the budget — the delivery layer's
 // retry/backoff redelivers later instead of submitting into a deaf or dirty
 // pane.
-const stripComposerWs = (s: string) => s.replace(/\s+/g, "");
+// Whitespace AND the composer's own frame. A TUI that draws a box around the
+// prompt puts a border glyph between one wrapped line and the next (grok:
+// `│ ❯ first line …│` / `│   second line …│`), so a multi-line payload the
+// composer holds as real text only matches once the frame is out of the way
+// (ct-49607). Both sides go through this, so a payload containing box glyphs
+// still compares against itself.
+const stripComposerChrome = (s: string) => s.replace(/[\s\u2500-\u257f]+/g, "");
 
 // The first 40 non-whitespace chars the composer must show at the prompt, or
 // null when the payload cannot be watched for.
 export function tmuxWatchablePrefix(payload: string): string | null {
   if (/[❯›]/.test(payload)) return null;
-  return stripComposerWs(payload).slice(0, 40) || null;
+  return stripComposerChrome(payload).slice(0, 40) || null;
 }
 
 export async function awaitTmuxComposerPayload(
@@ -13635,7 +13643,7 @@ export async function awaitTmuxComposerPayload(
     const chip = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/i) : null;
     const matched = chip
       ? !glyphLine.slice(0, chip.index).trim()
-      : stripComposerWs(afterGlyph).startsWith(prefix);
+      : stripComposerChrome(afterGlyph).startsWith(prefix);
     if (matched) return "matched";
 
     if (!glyphLine.trim()) {
@@ -13700,7 +13708,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
       if (declineText) {
-        await pasteTextIntoPane(target, declineText, bracketed);
+        await deliverIntoPane(target, declineText, bracketed, agentType);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
       }
@@ -13730,7 +13738,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     }
     if (poll.text) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      await pasteTextIntoPane(target, poll.text, bracketed);
+      await deliverIntoPane(target, poll.text, bracketed, agentType);
       await new Promise(resolve => setTimeout(resolve, 150));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     } else if (menuSteps.length > 0) {
@@ -13763,9 +13771,14 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
-  const contentPrefix = sanitized.slice(0, 40);
+  // First LINE, not first 40 characters: the submit verifier looks for this
+  // text at the prompt, and a composer that holds the message as real text
+  // (rather than a collapsed paste chip) wraps it inside its own frame, so a
+  // prefix that crosses a newline can never match what is on screen — and
+  // "text not found" reads as "submitted" (ct-49607).
+  const contentPrefix = sanitized.split("\n", 1)[0].slice(0, 40);
 
-  const doPaste = () => pasteTextIntoPane(target, sanitized, bracketed);
+  const doPaste = () => deliverIntoPane(target, sanitized, bracketed, agentType);
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter —

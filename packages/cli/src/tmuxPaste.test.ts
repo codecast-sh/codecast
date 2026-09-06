@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, statSync } from "node:fs";
 import {
   clientAcceptsBracketedPaste,
+  composerNewlineKey,
+  deliverTextIntoPane,
   pasteAndSubmitText,
   pasteTextIntoPane,
   prepareInjectedContent,
+  typeTextIntoPane,
 } from "./tmuxPaste.js";
 
 describe("clientAcceptsBracketedPaste", () => {
@@ -147,5 +150,58 @@ describe("pasteAndSubmitText", () => {
       },
     })).rejects.toThrow("paste failed");
     expect(submits).toBe(0);
+  });
+});
+
+// ct-49607: pasting into a grok pane made grok read the machine's clipboard and
+// attach any image on it, so every delivery on a machine with a screenshot
+// copied carried that image to xAI under a message that never mentioned it. A
+// bracketed paste is a paste GESTURE, not just text; typed keys are not, so
+// grok is delivered by typing with Ctrl+J for its newlines.
+describe("typed composer delivery", () => {
+  test("grok is the client that must be typed; the rest still paste", () => {
+    expect(composerNewlineKey("grok")).toBe("C-j");
+    for (const id of ["claude", "codex", "opencode", "pi", "cursor", "gemini"] as const) {
+      expect(composerNewlineKey(id)).toBeNull();
+    }
+    expect(composerNewlineKey(undefined)).toBeNull();
+  });
+
+  test("types line by line, with the newline key between lines", async () => {
+    const calls: string[][] = [];
+    await typeTextIntoPane(async (args) => { calls.push(args); }, "%3", "one\ntwo\n\nfour\n", "C-j");
+
+    expect(calls).toEqual([
+      ["send-keys", "-t", "%3", "-l", "one"],
+      ["send-keys", "-t", "%3", "C-j"],
+      ["send-keys", "-t", "%3", "-l", "two"],
+      ["send-keys", "-t", "%3", "C-j"],
+      // The blank line is the key alone: typing "" would be a no-op tmux call.
+      ["send-keys", "-t", "%3", "C-j"],
+      ["send-keys", "-t", "%3", "-l", "four"],
+    ]);
+  });
+
+  test("a long line goes in as chunks, in order and whole", async () => {
+    const line = "x".repeat(2500);
+    const typed: string[] = [];
+    await typeTextIntoPane(async (args) => {
+      if (args[4] !== undefined) typed.push(args[4]);
+    }, "%3", line, "C-j");
+
+    expect(typed.length).toBe(3);
+    expect(typed.join("")).toBe(line);
+  });
+
+  test("deliverTextIntoPane routes grok to keys and everyone else to the buffer", async () => {
+    const grokCalls: string[][] = [];
+    await deliverTextIntoPane(async (args) => { grokCalls.push(args); }, "%1", "one\ntwo", { agentType: "grok" });
+    expect(grokCalls.map((args) => args[0])).toEqual(["send-keys", "send-keys", "send-keys"]);
+    // Never a tmux buffer: that is the paste grok answers by reading the clipboard.
+    expect(grokCalls.some((args) => args[0] === "paste-buffer")).toBe(false);
+
+    const claudeCalls: string[][] = [];
+    await deliverTextIntoPane(async (args) => { claudeCalls.push(args); }, "%2", "one\ntwo", { agentType: "claude" });
+    expect(claudeCalls.map((args) => args[0])).toEqual(["load-buffer", "paste-buffer", "delete-buffer"]);
   });
 });
