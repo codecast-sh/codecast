@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { CodexAppServer } from "./codexAppServer.js";
-import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { codexResumeParams, recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 
 test("a killed app-server resumes persisted work once through JSON-RPC and finishes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "codex-recovery-"));
@@ -15,10 +15,15 @@ test("a killed app-server resumes persisted work once through JSON-RPC and finis
 import { appendFileSync, existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+setInterval(() => {}, 1000);
+process.stdin.on('end', () => process.exit(0));
 createInterface({input:process.stdin}).on('line', line => {
   const r=JSON.parse(line);
   if(r.method==='initialize') send({id:r.id,result:{}});
-  if(r.method==='thread/resume') send({id:r.id,result:{thread:{id:'thread',status:{type:'idle'},turns:[{id:'turn',status:'interrupted',items:[]}]},cwd:${JSON.stringify(dir)},model:'test'}});
+  if(r.method==='thread/resume') {
+    if(r.params.sandbox!=='danger-full-access') send({id:r.id,error:{message:'sandbox changed across restart'}});
+    else send({id:r.id,result:{thread:{id:'thread',status:{type:'idle'},turns:[{id:'turn',status:'interrupted',items:[]}]},cwd:${JSON.stringify(dir)},model:'test'}});
+  }
   if(r.method==='turn/start') {
     const recovery=existsSync(${JSON.stringify(starts)});
     appendFileSync(${JSON.stringify(starts)},JSON.stringify(r.params)+'\\n');
@@ -35,10 +40,10 @@ createInterface({input:process.stdin}).on('line', line => {
 });
 `, { mode: 0o755 });
   let server: CodexAppServer | undefined;
-  let saved: PersistedCodexThread = { threadId: "thread", updatedAt: 1, cwd: dir };
+  let saved: PersistedCodexThread = { threadId: "thread", updatedAt: 1, cwd: dir, sandbox: "danger-full-access" };
   const save = (next: PersistedCodexThread) => { saved = next; writeFileSync(state, JSON.stringify(saved)); };
   const boot = async () => {
-    server = new CodexAppServer({ codexBinary: binary, log: message => console.error(message) });
+    server = new CodexAppServer({ codexBinary: binary, log: () => {} });
     server.on("error", () => {});
     server.on("turnStarted", (_thread, turnId) => save({ ...saved, activeTurnId: turnId }));
     server.on("turnCompleted", (_thread, turnId) => save(settledCodexRecord(saved, turnId)));
@@ -56,7 +61,7 @@ createInterface({input:process.stdin}).on('line', line => {
     saved = JSON.parse(readFileSync(state, "utf8"));
     expect(saved.activeTurnId).toBe("turn");
     const replacement = await boot();
-    const response = await replacement.threadResume({ threadId: saved.threadId });
+    const response = await replacement.threadResume(codexResumeParams(saved, "never"));
     const complete = once(replacement, "turnCompleted");
     await recoverCodexTurn({ record: saved, thread: response.thread, save, start: input => replacement.turnStart(input) });
     const [, , messages, status] = await complete;
