@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { restartConfirmedLive, type RestartProgressRow } from "./useSessionRestart";
+import { deriveRestartStage, restartConfirmedLive, type RestartProgressRow } from "./useSessionRestart";
 
 const row = (over: Partial<RestartProgressRow>): RestartProgressRow => ({
   command: "resume_session",
@@ -8,6 +8,25 @@ const row = (over: Partial<RestartProgressRow>): RestartProgressRow => ({
   result: null,
   error: null,
   ...over,
+});
+
+describe("pending message restart progress", () => {
+  it("distinguishes a ready session from delivery of its pending message", () => {
+    for (const result of [{ resumed: true }, { reconstituted: true }, { started_fresh: true }]) {
+      expect(deriveRestartStage([row({ executed_at: 2000, result: JSON.stringify(result) })], false, true))
+        .toEqual({ label: "Session is ready — waiting for message delivery…", tone: "active" });
+    }
+  });
+
+  it("keeps reconnecting until the resumed session is ready", () => {
+    expect(deriveRestartStage([row({ executed_at: 2000, result: '{"resumed":true}' })], false))
+      .toEqual({ label: "Session resumed — reconnecting…", tone: "active" });
+  });
+
+  it("does not hide a failed restart behind stale liveness", () => {
+    expect(deriveRestartStage([row({ executed_at: 2000, error: "resume failed" })], false, true))
+      .toEqual({ label: "Restart failed: resume failed", tone: "error" });
+  });
 });
 
 describe("restartConfirmedLive", () => {

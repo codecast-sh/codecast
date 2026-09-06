@@ -55,6 +55,10 @@ export const isAliveIdleStatus = (s?: LiveAgentStatus): boolean =>
 
 export type PendingBannerState = "none" | "queued" | "stuck";
 
+export function pendingRetryClientId(messageId: string): string | undefined {
+  return messageId.startsWith("serverpending_") ? undefined : messageId;
+}
+
 // - "queued": session still booting/resuming/connecting → brief "starting up"
 //             reassurance (the agent has no input box yet). NOT used while the agent
 //             is actively processing — that case shows nothing (see below).
@@ -67,8 +71,6 @@ export function pendingBannerState(
   agentStatus: LiveAgentStatus | undefined,
   opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean },
 ): PendingBannerState {
-  if (opts.restartInFlight) return "stuck";
-  if (!opts.retryEligible) return "none";
   // Durable, server-persisted proof the message physically landed in the session's pane
   // (pending_messages → "injected"/"delivered"; the daemon resets it to "pending" if the
   // session dies, so it's only set while a live session genuinely holds the message). This
@@ -77,6 +79,8 @@ export function pendingBannerState(
   // as undefined, which would otherwise escalate straight to the alarming kill & restart.
   // Delivery proof trumps a missing heartbeat: never alarm about a message we know arrived.
   if (opts.messageReachedSession) return "none";
+  if (opts.restartInFlight) return "stuck";
+  if (!opts.retryEligible) return "none";
   // Agent alive and mid-turn: it has a live type-ahead input box, and the daemon has
   // already pasted the message straight into Claude Code's native queue (ensureTmuxReady's
   // busy path), so it WILL submit when the turn ends. Show nothing — the pending stripe on
