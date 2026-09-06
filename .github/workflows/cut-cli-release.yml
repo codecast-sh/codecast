@@ -166,6 +166,14 @@ jobs:
           bun test src/browser/appIdentity.test.ts src/browser/appIdentity.native.test.ts --timeout 30000
           bun scripts/test-browser-branding.ts ../web/binaries/codecast-darwin-arm64
 
+      - name: Collect browser launch diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          launchctl managername
+          ps -axww -o pid=,command= | grep '[C]hrome' || true
+          sudo /usr/bin/log show --last 5m --style compact --predicate 'process == "syspolicyd" OR process == "amfid" OR process == "Google Chrome"' | tail -250
+
       - name: Write the artifact manifest
         shell: bash
         run: |
