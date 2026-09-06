@@ -42,12 +42,6 @@ export const HIBERNATE_MAX_PER_PASS = 5;
 // produced any activity yet.
 export const HIBERNATE_RESUME_GRACE_MS = 10 * 60 * 1000;
 
-// How long a subagent's own transcript must stay quiet before the daemon stops
-// treating its parent as busy. A headless child (a Task tool agent, a `claude
-// -p` the agent launched) runs inside the parent pane's process tree, and the
-// teardown takes that tree down, so the parent has to outlive the child. Ten
-// minutes matches the resume grace: long enough to cover a child between two
-// tool calls, short enough that a finished child stops protecting its parent.
 export const HIBERNATE_SUBAGENT_QUIET_MS = 10 * 60 * 1000;
 
 export type HibernationCandidate = {
@@ -105,18 +99,21 @@ export function hibernationBlockReason(c: HibernationCandidate): string | null {
   // waiting on, and no completion, notification or wake ever arrives.
   if (c.status === "waiting") return "open-background-work";
   // A human has the pane open in a terminal.
+  if (!["idle", "dormant", "done"].includes(c.status ?? "")) return "status-unknown";
+  if (!Number.isInteger(c.attachedClients) || c.attachedClients < 0) return "attachment-unknown";
   if (c.attachedClients > 0) return "attached";
   // The pane belongs to another session too (a parent running its subagent
   // inside its own process): killing it takes down a session we did not pick.
-  if (c.sharedPane) return "shared-pane";
+  if (c.sharedPane !== false) return "shared-pane";
   // A subagent this session launched is still producing. It has no pane of its
   // own: it runs as a child process inside this pane's tree, so the teardown
   // would kill it mid-turn and nothing would ever report its result.
-  if (c.subagentActiveAgoMs < HIBERNATE_SUBAGENT_QUIET_MS) return "live-subagents";
+  if (c.subagentActiveAgoMs !== Infinity) return "live-subagents";
+  if (Number.isNaN(c.resumedAgoMs)) return "resume-unknown";
   if (c.resumedAgoMs < HIBERNATE_RESUME_GRACE_MS) return "recently-resumed";
   // Work is on its way to this session; parking it would trade the pane for a
   // resume on the very next delivery.
-  if (c.messagesInFlight) return "in-flight-messages";
+  if (c.messagesInFlight !== false) return "in-flight-messages";
   return null;
 }
 

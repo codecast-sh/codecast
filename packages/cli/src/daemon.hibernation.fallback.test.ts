@@ -16,6 +16,8 @@ function fixture() {
   const io: HibernationPassIo = {
     policy: () => ({ maxLive: 1, idleMs: 1, maxPerPass: 5 }),
     tmuxSessions: async () => new Map([["pane", 0]]),
+    terminal: async () => ({ stdout: "" }),
+    inspectTarget: async (id) => ({ session: "$1", pane: "%1", pid: 100, start: "start", stamp: id, conversationStamp: "" }),
     awakeIdleMs: () => 100_000,
     subagentActiveAgoMs: () => Infinity,
     conversationIds: () => ({ session: "conversation" }),

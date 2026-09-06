@@ -80,7 +80,7 @@ describe("hibernationBlockReason", () => {
     // tree, so the teardown would kill it mid-turn.
     expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: HIBERNATE_SUBAGENT_QUIET_MS - 1 })))
       .toBe("live-subagents");
-    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: HIBERNATE_SUBAGENT_QUIET_MS }))).toBeNull();
+    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: HIBERNATE_SUBAGENT_QUIET_MS }))).toBe("live-subagents");
     expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: 0 }))).toBe("live-subagents");
   });
 
@@ -96,7 +96,7 @@ describe("hibernationBlockReason", () => {
   test("a quiet session does not block — that is exactly what to park", () => {
     // "waiting" is deliberately absent: it is a settle verdict, but the one
     // that names live background work inside the pane.
-    for (const status of ["idle", "dormant", "done", "connected"] as const) {
+    for (const status of ["idle", "dormant", "done"] as const) {
       expect(hibernationBlockReason(candidate({ status }))).toBeNull();
     }
   });
