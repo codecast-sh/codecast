@@ -13,6 +13,7 @@ import { VAULT_MAX_SERVE_BYTES } from "@codecast/shared/contracts";
 import type { VaultScanResponse, VaultWriteResponse, VaultWsEvent } from "@codecast/shared/contracts";
 import { attachTerminalServer } from "../terminal/terminalServer.js";
 import { addVault } from "./vaultRegistry.js";
+import { clearRepoScopeCache } from "./vaultScope.js";
 import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vaultServer.js";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
@@ -196,6 +197,44 @@ describe("GET /vault/roots and /vault/scan", () => {
 
   test("an unknown vault is a 404", async () => {
     expect((await api("/vault/scan?vault=deadbeef")).status).toBe(404);
+  });
+
+  test("?ignored=1 lists a repo's hidden paths flagged, readable but not writable", async () => {
+    // Turn the fixture into a repo: a .git entry is the whole test.
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(root, "dist", "bundle.md"), "generated\n");
+    fs.writeFileSync(path.join(root, "dist", "app.js"), "js\n");
+    clearRepoScopeCache();
+
+    const plain = (await (await api(`/vault/scan?vault=${vaultId}`)).json()) as VaultScanResponse;
+    expect(plain.repo).toBe(true);
+    expect(plain.files.map((f) => f.path)).not.toContain("dist/bundle.md");
+
+    const res = await api(`/vault/scan?vault=${vaultId}&ignored=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as VaultScanResponse;
+    expect(body.repo).toBe(true);
+    expect(body.files.find((f) => f.path === "dist")).toMatchObject({ dir: true, ignored: true });
+    expect(body.files.find((f) => f.path === "dist/app.js")).toMatchObject({ ignored: true });
+    expect(body.files.find((f) => f.path === "index.md")?.ignored).toBeUndefined();
+    // A generated .md is not a note: the count matches the default scan.
+    expect(body.vault.note_count).toBe(plain.vault.note_count);
+
+    // The row can be opened...
+    const read = await api(filePath("dist/bundle.md"));
+    expect(read.status).toBe(200);
+    expect(await read.text()).toBe("generated\n");
+    // ...but not written, renamed or trashed: ignored means read-only.
+    expect((await api(filePath("dist/bundle.md"), { method: "PUT", body: "edited" })).status).toBe(400);
+    expect((await postOp({ op: "delete", path: "dist/bundle.md" })).status).toBe(400);
+  });
+
+  test("a plain vault reports repo:false and lists the same tree either way", async () => {
+    const plain = (await (await api(`/vault/scan?vault=${stableVaultId}`)).json()) as VaultScanResponse;
+    const withFlag = (await (await api(`/vault/scan?vault=${stableVaultId}&ignored=1`)).json()) as VaultScanResponse;
+    expect(plain.repo).toBe(false);
+    expect(withFlag.files.map((f) => f.path)).toEqual(plain.files.map((f) => f.path));
   });
 });
 

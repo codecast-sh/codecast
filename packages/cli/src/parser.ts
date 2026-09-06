@@ -111,6 +111,15 @@ export function parseSessionLine(line: string, opts?: { quiet?: boolean }): Clau
 // guard also drops it from older JSONL files written before the flag existed.
 export const CODECAST_IMPORT_NOTICE_PREFIX = "[Codecast import]";
 
+/** A user turn codecast itself wrote into a rebuilt transcript (the trim notice,
+ *  or OpenCode's whole-history import message). Context for the model only:
+ *  every client parser drops it, so it can never sync back into the
+ *  conversation as a new turn — not on the first pass, not after a daemon
+ *  restart re-parses the file from scratch. */
+export function isCodecastImportNotice(text: string | undefined | null): boolean {
+  return !!text && text.trimStart().startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+}
+
 // Queued prompts sometimes carry leading terminal control bytes (e.g. \x01\x0b,
 // bracketed-paste markers) captured with the keystrokes. Strip a leading run of
 // control chars — keeping tab/newline — so the synced content is clean and still
@@ -139,7 +148,11 @@ export function claudeBannerText(
   return text;
 }
 
-export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
+export type TranscriptEmission = { occurrence: number; timestampPresent: boolean; nativeTimestamp: unknown; receiptTimestamp: number; queued?: boolean; dequeue?: { timestampPresent: boolean; nativeTimestamp: unknown } };
+export type TranscriptEmissionObserver = (message: ParsedMessage, source: TranscriptEmission) => void;
+type ClaudeEmissionObserver = (message: ParsedMessage, entry: ClaudeSessionEntry, receiptTimestamp: number, dequeue?: { timestampPresent: boolean; nativeTimestamp: unknown }) => void;
+
+export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEmissionObserver): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   // A slash command's expansion (the command's .md body) is flagged isMeta by Claude Code,
   // so the generic meta-skip below drops it. Keep it when it directly follows the command
@@ -155,11 +168,13 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
   // instead: the queue-operation "remove" for the same text (written just
   // before it) carries that time; failing one, never earlier than the turn
   // already emitted in this pass.
-  let lastDequeue: { content: string; timestamp: number } | null = null;
+  let lastDequeue: { content: string; timestamp: number; receiptTimestamp: number; timestampPresent: boolean; nativeTimestamp: unknown } | null = null;
   let lastEmittedTimestamp = 0;
+  let lastEmittedReceiptTimestamp = 0;
 
   for (const entry of entries) {
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+    const receiptTimestamp = entry.timestamp ? timestamp : 0;
 
     if (entry.type === "system") {
       if (entry.content && entry.subtype) {
@@ -170,12 +185,13 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
           timestamp,
           subtype: entry.subtype,
         });
+        onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
       }
       continue;
     }
 
     if (entry.type === "queue-operation") {
-      if (entry.operation === "remove" && typeof entry.content === "string") lastDequeue = { content: entry.content, timestamp };
+      if (entry.operation === "remove" && typeof entry.content === "string") lastDequeue = { content: entry.content, timestamp, receiptTimestamp, timestampPresent: Object.hasOwn(entry, "timestamp"), nativeTimestamp: entry.timestamp };
       continue;
     }
 
@@ -217,6 +233,10 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
             timestamp: queuedTimestamp,
             images: promptImages.length > 0 ? promptImages : undefined,
           });
+          const matchedDequeue = lastDequeue?.content === promptText ? lastDequeue : undefined;
+          const queuedReceiptTimestamp = Math.max(receiptTimestamp, matchedDequeue?.receiptTimestamp ?? 0, lastEmittedReceiptTimestamp);
+          onEmit?.(messages[messages.length - 1], entry, queuedReceiptTimestamp, matchedDequeue);
+          lastEmittedReceiptTimestamp = Math.max(lastEmittedReceiptTimestamp, queuedReceiptTimestamp);
           lastEmittedTimestamp = Math.max(lastEmittedTimestamp, queuedTimestamp);
         }
       }
@@ -311,7 +331,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
 
     if (role === "assistant" && entry.isApiErrorMessage) textContent = claudeBannerText(entry, textContent);
 
-    const isImportNotice = role === "user" && textContent.trimStart().startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+    const isImportNotice = role === "user" && isCodecastImportNotice(textContent);
 
     if (!isImportNotice && (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0)) {
       const stopReason = typeof entry.message === "object" && entry.message.stop_reason
@@ -333,6 +353,8 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         stopReason,
         model,
       });
+      onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
+      lastEmittedReceiptTimestamp = Math.max(lastEmittedReceiptTimestamp, receiptTimestamp);
       lastEmittedTimestamp = Math.max(lastEmittedTimestamp, timestamp);
     }
 
@@ -346,12 +368,24 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
   return messages;
 }
 
-export function parseSessionFile(content: string): ParsedMessage[] {
+export function parseSessionFile(content: string, onEmit?: TranscriptEmissionObserver): ParsedMessage[] {
   const lines = content.split("\n");
+  const offsets = onEmit ? new WeakMap<ClaudeSessionEntry, number>() : undefined;
+  let offset = 0;
   const entries = lines
-    .map(line => parseSessionLine(line))
+    .map(line => {
+      const entry = parseSessionLine(line);
+      if (offsets) {
+        if (entry && typeof entry === "object") offsets.set(entry, offset);
+        offset += Buffer.byteLength(line) + 1;
+      }
+      return entry;
+    })
     .filter((e): e is ClaudeSessionEntry => e !== null);
-  return extractMessages(entries);
+  return extractMessages(entries, onEmit ? (message, entry, receiptTimestamp, dequeue) => onEmit(message, {
+    occurrence: offsets!.get(entry)!, timestampPresent: Object.hasOwn(entry, "timestamp"), nativeTimestamp: entry.timestamp, receiptTimestamp,
+    ...(entry.type === "attachment" ? { queued: true, ...(dequeue ? { dequeue: { timestampPresent: dequeue.timestampPresent, nativeTimestamp: dequeue.nativeTimestamp } } : {}) } : {}),
+  }) : undefined);
 }
 
 export function extractSlug(content: string): string | undefined {
@@ -485,6 +519,7 @@ export function parseCodexLines(content: string): CodexMessage[] {
 
 interface CodexSessionEntry {
   timestamp: string;
+  isMeta?: boolean;
   type: "session_meta" | "response_item" | "event_msg" | "turn_context";
   payload: {
     turn_id?: string;
@@ -705,7 +740,7 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       if (pendingAssistantThinking) pushAssistantMessage({ timestamp: lastTimestamp });
       messages.push(codexTurnErrorMessage(entry.payload.turn_id ?? entry.timestamp, entry.payload.error, new Date(entry.timestamp).getTime(), currentModel));
     }
-    if (entry.type !== "response_item") continue;
+    if (entry.type !== "response_item" || entry.isMeta) continue;
 
     const payload = entry.payload;
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
@@ -1137,7 +1172,7 @@ interface GeminiSessionFile {
   messages: GeminiSessionMessage[];
 }
 
-export function parseGeminiSessionFile(content: string): ParsedMessage[] {
+export function parseGeminiSessionFile(content: string, onEmit?: TranscriptEmissionObserver): ParsedMessage[] {
   let session: GeminiSessionFile;
   try {
     session = JSON.parse(content);
@@ -1151,7 +1186,7 @@ export function parseGeminiSessionFile(content: string): ParsedMessage[] {
 
   const messages: ParsedMessage[] = [];
 
-  for (const msg of session.messages) {
+  for (const [occurrence, msg] of session.messages.entries()) {
     if (msg.type === "info") continue;
 
     const timestamp = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
@@ -1205,6 +1240,7 @@ export function parseGeminiSessionFile(content: string): ParsedMessage[] {
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
       });
+      onEmit?.(messages[messages.length - 1], { occurrence, timestampPresent: Object.hasOwn(msg, "timestamp"), nativeTimestamp: msg.timestamp, receiptTimestamp: msg.timestamp ? timestamp : 0 });
     }
   }
 
@@ -1384,6 +1420,7 @@ export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
     if (role !== "user" && role !== "assistant") continue;
 
     const { content: text, thinking, toolCalls, toolResults, images } = foldOpencodeParts(entry.parts ?? []);
+    if (role === "user" && isCodecastImportNotice(text)) continue;
     const hasBody =
       text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0;
 
@@ -1563,6 +1600,7 @@ export function parsePiSessionFile(content: string): ParsedMessage[] {
     const { text, thinking, toolCalls, images } = extractPiBlocks(m.content);
 
     if (m.role === "user") {
+      if (isCodecastImportNotice(text)) continue;
       if (text.trim() || images.length > 0) {
         messages.push({
           uuid: entry.id,
@@ -1994,12 +2032,12 @@ export function extractGrokSessionId(content: string): string | undefined {
  * blob path uses parseCursorPrompts directly. OpenCode reads an assembled
  * multi-file snapshot (see parseOpencodeSessionFile).
  */
-export function parseTranscriptFor(clientId: AgentClientId, content: string): ParsedMessage[] {
+export function parseTranscriptFor(clientId: AgentClientId, content: string, onEmit?: TranscriptEmissionObserver): ParsedMessage[] {
   switch (clientId) {
     case "codex":
       return parseCodexSessionFile(content);
     case "gemini":
-      return parseGeminiSessionFile(content);
+      return parseGeminiSessionFile(content, onEmit);
     case "cursor":
       return parseCursorTranscriptFile(content);
     case "opencode":
@@ -2009,6 +2047,6 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string): Pa
     case "grok":
       return parseGrokSessionFile(content);
     default:
-      return parseSessionFile(content);
+      return parseSessionFile(content, onEmit);
   }
 }

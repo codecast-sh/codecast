@@ -34,7 +34,8 @@ function harness() {
   const resumeInFlight = new Map<string, Promise<boolean>>();
   const resumeInFlightStarted = new Map<string, number>();
   const resumeSessionCache = new Map<string, string>();
-  const timers = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const hibernationInFlight = new Map<string, { cancel: () => void; done: Promise<void> }>();
+  const expectedHibernationExits = new Map<string, unknown>();
   const sync = {
     getConversationOwnerInfo: async () => {
       state.ownerReads++;
@@ -47,23 +48,17 @@ function harness() {
     },
   };
   const deps = {
-    setTimeout: (callback: () => void, ms: number) => {
-      const fire = () => { clearTimeout(timer); timers.delete(timer); callback(); };
-      const timer = setTimeout(fire, ms);
-      timers.set(timer, fire);
-      return timer;
-    },
-    clearTimeout: (timer: ReturnType<typeof setTimeout>) => { clearTimeout(timer); timers.delete(timer); },
     accountLifecycleGate: gate, resumeInFlight, resumeInFlightStarted, resumeSessionCache,
-    lastResumeAt: new Map<string, number>(),
+    hibernationInFlight, expectedHibernationExits, lastResumeAt: new Map<string, number>(),
     RESUME_IN_FLIGHT_TIMEOUT_MS: 60_000, SWITCH_CONTINUE_SPACING_MS: 1,
     conversationForbidsResurrection: async () => state.forbidden,
     syncServiceRef: sync, deviceId: () => "local", isRemoteDevice: () => false,
     log: () => {}, logDelivery: () => {},
-    autoResumeSessionInner: async (...args: Parameters<Resume>) => {
+    resumeInnerForTests: async (...args: Parameters<Resume>) => {
       events.push(`launch:${args[0]}:${state.account}`);
       return hooks.launch(...args);
     },
+    autoResumeSessionInner: () => { throw new Error("unexpected real launch"); },
     clearHibernationPark: (id: string) => { events.push(`clear:${id}`); },
     injectViaTmux: async (_target: string, content: string) => { events.push(`inject:${content}`); },
     useProfile: (profile: string) => {
@@ -96,7 +91,7 @@ function harness() {
     resume: Resume;
     switchAccount: (args: Record<string, unknown>) => Promise<{ result?: string; error?: string }>;
   };
-  return { ...runtime, gate, state, hooks, events, resumeInFlight, resumeInFlightStarted, resumeSessionCache, timers };
+  return { ...runtime, gate, state, hooks, events, resumeInFlight, resumeInFlightStarted, resumeSessionCache, hibernationInFlight, expectedHibernationExits };
 }
 
 test("credentials never change until an in-flight launch reports ready", async () => {
@@ -136,10 +131,40 @@ test("production switch waits for Claude readiness and cleanup; queued Claude wa
   expect(h.events.indexOf("enqueue:first-conv")).toBeLessThan(h.events.indexOf("launch:queued:new"));
 });
 
+test("production resume retains one reservation across account wait and cancelled park, forwarding launch intent unchanged", async () => {
+  const h = harness(), parked = deferred();
+  let cancels = 0, launches = 0;
+  const opts = { userInitiated: true, model: "saved-model", effort: "high" };
+  h.hooks.launch = async (...args) => { launches++; expect(args[6]).toBe(opts); return true; };
+  h.resumeSessionCache.set("same", "owned-pane");
+  h.expectedHibernationExits.set("same", true);
+  h.hibernationInFlight.set("same", { cancel: () => { cancels++; }, done: parked.promise });
+  const release = await h.gate.acquireSwitch();
+  const first = h.resume("same", "", {}, "/saved/cwd", "conv", "claude", opts);
+  const second = h.resume("same", "second", {}, "/saved/cwd", "conv", "claude", opts);
+  try {
+    await waitFor(() => h.state.resumeAcquires === 1);
+    expect(h.resumeInFlight.has("same")).toBe(true);
+    expect(cancels).toBe(0);
+    release();
+    await waitFor(() => cancels === 1);
+    expect(launches).toBe(0);
+    parked.resolve();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(launches).toBe(1);
+    expect(cancels).toBe(1);
+    expect(h.expectedHibernationExits.has("same")).toBe(false);
+    expect(h.resumeInFlight.has("same")).toBe(false);
+    expect(h.events.filter(e => e === "clear:same")).toHaveLength(1);
+    expect(h.events).toContain("inject:second");
+  } finally { release(); parked.resolve(); }
+});
 
-test("reservation invalidated during account wait cannot launch and releases its hold", async () => {
+test("reservation invalidated during account wait cannot cancel a park or launch and releases its hold", async () => {
   const h = harness(), release = await h.gate.acquireSwitch();
   const newer = Promise.resolve(true);
+  let cancels = 0;
+  h.hibernationInFlight.set("old", { cancel: () => { cancels++; }, done: Promise.resolve() });
   const resume = h.resume("old", "", {}, undefined, "conv", "claude");
   try {
     await waitFor(() => h.state.resumeAcquires === 1);
@@ -147,6 +172,7 @@ test("reservation invalidated during account wait cannot launch and releases its
     release();
     expect(await resume).toBe(false);
     expect(h.resumeInFlight.get("old")).toBe(newer);
+    expect(cancels).toBe(0);
     expect(h.events).toEqual([]);
     (await h.gate.acquireSwitch())();
   } finally { release(); }
@@ -169,6 +195,28 @@ for (const refusal of ["lifecycle", "owner"] as const) {
   });
 }
 
+for (const refusal of ["lifecycle", "owner", "reservation"] as const) {
+  test(`production resume rechecks ${refusal} after waiting for park cancellation`, async () => {
+    const h = harness(), parked = deferred();
+    let cancels = 0;
+    const newer = Promise.resolve(true);
+    h.hibernationInFlight.set("parked", { cancel: () => { cancels++; }, done: parked.promise });
+    h.expectedHibernationExits.set("parked", true);
+    const resume = h.resume("parked", "", {}, undefined, "conv", "claude");
+    try {
+      await waitFor(() => cancels === 1);
+      if (refusal === "lifecycle") h.state.forbidden = true;
+      else if (refusal === "owner") h.state.owner = "other-live-device";
+      else h.resumeInFlight.set("parked", newer);
+      parked.resolve();
+      expect(await resume).toBe(false);
+      expect(h.events).toEqual([]);
+      expect(h.expectedHibernationExits.has("parked")).toBe(true);
+      expect(h.resumeInFlight.get("parked")).toBe(refusal === "reservation" ? newer : undefined);
+      (await h.gate.acquireSwitch())();
+    } finally { parked.resolve(); }
+  });
+}
 
 test("an initial refusal does not wait for credentials, while explicit user resume retains its bypass", async () => {
   const h = harness(), release = await h.gate.acquireSwitch();
@@ -245,67 +293,3 @@ test("daemon wires one shared account gate without wrapping the Codex app-server
   expect(resumeSource).not.toContain("markAppServerConversationResumable(");
   expect(resumeSource).not.toContain("new CodexAppServer(");
 });
-
-
-test("candidate reserves synchronously and duplicate forwarding uses one launch and clears its timer", async () => {
-  const h = harness(), boot = deferred(), release = await h.gate.acquireSwitch();
-  let launches = 0;
-  const opts = { userInitiated: true, model: "saved-model", effort: "high" }, cache = {};
-  h.hooks.launch = async (...args) => {
-    launches++;
-    expect(args[2]).toBe(cache);
-    expect(args[3]).toBe("/saved/cwd");
-    expect(args[6]).toBe(opts);
-    await boot.promise;
-    return true;
-  };
-  h.resumeSessionCache.set("same", "owned-pane");
-  const first = h.resume("same", "", cache, "/saved/cwd", "conv", "claude", opts);
-  expect(h.resumeInFlight.has("same")).toBe(true);
-  const second = h.resume("same", "second", cache, "/saved/cwd", "conv", "claude", opts);
-  try {
-    await waitFor(() => h.state.resumeAcquires === 1);
-    expect(h.timers.size).toBe(1);
-    expect(launches).toBe(0);
-    release();
-    await waitFor(() => launches === 1);
-    boot.resolve();
-    expect(await Promise.all([first, second])).toEqual([true, true]);
-    expect(launches).toBe(1);
-    expect(h.timers.size).toBe(0);
-    expect(h.events.filter(e => e === "inject:second")).toHaveLength(1);
-    expect(h.events.filter(e => e === "clear:same")).toHaveLength(1);
-    expect(h.resumeInFlight.has("same")).toBe(false);
-  } finally { release(); boot.resolve(); await Promise.all([first, second]); }
-});
-
-for (const expiry of ["age", "timer"] as const) {
-  test("expired original settling after " + expiry + " replacement cannot erase or clear the newer resume", async () => {
-    const h = harness(), oldReady = deferred(), newReady = deferred();
-    let launches = 0;
-    h.hooks.launch = async () => { await (++launches === 1 ? oldReady.promise : newReady.promise); return true; };
-    const old = h.resume("same", "", {}, undefined, "conv", "claude");
-    await waitFor(() => launches === 1);
-    if (expiry === "age") h.resumeInFlightStarted.set("same", Date.now() - 60_001);
-    const newer = h.resume("same", "", {}, undefined, "conv", "claude");
-    try {
-      if (expiry === "timer") {
-        await waitFor(() => h.timers.size === 1);
-        [...h.timers.values()][0]();
-      }
-      await waitFor(() => launches === 2);
-      const reservation = h.resumeInFlight.get("same");
-      oldReady.resolve();
-      expect(await old).toBe(true);
-      expect(h.resumeInFlight.get("same")).toBe(reservation);
-      expect(h.resumeInFlightStarted.has("same")).toBe(true);
-      expect(h.events.filter(e => e === "clear:same")).toHaveLength(0);
-      newReady.resolve();
-      expect(await newer).toBe(true);
-      expect(h.resumeInFlight.has("same")).toBe(false);
-      expect(h.events.filter(e => e === "clear:same")).toHaveLength(1);
-      expect(h.timers.size).toBe(0);
-      (await h.gate.acquireSwitch())();
-    } finally { oldReady.resolve(); newReady.resolve(); await Promise.all([old, newer]); }
-  });
-}

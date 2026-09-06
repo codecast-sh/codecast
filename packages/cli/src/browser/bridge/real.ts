@@ -2,11 +2,6 @@
  * Real-Chrome mode: routing `cast browser` verbs at the user's own Chrome
  * through the extension bridge instead of the managed clone.
  *
- * The clone stays the default — it is the safe place for unattended work.
- * Real mode exists for the cases the clone cannot serve: logins that drifted
- * since the clone was made, sites that fight fresh profiles, and work the
- * human wants to watch happen in their own browser.
- *
  * Because the bridge host IS a CDP endpoint, this file holds no transport:
  * `CdpConnection.fromPort(bridgeEndpoint)`, `listTargets`, `attachToTarget`
  * and every verb work exactly as they do against the clone. What is left is
@@ -19,7 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "../cdp.js";
+import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget, withSession } from "../cdp.js";
 import { attachToTarget, type InstanceState, type PageSession } from "../instance.js";
 import { browserHome } from "../profile.js";
 import { isPidAlive } from "../../workspace/chrome.js";
@@ -91,8 +86,8 @@ export function extensionReady(): boolean {
 
 /**
  * Which browser a session's verbs act on. An explicit `cast browser target`
- * wins. Otherwise the human's Chrome is the default whenever the extension is
- * connected, and the clone when it is not. With `settle` a real default is
+ * wins. Otherwise the human's Chrome is the default once the extension is
+ * paired, including while disconnected. With `settle` a real default is
  * written down as the session's choice, so a session that started in the
  * human's Chrome stays there if the extension drops; a clone default is not
  * written, so a session waiting on the clone moves over the moment the
@@ -101,7 +96,7 @@ export function extensionReady(): boolean {
 export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
   const chosen = explicitTarget(sessionKey);
   if (chosen) return chosen;
-  const mode = extensionReady() ? "real" : "clone";
+  const mode = extensionPaired() || extensionReady() ? "real" : "clone";
   if (opts.settle && mode === "real") setStickyTarget(sessionKey, mode);
   return mode;
 }
@@ -160,11 +155,11 @@ export function requireBridgeConfigured(): BridgeState {
  * running, or what answers on the port cannot prove it is our host. Those
  * callers are courtesies that never start a host, so all three are "no".
  */
-export async function bridgeEndpointIfConfigured(): Promise<CdpEndpoint | null> {
+export async function bridgeEndpointIfConfigured(session?: string | null): Promise<CdpEndpoint | null> {
   const state = readBridgeState();
   if (!state?.token) return null;
   try {
-    return bridgeEndpoint(await proveBridgeHost(state));
+    return bridgeEndpoint(await proveBridgeHost(state), session);
   } catch {
     return null;
   }
@@ -185,7 +180,10 @@ export async function bridgeEndpointIfConfigured(): Promise<CdpEndpoint | null> 
  */
 export async function engineBrowserFor(session: string, bridge?: ProvenBridge): Promise<EngineOptions & { session: string }> {
   if (!isRealSession(session)) return { session };
-  return { session, cdp: bridgeWsUrl(bridge ?? (await proveBridgeHost(requireBridgeConfigured()))) };
+  // The session rides on the socket URL: the host scopes what this engine
+  // discovers to the tabs granted to that session (bridge/host.ts).
+  const state = bridge ?? (await proveBridgeHost(requireBridgeConfigured()));
+  return { session, cdp: withSession(bridgeWsUrl(state), bridgeEndpoint(state, session)) };
 }
 
 export function rememberRealTab(sessionKey: string | null, targetId: string): void {
@@ -225,15 +223,38 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 // Reaching the real browser
 // ---------------------------------------------------------------------------
 
-/** How long a host this process just started may wait for the extension to
- *  reconnect before it is declared absent. */
+/**
+ * URLs chrome.debugger may not drive, so no extension can: Chrome's own pages
+ * and the Chrome Web Store, its developer dashboard included. Page.navigate
+ * to one answers "Not allowed" after the tab was already attached, which read
+ * as a broken bridge; naming the wall up front sends the human to click it
+ * themselves instead. Null when the URL is fine.
+ */
+export function walledOffFromExtension(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url.includes("://") ? url : `https://${url}`);
+  } catch {
+    return null;
+  }
+  if (u.protocol === "chrome:" || u.protocol === "chrome-extension:" || u.protocol === "devtools:") {
+    return `Chrome does not let an extension drive ${u.protocol}// pages`;
+  }
+  const host = u.hostname.toLowerCase();
+  if (host === "chromewebstore.google.com" || (host === "chrome.google.com" && u.pathname.toLowerCase().startsWith("/webstore"))) {
+    return "Chrome does not let an extension drive the Chrome Web Store or its developer dashboard";
+  }
+  return null;
+}
+
+/** How long to wait for the extension to reconnect before it is declared absent. */
 export const EXTENSION_RECONNECT_GRACE_MS = 8_000;
 
 /**
  * The bridge with its host up, and whether the extension is on it. A host
  * that is not running is started here, never reported: the extension can
  * only prove itself to a running host, and it reconnects to a new one on its
- * own within seconds (host.ts waitForExtension), so a host that just came up
+ * own within seconds (host.ts waitForExtension), so a disconnected extension
  * is given EXTENSION_RECONNECT_GRACE_MS to hear from it before the answer is
  * "not connected". Every question about the real Chrome's reachability goes
  * through here, whether it wants the answer (status) or a bridge to act on
@@ -244,7 +265,7 @@ export async function connectRealBridge(
 ): Promise<{ bridge: ProvenBridge & { started: boolean }; status: BridgeHostStatus }> {
   requireBridgeConfigured();
   const bridge = await ensureBridgeHost(start);
-  const status = await waitForExtension(bridge, bridge.started ? EXTENSION_RECONNECT_GRACE_MS : 0);
+  const status = await waitForExtension(bridge, EXTENSION_RECONNECT_GRACE_MS);
   return { bridge, status };
 }
 
@@ -258,8 +279,9 @@ export async function requireRealBridge(start?: BridgeHostStarter): Promise<Prov
   if (!status.extensionConnected) {
     throw new Error(
       "the cast bridge extension is not connected to this machine's bridge host.\n" +
-        "  In Chrome: check the extension is loaded (chrome://extensions), then run\n" +
-        "  `cast browser extension setup`; it hands the extension the current token and port.",
+        "  Open Chrome and check the extension is enabled (chrome://extensions).\n" +
+        "  If it still does not connect, run `cast browser extension setup` to pair it again.\n" +
+        "  To use the agent browser explicitly, add --clone or run `cast browser target clone`.",
     );
   }
   return bridge;
