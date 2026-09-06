@@ -32,6 +32,7 @@ import {
 } from "./engine.js";
 import { CdpConnection, type CdpEndpoint } from "./cdp.js";
 import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
+import { codecastPath } from "../codecastDir.js";
 
 /** How long a browser with an unknowable owner may sit untouched. */
 export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
@@ -108,7 +109,7 @@ export interface LiveOwners {
 export type OwnerState = "alive" | "dead" | "unknown";
 
 export function sessionRegistryDir(): string {
-  return path.join(process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast"), "session-registry");
+  return codecastPath("session-registry");
 }
 
 /** Newest mtime of a transcript for this session id under any project, or 0. */

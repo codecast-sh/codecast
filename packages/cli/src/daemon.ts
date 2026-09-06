@@ -237,6 +237,7 @@ import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
 import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
+import { codecastDir, codecastPath } from "./codecastDir.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -823,7 +824,7 @@ setInterval(() => {
 function isInWakeGrace(): boolean { return Date.now() < wakeGraceUntil; }
 
 
-const CONFIG_DIR = process.env.HOME + "/.codecast";
+const CONFIG_DIR = codecastDir();
 
 // On the cloud host the idle watchdog (provisionLinux.ts cast-idle-check) reads
 // this file's mtime instead of counting claude processes: a dormant session's
@@ -999,7 +1000,7 @@ const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LOG_FLUSH_INTERVAL_MS = 15 * 1000; // 15 seconds - flush more frequently
 const MAX_LOG_QUEUE_SIZE = 500;
-const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
+const LOG_QUEUE_FILE = codecastPath("log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
 // External-watchdog staleness threshold lives in supervision.ts
@@ -1204,7 +1205,7 @@ const closedSyntheticPrompts = new Map<string, number>();
 // Exported for tests (daemon.synthetic-prompt-close.test.ts) — the closure
 // lifecycle is otherwise only reachable through live tmux scrapes.
 export const syntheticPromptTestSeam = { lastEmittedSyntheticPrompt, closedSyntheticPrompts };
-const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
+const AGENT_STATUS_DIR = codecastPath("agent-status");
 // A session id that is safe to use as a file name inside AGENT_STATUS_DIR. The
 // leading character cannot be a dot, so no id can name a parent directory, and
 // no separator is allowed, so no id can leave the directory at all. Real ids
@@ -1245,7 +1246,7 @@ export function setHookStatusSink(sink: (sessionId: string, data: HookStatusData
 // Where codecast-status.sh drops a pending AskUserQuestion's full tool_input, keyed by
 // session id. The buffered turn isn't in the JSONL yet, so this sidecar is the only
 // full-fidelity source for the question while it waits to be answered.
-const ASK_INPUT_DIR = path.join(process.env.HOME || "", ".codecast", "ask-input");
+const ASK_INPUT_DIR = codecastPath("ask-input");
 const skillsSyncedConversations = new Set<string>();
 
 // Post-compaction message recovery: CC sometimes goes idle after compacting instead of

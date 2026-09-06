@@ -14,6 +14,13 @@ import * as path from "node:path";
 import { processSessionFile, TEST_SCRATCH_DIRNAME } from "./daemon.js";
 import type { SyncService } from "./syncService.js";
 import type { RetryQueue } from "./retryQueue.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// processSessionFile records the file's read position, which lands in
+// positions.json under CODECAST_DIR. Without the redirect this suite wrote the
+// scratch transcript's path into the human's real file (ct-49597).
+const isolatedCodecastDir = isolateCodecastDir("cast-test-teammate-link-");
+afterAll(() => isolatedCodecastDir.restore());
 
 const TEAM = "session-7406f3cf";
 const AGENT = "fm-sending-3";

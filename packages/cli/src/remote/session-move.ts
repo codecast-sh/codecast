@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { credentialHealth } from "../ccAccounts.js";
 import { resolveManifest } from "../workspace/resolver.js";
 import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
+import { codecastPath } from "../codecastDir.js";
 
 export interface RemoteHost {
   /** SSH host/IP. */
@@ -746,7 +747,7 @@ export function refreshRemoteCredential(host: RemoteHost): CredentialPushOutcome
   return copyCredentialToRemote(host);
 }
 
-const SCALEWAY_DIR = path.join(os.homedir(), ".codecast", "scaleway");
+const SCALEWAY_DIR = codecastPath("scaleway");
 
 /** Cheap check for the daemon's periodic refresh: is any remote Mac registered? */
 export function remoteHostsRegistered(): boolean {

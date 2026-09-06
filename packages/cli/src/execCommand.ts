@@ -33,8 +33,9 @@ import {
   type PrintOutputFormat,
 } from "./launchCommand.js";
 import { spawn, whichBin } from "./proc.js";
+import { codecastDir } from "./codecastDir.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".codecast");
+const CONFIG_DIR = codecastDir();
 const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
 
 export interface ResolveExecPromptDeps {

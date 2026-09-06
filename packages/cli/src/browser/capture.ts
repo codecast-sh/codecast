@@ -38,6 +38,7 @@ import { downscaleWithSips } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
 import { fmt } from "../colors.js";
+import { codecastDir } from "../codecastDir.js";
 
 // Bounds. The block lands in a conversation, not a log file: enough entries to
 // name the breakage, few enough that the error stays visible above it.
@@ -151,7 +152,7 @@ export function formatFailureContext(rec: Recording): FailureContextText {
 
 /** Persistent opt-out, read from the same config file `cast config` writes. */
 export function captureConfigOff(
-  configDir = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast"),
+  configDir = codecastDir(),
 ): boolean {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(configDir, "config.json"), "utf-8"));

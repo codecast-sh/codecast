@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -6,6 +6,12 @@ import { Database } from "bun:sqlite";
 import { findStaleCursorSessions, isAppServerManagedCodexSessionHead, shouldTreatClaudeFileAsStale } from "./daemon.js";
 import { clearPosition, setPosition } from "./positionTracker.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// setPosition/clearPosition rewrite positions.json under CODECAST_DIR; without
+// the redirect this suite rewrote the human's real file (ct-49597).
+const isolatedCodecastDir = isolateCodecastDir("cast-test-stale-");
+afterAll(() => isolatedCodecastDir.restore());
 
 describe("shouldTreatClaudeFileAsStale", () => {
   test("marks file stale when there is no sync record", () => {

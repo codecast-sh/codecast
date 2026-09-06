@@ -33,6 +33,7 @@ import { connectToTab, evaluateOn, type EvalOutcome, type PageCtx } from "../bro
 import { readState } from "../browser/instance.js";
 import { repoRootFor } from "../gitPlane.js";
 import type { PublishDeps } from "../publish.js";
+import { codecastPath } from "../codecastDir.js";
 
 const OK = `${c.green}✓${c.reset}`;
 const BAD = `${c.red}✗${c.reset}`;
@@ -414,7 +415,7 @@ async function settle(at: Attached, timeoutMs: number, quietMs = 400): Promise<S
 
 function cliConfig(): { user_id?: string; convex_url?: string; web_url?: string } {
   try {
-    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codecast", "config.json"), "utf-8"));
+    return JSON.parse(fs.readFileSync(codecastPath("config.json"), "utf-8"));
   } catch {
     return {};
   }

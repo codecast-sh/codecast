@@ -19,6 +19,7 @@ import {
   type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
+import { codecastPath } from "./codecastDir.js";
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 
@@ -315,7 +316,7 @@ export function installStableHook(): void {
 // touches nothing of that client's.
 
 function codecastHooksDir(): string {
-  return path.join(process.env.HOME || "", ".codecast", "hooks");
+  return codecastPath("hooks");
 }
 
 function writeStableHookScript(client: Exclude<StableHookClient, "claude">): string {

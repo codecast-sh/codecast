@@ -28,6 +28,7 @@ import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
+import { codecastDir, homeDir } from "./codecastDir.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -67,16 +68,6 @@ export function assertValidProfileName(name: string): void {
 
 function useFileStore(): boolean {
   return process.platform !== "darwin" || process.env.CC_ACCOUNTS_FORCE_FILE === "1";
-}
-
-/** $HOME first (bun's os.homedir() caches at startup and ignores later env
- * changes, which breaks $HOME-sandboxed tests), os.homedir() as fallback. */
-function homeDir(): string {
-  return process.env.HOME || os.homedir();
-}
-
-function codecastDir(): string {
-  return path.join(homeDir(), ".codecast");
 }
 
 function profileFileDir(): string {

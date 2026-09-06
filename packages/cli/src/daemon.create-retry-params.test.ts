@@ -8,7 +8,7 @@
 // attempted. These tests drive processSessionFile with a failing sync stub and
 // pin that the queued op preserves the subagent linkage.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,8 +17,15 @@ import {
   subagentParentSessionFromPath,
   TEST_SCRATCH_DIRNAME,
 } from "./daemon.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
 import type { SyncService, CreateConversationParams } from "./syncService.js";
 import type { RetryQueue } from "./retryQueue.js";
+
+// processSessionFile records the file's read position, which lands in
+// positions.json under CODECAST_DIR. Without the redirect this suite wrote the
+// scratch transcript's path into the human's real file (ct-49597).
+const isolatedCodecastDir = isolateCodecastDir("cast-test-create-retry-");
+afterAll(() => isolatedCodecastDir.restore());
 
 const PARENT_SESSION = "a4c6f0c0-4251-42de-b3f3-732eb239908b";
 const PARENT_CONV = "convParentJx74th3";

@@ -34,6 +34,7 @@ import { browserHome } from "./profile.js";
 import type { PageSession } from "./instance.js";
 import { readSharedConfig, writeSharedConfig } from "../config/sharedConfig.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
+import { codecastDir } from "../codecastDir.js";
 
 export const AUTO_SHOT_MAX_WIDTH = 800;
 const AUTO_SHOT_JPEG_QUALITY = 60;
@@ -61,7 +62,7 @@ export function isMutatingStep(verb: string, args: string[] = []): boolean {
 // ------------------------------------------------------------------- settings
 
 function defaultConfigDir(): string {
-  return process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  return codecastDir();
 }
 
 /**

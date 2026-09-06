@@ -10,7 +10,6 @@
 // access, this module stays importable by tests.
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./publish.js";
@@ -24,6 +23,7 @@ import {
   THREAD_STATE_STATUS_LABEL,
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
+import { codecastPath } from "./codecastDir.js";
 
 // ── the local stamp the reminder hook reads ──────────────────────────────────
 //
@@ -37,7 +37,7 @@ import {
 // its state.
 
 function threadStateDir(): string {
-  return path.join(os.homedir(), ".codecast", "thread-state");
+  return codecastPath("thread-state");
 }
 
 export function threadStateStampPath(sessionId: string): string {

@@ -43,6 +43,7 @@ import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
 import { findStaleTmuxServers, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
+import { codecastPath } from "./codecastDir.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -200,7 +201,7 @@ export function pickDoctorProjectDir(config: Config, runId: string, override?: s
   const candidates = override
     ? [override]
     : [
-        path.join(os.homedir(), ".codecast", "doctor", `e2e-${runId}`),
+        codecastPath("doctor", `e2e-${runId}`),
         ...(config.sync_projects ?? []).map((root) => path.join(root, ".codecast-doctor", `e2e-${runId}`)),
       ];
   for (const candidate of candidates) {

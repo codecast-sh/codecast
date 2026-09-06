@@ -171,6 +171,7 @@ import {
 import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
 import { resolveOwnTarget } from "./ownTarget.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
+import { codecastDir, codecastPath } from "./codecastDir.js";
 
 const program = new Command();
 const isStableContextFastPath = isStableContextFastPathArgv(process.argv);
@@ -474,7 +475,7 @@ async function autoBindFromEnv(): Promise<void> {
   } catch {}
 }
 
-const CONFIG_DIR = process.env.HOME + "/.codecast";
+const CONFIG_DIR = codecastDir();
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
@@ -858,7 +859,7 @@ function installSlashCommand(): void {
 
 function writeTaskPulse(sessionId: string, taskId: string, planId?: string): void {
   try {
-    const dir = path.join(os.homedir(), ".codecast", "task-pulse");
+    const dir = codecastPath("task-pulse");
     fs.mkdirSync(dir, { recursive: true });
     const data: Record<string, string> = { task: taskId };
     if (planId) data.plan = planId;
@@ -868,7 +869,7 @@ function writeTaskPulse(sessionId: string, taskId: string, planId?: string): voi
 
 function clearTaskPulse(sessionId: string): void {
   try {
-    const file = path.join(os.homedir(), ".codecast", "task-pulse", `${sessionId}.json`);
+    const file = codecastPath("task-pulse", `${sessionId}.json`);
     if (fs.existsSync(file)) fs.unlinkSync(file);
   } catch {}
 }
@@ -885,7 +886,7 @@ function readTaskPulse(): { task?: string; plan?: string } | null {
   const sessionId = detectCurrentSessionId();
   if (!sessionId) return null;
   try {
-    const file = path.join(os.homedir(), ".codecast", "task-pulse", `${sessionId}.json`);
+    const file = codecastPath("task-pulse", `${sessionId}.json`);
     if (!fs.existsSync(file)) return null;
     return JSON.parse(fs.readFileSync(file, "utf-8"));
   } catch {
@@ -2298,7 +2299,7 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
   }
 
   const claudeDir = path.join(os.homedir(), ".claude");
-  const orchDest = path.join(os.homedir(), ".codecast", "orchestration");
+  const orchDest = codecastPath("orchestration");
   let anyChange = false;
 
   // Copy skill
@@ -2436,7 +2437,7 @@ function uninstallOrchestration(): void {
     } catch {}
   }
 
-  const orchDest = path.join(os.homedir(), ".codecast", "orchestration");
+  const orchDest = codecastPath("orchestration");
   if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
 }
 
@@ -7061,7 +7062,7 @@ function normalizePsTty(tty: string): string {
 function loadSessionRegistryLookups(): { byPid: Map<number, string>; byTty: Map<string, string> } {
   const byPid = new Map<number, string>();
   const byTty = new Map<string, string>();
-  const registryDir = path.join(os.homedir(), ".codecast", "session-registry");
+  const registryDir = codecastPath("session-registry");
 
   if (!fs.existsSync(registryDir)) return { byPid, byTty };
 
@@ -7952,7 +7953,7 @@ function claudeSessionPath(sessionId: string, projectPath?: string | null): stri
 // the server while this file already has the answer.
 function readLocalConversationMap(): Record<string, string> {
   try {
-    const cacheFile = path.join(os.homedir(), ".codecast", "conversations.json");
+    const cacheFile = codecastPath("conversations.json");
     if (!fs.existsSync(cacheFile)) return {};
     return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
   } catch {
@@ -7969,7 +7970,7 @@ function readLocalConversationMap(): Record<string, string> {
 // race against the JSONL watcher discovering the file.
 function linkSessionToConversation(sessionId: string, conversationId: string): void {
   try {
-    const cacheDir = path.join(os.homedir(), ".codecast");
+    const cacheDir = codecastDir();
     const cacheFile = path.join(cacheDir, "conversations.json");
     const cache = readLocalConversationMap();
     if (cache[sessionId] === conversationId) return;
@@ -13760,7 +13761,7 @@ program
     const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
 
     // Read agent-status files for live session state
-    const agentStatusDir = path.join(os.homedir(), ".codecast", "agent-status");
+    const agentStatusDir = codecastPath("agent-status");
     const sessionStates = new Map<string, { status: string; ts: number }>();
     try {
       if (fs.existsSync(agentStatusDir)) {
