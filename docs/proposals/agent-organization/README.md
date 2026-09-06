@@ -4,7 +4,7 @@ Published page: https://codecast.sh/a/d0vFfz4flyqj
 
 Proposal plan: pl-519. Draft implementation roadmap: pl-529.
 
-Published version 2 is browser-verified. The local source contains one additional accessibility-label cleanup; its republish was blocked by the new sandbox. See `review/handoff.md`.
+Version 3 includes the final accessibility-label cleanup. On 5 September 2026, coordinator jx70p9m confirmed publication and DOM verification: ten chapters, nine focusable code blocks, no generic labels, and no horizontal overflow. ct-48817 and pl-519 are closed; pl-529 remains draft. No proposal work remains.
 
 This deliverable proposes a feature. It does not implement or authorize managed agents, runtime spending, adoption, or deployment.
 

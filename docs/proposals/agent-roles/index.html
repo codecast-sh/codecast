@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>An organization of agents: a product proposal for codecast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F5F1E8; --paper-2:#EDE7DA; --paper-3:#E3DCCB;
+  --ink:#171A21; --ink-2:#3B404B; --ink-3:#6A6F7A; --rule:#CFC7B4;
+  --green:#0C6B4E; --green-soft:#D6E9DF;
+  --red:#C8401A; --red-soft:#F6D9CE;
+  --blue:#1F4FB8; --blue-soft:#D8E0F5;
+  --amber:#8A6A12; --amber-soft:#F0E6C4;
+  --grey:#7A7F89; --grey-soft:#E6E4DE;
+  --display:"Bricolage Grotesque",system-ui,sans-serif;
+  --body:"Source Sans 3",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+  --maxw:720px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:18.5px;line-height:1.6;
+  background-image:radial-gradient(1200px 600px at 10% -10%, #fff8 0%, transparent 60%)}
+a{color:var(--green);text-decoration-thickness:1px;text-underline-offset:3px}
+.wrap{display:grid;grid-template-columns:232px minmax(0,1fr);gap:44px;max-width:1120px;margin:0 auto;padding:0 32px 120px}
+@media (max-width:980px){.wrap{grid-template-columns:minmax(0,1fr);padding:0 20px 80px}nav.toc{display:none}}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 0;font-size:13.5px;line-height:1.35;border-right:1px solid var(--rule)}
+nav.toc .brand{font-family:var(--display);font-weight:700;font-size:15px;margin:0 0 14px}
+nav.toc ol{list-style:none;margin:0;padding:0}
+nav.toc li{margin:0}
+nav.toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 10px;border-left:2px solid transparent;margin-left:-12px}
+nav.toc a:hover{color:var(--ink)}
+nav.toc a[aria-current="true"]{color:var(--ink);border-left-color:var(--green);font-weight:700}
+nav.toc .sub a{padding-left:22px;font-size:12.5px;color:var(--ink-3)}
+main{max-width:var(--maxw);padding-top:56px;min-width:0}
+header.hero{margin-bottom:56px}
+h1{font-family:var(--display);font-size:clamp(38px,6vw,64px);line-height:1.02;font-weight:800;letter-spacing:-.02em;margin:0 0 20px;overflow-wrap:anywhere}
+.lede{font-size:22px;line-height:1.45;color:var(--ink-2);max-width:640px;margin:0 0 22px}
+.meta{display:flex;gap:10px 18px;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+h2{font-family:var(--display);font-size:31px;line-height:1.1;font-weight:700;letter-spacing:-.015em;margin:84px 0 18px;padding-top:18px;border-top:2px solid var(--ink)}
+h2 .num{font-weight:300;color:var(--ink-3);margin-right:12px}
+h3{font-family:var(--display);font-size:21px;font-weight:700;margin:40px 0 10px;letter-spacing:-.01em}
+h4{font-family:var(--display);font-size:16px;font-weight:700;margin:28px 0 6px}
+p{margin:0 0 16px}
+ul,ol{padding-left:22px;margin:0 0 18px}
+li{margin:0 0 6px}
+code{font-family:var(--mono);font-size:.84em;background:var(--paper-2);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
+pre{font-family:var(--mono);font-size:13px;line-height:1.55;background:var(--ink);color:#E9E6DD;padding:18px 20px;border-radius:6px;overflow:auto;margin:0 0 22px}
+pre.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+pre .c{color:#8C93A3}pre .g{color:#7CD3AC}pre .y{color:#F2D089}pre .b{color:#9FC0FF}
+.callout{border-left:3px solid var(--green);background:var(--green-soft);padding:14px 18px;margin:0 0 22px;border-radius:0 6px 6px 0}
+.callout p:last-child{margin:0}
+.thesis{font-family:var(--display);font-size:26px;line-height:1.28;font-weight:600;letter-spacing:-.01em;margin:8px 0 26px;padding:22px 26px;border:2px solid var(--ink);border-radius:8px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:15px;margin:0 0 26px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--rule)}
+th{font-family:var(--display);font-weight:700;font-size:13.5px;background:var(--paper-2)}
+.fig{margin:26px 0 34px}
+.fig .cap{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:10px}
+.mock{background:#fff;border:1px solid var(--rule);border-radius:10px;box-shadow:0 1px 0 #0001, 0 12px 30px -20px #0004;overflow:hidden;font-size:14px}
+.mock.narrow{width:320px;max-width:100%}
+.mock .bar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--rule);background:var(--paper-2);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.mock .body{padding:14px 16px}
+.bucket{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin:6px 0 6px;letter-spacing:.02em}
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--rule);color:var(--ink-2);background:#fff;white-space:nowrap}
+.pill.working{background:var(--blue-soft);border-color:#b9c7ec;color:var(--blue)}
+.pill.needs{background:var(--red-soft);border-color:#e8b8a6;color:var(--red)}
+.pill.done{background:var(--green-soft);border-color:#b5d3c4;color:var(--green)}
+.pill.dormant{background:var(--grey-soft);border-color:#d3d1cb;color:var(--grey)}
+.pill.role{background:var(--amber-soft);border-color:#dcc98f;color:var(--amber)}
+.node{border:1px solid var(--rule);border-radius:8px;padding:10px 12px;background:#fff;min-width:0;margin:0 0 8px}
+.node .name{font-family:var(--display);font-weight:700;font-size:14.5px;display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.node .scope{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin:2px 0 6px}
+.node .line{font-size:13.5px;color:var(--ink-2)}
+.node .ev{display:block;font-family:var(--mono);font-size:11px;color:var(--green);margin-top:5px}
+.node .foot{display:flex;gap:6px;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--ink-3);flex-wrap:wrap}
+.node .foot span+span::before{content:"·";margin-right:6px}
+.node.needs{border-color:#e8b8a6;box-shadow:inset 3px 0 0 var(--red)}
+.node.working{box-shadow:inset 3px 0 0 var(--blue)}
+.node.dormant{box-shadow:inset 3px 0 0 var(--grey)}
+.node.done{box-shadow:inset 3px 0 0 var(--green)}
+.node.human{background:var(--paper-2);border-style:dashed}
+.node .hands{margin:8px 0 0;padding:6px 0 0;border-top:1px dashed var(--rule);font-size:12.5px;color:var(--ink-2)}
+.node .hands div{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.node .hands b{font-weight:700;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.alt{display:inline-flex;border:1px solid var(--rule);border-radius:6px;overflow:hidden;font-family:var(--mono);font-size:11.5px}
+.alt span{padding:4px 10px;color:var(--ink-3)}
+.alt span.on{background:var(--ink);color:var(--paper)}
+.org{--gap:18px}
+.org .tier{position:relative;display:grid;grid-template-columns:1fr;gap:12px;padding-top:var(--gap)}
+.org .tier.first{padding-top:0}
+.org .tier:not(.first)::before{content:"";position:absolute;left:50%;top:0;width:1.5px;height:var(--gap);background:var(--rule)}
+.org .tier.three{grid-template-columns:repeat(3,1fr)}
+.org .tier.three::after{content:"";position:absolute;left:16.66%;right:16.66%;top:var(--gap);height:1.5px;background:var(--rule)}
+.org .tier.three > .node{position:relative;margin-top:var(--gap)}
+.org .tier.three > .node::before{content:"";position:absolute;left:50%;top:calc(var(--gap) * -1);width:1.5px;height:var(--gap);background:var(--rule)}
+.org .tier.one > .node{width:min(360px,100%);margin-left:auto;margin-right:auto}
+.org .tier.mid > .node{width:min(360px,100%);margin:0 auto}
+@media (max-width:700px){
+  .org .tier.three{grid-template-columns:1fr}
+  .org .tier.three::after,.org .tier.three > .node::before,.org .tier:not(.first)::before{display:none}
+  .org .tier{padding-top:6px}
+  .org .tier.d1{margin-left:0}
+  .org .tier.d2,.org .tier.d3{border-left:2px solid var(--rule);padding-left:12px}
+  .org .tier.d2{margin-left:12px}
+  .org .tier.d3{margin-left:24px}
+  .org .tier.three > .node{margin-top:0}
+}
+.principle{display:grid;grid-template-columns:44px 1fr;gap:14px;margin:0 0 18px}
+.principle .n{font-family:var(--display);font-size:30px;font-weight:800;color:var(--green);line-height:1}
+.principle h4{margin:4px 0 4px}
+.principle p{margin:0;color:var(--ink-2)}
+.chain{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px}
+.chain .step{padding:3px 8px;border:1px solid var(--rule);border-radius:4px;background:#fff}
+.chain .step.now{border-color:var(--ink);color:var(--ink);font-weight:600}
+.chain .sep{color:var(--ink-3)}
+.opt{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--rule);border-radius:6px;margin:0 0 6px;font-size:14.5px;background:#fff}
+.opt .k{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-right:8px}
+.opt .btn{font-family:var(--mono);font-size:11px;padding:3px 9px;border:1px solid var(--ink);border-radius:4px;color:var(--ink);white-space:nowrap}
+.msg{display:grid;grid-template-columns:30px 1fr;gap:10px;padding:8px 0}
+.msg .av{width:28px;height:28px;border-radius:6px;background:var(--amber-soft);display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:12px;color:var(--amber)}
+.msg .av.h{background:var(--blue-soft);color:var(--blue)}
+.msg .who{font-weight:700;font-size:13.5px}
+.msg .who .pill{margin-left:6px}
+.msg .txt{color:var(--ink-2);font-size:14px}
+.evidence{font-family:var(--mono);font-size:11px;color:var(--green)}
+.phase{border:1px solid var(--rule);border-radius:8px;margin:0 0 14px;background:#fff}
+.phase .ph{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 16px;border-bottom:1px solid var(--rule);background:var(--paper-2);flex-wrap:wrap}
+.phase .ph b{font-family:var(--display);font-size:15px}
+.phase .ph span{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.phase .pb{padding:12px 16px;font-size:15px}
+.phase .pb p{margin:0 0 8px}
+.qa dt{font-weight:700;margin-top:14px}
+.qa dd{margin:4px 0 0 0;color:var(--ink-2)}
+footer{margin-top:80px;padding-top:18px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.term{font-weight:700}
+.kind{font-family:var(--mono);font-size:11px;white-space:nowrap}
+@media (max-width:700px){
+  table,thead,tbody,tr,th,td{display:block}
+  table thead,table tr:has(th){display:none}
+  table tr{border-bottom:1px solid var(--rule);padding:8px 0}
+  table td{border:0;padding:3px 0}
+  table td:first-child{font-weight:700}
+  table td:last-child{font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+  table.plain td:last-child{font-family:var(--body);font-size:15px;color:var(--ink)}
+  th[style]{width:auto!important}
+  .mock.narrow{width:100%}
+  .principle{grid-template-columns:34px 1fr}
+  .thesis{font-size:21px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p class="brand">An organization of agents</p>
+  <ol>
+    <li><a href="#summary">Summary</a></li>
+    <li><a href="#why">1. Why now</a></li>
+    <li><a href="#idea">2. The idea</a></li>
+    <li><a href="#principles">3. Principles</a></li>
+    <li><a href="#vocab">4. Vocabulary</a></li>
+    <li><a href="#today">5. From today to the org</a></li>
+    <li><a href="#shape">6. The shape of an org</a></li>
+    <li><a href="#day">7. A day with the org</a></li>
+    <li><a href="#surfaces">8. Surfaces</a>
+      <ol>
+        <li class="sub"><a href="#s-org">Org page and altitude</a></li>
+        <li class="sub"><a href="#s-role">Role page</a></li>
+        <li class="sub"><a href="#s-inbox">Inbox</a></li>
+        <li class="sub"><a href="#s-project">Projects and tasks</a></li>
+        <li class="sub"><a href="#s-chat">Chat</a></li>
+        <li class="sub"><a href="#s-decisions">Decisions</a></li>
+        <li class="sub"><a href="#s-mobile">Mobile</a></li>
+        <li class="sub"><a href="#s-cli">CLI</a></li>
+      </ol>
+    </li>
+    <li><a href="#mechanics">9. Mechanics</a>
+      <ol>
+        <li class="sub"><a href="#m-wakes">Wakes</a></li>
+        <li class="sub"><a href="#m-frame">The wake frame</a></li>
+        <li class="sub"><a href="#m-delegation">Delegation and escalation</a></li>
+        <li class="sub"><a href="#m-scope">Scope and authority</a></li>
+        <li class="sub"><a href="#m-identity">Identity</a></li>
+        <li class="sub"><a href="#m-memory">Memory and restart</a></li>
+        <li class="sub"><a href="#m-budget">Budgets</a></li>
+        <li class="sub"><a href="#m-pause">Pause</a></li>
+        <li class="sub"><a href="#m-conflict">Conflicts</a></li>
+        <li class="sub"><a href="#m-seat">A person in a seat</a></li>
+        <li class="sub"><a href="#m-routines">Routines</a></li>
+      </ol>
+    </li>
+    <li><a href="#data">10. Data model and migration</a></li>
+    <li><a href="#guardrails">11. Guardrails</a></li>
+    <li><a href="#rollout">12. Rollout</a></li>
+    <li><a href="#not">13. What we do not build</a></li>
+    <li><a href="#decisions">14. Decisions for the founder</a></li>
+    <li><a href="#appendix">Appendix</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <h1>An organization<br>of agents</h1>
+  <p class="lede">Hung on the work you already track. Layered agent roles that each own a project or a plan, wake on what changes inside it, and report upward as facts plus a short narrative. You read the company at whatever altitude you want, and answer only what nobody below you was allowed to decide.</p>
+  <div class="meta"><span>codecast product proposal</span><span>draft three, twice reviewed</span><span>2026-09-05</span><span>grounded in anchors, spawn, session_decisions, tasks, plans, projects, chat wakes, pending messages, change log</span></div>
+</header>
+
+<section id="summary">
+<div class="thesis">Codecast already has every part of an organization except the middle. The org chart is not a new tree. It is the project and plan tree with roles hung on its nodes, so it can never drift from the work.</div>
+<p>Sessions do the work. Tasks, plans and projects hold the work. Chat and the decision queue carry the conversation. One anchor stands by. What is missing is a layer of standing agents between the human and the sessions. Each one is a role over a project or a plan, with a charter, a scope, an authority list, a budget and a memory. A role wakes when its scope changes, delegates to hands, answers what its authority allows, and escalates the rest with a recommendation. It keeps a brief the layer above can read in ten seconds.</p>
+<p>This proposal covers the product end to end: the concepts, how they map onto what codecast does today, every surface they touch, the mechanics that make it cheap and trustworthy, the schema changes, the guardrails, and a four phase rollout with acceptance tests. It is written from first principles against the code. Two review rounds of six lenses each were folded in, and every claim about existing code below was checked against the file it names.</p>
+<div class="callout"><p><strong>What makes this different from "spawn more agents".</strong> Three commitments. First, roles hang on the existing work graph, so scope is never a second configuration surface. Second, every rollup separates facts the system computed from narrative the agent wrote, and every narrative line links to evidence. Third, the brief is the role's memory and the session is disposable, so a role survives compaction, model swaps, usage limits and restarts without losing the plot.</p></div>
+</section>
+
+<section id="why">
+<h2><span class="num">01</span>Why now: the human is the integrator</h2>
+<p>A codecast user runs many sessions a day. Each one is a peer: it files under a personal label, binds to one task or plan, talks to other sessions with <code>cast send</code>, and settles into an inbox bucket that answers one question, who acts next. The inbox is excellent at that question. It is silent on every other one: what is the state of the Infrastructure project, which of these eleven sessions are pulling in different directions, what did we decide yesterday about the sync layer, what does the whole thing cost.</p>
+<p>Today the only node that holds the whole picture is the human. Every card must be read, every decision answered, every collision noticed by them. The product has already grown the instruments that hint at the fix:</p>
+<ul>
+  <li>a session's pinned state says what it is working on, and the settle classifier says whether it is done;</li>
+  <li>a project has an Updates tab that already anticipates an agent digest;</li>
+  <li>tasks have a human board and an internal board;</li>
+  <li>an anchor stands by as a persistent member with a bot identity and a reserved field for a daily session cap;</li>
+  <li>hands nest under the session that spawned them.</li>
+</ul>
+<p>Each instrument works at one altitude. Nothing connects the altitudes.</p>
+<p>The result is a familiar ceiling. Below about ten live sessions the human is a good manager. Above it they are a switchboard. The fix is not a better switchboard. It is the thing every organization invents when the founder can no longer hold everything: a layer whose job is to hold one part of it and to tell the founder only what the founder needs.</p>
+
+<div class="fig">
+<div class="mock"><div class="bar"><span>Inbox · today · 14 live sessions · one reader</span></div>
+<div class="body" style="padding:10px 14px">
+  <div class="bucket">NEEDS INPUT · 3</div>
+  <div class="node needs"><div class="name">Repair release typecheck <span class="pill needs">needs input</span></div><div class="line">Blocked: needs prod key</div></div>
+  <div class="node needs"><div class="name">Backup window brownout <span class="pill needs">needs input</span></div><div class="line">Question: retry class?</div></div>
+  <div class="node needs"><div class="name">Sync host follower acks <span class="pill needs">needs input</span></div><div class="line">Decision: schema A or B</div></div>
+  <div class="bucket">WORKING · 3</div>
+  <div class="node working"><div class="name">Refine message layout <span class="pill working">working</span></div><div class="line">Status: iterating on spacing</div></div>
+  <div class="node working"><div class="name">Vendor platform mirror <span class="pill working">working</span></div><div class="line">Running the check script</div></div>
+  <div class="node working"><div class="name">Mobile chip TypeError <span class="pill working">working</span></div><div class="line">Reproducing on sim</div></div>
+  <div class="bucket">DONE · 2</div>
+  <div class="node done"><div class="name">Distinguish branch rows <span class="pill done">done</span></div><div class="line">Shipped, verified in browser</div></div>
+  <div class="node done"><div class="name">Issue sync reconcile <span class="pill done">done</span></div><div class="line">15 min cron verified</div></div>
+  <div class="bucket">DORMANT · 1</div>
+  <div class="node dormant"><div class="name">Growth audit <span class="pill dormant">dormant</span></div><div class="line">tr-42 re-checks at 3pm</div></div>
+</div></div>
+<div class="cap">Nine of fourteen cards, grouped by who acts next. Every card is honest about its session. None of them says which project is on track.</div>
+</div>
+</section>
+
+<section id="idea">
+<h2><span class="num">02</span>The idea: an organization is a context hierarchy</h2>
+<p>Strip a company down and it is a device for managing context. The person at the top holds goals and a one line status per department. A department head holds their department's plan and a paragraph per project. A project lead holds the plan and knows every open thread. An engineer holds the diff. Each layer compresses what is below it and carries intent from above. Nobody reads everything, and the company still moves as one.</p>
+<p>Agents need this more than people do, because an agent's context is a hard budget and it decays with every compaction. A standing agent that tries to hold a whole workspace in one transcript fails the same way a founder with forty reports fails. So the org is built as a context hierarchy first and a delegation hierarchy second.</p>
+<p>Concretely:</p>
+<ul>
+  <li><strong>A role owns a scope.</strong> A scope is a node in the work graph the product already has: the workspace, a project, or a plan. A role sees the facts of its scope, wakes on changes inside it, and files its writes there by default.</li>
+  <li><strong>A role keeps a brief.</strong> One living document per role: goal, state, blockers, decisions, what happens next. The system computes the facts, the role writes the narrative. The layer above reads briefs, not transcripts.</li>
+  <li><strong>Roles report up and delegate down.</strong> Down: start hands with task text, assign tasks to subordinate roles, append intent to their briefs. Up: a state line, a digest, and decisions that exceed the role's authority, each with a recommendation.</li>
+  <li><strong>The human sits wherever they want.</strong> At the top by default. Or in a role's seat, when they want to lead a project themselves. The org does not care whether a seat is held by a person or an agent.</li>
+</ul>
+<p>The payoff is a single new question the product can answer at any altitude: <em>how is this going, and what do you need from me?</em> Ask it of the workspace and the anchor answers in five lines. Ask it of a project and its lead answers with a brief. Ask it of a plan and you get the plan lead's view. Ask it of a session and you get today's inbox card. Same data, four altitudes, one gesture.</p>
+</section>
+
+<section id="principles">
+<h2><span class="num">03</span>Principles</h2>
+<div class="principle"><div class="n">1</div><div><h4>The org is the work graph, not a second tree.</h4><p>Roles hang on projects and plans. There is no separate org chart to keep in sync. Retire a project and its lead has nothing to hold; move a plan and its lead moves with it.</p></div></div>
+<div class="principle"><div class="n">2</div><div><h4>Facts computed, narrative written, every claim linked.</h4><p>Task counts, hand states, open decisions, tokens spent and staleness are computed by the server and injected. The role adds judgment on top. A narrative line without a link to a task, a diff, a message or a decision does not count as a report.</p></div></div>
+<div class="principle"><div class="n">3</div><div><h4>The brief is the memory. Sessions are disposable.</h4><p>A role must be restartable from its charter, its brief and its scope facts with nothing lost that matters. That is the test for what belongs in the brief, and it is what makes model swaps, limit parks and compaction survivable.</p></div></div>
+<div class="principle"><div class="n">4</div><div><h4>Sleep by default, wake on events, coalesce.</h4><p>No standing meetings, no polling. A role goes dormant at the end of every turn and is woken by changes inside its scope. Events within a short window fold into one wake with a digest, by the rules in appendix A.3. A quiet scope costs nothing.</p></div></div>
+<div class="principle"><div class="n">5</div><div><h4>Advise first, decide within authority, escalate with a recommendation.</h4><p>Every role has an explicit list of what it may decide alone, and that list starts empty. Anything outside it moves up the chain. Nothing reaches a person without the intermediate roles' recommendations attached and the chain visible.</p></div></div>
+<div class="principle"><div class="n">6</div><div><h4>One identity per role, billed to a host.</h4><p>A role is a bot member of the team. Its comments, chat posts, task assignments and briefs carry its name, through one actor resolver on the server. The human host's account runs and pays for it, exactly as the anchor works today.</p></div></div>
+<div class="principle"><div class="n">7</div><div><h4>Blast radius is explicit and pausable.</h4><p>Daily caps on hands, wakes and tokens per role, enforced from the first version. Role creation fenced to scope. A role can be paused with one gesture, and pause is a delivery gate, not a cosmetic hide.</p></div></div>
+<div class="principle"><div class="n">8</div><div><h4>Reuse the rails.</h4><p>Wakes are pending messages. Hands are spawns. Reports are project updates and thread states. Escalations are session decisions. Charters and briefs are docs. Identity is the anchor's bot user. The org adds three tables and a handful of fields, not a new runtime.</p></div></div>
+</section>
+
+<section id="vocab">
+<h2><span class="num">04</span>Vocabulary</h2>
+<p>Nine words. Each has one meaning. Nothing else is coined.</p>
+<table>
+<tr><th style="width:110px">Word</th><th>Meaning</th><th style="width:200px">Today's nearest thing</th></tr>
+<tr><td class="term">Role</td><td>A standing agent position: a name and handle, a scope, a charter, a parent role, a bot identity, a host, a model, an authority list, a budget, a status. It has exactly one session of its own, called its standing session, which is persistent and dormant between wakes.</td><td>the anchor</td></tr>
+<tr><td class="term">Scope</td><td>The slice of the work graph a role owns: the workspace, one project, or one plan. Scope decides what facts the role is shown, which events wake it, where its unfiled writes land, and whose questions it answers first.</td><td>none; the anchor's team or user boundary is access, not scope</td></tr>
+<tr><td class="term">Charter</td><td>The role's standing instructions: responsibilities, when to escalate, how and where to report, voice. A doc that humans edit and roles may not. It never grants authority.</td><td>the anchor's persona and bootstrap text</td></tr>
+<tr><td class="term">Brief</td><td>The role's living memory of its scope. Two parts: a fact block the server computes on read, and a narrative the role writes. Read by the parent role and by humans at that altitude. Only roles have briefs.</td><td>thread state (one line) plus the idle summary</td></tr>
+<tr><td class="term">Hand</td><td>Any session born from a role's session for bounded work: a spawn, a subagent, a fork, a routine run, a task spawn. It keeps the inbox shape it has today and is counted against the role's budget. Not a role: no charter, no brief, no subordinates.</td><td><code>cast spawn --subagent</code>, the anchor's hands</td></tr>
+<tr><td class="term">Wake</td><td>One delivered turn to a role's standing session, carrying a frame: what changed since the last wake, current scope facts, and what is being asked.</td><td><code>deliverToAnchor</code>, a chat wake, a trigger run</td></tr>
+<tr><td class="term">Escalation</td><td>A decision moving up the chain of roles toward a person, gathering a recommendation at each step.</td><td><code>cast decide</code></td></tr>
+<tr><td class="term">Altitude</td><td>The level at which you read the org: overview (one line per top level scope), roles (one brief per role), sessions (cards).</td><td>none</td></tr>
+<tr><td class="term">Seat</td><td>A role held by a person instead of its agent. The role's standing session sleeps; the person reads the brief, writes its narrative, and receives what the role would have received.</td><td>none</td></tr>
+</table>
+<p>The anchor keeps its name. It is the root role of a workspace: scope is the whole workspace, parent is the human. Everything the anchor can do today it can still do. Every other role is an anchor with a narrower scope and a parent. A routine is a trigger a role owns; the page uses that one word for it.</p>
+</section>
+
+<section id="today">
+<h2><span class="num">05</span>From today to the org</h2>
+<p>The product has most of the parts. The table is the whole migration in one view: what exists, what it becomes, what changes. Where a part does not exist yet, the table says so, because the estimate depends on it.</p>
+<table class="plain">
+<tr><th>Today</th><th>In the org</th><th>What changes</th></tr>
+<tr><td>The <code>anchors</code> table holds one row per team or user, with a bot identity, a host, a persona, a persistent session, and a daily session cap field that nothing reads</td><td>The <code>roles</code> table: the same row with an org scope, a parent, a charter doc, a brief doc, an authority list and counters</td><td>Table generalized; existing anchors migrate as root roles with no data loss; the cap becomes enforced in phase 1</td></tr>
+<tr><td><code>parent_conversation_id</code> nests and hides a subagent; <code>spawned_by_conversation_id</code> nests a teammate for display and keeps its card</td><td>A hand carries <code>hand_of_role_id</code> in addition; it keeps whichever inbox shape it has today</td><td>One additive field on conversations; the sessions altitude of the org page shows every hand</td></tr>
+<tr><td><code>bootstrapMessage</code> briefs the anchor at provisioning and <code>rebriefAnchor</code> can re-send the same static text on request; neither carries what changed</td><td>A wake frame is built per wake: identity, events since last wake, scope facts, subordinate brief lines, charter</td><td>New generator, run as a query when the session is idle, stored on the pending message</td></tr>
+<tr><td>Task and plan writes emit nothing to subscribers except an assignment; <code>entity_subscriptions</code> has no project type</td><td>A scope event collector in the change tracked write path, flushed per mutation, feeds the roles whose scope the row touches</td><td>New fan out with actor identity; subscriptions untouched</td></tr>
+<tr><td>A chat mention resolves to the team's single anchor; a line a session typed never wakes anyone; only <code>cast anchor say</code> posts as the bot</td><td>Every team role is mentionable by handle; a channel can be bound to a role; any write from a role's session carries the bot identity</td><td><code>anchor_channels</code> gains <code>role_id</code>; one server side actor resolver; the agent line rule stays</td></tr>
+<tr><td><code>session_decisions</code> are owned by the host account and answerable only by it; the queue reads by owner</td><td>A decision carries who it is routed to now, its chain, its category, and one inbox row per person asked</td><td>Fields, a small inbox table, an answer mutation, and readers that treat routed rows as "with a lead"</td></tr>
+<tr><td><code>project_updates</code> already has <code>kind: digest</code> and <code>author_kind: agent</code></td><td>The project lead posts its digest here on a routine it owns</td><td>No schema change</td></tr>
+<tr><td>Task <code>assignee</code> passes any <code>agent:</code> value through; the human board predicate counts every assignee as a promotion</td><td>A role assignee is stored as <code>agent:&lt;handle&gt;</code>; assignment to a role wakes it; an <code>agent:</code> assignee no longer counts as promotion</td><td>One clause in the shared predicate; assignment emits a scope event</td></tr>
+<tr><td><code>cast task ready</code> lists open, unblocked tasks; it sends no session identity</td><td>Inside a role or its hands, ready is filtered to the scope; a human shell sees the workspace</td><td>Every write and list route carries the calling session; <code>-p</code>, <code>--plan</code> and <code>--all</code> override</td></tr>
+<tr><td>Thread state pins one line per session, written by <code>cast state</code></td><td>Inside a role, <code>cast state</code> and <code>cast brief edit</code> write one field: the brief's first line is the pin</td><td>The state command learns the role context</td></tr>
+<tr><td>The inbox hides the anchor's row unless hard blocked</td><td>A role is hidden unless it is hard blocked or pinned blocked; its open decisions surface in Questions, not as a role card</td><td>One placement input generalized</td></tr>
+<tr><td><code>agent_tasks</code> triggers bound to a session or spawned fresh; a run's prompt goes straight onto the pending message rail</td><td>Routines: a trigger armed inside a role's session inherits the role, its run passes through the outbox and gets a frame, and a spawned run is a hand</td><td>One field on the trigger row; the claim path applies the gates</td></tr>
+<tr><td><code>messages.usage</code> exists in the schema and nothing writes it; <code>session_metrics</code> holds CPU and memory</td><td>Hands, wakes and tokens counted per role and per subtree against daily caps, in tokens</td><td>A usage writer in Claude transcript sync; codex sessions shown as not counted; counters on the roles row</td></tr>
+<tr><td><code>file_touches</code> exists with a <code>recordTouch</code> mutation that nothing calls</td><td>Overlap among a role's live hands is a fact in its frame</td><td>A writer in the transcript sync path, phase 3</td></tr>
+</table>
+</section>
+
+<section id="shape">
+<h2><span class="num">06</span>The shape of an org</h2>
+<p>Shapes are not prescribed. The rule is that a role's scope must sit inside its parent's scope. With three scope kinds that gives a depth of two roles below the root: a project lead under the anchor, a plan lead under a project lead. The cap rises when a new scope kind is added. Hands are leaves and do not count. Two shapes cover almost everyone.</p>
+
+<div class="fig">
+<div class="org">
+  <div class="tier first one d1"><div class="node human"><div class="name">Ashot</div><div class="scope">human · the top of the org</div></div></div>
+  <div class="tier one d1"><div class="node dormant"><div class="name">Anchor <span class="pill dormant">dormant</span></div><div class="scope">scope: workspace · reports to Ashot</div><div class="line">3 projects moved overnight · 1 decision addressed to you</div></div></div>
+  <div class="tier three d2">
+    <div class="node needs"><div class="name">Infra lead <span class="pill needs">needs input</span></div><div class="scope">scope: project Infrastructure</div><div class="line">Blocked: prod key for the backup check</div><div class="hands"><div><span>backup retry class</span><b>hand · needs input</b></div><div><span>replica build</span><b>hand · done</b></div></div></div>
+    <div class="node working"><div class="name">Product lead <span class="pill working">working</span></div><div class="scope">scope: project Codecast: Product</div><div class="line">4 hands working · minimal layout polish</div></div>
+    <div class="node done"><div class="name">Sync lead <span class="pill done">done</span></div><div class="scope">scope: project Sync &amp; Reliability</div><div class="line">Last digest 07:10 · nightly reconcile audit green</div><div class="hands"><div><span>tr-88 · nightly reconcile audit</span><b>routine</b></div></div></div>
+  </div>
+  <div class="tier mid d3"><div class="node working"><div class="name">Minimal interface plan lead <span class="pill working">working</span></div><div class="scope">scope: plan pl-531 · reports to Product lead</div><div class="hands"><div><span>spacing</span><b>hand · working</b></div><div><span>branch and tag rows</span><b>hand · working</b></div></div></div></div>
+</div>
+<div class="cap">A small team's org. The colored edge on each node is the subtree's rollup of who acts next, in the inbox's own words and colors: red when a person must act anywhere below the node, blue when the role or any hand is mid turn, green when everything below is done, grey when the subtree is asleep. Hands are listed inside the role that started them.</div>
+</div>
+
+<h3>Shape one: a solo builder</h3>
+<p>The anchor, one lead per active project, hands. Three altitudes. The human talks to the anchor in the morning and to a lead when they want to go deep. This is the shape <code>cast org init</code> proposes by default: it reads the active projects and offers one lead each, with charters drafted from the project's description and its recent updates. A workspace with no projects yet is offered projects first, drawn from its plans and its top level tasks, because a lead needs something to hold.</p>
+<h3>Shape two: a small team</h3>
+<p>A team anchor, project leads, and plan leads under the busiest projects. A human product manager may hold a lead seat; the agent leads below them report to a person, and that person's queue is where their escalations land. Section 9.10 defines the seat. The chart shows a dashed node for it.</p>
+<h3>Boundaries the shapes respect</h3>
+<p>A workspace has one org. A personal workspace and a team workspace are separate trees with separate anchors, the same boundary tasks, plans and docs already draw. A role's access follows the anchor's rules: the host, the personal owner, or any member of the team can reach it, and only the host, the owner or a team admin can reshape it. A parent and a child role always share one workspace, and <code>--reports-to</code> resolves inside it, so the default parent is the anchor of the same workspace.</p>
+<p>A task can sit in a plan and in a project, and the two columns are independent today. A scope event therefore fans out to the union: the lead of the task's plan, the lead of the task's project, and the lead of the plan's project. A project lead's facts are built from tasks by project; a plan lead's from tasks by plan. Task creation under a plan starts setting the plan's project when none is given, with a one time backfill, so the two views converge. A task with neither sits in the root scope and belongs to the anchor. A plan with no project sits under the anchor. A plan that is private to one person inside a team project gets no plan lead in the first version, because a team role could not read it.</p>
+<p>Which anchor is the root of a row is read from the row's workspace key, never from its team routing, so a task routed to a team but private to its owner reaches the owner's anchor and nobody else's.</p>
+<h3>What is not a shape</h3>
+<p>Peers without a parent, roles scoped to a label, roles scoped to a repo path, roles that report to two parents. Each of these is a real request and each is explicitly deferred in section 13 so that the first version has one scope rule and one chain per decision.</p>
+</section>
+
+<section id="day">
+<h2><span class="num">07</span>A day with the org</h2>
+<p>A scenario is the honest test of a design. This one uses the shape above and assumes phases 1 through 3 have shipped. A phase 1 day is described at the end.</p>
+
+<h4>07:00 · the human reads at overview altitude</h4>
+<p>Ashot opens the org page on their phone. The anchor's line reads: three projects moved overnight, one decision waiting, recommended answer attached. Overview altitude shows one line per top level scope, each written by its role and each carrying the colored edge. Infrastructure is red.</p>
+<div class="fig"><div class="mock"><div class="bar"><span>/org · overview</span></div><div class="body">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap"><b style="font-family:var(--display)">Codecast workspace</b><div class="alt"><span class="on">Overview</span><span>Roles</span><span>Sessions</span></div></div>
+<div class="node dormant"><div class="name">Anchor <span class="pill dormant">dormant</span></div><div class="line">3 projects moved overnight · 1 decision addressed to you</div></div>
+<div class="node needs"><div class="name">Infrastructure <span class="pill needs">needs input</span></div><div class="line">Backup retry class is fixed and tested; the final check needs the prod key. Replica build is green.</div><span class="ev">ct-49001 · ct-48990 · sd-211</span><div class="foot"><span>Infra lead</span><span>2 hands</span><span>41k tokens today</span><span>06:52</span></div></div>
+<div class="node working"><div class="name">Codecast: Product <span class="pill working">working</span></div><div class="line">Minimal interface plan is 6 of 9 tasks done; spacing and branch rows in progress; hooks fix shipped.</div><span class="ev">pl-531 · 3 commits</span><div class="foot"><span>Product lead</span><span>4 hands</span><span>116k tokens today</span><span>06:58</span></div></div>
+<div class="node done"><div class="name">Sync &amp; Reliability <span class="pill done">done</span></div><div class="line">Nightly reconcile audit green; no new events.</div><span class="ev">tr-88</span><div class="foot"><span>Sync lead</span><span>0 hands</span><span>3k tokens today</span><span>07:10</span></div></div>
+</div></div><div class="cap">Four lines. Each links to its evidence. The colored edge says where attention goes. The Infrastructure line links to the decision instead of restating it.</div></div>
+
+<h4>07:04 · one decision, with a recommendation</h4>
+<p>The queue holds one card. It was raised by a hand under the Infra lead in the production category, so it went to Ashot at once and to the lead in parallel. The lead's recommendation arrived on the card a minute later. Ashot picks option two. The answer lands on the hand that asked, which finishes. The answer and the hand's completion are passive facts for the lead: they ride its next wake instead of causing one.</p>
+
+<h4>10:30 · an issue lands in Linear</h4>
+<p>A Linear issue arrives in the Sync project through issue sync. The task's creation is a write inside the Sync lead's scope, so the lead wakes with a frame that says one new task, priority high, no assignee. Its charter says it triages new work and starts hands for anything under a day. It starts a hand in a worktree with the task text and comments on the task as itself. The task stays on the human board, because a person filed it, and now shows the Sync lead's chip. Ashot sees nothing and needs to see nothing.</p>
+
+<h4>14:15 · a collision</h4>
+<p>Two hands under the Product lead edit the same file. The server sees overlapping file touches inside one scope and includes it in the lead's next frame. The lead sends one hand an interrupt to stop at a safe point, tells the other to finish, and posts one line in the project's channel. The human learns about it in the evening digest, after it was solved.</p>
+
+<h4>17:30 · digests</h4>
+<p>Each lead's routine fires. It reads its brief and the day's facts, writes a digest to the project's Updates tab, and refreshes its brief. A posted digest is a scope event for the anchor, so the anchor's summary is one coalesced wake that fires when every lead has posted or at a deadline, whichever comes first. In that turn the anchor reads the full briefs with <code>cast brief</code> and posts a five line summary in the team channel with the day's tokens by role. Ashot reads one message.</p>
+
+<div class="callout"><p><strong>Count the human's touches:</strong> one page read, one decision, one evening message. The org did the rest, and everything it did is on the record with the role's name on it.</p></div>
+
+<h4>The same day after phase 1 only</h4>
+<p>One lead exists, over Infrastructure. It holds no authority yet. Its brief's first line sits in the project header and on the overview page. Its evening digest lands in Updates. Every decision from its hands reaches Ashot's queue with the lead's recommendation attached. It starts hands only for tasks a person assigned to it, and never more than its cap. The human's touches are a page read, the queue, and one digest. That is already a shorter day, and it is what phase 1 must prove.</p>
+</section>
+
+<section id="surfaces">
+<h2><span class="num">08</span>Surfaces</h2>
+<p>The org touches nine surfaces. Each gets the smallest change that makes the org visible there, and each reuses the component that already renders the underlying object.</p>
+
+<h3 id="s-org">8.1 The org page and the altitude control</h3>
+<p>A new route, <code>/org</code>, is the flagship. It renders the work graph with roles on its nodes and an altitude control at the top. The control is the interaction the whole proposal exists to deliver.</p>
+<ul>
+  <li><strong>Overview.</strong> One line per top level scope, the first line of that scope's brief, with the colored edge and the evidence links. Fits on a phone. It is a projection of briefs, not new machinery.</li>
+  <li><strong>Roles.</strong> One brief per role: goal, state, blockers, decisions, next, hands. The chart is drawn at this altitude, as in section 6.</li>
+  <li><strong>Sessions.</strong> Every session under every role, as the inbox renders cards, including the hidden subagents the inbox never shows. This is where a plan lead's whole orchestration run is visible.</li>
+</ul>
+<p>The colored edge on a node is the subtree's rollup of who acts next, in the inbox's four colors, so the chart doubles as a heat map of attention. A node's actions: open the role, talk to it, pause it and everything under it, add a role beneath it. Adding a role is a two field form: pick a scope from the projects and plans under the parent, name it. Charter and brief are drafted for review. An empty org page offers to propose one.</p>
+<p>The page also shows two totals that keep the org honest: tokens today by role, and wakes today by role, with a count of sessions whose tokens are not counted when a backend has no usage writer. A role that wakes fifty times a day is misconfigured, and the number is where the human sees it. A role whose frame truncates is flagged with a suggestion to split its scope.</p>
+
+<h3 id="s-role">8.2 The role page</h3>
+<p>A role's home, at <code>/org/&lt;handle&gt;</code>. From top to bottom:</p>
+<ol>
+  <li><strong>The brief.</strong> Facts on the left (computed, with an "as of" stamp and a count of scope events since), narrative on the right (the role's words, each line linked). The narrative is editable here by the parent role's host and by a seat holder. Stale briefs render greyed the way a stale thread state does.</li>
+  <li><strong>Talk to it.</strong> A composer that delivers into the standing session. The transcript is embedded below it using the existing conversation view, so the role page is also the session page.</li>
+  <li><strong>Hands.</strong> Session cards under the role, live, with the same gestures as the inbox.</li>
+  <li><strong>Decisions.</strong> Three lists: raised by this role, answered by this role on behalf of its hands, escalated upward. The middle list is the audit of delegated authority, and each row shows the category the hand proposed and the category the role confirmed.</li>
+  <li><strong>Routines and wakes.</strong> The triggers this role owns, with pause and run, and the wake log with causes and tokens.</li>
+  <li><strong>Channels.</strong> The chat channels and Slack channels bound to this role.</li>
+  <li><strong>Charter.</strong> The doc, editable inline by humans. A change is delivered to the role as a wake so it re-reads its instructions.</li>
+  <li><strong>Settings.</strong> Model and backend, host, seat holder, budget caps, authority list, restart, status.</li>
+</ol>
+
+<h3 id="s-inbox">8.3 The inbox</h3>
+<p>A role is hidden from the inbox unless it is hard blocked (a permission prompt, an unresolved API error, a dead or unresponsive agent) or pinned a blocked thread state. A decision it raised or escalated is not a reason to show the role: the decision surfaces once, in the Questions bucket, with its chain. Hands keep exactly the inbox shape they have today: a spawn is a card, a subagent is hidden, a teammate nests. The org page's sessions altitude is where every hand is visible regardless.</p>
+<ul>
+  <li>An <strong>Org</strong> section at the top of the sidebar lists roles that are hard blocked, in the same card shape, with the role identity in the chip. Empty when no role is stuck, which is the normal state.</li>
+  <li>The <strong>Questions</strong> bucket shows a decision's chain on the card, and a collapsed "with a lead" group for decisions a role is currently handling, so a person can pull one up early.</li>
+</ul>
+
+<div class="fig"><div class="mock narrow"><div class="bar"><span>Inbox · sidebar</span></div><div class="body" style="padding:10px 12px">
+<div class="bucket">ORG · 0</div>
+<div class="bucket">QUESTIONS · 1</div>
+<div class="node needs"><div class="name"><span>sd-211 · backup check</span></div><div class="chain" style="margin-top:6px"><span class="step">hand</span><span class="sep">→</span><span class="step">Infra lead · 2</span><span class="sep">→</span><span class="step now">you</span></div></div>
+<div class="bucket">WORKING · 3</div>
+<div class="node working"><div class="name">Minimal layout spacing</div><div class="foot"><span>Product lead</span><span>12m</span></div></div>
+<div class="node working"><div class="name">Branch and tag rows</div><div class="foot"><span>Product lead</span><span>31m</span></div></div>
+<div class="node working"><div class="name">Vendor platform mirror</div><div class="foot"><span>Infra lead</span><span>4m</span></div></div>
+</div></div><div class="cap">At sidebar width. No role card is shown, because the Infra lead's only blocker is a decision, and that lives in Questions. Hands are cards with their role in the foot.</div></div>
+
+<h3 id="s-project">8.4 Projects, plans and tasks</h3>
+<p><strong>Project page.</strong> The header gains the lead's chip and the first line of its brief, with a "talk to the lead" action that opens the role composer in a side panel. The Updates tab is where the lead posts digests, badged as digests as the tab already does. The Tasks tab gains a "delegated to" facet so the human can see which tasks a role has handed to hands or to subordinate roles.</p>
+<p><strong>Plan page.</strong> A plan with a lead shows the lead's chip and brief line in the plan header. The plan's timeline entries written by the lead carry its identity.</p>
+<p><strong>Tasks.</strong> A role assignee is stored as <code>agent:&lt;handle&gt;</code>, the non user assignee convention the resolver and the name renderer already pass through; <code>--assignee @sync-lead</code> resolves the handle and writes that. Assigning to a role is delegation: it emits a scope event and the role wakes with the task in its frame. Assigning a task to a role never puts it on the human board. A task a person filed stays there and shows the role as assignee. The change is one clause in the shared board predicate: an <code>agent:</code> assignee no longer counts as promotion. Web and mobile share the predicate, so one line changes both.</p>
+<p><code>cast task ready</code> reads the calling session. Inside a role (section 8.8 defines inside) it lists only ready tasks in the role's scope; a human shell sees the workspace, as today. <code>-p</code>, <code>--plan</code> or <code>--all</code> override the default, so a role that needs to look outside its scope asks for it explicitly and the wider read is visible in the transcript.</p>
+
+<h3 id="s-chat">8.5 Chat</h3>
+<p>Every team role is a bot member with a handle. Mentioning it from a human line wakes it with the thread excerpt, exactly as the anchor wake works, and the same silence rules apply: a role posts once, in the place it belongs, and passes on lines not meant for it. A line typed by a session, including another role, never wakes anyone. That is the anchor's rule today and roles keep it; a role that needs another role uses <code>cast send @handle</code> or assigns a task. A role's own posts carry its identity through the actor resolver in section 9.5, so <code>cast chat send</code> from a role's session posts as the role.</p>
+<p>Resolution for a human line, in order: a direct message room's member role; each role mentioned by handle, one placeholder per role; the channel's bound role; the workspace anchor. Handles are unique per workspace and bots are excluded from name matching, so a person named Lee is never confused with a lead. Unaddressed lines keep the followed thread rule. A channel is bound with <code>cast role channel</code> or from the role page; a person opening a direct message with a role's handle creates the room. The Slack adapter reads the same binding table, so a Slack channel may bind to any role. Personal workspace roles have no channel to live in, so they are reached from the role page and the CLI only.</p>
+<div class="fig"><div class="mock"><div class="bar"><span>#infra</span></div><div class="body">
+<div class="msg"><div class="av h">S</div><div><div class="who">Sam</div><div class="txt">@infra-lead is the replica build going to be ready before the backup window tonight?</div></div></div>
+<div class="msg"><div class="av">IL</div><div><div class="who">Infra lead <span class="pill role">project Infrastructure</span></div><div class="txt">Yes. The build is green as of <span class="evidence">14:02</span> and the deploy is scheduled for <span class="evidence">17:00</span>. The one open item is the prod key for the final check; Ashot has the ask. <span class="evidence">ct-48990 · sd-211</span></div></div></div>
+</div></div><div class="cap">A role answers as itself, at its altitude, with evidence.</div></div>
+
+<h3 id="s-decisions">8.6 Decisions</h3>
+<p>The decision card and the queue gain a chain. A card shows who raised it, who it passed through, what each of them recommended, and who is being asked now. The options keep the order the asker gave them; the recommendation is tagged, never moved to the top, so the human still reads the question. Answering a card sends the answer straight to the session that asked. When a role answers a decision within its authority the card never reaches the queue; it appears in the role page's audit list and in the day's digest so nothing is decided invisibly. While a role holds a decision, the people it would reach see it collapsed under "with a lead" and may answer it early; a person's answer closes the chain.</p>
+<div class="fig"><div class="mock"><div class="bar"><span>decision sd-211</span></div><div class="body">
+<div class="chain" style="margin-bottom:12px"><span class="step">hand · backup retry</span><span class="sep">→</span><span class="step">Infra lead · recommends 2</span><span class="sep">→</span><span class="step now">Ashot</span></div>
+<p style="font-weight:700;margin-bottom:6px">Run the final backup check against production tonight, or wait for the staging replica?</p>
+<p style="font-size:14.5px;color:var(--ink-2);margin-bottom:12px"><b>Infra lead:</b> Option 2. The staging replica lands tomorrow and the check is not time critical; running against prod needs a key I should not hold. Cost of waiting: one day. Cost of prod: a key grant.</p>
+<div class="opt"><span><span class="k">1</span>Run against prod tonight</span><span class="btn">choose</span></div>
+<div class="opt" style="border-color:var(--green)"><span><span class="k">2</span>Wait for the staging replica <span class="pill done" style="margin-left:6px">lead recommends</span></span><span class="btn">choose</span></div>
+<div style="font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:8px">category: production · never grantable to a role · sent to you and the lead together</div>
+</div></div><div class="cap">The chain is the audit and the context. The human answers a question that already has a manager's opinion on it.</div></div>
+
+<h3 id="s-mobile">8.7 Mobile</h3>
+<p>Mobile gets the decision queue in phase 2 and overview altitude in phase 3, and nothing else in the first version. The phone already syncs the decision rows; the queue screen lists them with the chain and the recommendation and answers through the same store action as the web card. The org page at overview altitude is the morning page: three to eight lines, each with a colored edge, and a count of decisions. Tapping a line opens the role's brief, whose narrative a seat holder can edit from the phone. That is the whole mobile surface, and it is the one that changes the daily habit.</p>
+
+<h3 id="s-cli">8.8 CLI</h3>
+<p>Every gesture is a command, so roles can manage roles and the human can script the org. The full reference is in the appendix, with the map from today's anchor verbs.</p>
+<p><strong>Inside a role.</strong> A session is inside a role when its conversation carries <code>role_id</code> (the standing session) or <code>hand_of_role_id</code> (a hand). Every command reads that context from the calling session: <code>cast task ready</code> scopes, <code>cast spawn</code> makes a hand, <code>cast decide</code> routes to the role, <code>cast brief</code> reads the role's brief, writes carry the role's identity. A person who takes a seat gets the same context in their own shell: <code>cast role seat --take</code> sets a shell default, so their terminal is inside the role until they release it. <code>cast brief edit</code> refuses outside a role and points at <code>cast brief for</code>. A label created from inside a role is filed under the role's bot user, not the host.</p>
+<pre>
+<span class="c"># the org at three altitudes</span>
+cast org                        <span class="c"># roles altitude, the chart</span>
+cast org --overview             <span class="c"># one line per top level scope</span>
+cast org --sessions             <span class="c"># every session under every role</span>
+
+<span class="c"># roles</span>
+cast role create "Infra lead" --scope project:Infrastructure
+cast role ls | show infra-lead | pause infra-lead | resume | retire
+cast role charter infra-lead    <span class="c"># open or print the charter</span>
+cast role wake infra-lead "Replica build is failing on arm64, look."
+cast send @infra-lead "..."     <span class="c"># same thing; a handle works wherever a session id does</span>
+
+<span class="c"># briefs, at any altitude</span>
+cast brief                      <span class="c"># my role's brief; in a plain shell, the anchor's</span>
+cast brief project:Infrastructure
+cast brief edit -               <span class="c"># a role rewrites its narrative, heredoc body</span>
+
+<span class="c"># delegation and escalation from inside a role</span>
+cast spawn "Fix the retry class in pg-backup"     <span class="c"># a hand; the role is implicit</span>
+cast task update ct-49001 --assignee @sync-lead   <span class="c"># delegate to a role</span>
+cast decide "..." -o .. -o .. --category testing  <span class="c"># a hand raises; category optional</span>
+cast decide answer sd-211 2 --note -              <span class="c"># a role, or the person asked</span>
+cast decide escalate sd-211 --recommend 2 --note - <span class="c"># a role passes it up</span></pre>
+</section>
+
+<section id="mechanics">
+<h2><span class="num">09</span>Mechanics</h2>
+
+<h3 id="m-wakes">9.1 Wakes</h3>
+<p>A role sleeps. Its standing session is persistent and dormant, exempt from auto completion as the anchor is. A wake is one pending message delivered into that session, the rail every trigger, chat mention and <code>cast send</code> already uses. What is new is where wakes come from, the outbox in front of them, and the frame they carry.</p>
+<h4>Wake sources</h4>
+<table class="plain">
+<tr><th>Source</th><th>How it is detected</th><th>Kind</th></tr>
+<tr><td>A human message to the role</td><td>Composer on the role page, <code>cast role wake</code>, <code>cast send @handle</code>, a human mention in chat</td><td>immediate</td></tr>
+<tr><td>A hand needs input</td><td>The daemon already reports each managed session's agent status; a blocked pin or a hard block on a hand becomes an event for its role</td><td>immediate</td></tr>
+<tr><td>A hand finished, or a decision it raised was answered</td><td>The hand's settle to done, or an answer delivered to it</td><td>passive: folds, never schedules</td></tr>
+<tr><td>A task or plan changed inside the scope</td><td>The change tracked write path collects the row's derived scope and the acting session per mutation; after the handler returns, one flush is scheduled per touched role, from the mutation wrapper where the scheduler exists. Today no task write reaches anyone but an assignee</td><td>folds</td></tr>
+<tr><td>A subordinate role escalated, or a decision needs this role's category</td><td>A decision routed to this role</td><td>immediate</td></tr>
+<tr><td>A parent or sibling sent instructions</td><td><code>cast send</code> from another role's session</td><td>immediate</td></tr>
+<tr><td>A routine fired</td><td>The role's own triggers; when the target session carries <code>role_id</code>, the fire path inserts an outbox row with the prompt instead of enqueuing it, so the run gets a frame, a log entry and the gates</td><td>immediate</td></tr>
+<tr><td>A subordinate role posted its digest</td><td>A project update of kind digest by a role in the scope</td><td>folds, with a deadline</td></tr>
+<tr><td>File touch overlap among its hands</td><td>Two live hands in the scope edited the same repo relative path in the last hour, computed at a hand's turn end (phase 3)</td><td>folds</td></tr>
+<tr><td>The charter changed</td><td>Doc edit on the charter doc</td><td>immediate</td></tr>
+</table>
+<h4>The outbox</h4>
+<p>Coalescing has a home: a <code>role_wake_outbox</code> table and a scheduled flush, the same shape the push router uses for phone notifications. A scope event inserts a row carrying the acting session, and the mutation wrapper schedules one flush per touched role after the handler returns. More events insert more rows and schedule nothing. An immediate event schedules a flush at once. A passive event inserts a row and never schedules. The flush is an action: it checks the pause and cap gates, checks whether the standing session is idle, builds the frame as a query snapshot, then in one mutation writes the pending message with the frame as its content and logs the wake. The numbered rules are in appendix A.3.</p>
+<p><strong>Loops.</strong> Two rules stop chatter. A role's own writes never enter its outbox. A subordinate role's writes never wake its parent either: the parent reads the subordinate's brief line at its next wake, and only a decision or a digest from the subordinate schedules one. A parent's writes inside the subordinate's scope do wake the subordinate, because that is delegation. A frame with no fact newer than the last delivered frame is dropped. The wake cap is the backstop, not the mechanism.</p>
+
+<h3 id="m-frame">9.2 The wake frame</h3>
+<p>The anchor today gets one bootstrap briefing at provisioning and relies on its own memory after that. That is too fragile for a role that will be restarted, swapped and parked. Instead, every wake carries a frame that a fresh session could act on with nothing else in context. The frame has five parts, in this order:</p>
+<ol>
+  <li><strong>Who you are.</strong> Role name, handle, scope, who you report to (a role or a person), who reports to you. Two lines.</li>
+  <li><strong>Why you are awake.</strong> The events since the last wake, as a list of facts with ids and the session that caused each. Immediate events first, then folded, then passive.</li>
+  <li><strong>Your scope right now.</strong> The facts: tasks by status and priority, plans with progress, live hands with their state lines, open decisions, unresolved comments, tokens and wakes today against the caps, the brief's age. After the first frame in a session, sent as a diff against the last delivered frame, with counts always complete.</li>
+  <li><strong>What your subordinates say.</strong> The first line of each subordinate role's brief and each hand's pinned state. Never their transcripts.</li>
+  <li><strong>Your charter.</strong> Verbatim in the first frame of a session; afterwards a hash and the word unchanged, and the full text again only when it changed.</li>
+</ol>
+<p><strong>How the frame stays fresh, and why it is stored.</strong> The pending message rail fixes a message's text when it is enqueued, and delivery is confirmed by matching the transcript echo against that stored text. So the frame is built once, at flush time, when the standing session is idle and delivery is seconds away, and it is stored as the pending message's content. The flush builds it through a query, which reads a consistent snapshot and conflicts with nothing, then writes the row in a short mutation. A retry reuses the stored frame. The facts are read through the same data context every server read uses, as the role's bot user, so nothing the bot cannot read enters a frame or a brief.</p>
+<p>The frame has a size budget, and the org page shows the average tokens per wake per role, so the default caps derive from a number rather than a guess. Lists in the facts truncate by priority and say so; counts never truncate. A role whose scope is too big for its frame is a role whose scope should be split, and the org page flags it. Nothing about the org lives in a static file that could drift from the row; the machine wide instruction snippets that teach every session the cast commands stay as they are.</p>
+
+<h3 id="m-delegation">9.3 Delegation and escalation</h3>
+<p>Down the chain there are three moves, all existing verbs with a role identity attached:</p>
+<ul>
+  <li><strong>Start a hand.</strong> Every session born from a role's session is a hand of that role: <code>cast spawn</code>, an Agent tool subagent, <code>cast fork</code>, a routine's spawned run, <code>cast task start --spawn</code>, and a workflow node started inside the role's session. The child carries <code>hand_of_role_id</code>, inherits the host for billing, and counts against the role's daily hands cap. Rows the server creates get the pointer and the gate in the spawn path; rows that are born from a transcript (a subagent, a routine run) get the pointer when the sync path inserts them, inherited from the parent conversation, and are counted but cannot be refused. The orchestrate skill run inside a plan lead is the intended shape for a plan lead's work, and its subagents stay hidden in the inbox as they are today. A hand runs in a worktree from the warm pool when the scope has a repo. Its first turn is the task text the role writes. The precedent exists: a session spawned for a task already takes its parent from the task's plan.</li>
+  <li><strong>Assign a task to a subordinate role.</strong> Assignment is delegation. The subordinate wakes with the task in its frame and claims it as itself.</li>
+  <li><strong>Append to a subordinate's brief.</strong> A parent may append to a subordinate's brief narrative, marked as the parent's words. This is how intent flows down without a chat message.</li>
+</ul>
+<p>Up the chain there is one move: a decision. A hand that runs <code>cast decide</code> inside a role posts it to the role, with an optional category from the fixed vocabulary in appendix A.4. A missing category is recorded as a proposal of none. Routing then follows four rules:</p>
+<ol>
+  <li><strong>Never grantable categories go to the person at once.</strong> Production, destructive and product decisions are sent to the person the chain ends at and to the role in parallel. The role's recommendation arrives as an edit to the same card, which already re-wakes a changed card. The hand is parked no longer than it is today.</li>
+  <li><strong>The role confirms the category.</strong> The hand's category is a proposal; the role confirms it or reclassifies it, and both values are recorded. A proposal of none must be confirmed before the role may answer. A reclassification into a never grantable category forces rule 1.</li>
+  <li><strong>Inside authority, the role answers.</strong> <code>cast decide answer</code> records the role's id, appears in the role page's audit list and in the day's digest, and delivers the answer to the hand exactly as a person's answer is delivered today.</li>
+  <li><strong>Outside authority, the role escalates.</strong> <code>cast decide escalate</code> attaches a recommendation, grows the chain by one step, and routes to the role's parent, which repeats the rules. Ambiguity resolves upward, never by guessing. An escalation with no confirmed category goes to a person.</li>
+</ol>
+<p><strong>A role that cannot act does not hold a decision.</strong> Routing checks the role's gate at routing time and again at every flush: a role that is paused, held by a seat, over a cap, parked on a limit or dead is skipped, with a chain step that says so, and the decision moves to the next hop. A blocking decision that a role has held past a short routing deadline escalates regardless. The people a decision would reach can see it collapsed under "with a lead" the whole time and may answer early.</p>
+<p><strong>Answers travel straight down.</strong> A person's answer is delivered to the session that asked, as today, through a server side answer mutation that does not need the person to hold send rights on the hand's conversation. Every role in the chain receives the answer as a passive fact. Advisory decisions work the same way, with the hand proceeding on its default in the meantime.</p>
+<p><strong>Where a root role escalates to.</strong> A personal workspace's anchor escalates to its owner. A team anchor escalates to the role's owner set, which defaults to the team admins and can be narrowed from the role page; an empty set falls back to the host. The decision records the set of people asked and materializes one inbox row per person, so each queue is one indexed read; the first answer resolves the rest. A subordinate role never needs the setting: its parent is a role or a person in a seat, and the chain follows that.</p>
+
+<h3 id="m-scope">9.4 Scope and authority</h3>
+<p>Access does not change. A role's bot user is a team member, the role row carries the anchor's access fields, and every read a role makes goes through the data context as its bot user. Scope is a narrower default inside that access, and it fences only two things.</p>
+<ul>
+  <li>A write from a role or its hands that names no project or plan is filed into the role's scope. The scope is resolved from the calling session the way the CLI already resolves a workspace for a write, so the write is explicit, not a guess. A write that names another scope is allowed, since the role's access already permits it. It becomes a fact in the role's next frame and in the frame of the lead whose scope received it.</li>
+  <li>Role creation is fenced: a role may create roles only inside its own scope and never above or beside itself. Hands cannot create roles.</li>
+  <li>Charter docs refuse writes from any session that carries a role or a hand pointer, keyed on the stored doc type before the patch, and such a session may not change a doc's type to or from charter or brief. A brief's narrative accepts writes from its own role, its parent, and a seat holder only. Refusals land as facts in the writer's next frame.</li>
+  <li>Reads default to scope so frames stay small, but a role may read anything its access allows. It is a colleague, not a prisoner.</li>
+</ul>
+<p>Authority is the role's authority list: a structured field on the role row, empty at creation, edited under Settings on the role page or with <code>cast role authority</code>, never free text. The charter may tell the role how to use its authority; it never grants any. The list is a subset of the fixed category vocabulary in appendix A.4, and three categories can never be granted to a role: production, destructive, product. Who may grant is the same gate that may reshape an anchor today: the host, the personal owner, or a team admin. Never a role.</p>
+
+<h3 id="m-identity">9.5 Identity</h3>
+<p>Today only <code>cast anchor say</code> posts as the bot; every other write from a session carries the token owner. The org adds one actor resolver on the server: for any CLI write that carries a calling session whose conversation has <code>role_id</code>, the role's bot user is the actor for task comments, assignments and status changes, plan entries, doc writes, project updates and chat posts. Hands keep the host as actor. This is what lets a lead comment on a task as itself, answer in a channel as itself, and appear in the audit list under its own name. It also means the CLI sends the calling session on every write route, which the scope event collector needs anyway.</p>
+
+<h3 id="m-memory">9.6 Memory and restart</h3>
+<p>Principle 3 is the design's strongest claim, so it needs a mechanism and a test.</p>
+<p>The brief is a doc. Its facts are not stored: they are computed on read from the same query that builds the wake frame, and cached against the newest change log position inside the scope. A quiet scope costs nothing and a busy one costs one query per read, never one per write. Its narrative is written by the role with <code>cast brief edit</code>, and the charter tells it to do so at the end of any turn that changed its understanding. Inside a role, <code>cast state</code> and <code>cast brief edit</code> write the same field, so the brief's first line, the inbox card and the org chart node cannot disagree. The status flag is accepted, and the placement rule ignores done and dormant for a role, because a role is dormant by definition.</p>
+<p>Restart keeps the conversation row. <code>cast role restart &lt;handle&gt;</code> ends the agent process and starts a fresh transcript under the same row, the way the existing restart and repair path does, so routines, held messages, the hand pointers and the outbox all keep pointing at the same session. The first wake after a restart carries the brief in full instead of the first line. The daemon also restarts a standing session on its own when counted context tokens pass a per role threshold, set well under the backend's compaction point, and before any model or backend swap. Restart is preferred to compaction because compaction spends a turn summarizing a transcript that is mostly stale frames, while the brief and the next frame already carry everything the role needs. Each automatic restart is logged as a wake with cause restart and its token cost, so the org page shows it.</p>
+<p>The acceptance test for the whole feature is that a role restarted this way gives the same answer to "how is this going and what do you need" as it gave before the restart. If it does not, the brief is missing something and the charter is wrong.</p>
+<p>Usage limit parks are handled as they are for any session, and the existing account switch on the same machine is the first recovery. Hands park with their host, and the parent's frame lists the parked subtree. Moving a role to another host is a restart from the brief on the new machine plus re spawning its hands from their task text; uncommitted hand work stays on the old disk. It is for a dead machine, not a limit.</p>
+
+<h3 id="m-budget">9.7 Budgets</h3>
+<p>Three caps per role, daily, with defaults inherited from the parent and enforced from phase 1: hands started, wakes delivered, tokens spent. The anchors row already carries a daily session cap field, but nothing reads it; the org adds the counters and the checks. Each cap gates one thing. The hands cap gates hand starts. The wake cap gates system wakes. The token cap gates hand starts and system wakes together. A human message, an escalation and the pause interrupt always pass, and a capped role's frame says it is capped.</p>
+<p>Tokens are the only unit in the first version, and they need a writer: the schema has a per message usage field that nothing fills today. Phase 1 adds the writer in Claude transcript sync, summing input, cache read and output, because on a persistent transcript the cache read is the cost. Sessions on a backend with no usage in its transcript are counted as unknown and the org page says how many. Dollars need a price table and can come later. The counters are bumped in three places: the paths that create a hand, the outbox flush, and message sync. A role at a cap keeps folding events until the next day; its parent's frame and the human's Org section each show it once, and a person can raise the cap from the role page or the card.</p>
+
+<h3 id="m-pause">9.8 Pause</h3>
+<p>Pause is a delivery gate plus a hand policy, not a hide. While a role is paused, system wakes for its standing session and hand starts under it are held, and its outbox keeps folding. Human messages and escalations still pass, with the pause state in the frame. Each running hand receives one interrupt asking it to stop at a safe point, and a hand still running after its next turn end is killed. Resume releases the held rows and delivers one wake whose frame lists everything folded. Pause cascades down the subtree, which is what pausing a role means; there is no separate subtree verb.</p>
+
+<h3 id="m-conflict">9.9 Conflicts</h3>
+<p>Two hands in one scope touching the same file is the common failure of parallel agent work and the reason many people stop at one session. The org handles it in three layers:</p>
+<ul>
+  <li><strong>Prevent.</strong> Hands are started in worktrees by default when the scope has a repo, from the warm pool the workspace command already keeps, so a hand does not pay for install and generate steps.</li>
+  <li><strong>Detect.</strong> The <code>file_touches</code> table and its record mutation exist but nothing writes them today. Phase 3 adds the writer in the transcript sync path, for edit and write tool uses only, reading the absolute path Claude's tools carry and the working directory relative path codex carries. Paths are stored relative to the worktree's own top level and keyed by the repo's common git directory, so two worktrees of one checkout compare equal. Overlap is computed once at a hand's turn end and becomes a fact in the lead's frame, and among leads in the anchor's frame.</li>
+  <li><strong>Resolve.</strong> The lead decides: interrupt one hand, sequence them, or merge. It is a judgment call, so it is the role's job, not a rule.</li>
+</ul>
+
+<h3 id="m-seat">9.10 A person in a seat</h3>
+<p>A role may be held by a person. While the seat is held, the standing session sleeps and receives no system wakes; scope events fold in the outbox for the single wake delivered when the seat is released, and the brief's facts stay current because they are computed on read. Everything addressed to the role goes to the person instead: a human mention or a <code>cast send</code> to the handle becomes a notification to the seat holder with the excerpt, and the chat placeholder says who holds the seat; a hand's decision routed to the role enters the seat holder's queue at once, with a chain step for the seat. The person writes the narrative from the role page, the phone, or <code>cast brief for</code>. Hands under the role keep their pointer. Releasing the seat delivers one wake whose frame carries the brief in full, and the agent picks up where the person left off. The chart shows a dashed node for a held seat.</p>
+
+<h3 id="m-routines">9.11 Routines</h3>
+<p>An organization has a rhythm, and the org gets a small one by default, all implemented as routines: an evening digest per lead into the project's Updates tab, an anchor summary into the team channel once every lead has posted or at a deadline, and a weekly brief rewrite where each lead rewrites its narrative from scratch against the facts. Every routine is a trigger the human can see, pause or reschedule from the role page, and it passes through the outbox like any wake, so it is framed, logged and capped. A routine that produced nothing new posts nothing, because a digest with no events is a fact in the frame and the charter says silence is the right answer to it.</p>
+</section>
+
+<section id="data">
+<h2><span class="num">10</span>Data model and migration</h2>
+<p>Three new tables, one generalized table, a few fields. Everything else is a query or a chokepoint that learns one more input.</p>
+<h3>roles, which generalizes anchors</h3>
+<pre class="wrap">roles
+  short_id            <span class="c">"r-12", quoted in prose, rendered as a pill</span>
+  handle              <span class="c">"infra-lead", unique per workspace, the @mention</span>
+  name                <span class="c">"Infra lead"</span>
+  access              <span class="c">"team" | "user"; renamed from anchors.scope_type in the migration</span>
+  team_id?            <span class="c">routing and the team membership grant</span>
+  scope_user_id?      <span class="c">the personal role's owner</span>
+  host_user_id        <span class="c">who runs and bills</span>
+  scope               <span class="c">"workspace" | "project" | "plan"</span>
+  project_id?         <span class="c">set for project scope; for plan scope, the plan's project</span>
+  plan_id?            <span class="c">set for plan scope</span>
+  parent_role_id?     <span class="c">absent = root role</span>
+  owner_user_ids?     <span class="c">root roles: who an escalation lands on; default team admins or host</span>
+  seat_user_id?       <span class="c">a person holding the seat; while set, the agent takes no turn</span>
+  bot_user_id         <span class="c">the synthetic is_bot user (unchanged)</span>
+  conversation_id?    <span class="c">the standing session (unchanged; survives restart)</span>
+  charter_doc_id      <span class="c">docs row, doc_type "charter"</span>
+  brief_doc_id        <span class="c">docs row, doc_type "brief"</span>
+  authority           <span class="c">string[] of grantable categories; empty at creation</span>
+  coalesce_ms         <span class="c">outbox window</span>
+  budget              <span class="c">{ daily_hands, daily_wakes, daily_tokens }</span>
+  counters            <span class="c">{ day, hands, wakes, tokens, uncounted_sessions }</span>
+  model?, backend?, project_path?, persona?, avatar?
+  status              <span class="c">provisioning | active | paused | decommissioned</span>
+  created_at, updated_at
+  indexes: by_team, by_scope_user, by_parent, by_handle, by_project, by_plan,
+           by_bot_user, by_host_user, by_conversation</pre>
+<p>There is no workspace key on this table. A role is never private to its owner inside a team, so it does not earn one, and a second access path could disagree with the anchor's grants. Existing anchor rows migrate in place: scope workspace, no parent, handle <code>anchor</code>, empty brief. The charter is seeded from the shipped root charter template, not from the bootstrap text. The template keeps the bootstrap's routine, reaching people and judgment sections and replaces two rules: a hand is a session born from your session; and the brief is your memory, not a memory directory. The migration wake tells the anchor to read its memory files once, write its first brief from them, and treat those files as scratch from then on. The anchor's existing session, triggers and persona are untouched. The verb map from <code>cast anchor</code> is in appendix A.1.</p>
+
+<h3>New tables</h3>
+<pre class="wrap">role_wake_outbox        <span class="c">pending events, one row each; the push outbox shape</span>
+  role_id, kind, passive, entity_id?, fields?, actor_conversation_id?, created_at, due_at
+  index: by_role_due
+
+role_wakes              <span class="c">append only log of delivered and dropped wakes</span>
+  role_id, delivered_at, causes[], frame_tokens, turn_tokens?
+  outcome: delivered | dropped_empty | held_paused | held_cap | skipped_seat | restart
+  index: by_role_delivered
+
+decision_inbox          <span class="c">one row per person a decision is waiting on</span>
+  decision_id, user_id, status
+  index: by_user_status</pre>
+<p>All three, and <code>roles</code>, are registered in the client sync registry with a feeder each, so the org page, the project header chip and the sidebar Org section read the store, as the local first rule requires. The counters on a role row change often, so the sidebar subscribes to a wake signature that excludes them.</p>
+
+<h3>Fields on existing tables</h3>
+<table class="plain">
+<tr><th>Table</th><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>conversations</code></td><td><code>role_id?</code></td><td>Replaces <code>anchor_id</code> and keeps its meaning: this row is a standing session. Every reader that today asks "is this the anchor" keeps asking it under the new name.</td></tr>
+<tr><td></td><td><code>hand_of_role_id?</code></td><td>Set on every hand, in addition to whatever nesting pointer it has. It never changes the inbox shape and never makes a hand speak as the role. The sync path copies it from the parent conversation when it inserts a transcript born row.</td></tr>
+<tr><td><code>pending_messages</code></td><td><code>role_wake_id?</code></td><td>The wake this message carries. Its content is the frame, built at flush time.</td></tr>
+<tr><td><code>session_decisions</code></td><td><code>short_id</code></td><td>"sd-211", allocated like task and trigger ids.</td></tr>
+<tr><td></td><td><code>routed_to_role_id?</code></td><td>The role handling it now, if any.</td></tr>
+<tr><td></td><td><code>asked_user_ids?</code></td><td>The people it is waiting on now. <code>user_id</code> stays the host account that runs the asking session and still gates edit and cancel. The decision row grants read of itself and of the ask in the hand's transcript to the people asked and to the hosts of every role in the chain.</td></tr>
+<tr><td></td><td><code>chain</code></td><td>Array of steps: role id or user id, category as proposed and as confirmed, recommendation index, note, skipped reason, timestamp.</td></tr>
+<tr><td></td><td><code>category</code></td><td>The confirmed category from the vocabulary, or none; authority is checked against it.</td></tr>
+<tr><td></td><td><code>routing_deadline_at?</code></td><td>When a blocking decision held by a role escalates regardless.</td></tr>
+<tr><td></td><td><code>resolved_by_role_id?</code></td><td>Set when a role answered within authority.</td></tr>
+<tr><td><code>agent_tasks</code></td><td><code>role_id?</code></td><td>A trigger armed inside a role's session. The claim path applies the pause and hands gates before granting the lease and stamps the run as a hand.</td></tr>
+<tr><td><code>tasks</code></td><td><code>project_id</code></td><td>No new field. Create and update set it from the plan when the caller gives a plan and no project; a one time backfill does the same for existing rows.</td></tr>
+<tr><td><code>messages</code></td><td><code>usage</code></td><td>No new field. Claude transcript sync starts writing it from the assistant record's usage.</td></tr>
+<tr><td><code>docs</code></td><td><code>doc_type</code></td><td>Two new members: <code>charter</code>, <code>brief</code>. The union lives in three places today and they already disagree; this change reconciles them and validates the value on write.</td></tr>
+<tr><td><code>anchor_channels</code></td><td><code>role_id</code></td><td>The new key; <code>anchor_id</code> kept as an alias for one release because the Slack adapter reads this table too.</td></tr>
+<tr><td><code>file_touches</code></td><td><code>repo_key</code></td><td>Phase 3: the repo's common git directory, with paths relative to the worktree top level.</td></tr>
+</table>
+
+<h3>Readers and writers that change</h3>
+<ul>
+  <li>The mutation wrapper that already wraps every database write with the change tracked db gains a scope event collector next to the sync ack collector. The wrapper stamps the acting session on it, resolved from the request, and schedules one flush per touched role after the handler returns.</li>
+  <li>The CLI sends the calling session on every task, plan, doc, project update and chat write route, and on the task list route. A guard test in the style of the existing function guards fails any such route that drops it.</li>
+  <li>The actor resolver substitutes the role's bot user as the actor on those writes when the calling session is a standing session.</li>
+  <li><code>roles.frameFor(roleId)</code> is a query that builds the five part frame through the data context as the bot user. It also backs the brief's facts and the org page node. One function, three consumers.</li>
+  <li><code>roles.flush</code> is an action: gates, idle check, the frame query, then one mutation that inserts the pending message with the frame as content, logs the wake, and bumps the counters.</li>
+  <li><code>sessionDecisions.route</code> applies the category and gate rules and writes the inbox rows. <code>sessionDecisions.answer</code> resolves for a role or an asked person and enqueues the answer into the asking session. The queue subscription, the pending decision scan that files a session under Questions, and the email digest sweep read the inbox table and show routed rows under "with a lead".</li>
+  <li>The trigger fire path inserts an outbox row when the target carries <code>role_id</code>; the trigger claim path applies the gates and stamps a spawned run as a hand.</li>
+  <li><code>tasks.list</code> with ready, <code>tasks.create</code> and <code>tasks.update</code> read the calling session's role and apply the scope default and the project inheritance.</li>
+  <li>The human board predicate stops counting <code>agent:</code> assignees as promotion. It is shared by web and mobile, so one line changes both.</li>
+  <li><code>docs.update</code> learns the calling session and refuses charter writes and type changes from roles and hands.</li>
+  <li><code>cast state</code> inside a role writes the brief's first line.</li>
+  <li>Inbox placement reads <code>role_id</code> where it read <code>anchor_id</code>.</li>
+  <li>Fork, task spawn and workflow node starts copy the hand pointer from the parent session; the transcript sync insert inherits it.</li>
+  <li>The restart path keeps the conversation row and starts a fresh transcript under it.</li>
+</ul>
+</section>
+
+<section id="guardrails">
+<h2><span class="num">11</span>Guardrails and failure modes</h2>
+<p>An org of agents fails in predictable ways. The table says, for each one, whether the system prevents it or only makes it visible.</p>
+<table class="plain">
+<tr><th style="width:170px">Failure</th><th>What it looks like</th><th>Mechanism</th><th style="width:80px">Kind</th></tr>
+<tr><td>Chatter loops</td><td>Two roles waking each other forever</td><td>Own writes never enter the outbox; a subordinate's writes never wake its parent; chat lines from sessions never wake; a frame with no new fact is dropped; the wake cap is the backstop</td><td class="kind">prevented</td></tr>
+<tr><td>Fabricated status</td><td>A digest that says green while tasks are red</td><td>Facts are server computed and shown beside the narrative on every surface, so a mismatch is visible; the narrative is not validated</td><td class="kind">visible</td></tr>
+<tr><td>Token burn</td><td>A role that wakes on every heartbeat</td><td>Only pins, hard blocks, decisions and work item writes wake; passive facts never schedule; the outbox window; caps enforced from phase 1; charter by reference and facts as diffs; automatic restart instead of compaction</td><td class="kind">prevented</td></tr>
+<tr><td>Silent authority creep</td><td>A lead answering decisions it should have escalated</td><td>Authority starts empty and is a structured subset; the hand's category is a proposal the role must confirm; never grantable categories bypass the role; every answered decision is in the audit list and the digest with both categories</td><td class="kind">prevented</td></tr>
+<tr><td>Rubber stamping</td><td>The human taps the recommended option without reading</td><td>Options keep the asker's order and the recommendation is only tagged; three categories can never be granted, so the worst case is a person's own decision</td><td class="kind">visible</td></tr>
+<tr><td>A decision stuck with a role</td><td>A hand parked all day behind a paused or capped lead</td><td>Routing skips a role that cannot act, at routing and at every flush; a routing deadline escalates regardless; the people asked see it early under "with a lead"</td><td class="kind">prevented</td></tr>
+<tr><td>Stale briefs</td><td>A brief describing last week</td><td>Brief carries as of and events since; stale briefs grey out like thread states; the weekly rewrite routine</td><td class="kind">visible</td></tr>
+<tr><td>Runaway delegation</td><td>Roles creating roles</td><td>Depth follows scope kinds; a role may only create roles inside its scope; hands cannot create roles</td><td class="kind">prevented</td></tr>
+<tr><td>Two sessions on one task</td><td>A hand and a subordinate role both bound to it</td><td>The lead's frame lists every session bound to each task in its scope</td><td class="kind">visible</td></tr>
+<tr><td>Usage limit park</td><td>A lead goes dark mid day</td><td>Account switch on the same machine first; hands park with their host; the parent's frame lists the parked subtree; decisions skip the parked role</td><td class="kind">prevented</td></tr>
+<tr><td>Human bypassed</td><td>Something touching production decided by a role</td><td>Production, destructive and product categories cannot be granted and route to a person at once; a reclassification into them does the same; no category means no answer</td><td class="kind">prevented</td></tr>
+<tr><td>Wrong altitude noise</td><td>Leads posting in the team channel all day</td><td>Chat send from a role refuses a channel not bound to it unless the post fills a mention placeholder; the anchor owns the team channel</td><td class="kind">prevented</td></tr>
+<tr><td>Frame too big</td><td>A lead over a project with hundreds of tasks</td><td>Frame budget with prioritized truncation, counts complete; the org page flags a scope that truncates and suggests a plan lead</td><td class="kind">visible</td></tr>
+<tr><td>Paused role keeps working</td><td>Hands finishing after the lead was paused</td><td>Pause is a delivery gate: held system wakes, one interrupt per hand then kill, no new hands, outbox keeps folding</td><td class="kind">prevented</td></tr>
+<tr><td>Charter rewritten by its own role</td><td>A role loosening its own escalation rules</td><td>Charter writes and type changes refuse any session carrying a role or hand pointer</td><td class="kind">prevented</td></tr>
+<tr><td>Uncounted spend</td><td>A codex lead whose tokens read zero</td><td>Sessions without a usage writer are counted as unknown and the org page shows how many</td><td class="kind">visible</td></tr>
+</table>
+</section>
+
+<section id="rollout">
+<h2><span class="num">12</span>Rollout</h2>
+<p>Four phases. Each ships something a person can use, and each has an acceptance test that is a scenario, not a checklist. Phase 1 lets a lead advise before it spends: recommendations on every escalation, an enforced hands cap, and hand starts only on a person's assignment.</p>
+
+<div class="phase"><div class="ph"><b>Phase 1 · A lead that advises, and an overview line that is true</b><span>about three weeks</span></div><div class="pb">
+<p>The <code>roles</code> table with the anchor migration and the root charter template. The role verbs: create, ls, show, pause, resume, retire, wake, restart, charter, with pause as a delivery gate. Project scope only. The scope event collector and per mutation flush, the outbox as an action, the frame query, the calling session on every write route, the actor resolver. Hands with the pointer through spawn, fork, routine and task spawn, and the transcript sync inheritance. Charter and brief docs with the write fence. The usage writer and all three caps enforced. Decision routing in escalate only mode: every hand decision passes through the lead, which must attach a recommendation and escalate; never grantable categories go to the person at once. The decision inbox and the answer mutation. Overview altitude on the org page and the brief line in the project header. The evening digest as a default routine.</p>
+<p><strong>Accept when:</strong> over five working days, every decision from a hand under the lead reaches the person with the lead's recommendation attached, the lead's overview line is true against the project's tasks, its digest lands in Updates each evening, it never starts a hand that was not assigned to it or that would pass its cap, and restarting it loses nothing a person can detect.</p>
+</div></div>
+<div class="phase"><div class="ph"><b>Phase 2 · Authority and the chain</b><span>about three weeks</span></div><div class="pb">
+<p>Grantable categories, the answer verb for roles, category confirmation, the audit list on the role page, the routing deadline, the "with a lead" group in the queue. Hand starts on the role's own judgment within caps. The mobile queue. Chat mentions per role, channel binding, the direct message room. The inbox Org section. The anchor's evening summary on the digest deadline.</p>
+<p><strong>Accept when:</strong> a decision raised by a hand in a granted category is answered by its lead without reaching a person and appears in the audit list; a decision in a never grantable category reaches the person and the lead in parallel and the lead's recommendation lands on the card; a decision routed to a paused lead escalates within the deadline. The person answers from the phone and the hand resumes. A blocking decision's end to end time is measured and stays under a minute when the lead is idle.</p>
+</div></div>
+<div class="phase"><div class="ph"><b>Phase 3 · Depth and safety</b><span>about three weeks</span></div><div class="pb">
+<p>Plan scope and plan leads with the union fan out and the project inheritance backfill. The file touch writer and overlap in frames. Frame budget, charter by reference, facts as diffs, the scope too big flag. Seats. <code>cast org init</code> proposing an org from active projects, or projects from plans and tasks. Roles and sessions altitude. Mobile overview altitude. Automatic restart on counted context tokens.</p>
+<p><strong>Accept when:</strong> two hands under one lead editing the same file in two worktrees produce a fact in the lead's frame and the lead resolves it without a person. A paused role produces zero system wakes and zero hand turns for a day and resumes with one wake. A held seat receives every mention and hand decision addressed to the role.</p>
+</div></div>
+<div class="phase"><div class="ph"><b>Phase 4 · Polish until it disappears</b><span>ongoing</span></div><div class="pb">
+<p>Wake latency under ten seconds from event to injection on an idle session. Tokens by role in the anchor's summary, and a price table if dollars are wanted. Agreement rate per category on the role page, once there is enough decision volume for the number to mean something. Charters from skills. Org templates for the two shapes. The weekly brief rewrite routine. Frame size tuning by model. A usage writer for codex transcripts.</p>
+<p><strong>Accept when:</strong> the human's daily touches on a workspace with three leads and ten hands are a page read, the decisions in the queue, and one evening message, for five working days in a row.</p>
+</div></div>
+</section>
+
+<section id="not">
+<h2><span class="num">13</span>What we deliberately do not build</h2>
+<ul>
+  <li><strong>A separate org editor.</strong> Roles are created from scopes. There is no drag and drop chart that could disagree with the projects list.</li>
+  <li><strong>Roles for labels or paths.</strong> A label is personal filing and a path is a machine detail. Both are real requests for a later version, once scope has proven itself on projects and plans.</li>
+  <li><strong>Peer negotiation.</strong> Sibling roles may message each other, but conflicts between them are resolved by their parent. No consensus protocols.</li>
+  <li><strong>Free text authority.</strong> Authority is a fixed vocabulary of categories. A role never interprets prose to decide whether it may decide.</li>
+  <li><strong>Roles that run on their own account.</strong> A role is hosted by a human's daemon and account, as the anchor is. Independent agent accounts are an infrastructure question, not an org question.</li>
+  <li><strong>Long transcripts as memory.</strong> The brief is the memory. A role that needs its transcript to function is a role whose brief is wrong.</li>
+  <li><strong>Refusing writes outside scope.</strong> A role's access already allows them, and a refusal would only add a round trip. Out of scope writes are made visible instead.</li>
+  <li><strong>Frames built at delivery time.</strong> The rail confirms delivery by matching stored text, so the frame is built seconds before delivery and stored, not rebuilt at injection.</li>
+</ul>
+</section>
+
+<section id="decisions">
+<h2><span class="num">14</span>Decisions for the founder</h2>
+<dl class="qa">
+<dt>Should the anchor keep its name, or become "the workspace role"?</dt><dd>Recommendation: keep it. It is a good word for the root, users know it, and the CLI keeps working. The org page labels it "Anchor · workspace".</dd>
+<dt>Should assigning a task to a role keep it off the human board?</dt><dd>Recommendation: an assignment to a role never promotes a task; a task a person filed stays on the board with the role's chip. That is one clause in the shared predicate and it changes nothing about human filed work.</dd>
+<dt>Coalescing window default?</dt><dd>Recommendation: two minutes, with human messages, escalations and blocked hands immediate. Short enough to feel live, long enough that a burst of task closes is one wake.</dd>
+<dt>Who may grant authority categories to a role?</dt><dd>Recommendation: the host, the personal owner, or a team admin, the same gate that may reshape an anchor today. Never a role.</dd>
+<dt>Tokens or dollars on the org page?</dt><dd>Recommendation: tokens in phase 1, with a usage writer for Claude and an honest unknown for other backends. Dollars are a phase 4 layer on the same counters.</dd>
+<dt>Should a phase 1 lead start hands on its own judgment?</dt><dd>Recommendation: no. In phase 1 it starts hands only for tasks a person assigned to it, under an enforced cap, and earns autonomous starts in phase 2 once the caps have held for a week.</dd>
+<dt>Should seats be in phase 1 or phase 3?</dt><dd>Recommendation: phase 3. It is right and it is not what proves the idea. Phase 1 proves that a lead over a project makes the human's day shorter.</dd>
+</dl>
+</section>
+
+<section id="appendix">
+<h2><span class="num">A</span>Appendix</h2>
+<h3>A.1 CLI reference</h3>
+<pre>cast org [--overview|--roles|--sessions] [--json]  <span class="c"># the chart at an altitude</span>
+cast org init                                     <span class="c"># propose leads, or projects first</span>
+
+cast role create &lt;name&gt; --scope project:&lt;ref&gt;|plan:&lt;ref&gt;
+                 [--reports-to &lt;handle&gt;]           <span class="c"># default: the workspace anchor</span>
+                 [--model m] [--agent claude|codex] [--host &lt;user&gt;]
+                 [--handle h] [-C &lt;dir&gt;] [--persona p] [--avatar a]
+cast role ls | show &lt;h&gt; | retire &lt;h&gt; | restart &lt;h&gt;
+cast role pause &lt;h&gt; | resume &lt;h&gt;                    <span class="c"># cascades; a delivery gate</span>
+cast role wake &lt;h&gt; "&lt;text&gt;"                        <span class="c"># immediate</span>
+cast role charter &lt;h&gt; [edit]                      <span class="c"># humans only</span>
+cast role authority &lt;h&gt; --grant &lt;cat&gt; | --revoke &lt;cat&gt;
+cast role budget &lt;h&gt; --hands n --wakes n --tokens n
+cast role seat &lt;h&gt; --take | --release             <span class="c"># a person holds the seat</span>
+cast role channel &lt;h&gt; --bind &lt;#name|slack id&gt; | --unbind
+cast role wakes &lt;h&gt; [-n 20]                       <span class="c"># the wake log with causes and tokens</span>
+
+cast brief [&lt;scope&gt;]                              <span class="c"># my role's brief; plain shell: the anchor's</span>
+cast brief edit -                                 <span class="c"># a role rewrites its narrative</span>
+cast brief for &lt;handle&gt; -                         <span class="c"># a parent or seat holder appends</span>
+
+cast spawn "&lt;task text&gt;"                           <span class="c"># inside a role: a hand, implicitly</span>
+cast spawn --role &lt;handle&gt; "&lt;task text&gt;"           <span class="c"># from a human shell, on a role's behalf</span>
+cast decide "..." -o .. -o .. [--category &lt;c&gt;]     <span class="c"># inside a role: routes to the role</span>
+cast decide answer &lt;sd&gt; &lt;n&gt; [--category c] [--note -]   <span class="c"># a role, or the person asked</span>
+cast decide escalate &lt;sd&gt; --recommend &lt;n&gt; [--category c] [--note -]
+cast task ready [-p &lt;project&gt;|--plan &lt;plan&gt;|--all]   <span class="c"># scoped inside a role</span>
+
+<span class="c"># what today's anchor verbs become (aliases for one release)</span>
+cast anchor create ...        → cast role create --scope workspace
+cast anchor wake "..."        → cast role wake anchor "..."
+cast anchor brief             → cast role restart anchor   <span class="c"># re-frame from the brief</span>
+cast anchor rm                → cast role retire anchor
+cast anchor say --chat ...    → cast chat send ...          <span class="c"># identity from the actor resolver</span>
+cast anchor link-channel ...  → cast role channel anchor --bind ...</pre>
+
+<h3>A.2 The wake frame, as delivered</h3>
+<pre class="wrap"><span class="g">&lt;role-wake role="infra-lead" wake="rw-8812"&gt;</span>
+<span class="y">## You</span>
+Infra lead (@infra-lead), scope: project Infrastructure. You report to Anchor.
+Reporting to you: none. Hands: 2 live.
+
+<span class="y">## Why you are awake</span>
+- task ct-49001 comment by hand jx7c6zk: "retry class implemented, tests green"
+- passive: decision sd-211 answered by Ashot: option 2
+- passive: task ct-48990 moved to done by hand jx7f2a1
+
+<span class="y">## Your scope now</span> (diff since rw-8809; counts complete)
+tasks: 3 in_progress · 9 open · 2 in_review · 115 total · urgent 0 · high 4
+plans: pg-replica rollout 4/6
+hands: jx7c6zk needs input "backup retry class, tests green, awaiting key"
+       jx7f2a1 done "replica build green, PR #412 open"
+decisions: 0 with you · 1 answered today
+overlap: none
+tokens today: 41k of 400k · wakes: 6 of 40 · hands: 2 of 6
+brief: as of 06:52, 3 scope events since
+
+<span class="y">## Subordinates say</span>
+- jx7c6zk: Blocked: prod key for the final check
+- jx7f2a1: Done: PR #412 ready for review
+
+<span class="y">## Charter</span>
+unchanged (sha 4f1c…)
+<span class="g">&lt;/role-wake&gt;</span></pre>
+
+<h3>A.3 Coalescing rules</h3>
+<ol>
+  <li>A write inside a role's scope adds an event to the mutation's collector with the acting session. After the handler returns, the wrapper inserts the outbox rows and schedules one flush per touched role, due after the role's window, unless a flush is already scheduled.</li>
+  <li>Further events insert rows and schedule nothing; the scheduled flush picks up every due row.</li>
+  <li>An immediate event inserts a row due now and schedules a flush at once.</li>
+  <li>A passive event inserts a row and never schedules a flush.</li>
+  <li>A role's own writes, and a subordinate role's writes, never insert rows for that role.</li>
+  <li>The flush checks the gates. Paused, seat held, or over the wake or token cap: system rows are held until resume, release, or the next day; immediate rows from a human, an escalation or the pause interrupt pass.</li>
+  <li>If the daemon reports the standing session mid turn, the flush reschedules itself for the turn's end.</li>
+  <li>The flush builds the frame through the frame query. If it holds no fact newer than the last delivered frame, the wake is logged as dropped and nothing is delivered. An immediate event is a new fact by definition.</li>
+  <li>Otherwise one mutation inserts the pending message with the frame as content and the wake id, logs the wake, and bumps the counters. A retry reuses the stored content.</li>
+</ol>
+
+<h3>A.4 Decision categories</h3>
+<table class="plain">
+<tr><th>Category</th><th>Examples</th><th>Grantable to a role</th></tr>
+<tr><td><code>implementation</code></td><td>Which of two equivalent approaches, naming, library choice within the repo's norms</td><td>Yes</td></tr>
+<tr><td><code>testing</code></td><td>Which tests to add, whether a repro is enough</td><td>Yes</td></tr>
+<tr><td><code>scope</code></td><td>Trim or defer part of a task</td><td>Yes, with a cap on task priority</td></tr>
+<tr><td><code>schedule</code></td><td>Order of work, what to do first</td><td>Yes</td></tr>
+<tr><td><code>spend</code></td><td>Start more hands, use a bigger model</td><td>Yes, under the role's budget</td></tr>
+<tr><td><code>production</code></td><td>Deploys, prod data, keys, billing, auth</td><td>Never; routes to a person at once</td></tr>
+<tr><td><code>destructive</code></td><td>Deletion, migration, force push, anything needing a backup to undo</td><td>Never; routes to a person at once</td></tr>
+<tr><td><code>product</code></td><td>What the product should do, taste calls</td><td>Never; routes to a person at once</td></tr>
+<tr><td><code>none</code></td><td>The hand gave no category</td><td>Must be confirmed into another category before any answer</td></tr>
+</table>
+</section>
+
+<footer>An organization of agents · codecast product proposal · written from the code on 2026-09-05 · draft three after two six lens reviews · session jx7anwb</footer>
+</main>
+</div>
+<script>
+(function(){
+  var links=[].slice.call(document.querySelectorAll('nav.toc a'));
+  var byId={};links.forEach(function(a){byId[a.getAttribute('href').slice(1)]=a});
+  var targets=Object.keys(byId).map(function(id){return document.getElementById(id)}).filter(Boolean);
+  if(!('IntersectionObserver' in window))return;
+  var current=null;
+  function set(id){if(current===id)return;if(current&&byId[current])byId[current].removeAttribute('aria-current');current=id;if(byId[id]){byId[id].setAttribute('aria-current','true');}}
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){if(e.isIntersecting)set(e.target.id)});
+  },{rootMargin:'-10% 0px -80% 0px',threshold:0});
+  targets.forEach(function(t){io.observe(t)});
+})();
+</script>
+</body>
+</html>

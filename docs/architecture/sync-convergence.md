@@ -171,7 +171,9 @@ APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It e
 - `classifyWorkState(input)`: the one work state classifier, merging the server rules
   and the web rules (killed outranks everything; an unresolved API error banner with
   content is needs input; declared and structural rest verdicts; the settle classifier
-  only files done).
+  only files done). The agent's own `--status blocked` pin is a hard block while the
+  turn is settled or the daemon is gone: it outranks a standing trigger or loop park
+  and surfaces an anchor, so the card's label and its section cannot disagree.
 - `placeInboxRow(input)`: the mutually exclusive bucket, first rule wins: dismissed,
   stashed, hidden (an anchor row that is not hard blocked), questions (asking), pinned,
   new (no messages), then the work state. Pinned outranks the work buckets, so Needs
@@ -325,7 +327,12 @@ blanked) and the coverage gate around it are gone: a row with no facts at all ta
 server's no status branch and settles by the activity grace. One rule this makes exact
 on the replica that the client could not apply before: a declared dormant home whose
 daemon is gone resurfaces as the human's, because nobody can deliver the wake it
-promised.
+promised. The same idea bounds a live daemon's bare claim: a declared dormant with no
+wake the system can verify (no armed trigger or loop into the session, no daemon-checked
+open task) files needs input after `DORMANT_CLAIM_TTL_MS` of quiet. The status only
+re-derives when the wake lands, so a wake that never lands would otherwise strand the
+row in Dormant. `rowLiveDeadlines` carries the expiry, so the time flip lands on both
+sides at the same instant.
 
 **Feeder parity.** `useSyncCore(profile)` owns the full feeder mount set: sync log
 applier, live window, liveness overlay, team feeders (mounted per scope), recovery
