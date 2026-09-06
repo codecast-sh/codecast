@@ -91,6 +91,8 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
+import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -2936,11 +2938,33 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
 // | head -1)` picked up jx7c6zk, the placeholder short id in cast own's own
 // examples, and tried to own a session that never existed. Help goes to stderr
 // here for the same reason: nothing usable may reach stdout on a failure.
+// The suggestion line is bounded by the same reason: it names only siblings at
+// the level the unknown token sits on, and never a destructive command unless
+// the token is a near-miss of that command (commandSuggestion.ts). ct-49545.
 function failUnknownCommand(operands: string[]): never {
   console.error(`error: unknown command '${operands[0]}'`);
+  const nextStep = unknownCommandNextStep(commandTree(program), operands);
+  if (nextStep) console.error(nextStep);
   console.error(`Run 'cast --help' for the list of commands.`);
   process.exit(1);
 }
+
+// Groups never reach failUnknownCommand — commander answers their unknown
+// subcommands itself, and its built-in ranking is pure string similarity, so
+// `cast doc delta` was answered with "(Did you mean delete?)" and
+// `cast workspace estry` with "(Did you mean destroy?)". Route every level of
+// the tree through the same guarded suggester the root uses, so no depth can
+// hand a typo an irreversible verb. Everything else about the error — exit
+// code, the group's own help — stays commander's. ct-49545.
+// (unknownCommand is commander's own hook; it is not in its published types.)
+(Command.prototype as Command & { unknownCommand: (this: Command) => void }).unknownCommand =
+  function unknownCommand(this: Command): void {
+    const typed = String(this.args[0] ?? "");
+    const groupPath: string[] = [];
+    for (let cmd: Command | null = this; cmd?.parent; cmd = cmd.parent) groupPath.unshift(cmd.name());
+    const nextStep = unknownCommandNextStep(commandTree(program), [...groupPath, typed]);
+    this.error(`error: unknown command '${typed}'${nextStep ? `\n${nextStep}` : ""}`);
+  };
 
 program
   .name("cast")
@@ -8971,18 +8995,7 @@ program
   .option("--keep-config", "Keep ~/.codecast config directory")
   .option("-y, --yes", "Skip confirmation prompt")
   .action(async (options) => {
-    if (!options.yes) {
-      const rl = await import("readline");
-      const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        iface.question("This will remove cast, its daemon, auto-start config, and all local data. Continue? [y/N] ", resolve);
-      });
-      iface.close();
-      if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
-        console.log("Aborted");
-        process.exit(0);
-      }
-    }
+    await requireDestructiveConfirm(["uninstall"], { yes: options.yes });
 
     const home = process.env.HOME || "";
 
@@ -15168,11 +15181,7 @@ doc
   .argument("<id>", "Document ID")
   .option("--yes", "Confirm deletion (required)")
   .action(async (id: string, options: any) => {
-    if (!options.yes) {
-      console.error(`This permanently deletes the document. Re-run with --yes to confirm:`);
-      console.error(`  cast doc delete ${id} --yes`);
-      process.exit(1);
-    }
+    await requireDestructiveConfirm(["doc", "delete"], { yes: options.yes, args: [id] });
     await cliPost("/cli/docs/delete", { id });
     console.log(`${c.green}ok${c.reset} Deleted ${c.cyan}${id}${c.reset}`);
   });
