@@ -181,19 +181,32 @@ describe("acquireStartLock", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    // Wait until it actually holds the lock before signalling.
-    const lockFile = path.join(browserHome(), "start.lock");
-    for (let i = 0; i < 100 && !fs.existsSync(lockFile); i++) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    expect(fs.existsSync(lockFile)).toBe(true);
+    const deadline = setTimeout(() => proc.kill("SIGKILL"), 4000);
+    try {
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      let output = "";
+      while (!output.includes("\n")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        output += decoder.decode(value, { stream: true });
+      }
+      reader.releaseLock();
+      expect(output).toBe("acquired\n");
+      const lockFile = path.join(browserHome(), "start.lock");
+      expect(fs.existsSync(lockFile)).toBe(true);
 
-    proc.kill("SIGTERM");
-    await proc.exited;
-    expect(fs.existsSync(lockFile)).toBe(false);
-    // Re-raised rather than swallowed: the process must still die by the
-    // signal (128 + 15), so callers and shells see what they expect.
-    expect(proc.exitCode === 143 || proc.signalCode === "SIGTERM").toBe(true);
+      proc.kill("SIGTERM");
+      await proc.exited;
+      expect(fs.existsSync(lockFile)).toBe(false);
+      // Re-raised rather than swallowed: the process must still die by the
+      // signal (128 + 15), so callers and shells see what they expect.
+      expect(proc.exitCode === 143 || proc.signalCode === "SIGTERM").toBe(true);
+    } finally {
+      clearTimeout(deadline);
+      if (proc.exitCode === null) proc.kill("SIGKILL");
+      await proc.exited;
+    }
   });
 
   test("reports who it is waiting for instead of blocking silently", async () => {
