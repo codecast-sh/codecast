@@ -13,6 +13,7 @@
  */
 
 import * as fs from "node:fs";
+import { prepareBrowserApp } from "./appIdentity.js";
 import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -233,9 +234,11 @@ export function chromeLaunchArgs(opts: LaunchOptions): string[] {
 
 export async function launchManagedChrome(opts: LaunchOptions): Promise<number> {
   const channel = opts.channel ?? "chrome";
-  const bin = chromeBinaryFor(channel);
+  const prepared = prepareBrowserApp(chromeBinaryFor(channel), !!opts.headless);
+  const bin = prepared.binary;
   fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
   const args = chromeLaunchArgs(opts);
+  if (prepared.branded) args.push("--disable-updater-scheduler");
 
   // On macOS, spawning an app bundle's binary makes the OS activate it, so a
   // launch yanks the screen away from whatever the human is doing. `open -g`
