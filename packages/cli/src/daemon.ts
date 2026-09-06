@@ -178,7 +178,16 @@ import {
   type LoopbackIdentity,
 } from "./loopbackIdentity.js";
 import { HookStatusGate } from "./hookStatusGate.js";
-import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
+import { startPaneStream, isPaneStreaming, writePane } from "./terminal/paneStream.js";
+import {
+  INTERRUPT_SETTLE_MS,
+  classifyInputBytes,
+  createKeystrokeInference,
+  parseAskInputSidecar,
+  readAskInputSidecar,
+  singleSelectOptionCount,
+  type InputIntent,
+} from "./keystrokeInference.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
@@ -1120,6 +1129,10 @@ const lastIdleNotifiedSize = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
+// When lastSentAgentStatus last MOVED for each session. Keystroke inference arms
+// against this pair and stands down when either changed inside its settle
+// window, so a real hook always outranks the inference (ct-49534).
+const lastAgentStatusSentAt = new Map<string, number>();
 // When each session's CURRENT turn began. A `cast state --status dormant|done`
 // stamp counts as a settle verdict only if written after this, so a declaration
 // never outlives the turn that made it (see declaredSettleVerdict). Empty after
@@ -1549,6 +1562,7 @@ function sendAgentStatus(
     markTurnStarted(sessionId, Date.now());
   }
   lastSentAgentStatus.set(sessionId, status);
+  lastAgentStatusSentAt.set(sessionId, Date.now());
   // The open-task report a settle just computed rides along with its verdict;
   // any other status drops it (a turn start makes the parked picture moot).
   const openTasks = pendingOpenTaskReports.get(sessionId);
@@ -1640,7 +1654,7 @@ let watchServerHandle: { close(): void } | null = null;
 let vaultMirror: VaultMirror | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
-  return { token: terminalToken(), log };
+  return { token: terminalToken(), log, onInput: observePaneInput };
 }
 
 // The vault routes ride the same loopback server and the same persisted token;
@@ -1891,6 +1905,10 @@ const bypassPermissionsCleaned = new Set<string>();
 // for the entire wait. We hold the block until a non-blocked status arrives (the answer
 // landed and the agent moved on). See classifyBypassBlock.
 const awaitingAskUserQuestion = new Set<string>();
+// The status a session held just before its AskUserQuestion wait opened. When a
+// keystroke tells us the question was answered, this is what the session goes
+// back to — the same status the missing hook would have reported (ct-49534).
+const preAskUserQuestionStatus = new Map<string, AgentStatus>();
 
 const syncStats = {
   messagesSynced: 0,
@@ -4166,6 +4184,10 @@ async function executeRemoteCommand(
         const alreadyRunning = isPaneStreaming(target);
         startPaneStream(target, {
           log,
+          write: (pane, bytes) => {
+            observePaneInput(pane, bytes);
+            writePane(pane, bytes);
+          },
           push: async (msg) => {
             try {
               const res = await fetch(`${siteUrl}/cli/terminal/frame`, {
@@ -4760,6 +4782,7 @@ async function executeRemoteCommand(
         const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
         if (tmuxTarget) {
           await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
+          observeSessionInput(sessionId, { kind: "escape" });
           result = "escape_sent";
           log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
         } else if (!proc) {
@@ -4774,6 +4797,7 @@ async function executeRemoteCommand(
         } else {
           try {
             process.kill(proc.pid, "SIGINT");
+            observeSessionInput(sessionId, { kind: "ctrl-c" });
             result = "escape_sent_sigint";
             log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc.pid}`);
           } catch (killErr) {
@@ -11192,11 +11216,90 @@ function readAskUserQuestionInput(sessionId: string): { questions: any[] } | nul
   try {
     const p = path.join(ASK_INPUT_DIR, `${sessionId}.json`);
     const stat = fs.statSync(p);
-    if (Date.now() - stat.mtimeMs > 5 * 60_000) return null;
-    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
-    if (Array.isArray(parsed?.questions) && parsed.questions.length) return { questions: parsed.questions };
+    return parseAskInputSidecar(fs.readFileSync(p, "utf8"), stat.mtimeMs, Date.now());
   } catch {}
   return null;
+}
+
+// Ctrl+C and an AskUserQuestion answer produce no hook, so both used to surface
+// only once the transcript flushed. Where cast sees the input bytes it can know
+// sooner — see keystrokeInference.ts for the mechanism, its guards, and why a
+// pane driven from a raw `tmux attach` is invisible to it.
+const keystrokeInference = createKeystrokeInference({
+  readBaseline: (sessionId) => {
+    const status = lastSentAgentStatus.get(sessionId);
+    if (!status) return null;
+    return {
+      status,
+      statusSentAt: lastAgentStatusSentAt.get(sessionId) ?? 0,
+      turnStartedAt: turnStartedAt.get(sessionId) ?? 0,
+      agentType: detectSessionAgentType(sessionId),
+    };
+  },
+  isAwaitingQuestion: (sessionId) => awaitingAskUserQuestion.has(sessionId),
+  readOptionCount: async (sessionId) =>
+    singleSelectOptionCount((await readAskInputSidecar(ASK_INPUT_DIR, sessionId, Date.now()))?.questions),
+  writeInterrupted: (sessionId) => {
+    const convId = conversationCacheRef?.[sessionId];
+    if (!convId || !syncServiceRef) return;
+    log(`[INFER] Interrupt keystroke ended session ${sessionId.slice(0, 8)}'s turn; no hook arrived in ${INTERRUPT_SETTLE_MS}ms`);
+    // "idle" is codecast's interrupted turn end — the same status the transcript
+    // path writes once it sees the [Request interrupted by user] control message.
+    // Presumed, because a keystroke is our reading of the turn, not a report.
+    sendAgentStatus(syncServiceRef, convId, sessionId, "idle", undefined, undefined, true);
+  },
+  writeQuestionAnswered: (sessionId) => {
+    const convId = conversationCacheRef?.[sessionId];
+    if (!convId || !syncServiceRef) return;
+    awaitingAskUserQuestion.delete(sessionId);
+    const restored = preAskUserQuestionStatus.get(sessionId) ?? "working";
+    preAskUserQuestionStatus.delete(sessionId);
+    log(`[INFER] Session ${sessionId.slice(0, 8)} answered its question; restoring ${restored}`);
+    sendAgentStatus(syncServiceRef, convId, sessionId, restored, undefined, undefined, true);
+  },
+  log,
+});
+
+// Which session a tmux name is hosting. The input seams below see a pane, not a
+// session: the process cache already holds the mapping for every live session,
+// and the pane's own @codecast_session_id stamp is the fallback for one the
+// cache has not filled yet.
+const tmuxSessionIdMemo = new Map<string, { sessionId: string | null; at: number }>();
+const TMUX_SESSION_ID_MEMO_MS = 60_000;
+async function sessionIdForTmuxName(name: string): Promise<string | null> {
+  for (const [sessionId, cached] of sessionProcessCache) {
+    if (cached.tmuxTarget && cached.tmuxTarget.split(":")[0] === name) return sessionId;
+  }
+  const memo = tmuxSessionIdMemo.get(name);
+  if (memo && Date.now() - memo.at < TMUX_SESSION_ID_MEMO_MS) return memo.sessionId;
+  const stamped = (await getTmuxSessionOption(name, "@codecast_session_id"))?.trim() || null;
+  tmuxSessionIdMemo.set(name, { sessionId: stamped, at: Date.now() });
+  return stamped;
+}
+
+// Every seam where cast SEES bytes going into a managed pane funnels here: the
+// integrated terminal proxy (terminal/terminalServer.ts), the remote pane stream
+// (terminal/paneStream.ts) and the daemon's own send-keys. Off the loop, and
+// only for a chunk that is exactly one interesting keystroke.
+function observePaneInput(target: string, bytes: ArrayLike<number>): void {
+  const intent = classifyInputBytes(bytes);
+  if (!intent) return;
+  const name = target.split(":")[0];
+  if (!name || !isManagedTmuxName(name)) return;
+  void (async () => {
+    const sessionId = await sessionIdForTmuxName(name);
+    if (sessionId) await keystrokeInference.observeInput(sessionId, intent);
+  })().catch((err) => log(`[INFER] input observation failed for ${target}: ${err instanceof Error ? err.message : String(err)}`));
+}
+
+// The daemon pressing a key on the human's behalf is the same evidence as the
+// human pressing it, and here the session is already known. Message delivery is
+// deliberately NOT routed here: injectViaTmux already writes a presumed
+// "thinking" the moment a paste lands, which covers the poll answer that
+// resolves an AskUserQuestion card from the web.
+function observeSessionInput(sessionId: string, intent: InputIntent): void {
+  void keystrokeInference.observeInput(sessionId, intent)
+    .catch((err) => log(`[INFER] input observation failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 // Guard against a stale sidecar (a prior question's tool_input) being stamped onto the
@@ -22977,6 +23080,17 @@ async function main(): Promise<void> {
       // the whole wait — worst for raw-iTerm sessions, where the question can't be
       // scraped from a pane or read from the buffered JSONL until it's answered.
       const inheritedMode = data.permission_mode || prev?.permission_mode;
+      // Remember what the session was doing before the wait opens, so a
+      // keystroke that answers the question can put it back (ct-49534).
+      // classifyBypassBlock mutates the set, so this has to read first.
+      const opensQuestionWait = data.status === "permission_blocked" && (data.message || "").startsWith("AskUserQuestion");
+      if (opensQuestionWait && !awaitingAskUserQuestion.has(sessionId)) {
+        const before = lastSentAgentStatus.get(sessionId);
+        // Only an ACTIVE status is worth restoring: a question can only be
+        // asked mid-turn, so anything else is a stale row, and restoring
+        // another permission_blocked would re-block the session on nothing.
+        if (before && ACTIVE_AGENT_STATUSES.has(before)) preAskUserQuestionStatus.set(sessionId, before);
+      }
       if (classifyBypassBlock(awaitingAskUserQuestion, sessionId, data.status, inheritedMode, data.message).suppress) {
         log(`Suppressing phantom permission_blocked in bypassPermissions mode for session ${sessionId.slice(0, 8)}`);
         data = { ...data, status: "working" };
@@ -23268,6 +23382,8 @@ async function main(): Promise<void> {
         await fs.promises.unlink(f.filePath).catch(() => {});
         lastHookStatus.delete(f.sessionId);
         bypassPermissionsCleaned.delete(f.sessionId);
+        preAskUserQuestionStatus.delete(f.sessionId);
+        keystrokeInference.cancel(f.sessionId);
       }
     })().catch(() => {});
   }, 30 * 60 * 1000);

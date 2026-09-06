@@ -23,6 +23,15 @@ export interface TerminalServerOptions {
   log: (msg: string) => void;
   /** Extra origin check on top of the built-in allowlist (dev override). */
   allowOrigin?: (origin: string) => boolean;
+  /**
+   * Raw input bytes on their way into an ATTACHED agent pane, before tmux gets
+   * them. This is one of the few places cast sees what the human typed, which
+   * is what lets the daemon know about a Ctrl+C or an answered question without
+   * waiting for the transcript (see keystrokeInference.ts). Attach only, and
+   * never for a read-only attach, which delivers nothing. The target may still
+   * be one of the panel's own shells; the daemon keeps only managed panes.
+   */
+  onInput?: (target: string, data: Buffer) => void;
 }
 
 interface HelloMessage {
@@ -441,7 +450,9 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
     ws.on("message", (data, isBinary) => {
       if (!client) return;
       if (isBinary) {
-        client.sendInput(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+        const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        if (mode.kind === "attach" && !client.isReadOnly) opts.onInput?.(mode.target, bytes);
+        client.sendInput(bytes);
         return;
       }
       try {
