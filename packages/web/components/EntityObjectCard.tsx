@@ -30,19 +30,17 @@ import { clipFade } from "./CollapsibleBody";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
+import { AuthorAvatar, SessionSummaryBlock, DiffStat } from "./entityDisplay";
 import {
-  AuthorAvatar,
   PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
-  SessionSummaryBlock,
   TYPE_LABEL,
   abbrevModel,
   relativeTime,
   taskPeople,
   useEntityResolution,
-  DiffStat,
-} from "./entityDisplay";
+} from "../lib/entityDisplay";
 import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";

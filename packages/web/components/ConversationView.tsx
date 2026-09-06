@@ -139,7 +139,8 @@ import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
-import { HeaderModelControl, LaunchModelPill, useLiveSessionMeta } from "./ModelEffortPicker";
+import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import {
   DropdownMenu,
   DropdownMenuContent,

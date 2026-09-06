@@ -3,7 +3,7 @@
 // naively duplicates characters, which silently corrupts the code a person is
 // reading, so every run here reassembles to the original fragment.
 import { describe, expect, test } from "bun:test";
-import { highlightRuns } from "../RepoSearchContent";
+import { highlightRuns } from "../../../lib/highlightRuns";
 
 const rebuild = (runs: { text: string }[]) => runs.map((r) => r.text).join("");
 
