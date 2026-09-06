@@ -31,6 +31,7 @@ import {
   splitBrowserBatchResult,
   describeToolGroup,
   describeSmallToolGroup,
+  shellLead,
 } from "./index";
 
 const tc = (name: string, input: unknown) => ({
@@ -391,19 +392,44 @@ describe("describeToolGroup", () => {
   });
 });
 
+describe("shellLead", () => {
+  it("names the program, with a subcommand only for CLIs that have them", () => {
+    expect(shellLead("npm test")).toBe("npm test");
+    expect(shellLead("ls -la")).toBe("ls");
+    expect(shellLead('ps -Ao pid,pcpu,rss,command | grep -i "Google Chrome Helper"')).toBe("ps");
+    expect(shellLead("cast browser tabs --real")).toBe("cast browser");
+    expect(shellLead("cat > /tmp/probe.mjs <<'EOF'\nimport fs\nEOF")).toBe("cat");
+    expect(shellLead("echo hello world")).toBe("echo");
+  });
+
+  it("skips setup words so the receipt names what actually ran", () => {
+    expect(shellLead('cd /Users/me/src/codecast; echo "=== tabs"; cast browser tabs')).toBe("echo");
+    expect(shellLead("cd packages/web && npx tsc --noEmit -p tsconfig.json")).toBe("npx tsc");
+    expect(shellLead("FOO=1 sudo time bun test")).toBe("bun test");
+    expect(shellLead("/opt/homebrew/bin/node -e 1")).toBe("node");
+    expect(shellLead("(cd repo && git status)")).toBe("git status");
+  });
+
+  it("keeps a setup-only command's first word instead of vanishing", () => {
+    expect(shellLead("cd /Users/me/src/codecast")).toBe("cd");
+    expect(shellLead("")).toBe("");
+  });
+});
+
 describe("describeSmallToolGroup", () => {
-  it("names a lone command instead of counting it", () => {
+  it("names a lone command by its program instead of counting it", () => {
     expect(describeSmallToolGroup([tc("Bash", { command: "npm test" })])).toBe("ran npm test");
-    expect(describeSmallToolGroup([tc("run_terminal_command", { command: "ls -la" })])).toBe("ran ls -la");
+    expect(describeSmallToolGroup([tc("run_terminal_command", { command: "ls -la" })])).toBe("ran ls");
+    expect(describeSmallToolGroup([tc("Bash", { command: "cd repo; ps -Ao pid | grep chrome" })])).toBe("ran ps");
   });
 
   it("spends a whole line on a lone subject, and splits it across a pair", () => {
-    const long = tc("Bash", { command: "cd packages/web && npx tsc --noEmit -p tsconfig.json --pretty false" });
+    const long = tc("Read", { file_path: "/Users/me/src/codecast/packages/web/components/ConversationViewHeader.tsx" });
     expect(describeSmallToolGroup([long])).toBe(
-      "ran cd packages/web && npx tsc --noEmit -p tsconfig.json --pretty false",
+      "read codecast/packages/web/components/ConversationViewHeader.tsx",
     );
     expect(describeSmallToolGroup([long, long])).toBe(
-      "ran cd packages/web && npx tsc --n... · cd packages/web && npx tsc --n...",
+      "read ConversationViewHeader.tsx · ConversationViewHeader.tsx",
     );
   });
 
@@ -426,9 +452,9 @@ describe("describeSmallToolGroup", () => {
     );
   });
 
-  it("collapses a multi-line command onto one line", () => {
+  it("names a multi-line command by its program", () => {
     expect(describeSmallToolGroup([tc("Bash", { command: "cat <<'EOF'\n  hello\nEOF" })]))
-      .toBe("ran cat <<'EOF' hello EOF");
+      .toBe("ran cat");
   });
 
   it("gives up when a subject is missing, leaving the caller to count", () => {
