@@ -31,13 +31,13 @@ export function prepareBrowserApp(binary: string, headless: boolean): { binary: 
     fs.renameSync(temporary, file);
   }
   const source = binary.slice(0, binary.indexOf(".app/") + 4);
-  const result = spawnSync(helperPath, [source, root, iconPath, `2-${hash(icon)}`], { encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 });
+  const result = spawnSync(helperPath, [source, root, iconPath, `2-${hash(icon)}`], { encoding: "utf8", timeout: 90_000, maxBuffer: 256 * 1024 });
   const appPath = result.stdout?.trim();
   if (result.status !== 0 || !appPath || !path.isAbsolute(appPath) || !appPath.startsWith(`${root}/version-`)) {
     console.error(`Cast Agent Chrome branding unavailable; using installed Chrome. ${result.error?.message || result.stderr?.trim() || "App preparation failed"}`);
     return unchanged;
   }
-  const assessment = spawnSync("/usr/sbin/spctl", ["--assess", "--type", "execute", appPath], { encoding: "utf8", timeout: 30_000 });
+  const assessment = spawnSync("/usr/sbin/spctl", ["--assess", "--type", "execute", appPath], { encoding: "utf8", timeout: 60_000 });
   if (assessment.status !== 0) {
     console.error("Cast Agent Chrome did not pass macOS launch assessment; using installed Chrome.");
     return unchanged;

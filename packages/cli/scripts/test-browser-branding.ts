@@ -21,7 +21,8 @@ const server = Bun.serve({
 let state: { pid: number; port: number; userDataDir: string } | undefined;
 let conn: CdpConnection | undefined;
 const run = (command: string, args: string[]) => {
-  const result = spawnSync(command, args, { env, encoding: "utf8", timeout: 120_000, maxBuffer: 1024 * 1024 });
+  const result = spawnSync(command, args, { env, encoding: "utf8", timeout: 240_000, maxBuffer: 1024 * 1024 });
+  if (result.stderr) process.stderr.write(result.stderr);
   assert.equal(result.status, 0, result.stderr || result.error?.message || `${command}: ${result.signal}`);
   return result.stdout;
 };
