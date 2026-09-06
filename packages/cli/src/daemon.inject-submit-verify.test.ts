@@ -319,6 +319,175 @@ describe("verifyTmuxSubmitAfterPaste", () => {
 // "submitted"; the daemon then reported "thinking" and the row went terminal.
 // A single frame is thin evidence — the loop must look once more and, if the
 // text is still at the prompt, press Enter instead of acking.
+// ---------------------------------------------------------------------------
+// Per-client submit evidence (the D0 matrix's CI half, ct-49536)
+//
+// Each pair below was captured from a live pane of that client (2026-09-06):
+// the composer holding the pasted payload, then the same pane one Enter later
+// with the turn running. The verifier has to read "submitted" from four
+// different vocabularies — claude's spinner word, codex's "esc to interrupt"
+// footer, grok's braille spinner and "[stop]" chrome, and opencode's pane with
+// no prompt glyph at all — so a client whose chrome changes fails here without
+// needing its binary on the runner.
+// ---------------------------------------------------------------------------
+
+const MATRIX_PAYLOAD = "matrix payload first line\nsecond line\n\nfourth after a blank line";
+
+const CLIENT_FRAMES: Record<string, { idle: string; pasted: string; running: string; glyphless?: true }> = {
+  claude: {
+    idle: `
+ ▐▛███▛█   Claude Code v2.1.263
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+────────────────────────────────────────────────────────────────────────
+❯ Try "how do I log an error?"
+────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`,
+    pasted: `
+ ▐▛███▛█   Claude Code v2.1.263
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+────────────────────────────────────────────────────────────────────────
+❯ [Pasted text #1 +3 lines]
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`,
+    running: `
+ ▐▛███▛█   Claude Code v2.1.263
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+❯ matrix payload first line
+  second line
+  fourth after a blank line
+✽ Hashing…
+                                                       ● high · /effort
+────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`,
+  },
+  codex: {
+    idle: `
+╭─────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)              │
+╰─────────────────────────────────────────╯
+› Ask Codex to do anything
+  ? for shortcuts
+`,
+    pasted: `
+› matrix payload first line
+  second line
+  fourth after a blank line
+  matrix default · /private/tmp/matrix-codex
+`,
+    running: `
+› matrix payload first line
+  second line
+  fourth after a blank line
+⚠ Model metadata for \`matrix\` not found. Defaulting to fallback metadata.
+• Working (1s • esc to interrupt)
+› Ask Codex to do anything
+  matrix default · /private/tmp/matrix-codex
+`,
+  },
+  grok: {
+    idle: `
+  /private/tmp/matrix-grok
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                  │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`,
+    pasted: `
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 4 lines]                                                │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`,
+    running: `
+  /private/tmp/matrix-grok                                    1.5K / 200K
+     ❯ matrix payload first line                                 9:32 PM
+       second line
+        …
+    ⠴ Waiting for response… 1.7s                    1.7s ⇣1.51k [stop]
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                  │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Shift+Tab:mode  │  Esc:cancel  │  Ctrl+x:shortcuts
+`,
+  },
+  opencode: {
+    glyphless: true,
+    idle: `
+                    ┃
+                    ┃  Ask anything… "Fix broken tests"
+                    ┃
+                    ┃  Build · matrix-model matrix
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`,
+    pasted: `
+                    ┃
+                    ┃  [Pasted ~4 lines]
+                    ┃
+                    ┃  Build · matrix-model matrix
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`,
+    running: `
+  ┃  matrix payload first line
+  ┃  second line
+  ┃
+  ┃  fourth after a blank line
+     ▣  Build · matrix-model
+  ┃  Build · matrix-model matrix
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt              tab agents  ctrl+p commands
+`,
+  },
+};
+
+describe("verifyTmuxSubmitAfterPaste — real client turn-started frames", () => {
+  for (const [client, frames] of Object.entries(CLIENT_FRAMES)) {
+    test(`${client}: the running turn reads as submitted, with no extra keys`, async () => {
+      const { io, actions } = scriptedIO([frames.running]);
+      const result = await verifyTmuxSubmitAfterPaste(io, {
+        prePaste: frames.idle,
+        pasteConfirmed: true,
+        contentPrefix: MATRIX_PAYLOAD.slice(0, 40),
+        multiline: true,
+        deadlineMs: 4_000,
+      });
+      expect(result.outcome).toBe("submitted");
+      // The caller already sent the gate's Enter; a second one would submit
+      // whatever the person at the keyboard typed next.
+      expect(actions).toEqual([]);
+    });
+
+    test(`${client}: the payload still sitting in the composer is ${frames.glyphless ? "invisible to the pane verifier" : "answered with a discrete Enter"}`, async () => {
+      const { io, actions } = scriptedIO([frames.pasted]);
+      const result = await verifyTmuxSubmitAfterPaste(io, {
+        prePaste: frames.idle,
+        pasteConfirmed: true,
+        contentPrefix: MATRIX_PAYLOAD.slice(0, 40),
+        multiline: true,
+        deadlineMs: 2_000,
+      });
+      if (frames.glyphless) {
+        // opencode draws no prompt glyph, so "our text is still in the box"
+        // and "the turn is running" are the same picture and the verifier acks.
+        // That is why opencode's turn state comes from its SQLite store and not
+        // from this loop — the pane cannot answer the question.
+        expect(result.outcome).toBe("submitted");
+        return;
+      }
+      // The chip (or the text) is still at the prompt: the Enter was swallowed
+      // into the paste burst, so the loop presses a discrete one and keeps
+      // watching rather than acking a message nobody submitted.
+      expect(result.outcome).toBe("timeout");
+      expect(actions).toContain("enter");
+    });
+  }
+});
+
 describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
   const REDRAW_BLANK_PANE = `
  ▐▛███▜▌   Claude Code v2.1.175
