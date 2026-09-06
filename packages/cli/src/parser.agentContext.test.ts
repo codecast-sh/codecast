@@ -11,6 +11,14 @@ test("Codex plugin-prefixed setup never becomes a human message or title", () =>
   expect(isMachineDeliveredMessage(setup)).toBe(true);
 });
 
+test("Codex project-context setup turn is hidden like the AGENTS.md one", () => {
+  const projectContext = "# Project context\nWorking directory: /Users/ashot/src/union-mobile";
+  const messages = parseCodexSessionFile([entry(projectContext), entry("try the new kimi3 model")].join("\n"));
+  expect(messages.map(m => m.content)).toEqual(["try the new kimi3 model"]);
+  expect(isMachineDeliveredMessage(projectContext)).toBe(true);
+  expect(isAgentContextMessage("# Project contextual notes I wrote")).toBe(false);
+});
+
 test("context detection is anchored and accepts injection noise", () => {
   expect(isAgentContextMessage("\u0001\u000b " + setup)).toBe(true);
   for (const content of ["Explain <recommended_plugins>", "```xml\n" + setup, "# AGENTS.md guidance", "<permissions-example>example</permissions-example>"]) {
