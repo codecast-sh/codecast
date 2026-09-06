@@ -54,6 +54,11 @@ export type TaskRow = {
   target_conversation_id?: string;
   retry_count?: number;
   max_runtime_ms?: number;
+  // `cast trigger add --precheck`: the shell gate run before each scheduled or
+  // recurring firing, and the newest firing it refused.
+  precheck?: string;
+  last_precheck_skip_at?: number;
+  last_precheck_skip_reason?: string;
   // Haiku-distilled presentation fields (agentTasks.generateDisplaySummary).
   // display_title only exists when the stored title was a prompt slice; an
   // explicit human title is left alone, so preferring display_title is safe.

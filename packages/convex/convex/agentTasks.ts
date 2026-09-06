@@ -221,6 +221,7 @@ interface NewTaskArgs {
   mode?: string;
   max_runtime_ms?: number;
   max_retries?: number;
+  precheck?: string;
 }
 
 export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
@@ -265,6 +266,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     // tasks keep their stored mode, so nothing already armed changes.
     mode: (args.mode === "propose" ? "propose" : "apply") as "propose" | "apply",
     max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
+    precheck: args.precheck?.trim() || undefined,
     status: "scheduled" as const,
     retry_count: 0,
     max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
@@ -330,6 +332,7 @@ export const createTask = mutation({
     mode: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
     max_retries: v.optional(v.number()),
+    precheck: v.optional(v.string()),
     // Any session ref (short id, conversation _id, or Claude session uuid) the
     // schedule should inject into — `cast trigger add --for <session>`.
     // Resolved own-only: you can bind a schedule only to your own session.
@@ -688,17 +691,23 @@ function completedTaskRunFields(
   };
   if (!isLateSummary) {
     updates.run_count = task.run_count + 1;
-    if (task.schedule_type === "recurring" && task.interval_ms) {
-      updates.status = "scheduled";
-      updates.run_at = now + task.interval_ms;
-    } else if (task.schedule_type === "event") {
-      updates.status = "scheduled";
-      updates.run_at = undefined;
-    } else {
-      updates.status = "completed";
-    }
+    Object.assign(updates, nextArmingAfterRun(task, now));
   }
   return updates;
+}
+
+// When a trigger fires next, once this firing is over. Shared by the completion
+// path and the precheck skip path so a skipped firing re-arms a recurring
+// trigger on its normal cadence instead of leaving it due and re-firing at once.
+function nextArmingAfterRun(task: Doc<"agent_tasks">, now: number): Record<string, any> {
+  if (task.schedule_type === "recurring" && task.interval_ms) {
+    return { status: "scheduled", run_at: now + task.interval_ms };
+  }
+  // Disarmed until the next webhook, which sets run_at again.
+  if (task.schedule_type === "event") return { status: "scheduled", run_at: undefined };
+  // A one-shot keeps its run_at: nothing reads it once the status is terminal,
+  // and it is the record of when this trigger actually fired.
+  return { status: "completed" };
 }
 
 export const completeTaskRun = mutation({
@@ -951,6 +960,60 @@ export const failTaskRun = mutation({
       }
     }
 
+    return true;
+  },
+});
+
+// The daemon's precheck gate refused this firing: `cast trigger add --precheck`
+// ran its shell command in the trigger's project directory and it did not exit
+// 0. No agent was spawned and nothing was injected, so there is no conversation
+// to project a run from — the skip row IS the run record, and webListRuns folds
+// it into the history beside the real runs.
+//
+// The trigger re-arms exactly as a finished run would (nextArmingAfterRun), so
+// a recurring trigger with a precheck simply waits for its next interval. A
+// skip is not a failure either: retry_count stays where it is, because nothing
+// went wrong — the trigger asked whether there was work and the answer was no.
+export const skipTaskRun = mutation({
+  args: {
+    api_token: v.string(),
+    task_id: v.id("agent_tasks"),
+    daemon_id: v.string(),
+    command: v.string(),
+    exit_code: v.optional(v.number()),
+    timed_out: v.boolean(),
+    duration_ms: v.number(),
+    output: v.optional(v.string()),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const task = await ctx.db.get(args.task_id);
+    if (!task || task.user_id !== auth.userId) return false;
+    if (task.status !== "running" || task.lease_holder !== args.daemon_id) return false;
+
+    const now = Date.now();
+    await ctx.db.insert("agent_task_precheck_skips", {
+      task_id: args.task_id,
+      user_id: auth.userId,
+      command: args.command,
+      exit_code: args.exit_code,
+      timed_out: args.timed_out,
+      duration_ms: args.duration_ms,
+      output: args.output,
+      reason: args.reason,
+      created_at: now,
+    });
+
+    await patchTask(ctx, task, {
+      ...nextArmingAfterRun(task, now),
+      last_precheck_skip_at: now,
+      last_precheck_skip_reason: args.reason,
+      lease_holder: undefined,
+      lease_expires_at: undefined,
+    });
     return true;
   },
 });
@@ -1328,8 +1391,39 @@ export const backfillArmedTriggerKind = internalMutation({
 //     exact substring check on the task id. The scan is bounded: sessions so
 //     long their old runs fall outside it lose only the oldest entries.
 //     Encrypted conversations degrade to no history.
+//   • Precheck skips: a firing the --precheck gate refused. No agent ran, so
+//     there is no conversation — the agent_task_precheck_skips row is the run.
+//     Folded in by created_at so the history reads as one timeline.
 // `_id` stays the conversation id for older clients; `run_key` is the unique
 // per-run key (inject runs share one conversation).
+
+/** A firing the precheck gate refused, in the run-history shape. `_id` is the
+ *  skip row, not a conversation — these entries have nothing to open. */
+async function precheckSkipRuns(ctx: { db: any }, taskId: Id<"agent_tasks">) {
+  const skips = await ctx.db
+    .query("agent_task_precheck_skips")
+    .withIndex("by_task", (q: any) => q.eq("task_id", taskId))
+    .order("desc")
+    .take(100);
+  return skips.map((skip: Doc<"agent_task_precheck_skips">) => ({
+    _id: skip._id as string,
+    run_key: skip._id as string,
+    kind: "skipped_precheck" as const,
+    short_id: undefined as string | undefined,
+    title: skip.reason,
+    created_at: skip.created_at,
+    status: undefined as string | undefined,
+    idle_summary: undefined as string | undefined,
+    trigger_message_id: undefined,
+    trigger_message_timestamp: undefined,
+    precheck_command: skip.command,
+    precheck_output: skip.output,
+  }));
+}
+
+const newestRunsFirst = (rows: any[]) =>
+  rows.sort((a, b) => b.created_at - a.created_at).slice(0, 100);
+
 export const webListRuns = query({
   args: { task_id: v.id("agent_tasks") },
   handler: async (ctx, args) => {
@@ -1338,10 +1432,12 @@ export const webListRuns = query({
     const task = await ctx.db.get(args.task_id);
     if (!task || !(await canViewTask(ctx, userId, task))) return [];
 
+    const skipped = task.precheck ? await precheckSkipRuns(ctx, args.task_id) : [];
+
     if (task.originating_conversation_id) {
       const convId = task.originating_conversation_id;
       const conv = await ctx.db.get(convId);
-      if (!conv) return [];
+      if (!conv) return skipped;
       const marker = `task-id="${args.task_id}"`;
       const userTurns = await ctx.db
         .query("messages")
@@ -1350,11 +1446,11 @@ export const webListRuns = query({
         )
         .order("desc")
         .take(1000);
-      return userTurns
+      const injected = userTurns
         .filter((m) => m.content?.includes(marker))
         .slice(0, 100)
         .map((m) => ({
-          _id: convId,
+          _id: convId as string,
           run_key: m._id as string,
           kind: "inject" as const,
           short_id: conv.short_id,
@@ -1365,6 +1461,7 @@ export const webListRuns = query({
           trigger_message_id: m._id,
           trigger_message_timestamp: m.timestamp,
         }));
+      return newestRunsFirst([...injected, ...skipped]);
     }
 
     const runs = await ctx.db
@@ -1372,7 +1469,7 @@ export const webListRuns = query({
       .withIndex("by_agent_task", (q) => q.eq("agent_task_id", args.task_id))
       .collect();
     const newest = runs.sort((a, b) => b._creationTime - a._creationTime).slice(0, 100);
-    return await Promise.all(
+    const spawned = await Promise.all(
       newest.map(async (c) => {
         const trigger = await ctx.db
           .query("messages")
@@ -1382,7 +1479,7 @@ export const webListRuns = query({
           .order("asc")
           .first();
         return {
-          _id: c._id,
+          _id: c._id as string,
           run_key: c._id as string,
           kind: "spawn" as const,
           short_id: c.short_id,
@@ -1395,6 +1492,7 @@ export const webListRuns = query({
         };
       })
     );
+    return newestRunsFirst([...spawned, ...skipped]);
   },
 });
 
@@ -1416,6 +1514,7 @@ export const webCreate = mutation({
     model: v.optional(v.string()),
     project_path: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
+    precheck: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1446,6 +1545,11 @@ export async function deleteTaskCascade(ctx: TaskCtx, task: Doc<"agent_tasks">):
     .withIndex("by_task", (q: any) => q.eq("task_id", task._id))
     .collect();
   for (const r of revisions) await ctx.db.delete(r._id);
+  const skips = await ctx.db
+    .query("agent_task_precheck_skips")
+    .withIndex("by_task", (q: any) => q.eq("task_id", task._id))
+    .collect();
+  for (const skip of skips) await ctx.db.delete(skip._id);
   await ctx.db.delete(task._id);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
 }
@@ -1490,6 +1594,7 @@ type TaskUpdateArgs = {
   model?: string;
   project_path?: string;
   max_runtime_ms?: number;
+  precheck?: string;
 };
 
 // The editable surface — exactly the fields agent_task_revisions.before
@@ -1507,6 +1612,7 @@ const EDITABLE_FIELDS = [
   "model",
   "project_path",
   "max_runtime_ms",
+  "precheck",
 ] as const;
 
 function snapshotEditable(task: Doc<"agent_tasks">) {
@@ -1522,6 +1628,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     model: task.model,
     project_path: task.project_path,
     max_runtime_ms: task.max_runtime_ms,
+    precheck: task.precheck,
   };
 }
 
@@ -1556,6 +1663,8 @@ export async function applyTaskUpdate(
   if (args.model !== undefined) patch.model = args.model && args.model !== "default" ? args.model : undefined;
   if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
+  // "" removes the gate — `cast trigger update tr-42 --precheck ""`.
+  if (args.precheck !== undefined) patch.precheck = args.precheck.trim() || undefined;
 
   if (args.schedule_type !== undefined) {
     patch.schedule_type = args.schedule_type;
@@ -1628,6 +1737,7 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   model: v.optional(v.string()),
   project_path: v.optional(v.string()),
   max_runtime_ms: v.optional(v.number()),
+  precheck: v.optional(v.string()),
 };
 
 export const webUpdate = mutation({
