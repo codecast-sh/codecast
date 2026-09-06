@@ -64,6 +64,7 @@ import {
   projectInbox,
   digestProjection,
   placeProjectableRow,
+  inboxSortTimeOfRow,
   rowLastTurnAllowsPark,
   emptyInboxTally,
   isOrphanOrSubagent,
@@ -77,6 +78,7 @@ import {
   type InboxBucket,
   type InboxTally,
   type InboxTruncation,
+  type InboxSortTime,
   type ProjectableInboxRow,
   type WorkingSetRow,
   type WorkState,
@@ -513,6 +515,11 @@ export type InboxSession = {
   // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
   // decay flip locally without a server re-execution.
   agent_status_updated_at?: number | null;
+  // When the lead turn behind the current status ended (ct-49533). The stamp
+  // outlives later status writes, so it names the delivery even for a session
+  // the harness keeps alive afterwards — which is what the done and working
+  // classes sort a bucket by (ct-49550).
+  turn_completed_at?: number | null;
   hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
@@ -2027,16 +2034,51 @@ function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } 
   ];
 }
 
-// A session paired with its precomputed sort rank.
-type RankedSession = { s: InboxSession; rank: ReturnType<typeof sessionSortRank> };
+// The WorkState a row sorts by: its placed verdict, or — for a row the
+// chokepoint never placed (a create stub, a child riding its parent) — the
+// legacy verdict read back as a work state. The exact inverse of
+// verdictOfWorkState, so the class the order uses is the class the section
+// files under.
+function sortWorkStateOf(s: InboxSession, placement?: { work_state: WorkState } | null): WorkState {
+  if (placement) return placement.work_state;
+  const c = rankVerdictOf(s, null);
+  return c.waiting ? c.rest : c.idle ? "idle" : "working";
+}
 
-// Comparator over precomputed ranks, with _id as the stable tiebreak. Defined
-// once and shared by sortSessions and placeInboxRows so the active-session
-// order lives in exactly one place.
+// Where a row sits INSIDE its group (shared inboxSortTimeOfRow, ct-49550): one
+// event stamp per class plus the creation grace, so a section is ordered by
+// when something happened to each row instead of by id. Cached on the row
+// object like the placement is — the sync layer keeps a row's ref stable
+// unless a field changed — and keyed by the class and the coarse clock the
+// grace reads.
+type SortKeyEntry = { work_state: WorkState; epoch: number; time: InboxSortTime };
+const _sortKeyCache = new WeakMap<object, SortKeyEntry>();
+function sessionSortTime(s: InboxSession, placement: { work_state: WorkState } | null, now: number): InboxSortTime {
+  const work_state = sortWorkStateOf(s, placement);
+  // The clock at minute grain: the only time term is the 5-minute creation
+  // grace, so a per-render `now` would cost a recompute for nothing.
+  const epoch = inboxEpoch(now);
+  const hit = _sortKeyCache.get(s);
+  if (hit && hit.work_state === work_state && hit.epoch === epoch) return hit.time;
+  const time = inboxSortTimeOfRow(s, work_state, epoch);
+  _sortKeyCache.set(s, { work_state, epoch, time });
+  return time;
+}
+const sessionSortKey = (s: InboxSession, placement: { work_state: WorkState } | null, now: number) =>
+  sessionSortTime(s, placement, now).key;
+
+// A session paired with its precomputed sort rank and its in-bucket sort key.
+type RankedSession = { s: InboxSession; rank: ReturnType<typeof sessionSortRank>; key: number };
+
+// Comparator over precomputed ranks: the categorical tuple first, then the
+// class's own time key (ascending — the shared inboxSortTime orients it), then
+// _id as the stable tiebreak. Defined once and shared by sortSessions and
+// placeInboxRows so the active-session order lives in exactly one place.
 function compareRankedSessions(a: RankedSession, b: RankedSession): number {
   for (let i = 0; i < a.rank.length; i++) {
     if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
   }
+  if (a.key !== b.key) return a.key - b.key;
   return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
 }
 
@@ -2047,9 +2089,10 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   // of times per sort — which dominated the constant re-categorize cost the
   // inbox pays on every liveness sync (see Chrome trace: sortSessions hot on
   // every status flip). Output order is byte-identical to the old comparator.
+  const now = Date.now();
   const keyed: RankedSession[] = Object.values(sessions)
     .filter((s) => !isSessionHidden(s))
-    .map((s) => ({ s, rank: sessionSortRank(s) }));
+    .map((s) => ({ s, rank: sessionSortRank(s), key: sessionSortKey(s, null, now) }));
   keyed.sort(compareRankedSessions);
   return keyed.map((x) => x.s);
 }
@@ -2345,6 +2388,11 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 // carried inside the rank tuple, changes a bucket): a heartbeat or a streamed
 // token must not move anything, so it must not change this signature.
 //
+// The in-bucket sort key (sessionSortKey) stays OUT for the same reason: it is
+// time-driven, its idle class reads updated_at, and every stamp that moves it
+// without changing the rank tuple (a second turn ending under an unchanged
+// status) rides the coarse ticker the placement call already takes (ct-49550).
+//
 // Subscribe a list/sidebar to sessionsWakeSig(s.sessions) instead of the raw
 // `s.sessions` map and it wakes only on real structural change, not on every
 // liveness tick. The TIME-driven reclassification placeInboxRows performs
@@ -2570,6 +2618,9 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     awaiting_input: live.awaiting_input,
     last_turn_allows_park: s.last_turn_allows_park ?? null,
     agent_status_updated_at: s.agent_status_updated_at ?? null,
+    // The stamps the sort time inside a bucket reads (ct-49550).
+    turn_completed_at: s.turn_completed_at ?? null,
+    started_at: s.started_at ?? null,
     last_heartbeat: s.last_heartbeat ?? null,
     last_role_is_user: s.last_role_is_user ?? null,
     auq_open: s.auq_open ?? null,
@@ -2925,7 +2976,7 @@ export function placeInboxRows(
       : isSessionHidden(s);
     const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : hidden;
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
-    if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
+    if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p), key: sessionSortKey(s, p, now) });
     if (p ? p.bucket === "dismissed" : !subagent && isSessionDismissed(s)) dismissed.push(s);
     if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
     if (p?.bucket === "snoozed") snoozed.push(s);
@@ -3077,16 +3128,27 @@ export function placeInboxRows(
     return a._id < b._id ? -1 : a._id > b._id ? 1 : 0;
   });
   newSessions.sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  // Queues you clear top-down: oldest first; defer sinks below the group.
+  // The section sorts read the same per-class stamps the rank did (one cached
+  // computation per row): `at` for the queues that keep their own direction,
+  // `key` where the freshest belongs on top.
+  const sortTimeOf = (s: InboxSession) => sessionSortTime(s, placements.get(s._id) ?? null, now).at;
+  const sortKeyOf = (s: InboxSession) => sessionSortTime(s, placements.get(s._id) ?? null, now).key;
+  // Queues you clear top-down: oldest first; defer sinks below the group. The
+  // time is the CLASS's own event stamp (shared inboxSortTime, ct-49550) — when
+  // a needs-input row started needing you, when a done row's turn ended — not
+  // conversations.updated_at, which a late-syncing message or a heartbeat moves
+  // long after the row settled.
   const settledQueueOrder = (a: InboxSession, b: InboxSession) => {
     if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
-    return (a.updated_at || 0) - (b.updated_at || 0);
+    return sortTimeOf(a) - sortTimeOf(b);
   };
   questions.sort(settledQueueOrder);
   needsInput.sort(settledQueueOrder);
   done.sort(settledQueueOrder);
-  // Most recently parked first.
-  dormant.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  // The wake it parks on, soonest first: the row nearest to waking is the one
+  // the reader wants on top. A park whose wake nothing can name files after
+  // every named one, freshest park first (shared inboxSortTime).
+  dormant.sort((a, b) => sortKeyOf(a) - sortKeyOf(b));
 
   // Stable refs: reuse the previous slot's objects wherever the new content
   // is identical (the "nothing moved" half of the memoization contract).
