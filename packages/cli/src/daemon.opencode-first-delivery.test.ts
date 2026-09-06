@@ -41,6 +41,33 @@ const PI_IDLE_PANE = [
   "  $0.000 (sub) 0.0%/200k (auto)                     (anthropic) claude-opus-4-6 • medium",
 ].join("\n");
 
+// Real opencode 1.18.29 pane with a turn in flight, captured from the D0
+// matrix's own mid-turn cell (messaging.e2e.test.ts, the pane held open against
+// the stalling fake endpoint). Two things to see: the readiness marker `ctrl+p
+// commands` is STILL on screen mid-turn, and the only turn-state evidence is the
+// footer — an eight-cell dot run (⬝ U+2B1D alternating with ■ U+25A0) and the
+// words `esc interrupt`. Whitespace trimmed at line ends for readability;
+// nothing else touched.
+const OPENCODE_RUNNING_PANE = [
+  "  ┃                                                                                                                                                             New session - 2026-09-07T16:41:09.",
+  "  ┃  capture-74fce33f: hold this turn open                                                                                                                      694Z",
+  "  ┃",
+  "                                                                                                                                                                Context",
+  "     ▣  Build · matrix-model                                                                                                                                    0 tokens",
+  "                                                                                                                                                                0% used",
+  "                                                                                                                                                                $0.00 spent",
+  "",
+  "                                                                                                                                                                LSP",
+  "                                                                                                                                                                LSPs are disabled",
+  "",
+  "  ┃                                                                                                                                                             /private/var/folders/sr/",
+  "  ┃                                                                                                                                                             t5ddhmcd6q1gnzhx2xxydv680000gn/T/",
+  "  ┃                                                                                                                                                             codecasttestscratch/matrix-opencode-",
+  "  ┃  Build · matrix-model matrix                                                                                                                                kjf39n",
+  "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+  "   ■■■■⬝⬝⬝⬝  esc interrupt                                                                                                       tab agents  ctrl+p commands    • OpenCode 1.18.29",
+].join("\n");
+
 const OC_READY = AGENT_CLIENTS.opencode.promptReadyPattern;
 const PI_READY = AGENT_CLIENTS.pi.promptReadyPattern;
 
@@ -71,6 +98,25 @@ describe("classifyGlyphlessClientPaneState (ct-39174 first-message readiness)", 
   // "unknown" and threw AGENT_UNKNOWN_STATE, so the first message never injected.
   test("the ❯/›-glyph classifier misreads the opencode pane as unknown (the bug this fixes)", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(OPENCODE_IDLE_PANE))).toBe("unknown");
+  });
+
+  // ct-49608: a running opencode turn read "idle", so injectViaTmuxInner took the
+  // idle branch and sent the interrupting Escape into it.
+  test("a real 1.18.29 turn reads busy even though its ready marker is still on screen", () => {
+    // The pane keeps `ctrl+p commands` up for the whole turn, so the ready
+    // pattern matches a BUSY pane — busy-first ordering is the only thing
+    // between the running turn and the Escape.
+    expect(OC_READY.test(OPENCODE_RUNNING_PANE)).toBe(true);
+    expect(classifyGlyphlessClientPaneState(OPENCODE_RUNNING_PANE, OC_READY)).toBe("busy");
+  });
+
+  // The dot run animates: each of the eight cells alternates between ⬝ (U+2B1D)
+  // and ■ (U+25A0), so a frame can land with no ⬝ at all. The two footer words
+  // are what is always there.
+  test("the footer words carry it when the animated dot run has no ⬝ in this frame", () => {
+    const allFilled = OPENCODE_RUNNING_PANE.replace(/⬝/g, "■");
+    expect(allFilled).not.toContain("⬝");
+    expect(classifyGlyphlessClientPaneState(allFilled, OC_READY)).toBe("busy");
   });
 });
 
