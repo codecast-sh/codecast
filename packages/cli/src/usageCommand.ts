@@ -19,13 +19,17 @@ import {
   worstUsagePercent,
   type CcUsage,
 } from "@codecast/shared/contracts";
-import { activeAccountSummary, listProfiles, readUsageCache } from "./ccAccounts.js";
+import { activeAccountSummary, listProfiles, readUsageCache, type UsageRetryState } from "./ccAccounts.js";
 
 export interface UsageProfile {
   name: string;
   email?: string;
   active?: boolean;
   usage?: CcUsage;
+  // The daemon's poll is backing off for this account (429 or repeated
+  // failures). Local to this machine — the heartbeat can't carry it, see the
+  // UsageCache comment in ccAccounts.ts.
+  retry?: UsageRetryState;
 }
 
 export interface RecoveryFlags {
@@ -42,7 +46,14 @@ export interface UsageWindowLine {
 
 export interface UsageReport {
   now: number;
-  active: { name: string; email?: string; fetched_at?: number; windows: UsageWindowLine[] } | null;
+  active: {
+    name: string;
+    email?: string;
+    fetched_at?: number;
+    windows: UsageWindowLine[];
+    // Why the reading may be older than the poll interval suggests.
+    retry?: UsageRetryState;
+  } | null;
   worst: number | null;
   exhausted: boolean;
   // Earliest future reset among the active account's windows at or above the
@@ -60,17 +71,24 @@ export const USAGE_WARN_PERCENT = 85;
  * active login need not be a saved profile — it still has a cache entry, so
  * it is synthesized as one when no profile covers it. */
 export function loadLocalUsageProfiles(): UsageProfile[] {
-  const cache = readUsageCache().accounts;
+  const { accounts: cache, retries } = readUsageCache();
   const profiles: UsageProfile[] = listProfiles().map((p) => ({
     name: p.name,
     email: p.email,
     active: p.active,
     usage: cache[p.uuid || p.email || ""],
+    retry: retries?.[p.uuid || p.email || ""],
   }));
   const active = activeAccountSummary();
   const activeKey = active?.uuid || active?.email;
   if (active && activeKey && !profiles.some((p) => p.active)) {
-    profiles.push({ name: "(active login)", email: active.email, active: true, usage: cache[activeKey] });
+    profiles.push({
+      name: "(active login)",
+      email: active.email,
+      active: true,
+      usage: cache[activeKey],
+      retry: retries?.[activeKey],
+    });
   }
   return profiles;
 }
@@ -98,7 +116,9 @@ export function buildUsageReport(
   const next_reset = pressured.length ? Math.min(...pressured.map((w) => w.resets_at as number)) : undefined;
   return {
     now,
-    active: active ? { name: active.name, email: active.email, fetched_at: usage?.fetched_at, windows } : null,
+    active: active
+      ? { name: active.name, email: active.email, fetched_at: usage?.fetched_at, windows, retry: active.retry }
+      : null,
     worst,
     exhausted: isUsageExhausted(usage, now),
     next_reset,
@@ -153,6 +173,16 @@ export function renderUsageReport(r: UsageReport, c: Record<string, string>): st
     lines.push(`  ${pad(w.label, 14)} ${pct} ${reset}`.trimEnd());
   }
   if (r.active.windows.length === 0) lines.push(`  ${c.dim}no limit windows reported${c.reset}`);
+  const retry = r.active.retry;
+  if (retry) {
+    // The numbers above are the last GOOD reading. Without this line a stuck
+    // poll is invisible: the meters simply stop moving and read as headroom.
+    const when =
+      retry.retry_at > r.now ? `next try in ${formatCountdown(retry.retry_at - r.now)}` : "next try on the coming poll";
+    const streak = retry.failures > 1 ? ` ${c.dim}(${retry.failures} in a row)${c.reset}` : "";
+    const named = retry.retry_after ? " as the endpoint asked" : "";
+    lines.push(`  ${c.yellow}usage poll failing${c.reset}${streak} ${c.dim}${retry.reason} · ${when}${named}${c.reset}`);
+  }
   lines.push(describeRecovery(r));
   return lines.join("\n");
 }

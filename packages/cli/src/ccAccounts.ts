@@ -1345,11 +1345,44 @@ export function parseUsageResponse(data: any, now: number): CcUsageSnapshot {
   return snap;
 }
 
+/** A usage-endpoint refusal, carrying what the response said about coming back.
+ *  `retryAfterMs` is set only when the server named a wait (429 Retry-After);
+ *  otherwise the caller picks its own delay. */
+export class CcUsageHttpError extends CcAccountError {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`usage endpoint ${status}`);
+  }
+}
+
+// Why: a corrupt or hostile Retry-After would otherwise hold every automated
+// usage poll off for years, freezing the meters auto-switch reads (ct-49527).
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/** Retry-After (RFC 9110) in ms: either delta-seconds or an HTTP date. Capped
+ *  at 24h. Undefined when the header is absent, unparseable, or already past —
+ *  the caller then falls back to its own backoff. Exported for tests. */
+export function parseRetryAfter(header: string | null | undefined, now: number): number | undefined {
+  const raw = header?.trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) {
+    return seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS) : undefined;
+  }
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return undefined;
+  const delta = at - now;
+  return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : undefined;
+}
+
 export async function fetchUsageSnapshot(
   accessToken: string,
   opts: { fetchImpl?: typeof fetch; now?: number } = {},
 ): Promise<CcUsageSnapshot> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const now = opts.now ?? Date.now();
   const resp = await fetchImpl(CC_USAGE_URL, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -1360,25 +1393,80 @@ export async function fetchUsageSnapshot(
     signal: AbortSignal.timeout(15_000),
   });
   if (!resp.ok) {
-    throw new CcAccountError(`usage endpoint ${resp.status}`);
+    throw new CcUsageHttpError(
+      resp.status,
+      resp.status === 429 ? parseRetryAfter(resp.headers.get("retry-after"), now) : undefined,
+    );
   }
-  return parseUsageResponse(await resp.json(), opts.now ?? Date.now());
+  return parseUsageResponse(await resp.json(), now);
+}
+
+// ---------------------------------------------------------------------------
+// Per-account poll backoff
+// ---------------------------------------------------------------------------
+// The poll used to treat every refusal alike: throw, and try again on the next
+// five-minute tick. That reads a 429's Retry-After as noise and hammers a rate-
+// limited endpoint, and it makes a hard outage cost one request per account per
+// five minutes for as long as it lasts. So a failure now records when this
+// account may be asked again: what the server named on a 429, else 30s doubling
+// per consecutive failure. The stale snapshot always survives — a meter that
+// flapped to empty on a transient 500 would read as headroom.
+
+const USAGE_BACKOFF_BASE_MS = 30_000;
+const USAGE_BACKOFF_MAX_MS = 15 * 60 * 1000;
+
+export interface UsageRetryState {
+  retry_at: number; // no automated probe of this account before then
+  failures: number; // consecutive failures; drives the delay
+  reason: string; // the last failure, as `cast usage` prints it
+  failed_at: number;
+  status?: number; // HTTP status, when the endpoint answered at all
+  retry_after?: boolean; // the server named the wait; not our own guess
+}
+
+/** The backoff state after one failed probe. Exported for tests. */
+export function nextUsageRetry(
+  prev: UsageRetryState | undefined,
+  err: unknown,
+  now: number,
+): UsageRetryState {
+  const failures = (prev?.failures ?? 0) + 1;
+  const http = err instanceof CcUsageHttpError ? err : undefined;
+  const named = http?.retryAfterMs;
+  const backoff = Math.min(USAGE_BACKOFF_BASE_MS * 2 ** (failures - 1), USAGE_BACKOFF_MAX_MS);
+  return {
+    retry_at: now + (named ?? backoff),
+    failures,
+    reason: err instanceof Error ? err.message : String(err),
+    failed_at: now,
+    ...(http && { status: http.status }),
+    ...(named !== undefined && { retry_after: true }),
+  };
 }
 
 function usageCachePath(): string {
   return path.join(codecastDir(), "cc-usage.json");
 }
 
-interface UsageCache {
+export interface UsageCache {
   // Keyed by account uuid (email fallback) — the same identity the profile
   // index carries, so a profile covering the active login shares one entry.
   accounts: Record<string, CcUsageSnapshot>;
+  // Backoff after a failed probe, same keys. Kept beside the snapshots rather
+  // than inside one because Convex's ccUsageValidator is a closed object: a
+  // snapshot carrying an extra field would have every heartbeat's whole account
+  // inventory rejected. So this stays local — `cast usage` reads it, the
+  // heartbeat never sends it.
+  retries?: Record<string, UsageRetryState>;
 }
 
 export function readUsageCache(): UsageCache {
   try {
     const parsed = JSON.parse(fs.readFileSync(usageCachePath(), "utf-8"));
-    if (parsed && typeof parsed.accounts === "object") return parsed;
+    if (parsed && typeof parsed.accounts === "object") {
+      if (!parsed.retries || typeof parsed.retries !== "object") delete parsed.retries;
+      return parsed;
+    }
   } catch {}
   return { accounts: {} };
 }
@@ -1511,6 +1599,9 @@ export async function refreshUsageSnapshots(
   }
   if (activeKey) knownKeys.add(activeKey);
 
+  const retries: Record<string, UsageRetryState> = { ...cache.retries };
+  let retriesChanged = false;
+
   for (const [key, job] of jobs) {
     const prev = cache.accounts[key];
     // A just-activated account is probed regardless of the throttle: its last
@@ -1518,6 +1609,16 @@ export async function refreshUsageSnapshots(
     // account until one fetched after the activation lands.
     const predatesActivation =
       key === activeKey && activeSince !== undefined && !!prev && prev.fetched_at < activeSince;
+    const backoff = retries[key];
+    // Why: the endpoint named a wait (429 Retry-After) or we picked one after a
+    // refusal; asking again before it earns another refusal and, on a 429, can
+    // extend the block. This outranks the activation probe — no local urgency
+    // makes a rate-limited endpoint answer. A human pressing refresh comes in
+    // with minInterval 0 and is let through; only the poll is held (ct-49527).
+    if (minInterval > 0 && backoff && now < backoff.retry_at) {
+      summary.skipped.push(job.label);
+      continue;
+    }
     if (prev && !predatesActivation && now - prev.fetched_at < minInterval) {
       summary.skipped.push(job.label);
       continue;
@@ -1525,16 +1626,27 @@ export async function refreshUsageSnapshots(
     try {
       cache.accounts[key] = await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now });
       summary.probed.push(job.label);
+      if (retries[key]) {
+        delete retries[key]; // recovered — the next failure starts at 30s again
+        retriesChanged = true;
+      }
     } catch (err) {
+      retries[key] = nextUsageRetry(retries[key], err, now);
+      retriesChanged = true;
       summary.failed.push({ name: job.label, reason: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  if (summary.probed.length > 0) {
+  if (summary.probed.length > 0 || retriesChanged) {
     // Drop entries for deleted profiles so the cache can't grow unbounded.
     for (const key of Object.keys(cache.accounts)) {
       if (!knownKeys.has(key)) delete cache.accounts[key];
     }
+    for (const key of Object.keys(retries)) {
+      if (!knownKeys.has(key)) delete retries[key];
+    }
+    if (Object.keys(retries).length > 0) cache.retries = retries;
+    else delete cache.retries;
     atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
   }
   return summary;

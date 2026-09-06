@@ -86,3 +86,35 @@ describe("buildUsageReport", () => {
     expect(USAGE_WARN_PERCENT).toBe(85);
   });
 });
+
+describe("a stuck usage poll (ct-49527)", () => {
+  const active = {
+    name: "work",
+    email: "w@x.com",
+    active: true,
+    usage: { fetched_at: now - 40 * 60_000, session: { percent: 42, resets_at: now + H } },
+  };
+
+  test("says why the reading is old and when the poll tries again", () => {
+    const retry = {
+      retry_at: now + 9 * 60_000,
+      failures: 4,
+      reason: "usage endpoint 429",
+      failed_at: now - 60_000,
+      status: 429,
+      retry_after: true,
+    };
+    const r = buildUsageReport([{ ...active, retry }], now, { auto_switch: true, auto_continue: true });
+    const out = renderUsageReport(r, c);
+    expect(out).toContain("usage poll failing");
+    expect(out).toContain("usage endpoint 429");
+    expect(out).toContain("(4 in a row)");
+    expect(out).toContain("next try in 9m");
+    expect(out).toContain("as the endpoint asked");
+  });
+
+  test("stays silent while the poll is healthy", () => {
+    const r = buildUsageReport([active], now, { auto_switch: true, auto_continue: true });
+    expect(renderUsageReport(r, c)).not.toContain("usage poll failing");
+  });
+});
