@@ -442,6 +442,17 @@ export function structuredPayloadKeysFromRaw(raw: string): string {
 // command for a Bash, the query for a search). Genuinely pure: depends only on
 // `tc.input`, never on a tool RESULT or any renderer state. Returns "" when the
 // args don't parse or the tool has no meaningful summary.
+// The full command line a shell tool was asked to run, or "" when the input
+// did not parse. Clients name the field differently (`command` vs `cmd`).
+export function shellCommand(tc: ToolCallLike): string {
+  try {
+    const parsed = JSON.parse(tc.input);
+    return String(parsed?.command || parsed?.cmd || "");
+  } catch {
+    return "";
+  }
+}
+
 export function toolSummary(tc: ToolCallLike): string {
   let parsedInput: Record<string, any> = {};
   try {
@@ -464,7 +475,7 @@ export function toolSummary(tc: ToolCallLike): string {
 
   // Shell/Terminal tools
   if (isShellTool(tc.name)) {
-    const cmd = String(parsedInput.command || parsedInput.cmd || "");
+    const cmd = shellCommand(tc);
     return cmd ? truncateStr(cmd, 100) : "";
   }
 
@@ -706,10 +717,49 @@ export function describeToolGroup(rawName: string, count: number): string {
   return count === 1 ? phrase.one : phrase.many(count);
 }
 
+// Words that set a command up rather than being it: a `cd` into the repo, an
+// env assignment, a privilege or timing wrapper. The receipt names what follows.
+const SHELL_PREFIX_WORDS = new Set(["cd", "sudo", "time", "env", "nohup", "exec", "command", "builtin"]);
+
+// Programs whose first bare word is the real name of what ran ("git status",
+// "cast browser", "bun test"). Everything else is named by its program alone,
+// since the next word is usually a flag or a file ("ps", "cat", "grep").
+const SHELL_SUBCOMMAND_PROGRAMS = new Set([
+  "git", "gh", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "cast", "cargo", "go", "pip", "pip3",
+  "brew", "docker", "kubectl", "tmux", "xcrun", "gcloud", "aws", "railway", "convex", "vercel",
+  "terraform", "eas", "expo", "whisk", "make", "rails", "poetry", "uv", "deno", "flutter", "swift",
+]);
+
+// The program a shell command ran, with its subcommand when it has one:
+// `cd repo && npx tsc --noEmit` names "npx tsc", `ps -Ao pid | grep x` names
+// "ps". A collapsed receipt stands beside the prose it belongs to, so it has
+// room for a name, not an argv. A command that is only setup ("cd repo")
+// keeps its first word rather than vanishing.
+export function shellLead(command: string): string {
+  let fallback = "";
+  for (const segment of command.split(/\r?\n|&&|\|\||[;|]/)) {
+    const words = segment.replace(/^[\s({!]+/, "").replace(/[)}\s]+$/, "").split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+    if (!fallback) fallback = words[0];
+    while (words.length > 0 && (SHELL_PREFIX_WORDS.has(words[0]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]))) {
+      // `cd` takes its target with it; a wrapper or an assignment is one word.
+      words.splice(0, words[0] === "cd" ? 2 : 1);
+    }
+    if (words.length === 0) continue;
+    const program = words[0].startsWith("/") ? words[0].slice(words[0].lastIndexOf("/") + 1) : words[0];
+    const sub = words[1];
+    if (SHELL_SUBCOMMAND_PROGRAMS.has(program) && sub && /^[a-z][a-z0-9-]*$/i.test(sub)) return `${program} ${sub}`;
+    return program;
+  }
+  return fallback;
+}
+
 // One or two tools fit in the same space a count would take, so say WHAT they
 // did instead: "ran npm test", or "read lib/foo.ts · ran npm test". A pair of
 // the same kind states the verb once ("ran git status · npm test"), and a lone
-// tool spends the whole line on its subject. Returns "" when a subject is
+// tool spends the whole line on its subject. A shell command is named by its
+// program (shellLead), never its argv, so the receipt reads as a footnote to
+// the prose instead of competing with it. Returns "" when a subject is
 // missing (unparsed args, a tool with nothing to show), which leaves the caller
 // on the counting phrase.
 export function describeSmallToolGroup(actions: readonly ToolCallLike[]): string {
@@ -721,7 +771,8 @@ export function describeSmallToolGroup(actions: readonly ToolCallLike[]): string
     const { verb, path } = toolPhrase(action.name);
     // Multi-line commands (heredocs, chained shell) collapse to one line first,
     // so the clip spends its budget on words rather than indentation.
-    const subject = clipSubject(toolSummary(action).replace(/\s+/g, " ").trim(), budget, path === true);
+    const raw = isShellTool(action.name) ? shellLead(shellCommand(action)) : toolSummary(action);
+    const subject = clipSubject(raw.replace(/\s+/g, " ").trim(), budget, path === true);
     if (!verb || !subject) return "";
     parts.push(verb === previousVerb ? subject : `${verb} ${subject}`);
     previousVerb = verb;

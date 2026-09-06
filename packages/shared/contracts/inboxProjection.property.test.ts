@@ -175,6 +175,7 @@ describe("truncation flags", () => {
         case "pinned": return { ...base, inbox_pinned_at: EPOCH - GEN_HOUR - i * 1000 };
         case "dismissed": return { ...base, inbox_dismissed_at: EPOCH - GEN_HOUR - i * 1000 };
         case "stashed": return { ...base, inbox_stashed_at: EPOCH - GEN_HOUR - i * 1000 };
+        case "snoozed": return { ...base, inbox_snoozed_until: EPOCH + GEN_HOUR - i * 1000 };
         case "owned": return { ...base, updated_at: EPOCH - GEN_MIN - i * 1000, owned_by_me: true };
       }
     });
@@ -202,7 +203,7 @@ describe("truncation flags", () => {
       const rows = shuffled(rowsIn(w, cap + 25), 7);
       const { members } = selectWorkingSet(rows, EPOCH);
       const key = (r: ProjectableInboxRow) =>
-        w === "recent" ? r.updated_at : w === "pinned" ? r.inbox_pinned_at! : w === "dismissed" ? r.inbox_dismissed_at! : r.inbox_stashed_at!;
+        w === "recent" ? r.updated_at : w === "pinned" ? r.inbox_pinned_at! : w === "dismissed" ? r.inbox_dismissed_at! : w === "snoozed" ? r.inbox_snoozed_until! : r.inbox_stashed_at!;
       const kept = [...members.values()].map((m) => key(m.row)).sort((a, b) => b - a);
       const all = rows.map(key).sort((a, b) => b - a);
       expect(kept).toEqual(all.slice(0, cap));

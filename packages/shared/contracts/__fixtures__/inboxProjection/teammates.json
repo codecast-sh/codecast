@@ -155,6 +155,7 @@
         "dormant": 0,
         "working": 5,
         "idle": 0,
+        "snoozed": 0,
         "stashed": 1,
         "dismissed": 2,
         "hidden": 0
@@ -168,6 +169,7 @@
         "dormant": 0,
         "working": 0,
         "idle": 0,
+        "snoozed": 0,
         "stashed": 0,
         "dismissed": 0,
         "hidden": 0

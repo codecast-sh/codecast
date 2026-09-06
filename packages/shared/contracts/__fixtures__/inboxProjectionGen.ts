@@ -59,6 +59,19 @@ export function genUpdatedAt(rng: Rng, epoch: number): number {
 
 const AGENT_STATUSES = [undefined, undefined, "working", "idle", "idle", "done", "dormant", "waiting", "stopped", "permission_blocked"] as const;
 
+// The user's rest verdict (inbox_rest / inbox_rest_at), drawn from a stream
+// seeded by the row's own tag rather than the world rng: added after the
+// seeded worlds were pinned by the convergence suite, so the existing worlds
+// keep every row they had and only gain this field. Current 70% of the time.
+function genUserRest(tag: string, updated_at: number, row: Record<string, unknown>): void {
+  let h = 2166136261;
+  for (const ch of tag) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  const rng = makeRng(h >>> 0);
+  if (!chance(rng, 0.06)) return;
+  row.inbox_rest = pick(rng, ["needs_input", "done", "dormant"]);
+  row.inbox_rest_at = updated_at + (chance(rng, 0.7) ? 1 : -1);
+}
+
 // ── Shared-module rows (facts already on the row) ───────────────────────────
 
 // `leadTag` names an earlier row this one may join as an agent-team teammate
@@ -92,6 +105,7 @@ export function genProjectableRow(rng: Rng, epoch: number, tag: string, leadTag?
   if (chance(rng, 0.06)) row.thread_state_status = pick(rng, ["done", "blocked", "working"]);
   if (chance(rng, 0.05)) row.pending_api_error = true;
   if (chance(rng, 0.05)) row.inbox_dormant_at = updated_at + (chance(rng, 0.7) ? 1 : -1);
+  genUserRest(tag, updated_at, row);
   if (chance(rng, 0.3)) row.last_turn_allows_park = chance(rng, 0.6);
   return row;
 }
@@ -144,6 +158,7 @@ export function genWorld(seed: number, count: number, epoch: number, me: string)
     if (chance(rng, 0.06)) conv.thread_state_status = pick(rng, ["done", "blocked"]);
     if (chance(rng, 0.05)) conv.pending_api_error = true;
     if (chance(rng, 0.05)) conv.inbox_dormant_at = updated_at + 1;
+    genUserRest(tag, updated_at, conv);
     if (chance(rng, 0.05)) conv.has_pending_messages = true;
     world.conversations.push(conv);
     if (chance(rng, 0.45)) {

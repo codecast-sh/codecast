@@ -1,3 +1,4 @@
+import { DORMANT_CLAIM_TTL_MS } from "./agentStatus";
 import { deriveLiveAt, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
 import { describe, expect, test } from "bun:test";
 import {
@@ -166,7 +167,7 @@ describe("placeInboxRow — bucket precedence", () => {
   test("every bucket the function can produce is in the alphabet", () => {
     const seen = new Set<string>();
     for (const i of [
-      input({ dismissed: true }), input({ stashed: true }), input({ isAnchor: true }), input({ asking: true }),
+      input({ dismissed: true }), input({ stashed: true }), input({ snoozed: true }), input({ isAnchor: true }), input({ asking: true }),
       input({ pinned: true }), input({ messageCount: 0 }), input({}), input({ agentStatus: "done" }),
       input({ agentStatus: "dormant" }), input({ agentStatus: "working", isIdle: false }), input({ killed: true }),
     ]) seen.add(placeInboxRow(i).bucket);
@@ -185,6 +186,20 @@ describe("isHardBlocked", () => {
     expect(isHardBlocked(input({ agentStatus: "stopped" }))).toBe(true);
     expect(isHardBlocked(input({ agentStatus: "stopped", messageCount: 0 }))).toBe(false);
     expect(isHardBlocked(input({ isUnresponsive: true }))).toBe(true);
+  });
+
+  test("a declared block counts while the turn is settled or the daemon is gone", () => {
+    expect(isHardBlocked(input({ declaredStatus: "blocked" }))).toBe(true);
+    expect(isHardBlocked(input({ declaredStatus: "blocked", agentStatus: "idle" }))).toBe(true);
+    expect(isHardBlocked(input({ declaredStatus: "blocked", messageCount: 0 }))).toBe(false);
+    // A live status that is not idle is fresher than the pin.
+    expect(isHardBlocked(input({ declaredStatus: "blocked", agentStatus: "working" }))).toBe(false);
+    expect(isHardBlocked(input({ declaredStatus: "blocked", agentStatus: "dormant" }))).toBe(false);
+    expect(isHardBlocked(input({ declaredStatus: "done" }))).toBe(false);
+  });
+
+  test("an anchor that declares itself blocked surfaces out of hidden", () => {
+    expect(placeInboxRow(input({ isAnchor: true, declaredStatus: "blocked" })).bucket).toBe("needs_input");
   });
 });
 
@@ -229,6 +244,9 @@ describe("classifyWorkState armedLoopHome", () => {
   test("hard blocks outrank the loop park", () => {
     expect(classifyWorkState(input({ armedLoopHome: true, awaitingInput: true }))).toBe("needs_input");
     expect(classifyWorkState(input({ armedLoopHome: true, agentStatus: "permission_blocked" }))).toBe("needs_input");
+    // The agent's declared block is one of them.
+    expect(classifyWorkState(input({ armedLoopHome: true, agentStatus: "idle", declaredStatus: "blocked" }))).toBe("needs_input");
+    expect(classifyWorkState(input({ armedTriggerHome: true, declaredStatus: "blocked" }))).toBe("needs_input");
   });
 
   test("an active turn outranks the loop park", () => {
@@ -455,6 +473,40 @@ describe("placeProjectableRow — the park facts", () => {
     expect(placeProjectableRow(loop(EPOCH + HOUR), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(loop(EPOCH - HOUR), false, EPOCH).bucket).toBe("needs_input");
   });
+
+  // A declared dormant is a promise about a wake. The status only re-derives
+  // when the wake lands (that IS the next turn), so a promise nothing can
+  // verify had no expiry at all: a session parked on "another session's reply"
+  // that never came sat in Dormant for days. Past DORMANT_CLAIM_TTL_MS of quiet
+  // a bare claim files needs_input; a verifiable wake keeps the park.
+  test("a bare dormant claim expires into needs_input; a verifiable wake keeps it parked", () => {
+    const claim = (quietFor: number, extra: Record<string, any> = {}) =>
+      row("d", { is_idle: true, agent_status: "dormant", updated_at: EPOCH - quietFor, ...extra });
+    expect(placeProjectableRow(claim(HOUR), false, EPOCH).bucket).toBe("dormant");
+    expect(placeProjectableRow(claim(DORMANT_CLAIM_TTL_MS), false, EPOCH).bucket).toBe("needs_input");
+    expect(placeProjectableRow(claim(11 * HOUR), false, EPOCH).bucket).toBe("needs_input");
+    // Any wake the system can stand behind outlives the claim window.
+    expect(placeProjectableRow(claim(11 * HOUR, { armed_trigger_kind: "once" }), false, EPOCH).bucket).toBe("dormant");
+    expect(placeProjectableRow(claim(11 * HOUR, { armed_trigger_kind: "standing" }), false, EPOCH).bucket).toBe("dormant");
+    expect(placeProjectableRow(claim(11 * HOUR, { loop_state: { status: "armed", wakeup_at: EPOCH + HOUR, event_at: EPOCH - HOUR } }), false, EPOCH).bucket).toBe("dormant");
+    expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("dormant");
+    // Stale open-task report: the daemon has not vouched recently, so it is no wake.
+    expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 11 * HOUR }), false, EPOCH).bucket).toBe("needs_input");
+    // A verified `waiting` (open work) has its own trust rule and is untouched.
+    expect(placeProjectableRow(claim(11 * HOUR, { agent_status: "waiting", open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("dormant");
+  });
+
+  test("the claim expiry is a shared deadline: the time flip lands on needs_input at updated_at + TTL", () => {
+    const placedAt = EPOCH - HOUR;
+    const r = row("d", { is_idle: true, agent_status: "dormant", updated_at: placedAt });
+    const placeAt = (t: number) => placeProjectableRow(r, false, t);
+    expect(placeAt(placedAt + 60_000).bucket).toBe("dormant");
+    const stale = computeBucketStale(
+      { deadlines: rowLiveDeadlines(r as any), placeAt, current: "dormant" },
+      placedAt + 60_000,
+    );
+    expect(stale).toEqual({ bucket_stale_at: placedAt + DORMANT_CLAIM_TTL_MS, stale_bucket: "needs_input" });
+  });
 });
 
 describe("field ownership constants", () => {
@@ -463,7 +515,7 @@ describe("field ownership constants", () => {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
-      "agent_status_updated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
+      "agent_status_updated_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -471,9 +523,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 4", () => {
-    expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(4);
+  test("the caps are the single source and the version is 6", () => {
+    expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
+    expect(INBOX_PROJECTION_VERSION).toBe(6);
   });
 });
 

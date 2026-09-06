@@ -50,6 +50,11 @@ export interface VaultFileEntry {
   size: number;
   /** Directory flag: directories appear so empty folders render. */
   dir?: boolean;
+  /** Present only when the scan was asked for ignored paths (`?ignored=1`):
+   *  this entry is one the repo rules hide by default — build output, a
+   *  .gitignore name, a tool dot-directory. Read-only, never prefetched or
+   *  indexed, and not watched: it is a snapshot until the next scan. */
+  ignored?: boolean;
 }
 
 export interface VaultScanResponse {
@@ -57,6 +62,10 @@ export interface VaultScanResponse {
   files: VaultFileEntry[];
   /** Epoch ms when the scan ran (client uses as its sync watermark). */
   scanned_at: number;
+  /** True when the root is a git checkout, so the repo ignore rules applied
+   *  (vaultScope.isRepoVaultRoot). A plain notes folder hides nothing beyond the
+   *  always-ignored set, so a "show ignored" control has nothing to offer it. */
+  repo: boolean;
 }
 
 /** GET /vault/file response is the raw body with headers:
