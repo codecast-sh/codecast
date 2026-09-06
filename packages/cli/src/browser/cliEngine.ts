@@ -56,7 +56,7 @@ import { ownerKey } from "./owner.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { uploadOne } from "../imageCommand.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
 
 const OK = `${fmt.success(icons.check)}`;

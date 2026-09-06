@@ -13,7 +13,8 @@ import {
   type ConvexAgentType,
 } from "@codecast/shared/contracts";
 import { c, fmt } from "./colors.js";
-import { apiPost, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
+import { commandGroup } from "./commandGroups.js";
 
 /** Accept "claude", "claude_code", "Codex", etc. */
 export function parseSwitchAgentArg(raw: string): ConvexAgentType {
@@ -34,16 +35,7 @@ export function parseSwitchAgentArg(raw: string): ConvexAgentType {
 export function registerSwitchCommand(program: Command, deps: PublishDeps): void {
   program
     .command("switch")
-    .description(
-      "Change the agent or model on this session without forking\n\n" +
-      "Stays on the same conversation. A divider lands in the thread\n" +
-      "(\"now using Codex\"). A provider switch replaces this process.\n\n" +
-      "Examples:\n" +
-      "  cast switch --agent codex\n" +
-      "  cast switch --model opus\n" +
-      "  cast switch --agent claude --model sonnet\n" +
-      "  cast switch --agent codex --fork     # optional: a new session instead",
-    )
+    .description(commandGroup("switch").description)
     .option("--agent <name>", "Agent to continue as (claude, codex, cursor, gemini, opencode, pi, grok)")
     .option("--model <name>", "Model option key (opus, sonnet, gpt-5.4, …)")
     .option("--effort <level>", "Effort level (low, medium, high, max, …)")
