@@ -127,6 +127,18 @@ const ROWS: Row[] = [
   { file: "recursiveWatcher.ts", name: "probe", kind: "method", minLines: 5, mustContain: "stat" },
   { file: "recursiveWatcher.ts", name: "runRescan", kind: "method", minLines: 5, mustContain: "walkTree" },
   { file: "recursiveWatcher.ts", name: "walkTree", kind: "method", minLines: 5, mustContain: "walkFiles" },
+  // Warm worktree pool. The maintainer ticks on the daemon's loop and its tick
+  // builds whole checkouts, so every git call and every tree read below it is
+  // async; a sync `git worktree add` here freezes the daemon for its duration.
+  { file: "daemon.ts", name: "registerWorktreePool", kind: "function", minLines: 10, mustContain: "startPoolMaintainer" },
+  { file: "daemon.ts", name: "startWorktreePools", kind: "function", minLines: 3, mustContain: "registerWorktreePool" },
+  { file: "workspace/pool/maintainer.ts", name: "startPoolMaintainer", kind: "function", minLines: 40, mustContain: "maintainPool" },
+  { file: "workspace/pool/manager.ts", name: "maintainPool", kind: "function", minLines: 40, mustContain: "warmSlot" },
+  { file: "workspace/pool/manager.ts", name: "warmSlot", kind: "function", minLines: 10, mustContain: "acquireWorkspace" },
+  { file: "workspace/pool/manager.ts", name: "teardownSlotArtifacts", kind: "function", minLines: 8, mustContain: "worktree" },
+  { file: "workspace/pool/manager.ts", name: "currentRepoFingerprint", kind: "function", minLines: 15, mustContain: "rev-parse" },
+  { file: "workspace/pool/manager.ts", name: "renameWorkspace", kind: "function", minLines: 20, mustContain: "worktree" },
+  { file: "workspace/lifecycle.ts", name: "createGitWorktree", kind: "function", minLines: 10, mustContain: "worktree" },
 ];
 
 // Sync spawns and sync filesystem reads. readFileSync is forbidden outright:

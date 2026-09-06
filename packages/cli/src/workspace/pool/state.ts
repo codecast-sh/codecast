@@ -58,6 +58,15 @@ export interface PoolState {
   updatedAt: string;
 }
 
+/**
+ * A ready slot older than this is recycled even when HEAD and the lockfile
+ * still match. The fingerprint only sees committed state: a slot built before
+ * an uncommitted edit, a `bun install` outside the lockfile or a dependency
+ * fetched from the network is indistinguishable from a fresh one, and handing
+ * out a stale tree is worse than a cold create (ct-49540).
+ */
+export const POOL_MAX_AGE_MS = 30 * 60_000;
+
 /** Conventional location of the pool state file. */
 export const POOL_DIR = ".codecast/workspaces/_pool";
 
@@ -147,6 +156,67 @@ export function markStaleByHead(
   }
   state.updatedAt = new Date().toISOString();
   return state;
+}
+
+/**
+ * Mark ready slots older than `maxAgeMs` stale. Warming slots are left alone:
+ * their age is the build still running, not the age of a finished tree.
+ */
+export function markStaleByAge(
+  state: PoolState,
+  maxAgeMs = POOL_MAX_AGE_MS,
+  now = Date.now(),
+): PoolState {
+  for (const slot of state.slots) {
+    if (slot.state !== "ready") continue;
+    if (now - Date.parse(slot.updatedAt) < maxAgeMs) continue;
+    slot.state = "stale";
+    slot.updatedAt = new Date(now).toISOString();
+    state.updatedAt = slot.updatedAt;
+  }
+  return state;
+}
+
+/**
+ * Grow or shrink the pool to `size` slots WITHOUT dropping slots that hold a
+ * worktree. Re-initializing on a size change (what maintainPool used to do
+ * when the target moved) forgot the workspace names, leaking every worktree
+ * the pool had built; the demand-driven target changes on every burst, so that
+ * leak would now fire routinely (ct-49540).
+ *
+ * Surplus slots that still hold a tree go to `stale` so the next maintenance
+ * pass tears them down and this function can drop them once they are empty.
+ */
+export function resizePool(state: PoolState, size: number): PoolState {
+  state.size = size;
+  const now = new Date().toISOString();
+
+  for (let next = 0; state.slots.length < size; next++) {
+    const slotId = `pool-${next}`;
+    if (state.slots.some((s) => s.slotId === slotId)) continue;
+    state.slots.push({ slotId, state: "empty", updatedAt: now });
+  }
+
+  // Newest slots go first, so a burst that grows then shrinks keeps the slots
+  // most likely to still be warm.
+  for (let i = state.slots.length - 1; i >= 0 && countKeepable(state) > size; i--) {
+    const slot = state.slots[i]!;
+    if (slot.state === "empty") {
+      state.slots.splice(i, 1);
+      continue;
+    }
+    if (slot.state === "ready" || slot.state === "warming") {
+      slot.state = "stale";
+      slot.updatedAt = now;
+    }
+  }
+  state.updatedAt = now;
+  return state;
+}
+
+/** Slots that count against the target: everything not already on its way out. */
+function countKeepable(state: PoolState): number {
+  return state.slots.filter((s) => s.state !== "stale").length;
 }
 
 /** Initialize an empty pool with `size` slots. */
