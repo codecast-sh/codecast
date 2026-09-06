@@ -229,7 +229,10 @@ export interface CdpTarget {
  * `/json/*` routes (Chrome's has none — its safety comes from refusing to be
  * driven at all on the default profile).
  */
-export type CdpEndpoint = number | { port: number; token?: string };
+/** A port, or a bridge host with its token — and, for a socket opened on a
+ *  session's behalf, the session the host should scope that socket to
+ *  (bridge/host.ts Client.session). */
+export type CdpEndpoint = number | { port: number; token?: string; session?: string };
 
 const portOf = (ep: CdpEndpoint): number => (typeof ep === "number" ? ep : ep.port);
 
@@ -253,7 +256,15 @@ export async function browserSocketUrl(ep: CdpEndpoint, timeoutMs = 10_000): Pro
   if (!res.ok) throw new Error(`CDP endpoint on port ${portOf(ep)} returned ${res.status}`);
   const body = (await res.json()) as { webSocketDebuggerUrl?: string };
   if (!body.webSocketDebuggerUrl) throw new Error(`CDP endpoint on port ${portOf(ep)} exposed no browser socket`);
-  return body.webSocketDebuggerUrl;
+  return withSession(body.webSocketDebuggerUrl, ep);
+}
+
+/** The bridge scopes a socket to the session named on its URL; Chrome ignores the query. */
+export function withSession(wsUrl: string, ep: CdpEndpoint): string {
+  if (typeof ep === "number" || !ep.session) return wsUrl;
+  const u = new URL(wsUrl);
+  u.searchParams.set("session", ep.session);
+  return u.toString();
 }
 
 /**

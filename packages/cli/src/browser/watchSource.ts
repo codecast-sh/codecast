@@ -14,10 +14,12 @@
  *     timer. The fallback for engines with no CDP passthrough.
  */
 
-import { CdpConnection, listTargets, type CdpTarget } from "./cdp.js";
-import { sessionTargetId } from "./engineReap.js";
-import { engineSessionKey } from "./engine.js";
+import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "./cdp.js";
+import { sessionTarget, type SessionTarget } from "./engineReap.js";
+import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
 import { readState, type InstanceState } from "./instance.js";
+import { readBridgeState } from "./bridge/host.js";
+import { isPidAlive } from "../workspace/chrome.js";
 
 export interface WatchTab {
   /** Opaque, engine-scoped. Only ever compared for equality, never parsed. */
@@ -109,19 +111,66 @@ export interface WatchEngine {
 const TAB_POLL_MS = 2500;
 
 export interface CdpEngineDeps {
+  /** The managed clone (instance.json), or null when it is not running. */
   getState(): InstanceState | null;
-  connect(port: number): Promise<CdpConnection>;
-  listTargets(port: number): Promise<CdpTarget[]>;
+  /**
+   * The extension bridge into the human's own Chrome, or null when it was
+   * never paired or its host is down. Same shape the clone's port takes in
+   * `connect`/`listTargets`, token included (cdp.ts CdpEndpoint).
+   */
+  getBridge?(): CdpEndpoint | null;
+  /** Where the engine keeps its per-session `.target` files (engine.ts). */
+  stateDir?: string;
+  connect(endpoint: CdpEndpoint): Promise<CdpConnection>;
+  listTargets(endpoint: CdpEndpoint): Promise<CdpTarget[]>;
+}
+
+/** The bridge host's CDP face, when a host is up. Cheap: a file and a pid. */
+export function liveBridgeEndpoint(): CdpEndpoint | null {
+  const state = readBridgeState();
+  if (!state?.token || !state.hostPid || !isPidAlive(state.hostPid)) return null;
+  return { port: state.port, token: state.token };
 }
 
 const realCdpDeps: CdpEngineDeps = {
   getState: readState,
+  getBridge: liveBridgeEndpoint,
   // A loaded Chrome answers /json/version slowly (8s measured with three
   // busy renderers); the default 10s dial then fails the watch on the very
   // machines where someone most wants to see what the agent is doing.
-  connect: (port) => CdpConnection.fromPort(port, 30_000),
+  connect: (endpoint) => CdpConnection.fromPort(endpoint, 30_000),
   listTargets,
 };
+
+/**
+ * The tab the engine pinned for a session, and the browser it is in. A
+ * session has two engine keys — the clone's and the `-real` one for the
+ * human's Chrome (engine.ts realSessionKey) — and a session that switched
+ * targets may hold a `.target` file under each, so the one pinned most
+ * recently is the one the session is driving now. Only tabs whose browser
+ * is reachable count: a stale real-Chrome pin with no bridge host up must
+ * not shadow a live clone tab, or the reverse.
+ */
+export function resolveEngineTab(
+  candidates: string[],
+  browsers: { clone: CdpEndpoint | null; bridge: CdpEndpoint | null },
+  stateDir: string,
+): { tabId: string; endpoint: CdpEndpoint } | null {
+  let best: { target: SessionTarget; endpoint: CdpEndpoint } | null = null;
+  for (const cand of candidates) {
+    const key = engineSessionKey(cand);
+    const pins: Array<[CdpEndpoint | null, string]> = [
+      [browsers.clone, key],
+      [browsers.bridge, realSessionKey(key)],
+    ];
+    for (const [endpoint, engineKey] of pins) {
+      if (!endpoint) continue;
+      const target = sessionTarget(engineKey, stateDir);
+      if (target && (!best || target.mtimeMs > best.target.mtimeMs)) best = { target, endpoint };
+    }
+  }
+  return best ? { tabId: best.target.targetId, endpoint: best.endpoint } : null;
+}
 
 /**
  * Which tab this session is driving. The session's own claim wins; when NO
@@ -147,8 +196,8 @@ export function resolveOwnedTab(
 }
 
 export interface ScreencastDeps {
-  connect(port: number): Promise<CdpConnection>;
-  listTargets(port: number): Promise<CdpTarget[]>;
+  connect(endpoint: CdpEndpoint): Promise<CdpConnection>;
+  listTargets(endpoint: CdpEndpoint): Promise<CdpTarget[]>;
 }
 
 /**
@@ -157,13 +206,13 @@ export interface ScreencastDeps {
  * the extension bridge — they differ only in which port and which tab.
  */
 export async function openCdpScreencast(
-  port: number,
+  endpoint: CdpEndpoint,
   tabId: string,
   opts: FrameSourceOptions,
   handlers: FrameSourceHandlers,
   deps: ScreencastDeps,
 ): Promise<FrameSource> {
-  const conn = await deps.connect(port);
+  const conn = await deps.connect(endpoint);
   if (opts.signal.aborted) {
     conn.close();
     throw new Error("aborted");
@@ -314,7 +363,7 @@ export async function openCdpScreencast(
   const pollTimer = setInterval(() => {
     if (stopped) return;
     deps
-      .listTargets(port)
+      .listTargets(endpoint)
       .then((targets) => {
         if (stopped) return;
         const t = targets.find((x) => x.targetId === tabId);
@@ -354,7 +403,7 @@ export async function openCdpScreencast(
       sessionId,
       10_000,
     );
-    const t = (await deps.listTargets(port)).find((x) => x.targetId === tabId);
+    const t = (await deps.listTargets(endpoint)).find((x) => x.targetId === tabId);
     tab.title = t?.title ?? "";
     tab.url = t?.url ?? "";
   } catch (err) {
@@ -365,24 +414,38 @@ export async function openCdpScreencast(
 }
 
 export function cdpWatchEngine(deps: CdpEngineDeps = realCdpDeps): WatchEngine {
+  // Which browser each resolved tab lives in. resolveTab runs before every
+  // open (on connect and on every poll), so the entry is always fresh when
+  // open reads it; the id stays opaque to the server.
+  const endpointByTab = new Map<string, CdpEndpoint>();
   return {
     resolveTab: (candidates) => {
       const state = deps.getState();
-      const own = resolveOwnedTab(state, candidates);
-      if (!("error" in own) || own.error === "no-browser") return own;
+      const clone: CdpEndpoint | null = state ? state.port : null;
+      const bridge = deps.getBridge?.() ?? null;
       // The engine path keeps no tabsBySession: each session's daemon records
-      // the tab it is pinned to in its own target file, keyed by the same
-      // owner key flattened into an engine session name (engine.ts).
-      for (const cand of candidates) {
-        const tabId = sessionTargetId(engineSessionKey(cand));
-        if (tabId) return { tabId };
+      // the tab it is pinned to in its own target file, keyed by the owner
+      // key flattened into an engine session name (engine.ts) — in the clone
+      // or, with the `-real` suffix, in the human's Chrome via the bridge.
+      const pinned = resolveEngineTab(candidates, { clone, bridge }, deps.stateDir ?? engineStateDir());
+      if (pinned) {
+        endpointByTab.set(pinned.tabId, pinned.endpoint);
+        return { tabId: pinned.tabId };
       }
+      const own = resolveOwnedTab(state, candidates);
+      if (!("error" in own)) {
+        endpointByTab.set(own.tabId, clone!);
+        return own;
+      }
+      // With no clone but a live bridge, "no browser" would be a lie: the
+      // human's Chrome is right there, this session just has no tab in it.
+      if (own.error === "no-browser" && bridge) return { error: "no-tab" };
       return own;
     },
     open(tabId, opts, handlers) {
-      const state = deps.getState();
-      if (!state) return Promise.reject(new Error("no-browser"));
-      return openCdpScreencast(state.port, tabId, opts, handlers, deps);
+      const endpoint = endpointByTab.get(tabId) ?? deps.getState()?.port ?? null;
+      if (endpoint === null) return Promise.reject(new Error("no-browser"));
+      return openCdpScreencast(endpoint, tabId, opts, handlers, deps);
     },
   };
 }

@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BRIDGE_EXTENSION_ID, bridgePairingUrl, extensionIdOfKey } from "./protocol.js";
+import { BRIDGE_EXTENSION_ID, bridgePairingPage, bridgePairingUrl, extensionIdOfKey } from "./protocol.js";
 
 const manifestPath = path.join(import.meta.dir, "../../../../browser-extension/manifest.json");
 
@@ -44,5 +44,20 @@ describe("bridgePairingUrl", () => {
     const frag = new URLSearchParams(url.hash.slice(1));
     expect(frag.get("token")).toBe("ab".repeat(32));
     expect(frag.get("port")).toBe("41729");
+  });
+});
+
+describe("bridgePairingPage", () => {
+  test("forwards to exactly the pairing URL, fragment included", () => {
+    const url = bridgePairingUrl({ token: "cd".repeat(32), port: 41729 });
+    const page = bridgePairingPage(url);
+    expect(page).toContain(`location.replace(${JSON.stringify(url)})`);
+    expect(page.match(/<script>/g)).toHaveLength(1);
+  });
+
+  test("a URL cannot break out of the script", () => {
+    const page = bridgePairingPage("chrome-extension://x/options.html#t=</script><script>alert(1)");
+    expect(page.match(/<script>/g)).toHaveLength(1);
+    expect(page).not.toContain("</script><script>alert");
   });
 });

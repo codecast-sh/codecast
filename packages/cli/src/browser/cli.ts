@@ -211,7 +211,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // session and falls back to the last tab touched.
   const me = (): string | null => ownerKey(deps.detectCurrentSessionId);
   /**
-   * Dispatch on target: the managed clone (default) or the user's real Chrome
+   * Dispatch on target: the managed clone or the user's real Chrome
    * through the extension bridge. Both hand the callback a PageSession whose
    * conn speaks CdpClient, which is why one command body serves both.
    */
@@ -411,7 +411,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       } else {
         // Never navigate a tab this session does not own: the rest are the
         // human's. A fresh tab costs nothing and is visibly the agent's.
-        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url })).targetId;
+        // In the background: the human is working in this Chrome.
+        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url, background: true })).targetId;
         created = true;
       }
       const page = await attachToTarget(conn, targetId);

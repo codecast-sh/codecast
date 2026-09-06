@@ -78,8 +78,9 @@ describe("pinnedTabBrowser", () => {
   test("a -real session pins into a proven bridge host, in the background, under the session's tab group", async () => {
     const host = await testBridgeHost();
     try {
+      // The endpoint names the session so the host files the tab under it.
       expect(await pinnedTabBrowser("env-1234567890-real")).toEqual({
-        endpoint: { port: host.port, token: host.token },
+        endpoint: { port: host.port, token: host.token, session: "env-1234567890-real" },
         create: { url: "about:blank", background: true, castGroup: CAST_TAB_GROUP },
       });
     } finally {

@@ -11,19 +11,23 @@
  * 404 to fall back on.
  *
  * Engine-agnostic: browsers are found through FocusEngine, and the route asks
- * each in turn. Two ship by default — the built-in driver's state file (cheap,
- * authoritative for that browser) and a scan of every Chrome on the machine
- * that is listening for CDP (localChrome.ts), which is what finds a tab in an
- * agent-browser session without the daemon knowing anything about the engine.
+ * each in turn. Three ship by default — the built-in driver's state file
+ * (cheap, authoritative for that browser), a scan of every Chrome on the
+ * machine that is listening for CDP (localChrome.ts), which is what finds a
+ * tab in an agent-browser session without the daemon knowing anything about
+ * the engine, and the extension bridge into the human's own Chrome
+ * (bridge/host.ts), whose tabs no port scan can see: that Chrome runs no
+ * debugging port, so the bridge host's CDP face is the only way to reach it.
  * An engine adapter with a cheaper or truer view can register its own.
  */
 
 import type http from "http";
-import { CdpConnection, listTargets } from "./cdp.js";
+import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "./cdp.js";
 import { raiseAppByPid, raiseAppByPidSync } from "./raiseApp.js";
 import { noteDeliberateRaise } from "./focusSentinel.js";
 import { readState } from "./instance.js";
-import { listChromeDebugPorts } from "./localChrome.js";
+import { listChromeDebugPorts, realChromePid } from "./localChrome.js";
+import { bridgeEndpoint, proveBridgeHost, readBridgeState, type BridgeState, type ProvenBridge } from "./bridge/host.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import {
   authorizeLocalRequest,
@@ -46,8 +50,16 @@ export interface FocusTab {
   url: string;
   /** CDP port of the browser holding it. */
   port: number;
+  /** The token the extension bridge host wants on its CDP face; Chrome's own
+   *  endpoint has none. */
+  token?: string;
   /** The browser process to bring frontmost after activation, if known. */
   pid?: number;
+}
+
+/** The CDP endpoint a tab is reached through (cdp.ts CdpEndpoint). */
+export function focusEndpoint(tab: Pick<FocusTab, "port" | "token">): CdpEndpoint {
+  return tab.token ? { port: tab.port, token: tab.token } : tab.port;
 }
 
 /**
@@ -79,7 +91,7 @@ export function matchTab<T extends { id: string }>(tabs: T[], query: string): T 
 
 /** Browser-level CDP call that selects a tab in its window. */
 async function activateViaCdp(tab: FocusTab): Promise<void> {
-  const conn = await CdpConnection.fromPort(tab.port, 5_000);
+  const conn = await CdpConnection.fromPort(focusEndpoint(tab), 5_000);
   try {
     await conn.send("Target.activateTarget", { targetId: tab.id }, undefined, 5_000);
   } finally {
@@ -121,6 +133,51 @@ export const localChromeFocusEngine: FocusEngine = {
   activate: activateViaCdp,
 };
 
+/** What the bridge engine reads and calls; injectable for tests. */
+export interface BridgeFocusDeps {
+  readState(): BridgeState | null;
+  isPidAlive(pid: number): boolean;
+  prove(state: BridgeState): Promise<ProvenBridge>;
+  listTargets(ep: CdpEndpoint): Promise<CdpTarget[]>;
+  /** The human's Chrome process, to bring frontmost; null when unknown. */
+  realChromePid(): number | null;
+}
+
+/**
+ * The human's own Chrome, through the extension bridge host. The host's
+ * `/json/list` is the tab list and `Target.activateTarget` on its socket
+ * becomes `chrome.tabs.update({active}) + chrome.windows.update({focused})`
+ * in the extension, so activation here selects the tab AND raises its window
+ * inside Chrome; the pid raise then brings Chrome itself over other apps.
+ * The token rides on the endpoint, never on a command line.
+ *
+ * Silence rules match the other engines: no config or a dead host is "no
+ * browser here" ([]), a host that answers but cannot prove itself or refuses
+ * the list throws (browser-unreachable).
+ */
+export function makeBridgeFocusEngine(deps: BridgeFocusDeps): FocusEngine {
+  return {
+    name: "bridge",
+    async listTabs() {
+      const state = deps.readState();
+      if (!state?.token) return [];
+      if (!state.hostPid || !deps.isPidAlive(state.hostPid)) return [];
+      const ep = bridgeEndpoint(await deps.prove(state));
+      const pid = deps.realChromePid() ?? undefined;
+      return (await deps.listTargets(ep)).map((t) => ({ id: t.targetId, url: t.url, port: state.port, token: state.token, pid }));
+    },
+    activate: activateViaCdp,
+  };
+}
+
+export const bridgeFocusEngine: FocusEngine = makeBridgeFocusEngine({
+  readState: readBridgeState,
+  isPidAlive,
+  prove: (state) => proveBridgeHost(state),
+  listTargets,
+  realChromePid: () => realChromePid(),
+});
+
 // Activating a tab selects it inside its window, but a window behind other
 // apps stays behind them — so the route also brings that Chrome frontmost,
 // via the pid-addressed Apple event in raiseApp.ts. Best effort; tab
@@ -131,7 +188,7 @@ export const localChromeFocusEngine: FocusEngine = {
  * here (e.g. at daemon boot); the defaults stay last so they remain the
  * fallback.
  */
-const engines: FocusEngine[] = [builtinFocusEngine, localChromeFocusEngine];
+const engines: FocusEngine[] = [builtinFocusEngine, localChromeFocusEngine, bridgeFocusEngine];
 
 export function registerFocusEngine(engine: FocusEngine): () => void {
   engines.unshift(engine);
@@ -231,7 +288,9 @@ export function handleBrowserFocusHttp(
   if (req.method === "POST" && url.startsWith("/browser/focus")) {
     const tab = new URL(url, "http://localhost").searchParams.get("tab") ?? "";
     void focusBrowserTab(tab, { ...deps, log: deps.log ?? opts.log }).then((result) => {
-      if (result.ok) opts.log(`[BROWSER] Focused tab ${tab}`);
+      // Both outcomes are logged: a click that did nothing is otherwise
+      // invisible from every side (the web stays quiet by design).
+      opts.log(result.ok ? `[BROWSER] Focused tab ${tab}` : `[BROWSER] Could not focus tab ${tab}: ${result.reason}`);
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));
     });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { focusBrowserTab, matchTab, type FocusEngine, type FocusTab } from "./focusHttp.js";
+import { focusBrowserTab, focusEndpoint, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
 import { shortTabId, tabLine } from "./tabId.js";
 
 const T1 = "2BE86883491FD502B8D986C164423006";
@@ -147,5 +147,53 @@ describe("focusBrowserTab", () => {
     });
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([`local-chrome:activate:${T1}@9333`]);
+  });
+});
+
+describe("focusEndpoint", () => {
+  test("a Chrome tab is reached by bare port, a bridge tab by port plus token", () => {
+    expect(focusEndpoint({ port: 9333 })).toBe(9333);
+    expect(focusEndpoint({ port: 41729, token: "t0k" })).toEqual({ port: 41729, token: "t0k" });
+  });
+});
+
+describe("bridge focus engine", () => {
+  const state = { port: 41729, token: "t0k", hostPid: 4242 };
+  const target = { targetId: "1E21CD78", type: "page", title: "Console", url: "https://console.example/creds" };
+  const deps = (over: Partial<BridgeFocusDeps> = {}): BridgeFocusDeps => ({
+    readState: () => state,
+    isPidAlive: () => true,
+    prove: async (s) => ({ ...s, proven: true as const }),
+    listTargets: async () => [target],
+    realChromePid: () => 90468,
+    ...over,
+  });
+
+  test("lists the human's Chrome tabs with the bridge token and the real Chrome pid", async () => {
+    const tabs = await makeBridgeFocusEngine(deps()).listTabs();
+    expect(tabs).toEqual([{ id: "1E21CD78", url: "https://console.example/creds", port: 41729, token: "t0k", pid: 90468 }]);
+  });
+
+  test("never paired, or the host is dead: no browser here, not an error", async () => {
+    expect(await makeBridgeFocusEngine(deps({ readState: () => null })).listTabs()).toEqual([]);
+    expect(await makeBridgeFocusEngine(deps({ isPidAlive: () => false })).listTabs()).toEqual([]);
+  });
+
+  test("a host that cannot prove itself is unreachable, not silent", async () => {
+    const engine = makeBridgeFocusEngine(deps({ prove: async () => { throw new Error("impostor"); } }));
+    await expect(engine.listTabs()).rejects.toThrow("impostor");
+  });
+
+  test("a real-Chrome tab the clone lacks is found through the bridge and Chrome is raised", async () => {
+    const calls: string[] = [];
+    const bridge = makeBridgeFocusEngine(deps());
+    const result = await focusBrowserTab("1e21cd78", {
+      engines: [engine("builtin", { calls }), { ...bridge, activate: async (t) => { calls.push(`bridge:activate:${t.id}@${JSON.stringify(focusEndpoint(t))}`); } }],
+      raiseApp: (pid) => {
+        calls.push(`raise:${pid}`);
+      },
+    });
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual(['bridge:activate:1E21CD78@{"port":41729,"token":"t0k"}', "raise:90468"]);
   });
 });
