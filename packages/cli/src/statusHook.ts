@@ -126,9 +126,22 @@ if [ -f "$HOOK_PORT_FILE" ]; then
   fi
 fi
 
-# Fallback: write status file (existing path, daemon polls via chokidar)
+# Fallback: the daemon is unreachable (restart, port change, the boot window
+# before its handler registers), so the event waits on disk. The spool is the
+# append-only history the daemon replays in order and truncates; the single
+# status file below is what a daemon from before the spool reads. That file
+# alone used to be the whole fallback, so a burst during a restart collapsed
+# to its last entry and lost any Stop behind it.
+#
+# "working" is PreToolUse, one per tool call: it stays out of the spool so a
+# long turn cannot fill it with progress, and the file below still carries it.
+# Both writes are shell builtins — one extra process per event is what blew
+# Claude Code's hook timeout before (see the note at the top of this file).
 STATUS_DIR="$HOME/.codecast/agent-status"
 mkdir -p "$STATUS_DIR"
+if [ "$STATUS" != "working" ]; then
+  printf '%s\\n' "$FALLBACK" >> "$STATUS_DIR/$SESSION_ID.jsonl"
+fi
 printf '%s\\n' "$FALLBACK" > "$STATUS_DIR/$SESSION_ID.json"
 exit 0
 `;

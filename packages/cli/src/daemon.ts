@@ -178,6 +178,15 @@ import {
   type LoopbackIdentity,
 } from "./loopbackIdentity.js";
 import { HookStatusGate } from "./hookStatusGate.js";
+import {
+  SPOOL_EXT,
+  appendStatusSpool,
+  drainAllStatusSpools,
+  drainStatusSpool,
+  isSafeStatusSessionId,
+  isSpoolableStatus,
+  sweepStatusSpools,
+} from "./statusSpool.js";
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
@@ -1205,15 +1214,10 @@ const closedSyntheticPrompts = new Map<string, number>();
 // lifecycle is otherwise only reachable through live tmux scrapes.
 export const syntheticPromptTestSeam = { lastEmittedSyntheticPrompt, closedSyntheticPrompts };
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
-// A session id that is safe to use as a file name inside AGENT_STATUS_DIR. The
-// leading character cannot be a dot, so no id can name a parent directory, and
-// no separator is allowed, so no id can leave the directory at all. Real ids
-// are uuids, so this rejects nothing a real caller sends. Exported for the
-// test that covers the traversal shapes.
-const SAFE_STATUS_SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
-export function isSafeStatusSessionId(sessionId: string): boolean {
-  return SAFE_STATUS_SESSION_ID.test(sessionId);
-}
+// Re-exported for the test that covers the traversal shapes. Both the legacy
+// status file and the spool build a path out of the id, so the check lives
+// with them in statusSpool.ts.
+export { isSafeStatusSessionId };
 // Every write of an agent status file rides this one chain. Two statuses for a
 // session (a PostToolUse then a Stop) must land in that order, and two writes
 // racing on one path can also leave bytes the boot replay cannot parse. One
@@ -1231,13 +1235,25 @@ function queueAgentStatusWrite(sessionId: string, payload: () => HookStatusData)
     .catch(() => {});
 }
 
+// The deferral's second write: one line on the session's spool, so a burst
+// during the boot window replays in the order it happened instead of
+// collapsing to whatever the file above holds last (ct-49531). Rides the same
+// chain as that write, which is what keeps the two files agreeing on order.
+function queueAgentStatusSpoolAppend(sessionId: string, data: HookStatusData): void {
+  if (!isSpoolableStatus(data.status)) return;
+  agentStatusWriteChain = agentStatusWriteChain
+    .then(() => appendStatusSpool(AGENT_STATUS_DIR, sessionId, data))
+    .catch(() => {});
+}
+
 // The loopback server listens seconds into boot; the /hook/status handler
 // exists only once the caches it closes over do. Until then a status lands in
 // the agent-status directory, where the chokidar watcher and the boot replay
-// below already drain it. See hookStatusGate.ts for why the daemon writes that
-// file rather than letting the hook script fall back on its own.
+// below already drain it. See hookStatusGate.ts for why the daemon writes those
+// files rather than letting the hook script fall back on its own.
 const hookStatusGate = new HookStatusGate<HookStatusData>((sessionId, data) => {
   queueAgentStatusWrite(sessionId, () => data);
+  queueAgentStatusSpoolAppend(sessionId, data);
 });
 export function setHookStatusSink(sink: (sessionId: string, data: HookStatusData) => void): void {
   hookStatusGate.setSink(sink);
@@ -22905,9 +22921,18 @@ async function main(): Promise<void> {
   // Process existing status files on startup (chokidar ignoreInitial skips
   // them). A live hook that lands first wins: the ts guards in
   // handleStatusData drop a replayed record older than it.
-  void readAgentStatusFiles().then((files) => {
+  //
+  // The spools go first and in write order: they hold every status the hook
+  // could not push while the handler was down, and the single-status files
+  // below hold only the newest of them, so replaying history then latest is
+  // the order the ts guards expect (ct-49531).
+  void drainAllStatusSpools<HookStatusData>(AGENT_STATUS_DIR).then((spooled) => {
+    for (const { sessionId, records } of spooled) {
+      for (const data of records) handleStatusData(sessionId, data);
+    }
+  }).catch(() => {}).then(() => readAgentStatusFiles().then((files) => {
     for (const f of files) if (f.data) handleStatusData(f.sessionId, f.data, f.filePath);
-  }).catch(() => {});
+  })).catch(() => {});
 
   // The hook record carries transcript_path only on a permission prompt, so
   // the transcript comes from the session file index (a map lookup; staleOk
@@ -23190,10 +23215,24 @@ async function main(): Promise<void> {
   }
 
   function handleStatusFile(filePath: string) {
+    if (filePath.endsWith(SPOOL_EXT)) { handleStatusSpoolFile(filePath); return; }
     const sessionId = path.basename(filePath, ".json");
     if (!sessionId || !filePath.endsWith(".json")) return;
     fs.promises.readFile(filePath, "utf-8")
       .then((raw) => handleStatusData(sessionId, JSON.parse(raw) as HookStatusData, filePath))
+      .catch(() => {});
+  }
+
+  // One session's spool. Every line is a status the hook could not push, so
+  // they replay in the order they were written and the drain truncates behind
+  // itself — the same funnel as a pushed status, only late (ct-49531). No
+  // filePath is passed: it names the spool, not the session's status file,
+  // and handleStatusData would unlink it on a settle.
+  function handleStatusSpoolFile(filePath: string) {
+    const sessionId = path.basename(filePath, SPOOL_EXT);
+    if (!sessionId) return;
+    drainStatusSpool<HookStatusData>(filePath)
+      .then((records) => { for (const data of records) handleStatusData(sessionId, data); })
       .catch(() => {});
   }
 
@@ -23262,6 +23301,10 @@ async function main(): Promise<void> {
   // Clean up stale agent-status files every 30 minutes
   const statusCleanupInterval = setInterval(() => {
     (async () => {
+      // The spool's own retention: a 7 day TTL and the 5 MB cap. The cap is
+      // enforced here because the hook has no builtin that reads a file size
+      // and must not spawn a process per event (ct-49531).
+      await sweepStatusSpools(AGENT_STATUS_DIR).catch(() => {});
       const cutoff = Date.now() - 60 * 60 * 1000;
       for (const f of await readAgentStatusFiles()) {
         if (f.mtimeMs >= cutoff) continue;

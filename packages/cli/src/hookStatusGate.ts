@@ -5,11 +5,13 @@
 // different times.
 //
 // Before the handler registers, a status is DEFERRED rather than dropped. The
-// deferral is a write of the same JSON to ~/.codecast/agent-status/<session>.json
-// that the hook script would have written on its own, so the two drains that
-// already exist pick it up: the chokidar watcher on that directory and the
-// boot replay that reads it once the handler is up. The ts guards in
-// handleStatusData make a replayed record safe.
+// deferral writes the same JSON the hook script would have written on its own
+// (statusSpool.ts): one line appended to ~/.codecast/agent-status/<session>.jsonl,
+// plus the legacy <session>.json an older daemon still reads. The two drains
+// that already exist pick it up: the chokidar watcher on that directory and
+// the boot replay that runs once the handler is up. The spool is what keeps a
+// burst through the boot window intact — the single file holds only its last
+// entry — and the ts guards in handleStatusData make a replayed record safe.
 //
 // It has to be the daemon writing that file rather than the hook: the
 // installed hook runs `curl -s ... && exit 0` with no --fail, so curl exits 0

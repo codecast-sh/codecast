@@ -85,7 +85,16 @@ const ROWS: Row[] = [
   // Nested in main().
   { file: D, name: "handleStatusData", kind: "function", from: MAIN, minLines: 100, mustContain: "resolveTurnEndStatus" },
   { file: D, name: "handleStatusFile", kind: "function", from: MAIN, minLines: 5, mustContain: "handleStatusData" },
+  { file: D, name: "handleStatusSpoolFile", kind: "function", from: MAIN, minLines: 5, mustContain: "drainStatusSpool" },
   { file: D, name: "queueAgentStatusWrite", kind: "function", minLines: 5, mustContain: "AGENT_STATUS_DIR" },
+  { file: D, name: "queueAgentStatusSpoolAppend", kind: "function", minLines: 5, mustContain: "appendStatusSpool" },
+  // The spool the watcher, the boot replay and the retention interval all run
+  // on: one burst of hook events is one drain, and a sync read of a 5 MB file
+  // on the watcher would stall delivery for the whole fleet.
+  { file: "statusSpool.ts", name: "drainStatusSpool", kind: "function", minLines: 20, mustContain: "lastIndexOf" },
+  { file: "statusSpool.ts", name: "appendStatusSpool", kind: "function", minLines: 4, mustContain: "appendFile" },
+  { file: "statusSpool.ts", name: "listStatusSpools", kind: "function", minLines: 10, mustContain: "SPOOL_EXT" },
+  { file: "statusSpool.ts", name: "sweepStatusSpools", kind: "function", minLines: 20, mustContain: "SPOOL_TTL_MS" },
   { file: D, name: "handlePlanFile", kind: "function", from: MAIN, minLines: 15, mustContain: "syncPlanFromPlanMode" },
   { file: D, name: "findMostRecentSessionId", kind: "function", from: MAIN, minLines: 5, mustContain: "listFilesByMtime" },
   { file: D, name: 'watcher.on("session")', find: 'watcher.on("session"', kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
