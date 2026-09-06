@@ -2,7 +2,7 @@ import { mutation, query, internalAction, internalMutation } from "./functions";
 import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { enqueuePush } from "./pushRouter";
+import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
@@ -316,6 +316,20 @@ export const list = query({
     );
 
     return enriched;
+  },
+});
+
+// What a phone missed while it was away (ct-49553). It sends the {seq, epoch}
+// it last saw; a matching epoch answers with strictly newer entries, and a
+// mismatch answers with the whole retained ring, because a seq from a counter
+// that no longer exists indexes nothing. The reply always names the live epoch
+// so a phone with an empty ring can still adopt it.
+export const getMissedSince = query({
+  args: { seq: v.number(), epoch: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { epoch: null, entries: [] };
+    return await readMissedSince(ctx, userId, args);
   },
 });
 

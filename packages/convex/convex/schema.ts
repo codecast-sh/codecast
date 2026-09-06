@@ -2634,6 +2634,36 @@ export default defineSchema({
     deferred: v.boolean(),
   }).index("by_user", ["user_id"]),
 
+  // The catch-up ring: the last PUSH_RING_CAPACITY routed pushes per user
+  // (ct-49553). A phone that was offline recovered nothing beyond the single
+  // notification it was last tapped from, because the outbox deletes a row the
+  // moment it ships. Every send now also lands here, stamped with the user's
+  // monotonic `seq` and the `epoch` that counter belongs to, and
+  // notifications.getMissedSince replays what the phone missed.
+  //
+  // `workspace` is the ACCESS key, stamped at write time like every other
+  // key-carrying table: always `user:<recipient>`, because a routed push is
+  // private to the person it buzzed even when the notification behind it came
+  // from a team surface. Reads evaluate it through workspaceGrantsAccess.
+  push_ring: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    epoch: v.string(),
+    seq: v.number(),
+    // Stable identity of this routed push, carried in the live push payload as
+    // `notificationKey` too, so the phone can tell a replayed copy from one the
+    // OS already showed.
+    key: v.string(),
+    type: v.optional(v.string()),
+    title: v.string(),
+    subtitle: v.optional(v.string()),
+    body: v.string(),
+    data: v.optional(v.any()),
+    channel_id: v.optional(v.string()),
+    interruption_level: v.optional(v.string()),
+    created_at: v.number(),
+  }).index("by_user_seq", ["user_id", "seq"]),
+
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
   // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so

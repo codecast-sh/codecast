@@ -10,6 +10,12 @@ import {
   PRESENCE_FRESH_MS,
   INPUT_ACTIVE_MS,
   MAX_MACHINE_HOLD_MS,
+  PUSH_RING_CAPACITY,
+  pushRingKey,
+  readMissedSince,
+  recordRoutedPush,
+  selectMissedSince,
+  type MissedPush,
 } from "./pushRouter";
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
@@ -721,5 +727,177 @@ describe("machine hold safety properties", () => {
     await enqueuePush(ctx, { user: MACHINE_USER, type: "session_idle", title: "t", body: "b" });
     expect(ctx.tables.push_outbox[0].due_at).toBe(NOW + HOLD_WHILE_ACTIVE_MS);
     expect(ctx.tables.push_outbox[0].deferred).toBe(true);
+  });
+});
+
+// ── Catch-up ring (ct-49553) ────────────────────────────────────────────────
+// A phone that was offline used to recover nothing beyond the notification it
+// was last tapped from. These pin the two questions the replay turns on: is the
+// caller's seq measured against the counter it came from, and does the ring
+// stay bounded.
+
+const RING_USER = { _id: "users_1", push_token: "ExponentPushToken[x]", notifications_enabled: true };
+
+const ringUser = (ctx: { tables: Record<string, Rec[]> }) => ctx.tables.users[0] as { _id: any };
+
+function ringEntry(seq: number, epoch: string, over: Partial<MissedPush> = {}): MissedPush {
+  return {
+    key: pushRingKey(epoch, seq),
+    seq,
+    epoch,
+    title: `n${seq}`,
+    body: "b",
+    created_at: NOW + seq,
+    ...over,
+  };
+}
+
+describe("selectMissedSince", () => {
+  const ring = [ringEntry(1, "e1"), ringEntry(2, "e1"), ringEntry(3, "e1")];
+
+  test("matching epoch returns only what is newer than the watermark", () => {
+    expect(selectMissedSince(ring, { seq: 1, epoch: "e1" }).map((e) => e.seq)).toEqual([2, 3]);
+  });
+
+  test("the same watermark twice returns the same set — replay cannot re-deliver", () => {
+    const first = selectMissedSince(ring, { seq: 2, epoch: "e1" });
+    const second = selectMissedSince(ring, { seq: 2, epoch: "e1" });
+    expect(first.map((e) => e.key)).toEqual(second.map((e) => e.key));
+    expect(first.map((e) => e.seq)).toEqual([3]);
+  });
+
+  test("a watermark at the head returns nothing", () => {
+    expect(selectMissedSince(ring, { seq: 3, epoch: "e1" })).toEqual([]);
+  });
+
+  test("a watermark past the head is a counter this ring never issued", () => {
+    // The ring IS the counter, so seq 99 under the live epoch means the ring
+    // was emptied under this phone. Cutting against it would kill catch-up
+    // silently until the counter climbed back past 99.
+    expect(selectMissedSince(ring, { seq: 99, epoch: "e1" }).map((e) => e.seq)).toEqual([1, 2, 3]);
+  });
+
+  test("mismatched epoch returns the whole ring — a seq from a dead counter cuts nothing", () => {
+    // seq 99 would swallow every entry if the epoch were ignored.
+    expect(selectMissedSince(ring, { seq: 99, epoch: "e0" }).map((e) => e.seq)).toEqual([1, 2, 3]);
+  });
+
+  test("no epoch (a client that predates the field) keeps the seq-only cut", () => {
+    expect(selectMissedSince(ring, { seq: 1 }).map((e) => e.seq)).toEqual([2, 3]);
+  });
+});
+
+describe("recordRoutedPush", () => {
+  test("stamps a monotonic seq, an epoch and the shared key", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    const first = await recordRoutedPush(ctx as any, ringUser(ctx), { title: "a", body: "1" });
+    const second = await recordRoutedPush(ctx as any, ringUser(ctx), { title: "b", body: "2" });
+    expect(first.seq).toBe(1);
+    expect(second.seq).toBe(2);
+    expect(second.epoch).toBe(first.epoch);
+    expect(second.key).toBe(pushRingKey(second.epoch, 2));
+    // The counter is the ring's head, and the ring is durable — it survives
+    // every restart the in-memory Orca buffer could not.
+    expect(ctx.tables.push_ring.map((r: Rec) => r.seq)).toEqual([1, 2]);
+    // Nothing was written to the user doc; its churn re-renders the phone's
+    // whole tree through the auth provider's getCurrentUser subscription.
+    expect(ctx.tables.users[0].push_seq).toBeUndefined();
+  });
+
+  test("writes the recipient's personal workspace key at write time", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    await recordRoutedPush(ctx as any, ringUser(ctx), { title: "a", body: "1" });
+    expect(ctx.tables.push_ring[0].workspace).toBe("user:users_1");
+  });
+
+  test("the ring is capped, evicting oldest-first while the counter keeps climbing", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    const overflow = PUSH_RING_CAPACITY + 12;
+    for (let i = 0; i < overflow; i++) {
+      await recordRoutedPush(ctx as any, ringUser(ctx), { title: `n${i}`, body: "b" });
+    }
+    const seqs = ctx.tables.push_ring.map((r: Rec) => r.seq).sort((a: number, b: number) => a - b);
+    expect(seqs.length).toBe(PUSH_RING_CAPACITY);
+    expect(seqs[0]).toBe(overflow - PUSH_RING_CAPACITY + 1);
+    expect(seqs[seqs.length - 1]).toBe(overflow);
+  });
+
+  test("a rotated epoch restarts the counter and drops the dead counter's rows", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    await recordRoutedPush(ctx as any, ringUser(ctx), { title: "old", body: "b" });
+    const stale = ctx.tables.system_config[0];
+    stale.value = "rotated-epoch";
+    const after = await recordRoutedPush(ctx as any, ringUser(ctx), { title: "new", body: "b" });
+    expect(after.seq).toBe(1);
+    expect(after.epoch).toBe("rotated-epoch");
+    expect(ctx.tables.push_ring.map((r: Rec) => r.title)).toEqual(["new"]);
+  });
+});
+
+describe("readMissedSince", () => {
+  test("answers a matching epoch with newer entries and names the live epoch", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    const first = await recordRoutedPush(ctx as any, ringUser(ctx), { title: "a", body: "1" });
+    await recordRoutedPush(ctx as any, ringUser(ctx), { title: "b", body: "2" });
+    const missed = await readMissedSince(ctx as any, "users_1", { seq: 1, epoch: first.epoch });
+    expect(missed.epoch).toBe(first.epoch);
+    expect(missed.entries.map((e) => e.title)).toEqual(["b"]);
+  });
+
+  test("answers a stale epoch with everything retained", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    await recordRoutedPush(ctx as any, ringUser(ctx), { title: "a", body: "1" });
+    await recordRoutedPush(ctx as any, ringUser(ctx), { title: "b", body: "2" });
+    const missed = await readMissedSince(ctx as any, "users_1", { seq: 500, epoch: "gone" });
+    expect(missed.entries.map((e) => e.title)).toEqual(["a", "b"]);
+  });
+
+  test("a row stamped to another workspace is not readable, however it was indexed", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    await recordRoutedPush(ctx as any, ringUser(ctx), { title: "mine", body: "1" });
+    ctx.tables.push_ring.push({
+      _id: "push_ring_smuggled",
+      user_id: "users_1",
+      workspace: "user:users_2",
+      epoch: ctx.tables.push_ring[0].epoch,
+      seq: 2,
+      key: "x",
+      title: "not mine",
+      body: "b",
+      created_at: NOW,
+    });
+    const missed = await readMissedSince(ctx as any, "users_1", { seq: 0 });
+    expect(missed.entries.map((e) => e.title)).toEqual(["mine"]);
+  });
+});
+
+describe("performPushFlush ring stamp", () => {
+  test("the sent payload and the retained ring row carry the same key", async () => {
+    freezeTime(NOW);
+    const ctx = createCtx({ users: [RING_USER] });
+    await enqueuePush(ctx, {
+      user: RING_USER,
+      type: "session_idle",
+      title: "Session ready",
+      body: "fix-auth is waiting",
+      data: { conversationId: "c1" },
+    });
+    freezeTime(NOW + AWAY_DEBOUNCE_MS);
+    await performPushFlush(ctx, "users_1");
+    const sent = sentPushes(ctx)[0].args;
+    const row = ctx.tables.push_ring[0];
+    expect(sent.data.notificationKey).toBe(row.key);
+    expect(sent.data.notificationSeq).toBe(row.seq);
+    expect(sent.data.notificationEpoch).toBe(row.epoch);
+    // The routing payload survives the merge — a replayed copy still deep-links.
+    expect(sent.data.conversationId).toBe("c1");
+    expect(row.data.conversationId).toBe("c1");
   });
 });
