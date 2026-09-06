@@ -14,6 +14,8 @@ import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWor
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, applySyncPatch, type PendingEntry } from "./syncProtocol";
+import { syncTransaction } from "./syncTransaction";
+import { installStoreListenerCensus } from "./storeListenerCensus";
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import type { OsPermissionKind } from "../lib/osPermissions";
@@ -4520,6 +4522,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
+  applySyncTableRows: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
   // The detail query answered null for a doc we have cached: it was deleted or
   // access was revoked — drop the cached body so the page shows "not found"
@@ -8555,7 +8558,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.syncMeta[key] = next;
   }),
 
-  syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
+  // Every incoming apply runs inside a sync transaction, so a burst of feeder
+  // pushes costs ONE subscriber visit instead of N (ct-49548). State still
+  // commits synchronously; only the notification is folded. A plain function,
+  // not an action: the fold has to wrap the inner action's own commit.
+  syncTable(field: string, incoming: any, opts?: SyncOpts) {
+    syncTransaction(() => get().applySyncTableRows(field, incoming, opts));
+  },
+
+  applySyncTableRows: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
     const kind = config.kind ?? "collection";
@@ -11165,7 +11176,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
 });
 
 function createInboxStore() {
-  return create<InboxStoreState>(mutativeMiddleware(inboxStoreConfig) as any);
+  const withMiddleware = mutativeMiddleware(inboxStoreConfig);
+  return create<InboxStoreState>(((set: any, get: any, api: any) => {
+    // Runs before create() copies `subscribe` onto the bound hook, so React
+    // subscriptions and imperative ones share one counted, foldable path.
+    installStoreListenerCensus(api);
+    return withMiddleware(set, get, api);
+  }) as any);
 }
 
 // -- Dev hot swap --
