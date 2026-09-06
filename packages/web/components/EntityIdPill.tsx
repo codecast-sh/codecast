@@ -23,9 +23,8 @@ import {
   type EntityType,
 } from "../lib/entityLinks";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
+import { AuthorAvatar, DiffStat } from "./entityDisplay";
 import {
-  AuthorAvatar,
-  DiffStat,
   PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
@@ -33,7 +32,7 @@ import {
   relativeTime,
   taskPeople,
   useEntityResolution,
-} from "./entityDisplay";
+} from "../lib/entityDisplay";
 import { prState, repoObjectRefOf } from "../lib/repoObjects";
 import { githubLocationHref } from "../lib/repoNavigation";
 import { EntityObjectCard } from "./EntityObjectCard";
