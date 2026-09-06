@@ -517,6 +517,60 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
     }
   }
 
+  // The computer helper's whole scheme is one signed app at one path that
+  // never moves, because macOS keys a TCC grant to the resolved path AND the
+  // signing identity together. Every branch below names a way that scheme can
+  // break, and the fixed-path assertion is what stops a hashed or versioned
+  // directory creeping back in and costing every user a regrant.
+  //
+  // Registered on every platform, not just macOS: a Linux CLI embeds an empty
+  // helper asset, and the honest answer to "why does cast computer not work
+  // here" is the skip line this check prints (ct-49524).
+  passive.push({
+    name: "computer helper",
+    run: async () => {
+      // Imported here, not at the top: doctor.ts is on `index.ts`'s static
+      // graph, so a top-level import would put the computer client, the
+      // permission probe and the embedded helper bundle on the startup cost
+      // of `cast --help` and of every unrelated verb.
+      const [{ helperAvailability, HELPER_BUNDLE_ID }, { getPermissionStatus }] = await Promise.all([
+        import("./computer/helperApp.js"),
+        import("./computer/permissions.js"),
+      ]);
+      const helper = helperAvailability();
+      if (!helper.embedded) return { ok: true, skip: true, detail: "not built into this CLI" };
+      if (helper.pendingSwap) {
+        return { ok: false, warn: true, detail: "an interrupted bundle swap is pending repair — run `cast computer capabilities`" };
+      }
+      if (!helper.materialized) {
+        return { ok: true, skip: true, detail: "not set up yet (`cast computer capabilities` materializes it)" };
+      }
+      if (!helper.atFixedPath) {
+        return { ok: false, detail: `helper is not at its fixed path (${helper.appPath}); TCC grants will not survive updates` };
+      }
+      if (helper.signature === "invalid") {
+        return { ok: false, detail: `helper failed signature verification (${helper.signatureDetail}); reinstall codecast` };
+      }
+      if (helper.signature === "adhoc") {
+        return { ok: false, warn: true, detail: "ad-hoc signed (from-source build); TCC grants reset on every rebuild" };
+      }
+      const status = await getPermissionStatus().catch(() => null);
+      const missing = status?.permissions.filter((p) => p.status !== "granted") ?? [];
+      if (!status) return { ok: false, warn: true, detail: "Developer ID signed; could not read its permissions — run `cast computer permissions`" };
+      if (missing.length) {
+        const names = missing.map((p) => (p.id === "accessibility" ? "Accessibility" : "Screen Recording")).join(" and ");
+        return { ok: false, warn: true, detail: `${names} not granted; run \`cast computer permissions\`` };
+      }
+      // Name the version and the signing certificate, not just "signed": the
+      // TCC grant is keyed to the certificate, and the version says which
+      // helper is actually on disk. Both are what a human needs when a grant
+      // unexpectedly reset or an update has not been picked up yet (ct-49524).
+      const installed = helper.installedVersion ?? "unknown version";
+      const stale = helper.installedVersion && helper.installedVersion !== deps.version ? `; the next \`cast computer\` run swaps in ${deps.version}` : "";
+      return { ok: true, detail: `${HELPER_BUNDLE_ID} ${installed}, signed by ${helper.authority || "an unreadable authority"}, Accessibility and Screen Recording granted${stale}` };
+    },
+  });
+
   await runChecks(passive, {
     product: "Codecast",
     version: deps.version,

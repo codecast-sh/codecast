@@ -20,6 +20,18 @@ bun test src/daemonPid.test.ts src/daemonPid.cli.test.ts
 # source edit a developer committed.
 bun scripts/stamp-daemon-build-id.ts --check
 
+# The cast computer helper is a signed `codecast computer.app` that rides inside
+# the darwin binaries as a tar. Build and sign it ONCE, here, and point every
+# compile target at the same bytes: a tar records mtimes, so a per-target build
+# would give darwin-arm64 and darwin-x64 different helpers and the release would
+# have no single hash to record as the helper's identity. (ct-49524)
+if [[ "$(uname)" == "Darwin" && "${CODECAST_SKIP_COMPUTER_HELPER:-}" != "1" ]]; then
+  bun scripts/computer-helper-release.ts build "$(cd "$OUTPUT_DIR" && pwd)/computer-helper.tar"
+  export CODECAST_COMPUTER_HELPER_TAR="$(cd "$OUTPUT_DIR" && pwd)/computer-helper.tar"
+else
+  rm -f "$OUTPUT_DIR/computer-helper.tar" "$OUTPUT_DIR/computer-helper.json"
+fi
+
 echo "Building codecast binaries..."
 
 # Build for each platform
@@ -71,6 +83,17 @@ if [[ "$(uname)" == "Darwin" ]]; then
       echo "  signed codecast-$target"
     done
   fi
+fi
+
+# Post-build check for the embedded helper: unpack it, run `codesign --verify
+# --strict` and `spctl --assess` on the bundle, prove the darwin binaries can
+# still read the asset back after `bun build --compile`, and prove the linux and
+# windows ones carry no macOS helper at all. Writes computer-helper.json, which
+# the release manifest reads. (ct-49524)
+if [[ -n "${CODECAST_COMPUTER_HELPER_TAR:-}" ]]; then
+  echo ""
+  echo "Verifying the embedded cast computer helper..."
+  bun scripts/computer-helper-release.ts verify "$OUTPUT_DIR" --version "$(jq -r '.version' package.json)"
 fi
 
 echo ""
