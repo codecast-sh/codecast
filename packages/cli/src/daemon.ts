@@ -87,12 +87,22 @@ import {
   daemonTickStale,
   DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
+  EXIT_DO_NOT_RESTART,
   extractPlistProgramArguments,
   shellEscapeForSh,
   watchdogHeartbeatStale,
   WATCHDOG_HEARTBEAT_FILENAME,
   WATCHDOG_PASS_STAMP_FILENAME,
 } from "./supervision.js";
+import {
+  clearDaemonExitStamp,
+  consumeHangMarker,
+  createHangRecorder,
+  noRestartReason,
+  writeDaemonExitStamp,
+  writeHangMarker,
+  type HangMarker,
+} from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
 import { parseCodexSessionFile } from "./parser.js";
@@ -990,6 +1000,9 @@ interface DaemonState {
   // logins can start the watcher without re-touching an undecided TCC state
   // (see cursorWatcherDecision) and doctor can explain a denial.
   cursorAccess?: "granted" | "denied";
+  // Hang marker left by the PREVIOUS daemon and consumed at this boot, so the
+  // stall survives the process that suffered it (see daemonMarkers.ts).
+  lastHang?: HangMarker;
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -21329,6 +21342,22 @@ export function summarizeSamplingTraces(raw: unknown, top = 5): string {
 function startLoopFreezeProbe(): NodeJS.Timeout {
   // One sink for both sync spawns and sync filesystem work (slowSync.ts).
   setSlowSyncSink((message) => log(message));
+  // A hang the PREVIOUS daemon measured outlives the process that suffered it:
+  // consume the marker here, at the one place that understands it, and park it
+  // in the state file so `cast health` and `cast doctor` can report the stall
+  // even when the daemon that hung was killed and never spoke again.
+  try {
+    const priorHang = consumeHangMarker(CONFIG_DIR);
+    if (priorHang) {
+      log(
+        `[HANG-MARKER] previous daemon (pid ${priorHang.pid}) was silent for ` +
+        `${Math.round(priorHang.unresponsive_ms / 1000)}s; ` +
+        `${priorHang.self_recovered ? "loop resumed on its own" : "loop never resumed"}` +
+        `${priorHang.hot_stacks ? `; hot stacks: ${priorHang.hot_stacks}` : ""}`,
+      );
+      saveDaemonState({ lastHang: priorHang });
+    }
+  } catch {}
   // JSC's sampling profiler runs on its own thread, so it keeps collecting JS
   // stacks even while the event loop is pinned — exactly the window nothing
   // else can observe. Draining the buffer every tick keeps it bounded; when a
@@ -21357,6 +21386,13 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
   // before the loop stopped ticking. (Reading lastLogLine at report time would
   // name whatever logged first AFTER the freeze — the wrong side of it.)
   let logAtLastProbe = lastLogLine;
+  // The marker for a hang this daemon is living through. Written the moment the
+  // probe measures HANG_MARKER_THRESHOLD_MS of silence and rewritten only after
+  // the loop has ticked normally for HANG_SELF_RECOVERED_AFTER_MS — a daemon
+  // that resumes for one tick and re-wedges (or is SIGKILLed by the watchdog in
+  // that window) leaves the marker saying it never recovered, which is exactly
+  // the case the kill was aimed at.
+  const hangRecorder = createHangRecorder({ write: (marker) => writeHangMarker(marker, CONFIG_DIR) });
   const t = setInterval(() => {
     const now = Date.now();
     const nowMono = performance.now();
@@ -21389,7 +21425,15 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
       // that track each other through a laptop sleep disprove it.
       if (!suspend) {
         log(`[LOOP-FREEZE-CLOCKS] wall ${Math.round(late)}ms, loop ${Math.round(Math.max(0, monoLate))}ms, cpu ${cpuMs}ms`);
+        // A freeze long enough to matter to the watchdog leaves a file behind:
+        // the log line above dies with the log, and a daemon killed inside the
+        // stall never reports anything at all (daemonMarkers.ts).
+        if (hangRecorder.observeFreeze(verdict.freezeMs, now, hot)) {
+          log(`[HANG-MARKER] recorded ${Math.round(verdict.freezeMs / 1000)}s of loop silence for the next boot`);
+        }
       }
+    } else {
+      hangRecorder.observeHealthyTick(now);
     }
     logAtLastProbe = lastLogLine;
   }, LOOP_FREEZE_PROBE_INTERVAL_MS);
@@ -21961,6 +22005,19 @@ function startWatchdog(
   }, WATCHDOG_INTERVAL_MS);
 }
 
+// Stop for a configuration fact no restart can change, and say so in a way a
+// supervisor can read: the stamp is what makes both watchdog forms stop reviving
+// this daemon every minute into the same failure (supervision.ts). Everything
+// here must survive a broken ~/.codecast, so nothing depends on the log file.
+function exitDoNotRestart(reason: string): never {
+  console.error(`${reason}\nThe daemon will not be restarted until this is fixed. Then run: cast start`);
+  writeDaemonExitStamp(reason, CONFIG_DIR);
+  try {
+    fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [FATAL-CONFIG] ${reason}\n`);
+  } catch {}
+  process.exit(EXIT_DO_NOT_RESTART);
+}
+
 async function main(): Promise<void> {
   // Refuse before any state, lock, or exit-handler setup: on Windows the daemon
   // spawned a visible console window per background child (git, codex, cast) —
@@ -21970,7 +22027,28 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  ensureConfigDir();
+  // Config error 1: no HOME. CONFIG_DIR is built from it, so an unset HOME sends
+  // the pid file, the config and the state file to a relative
+  // "undefined/.codecast" that nothing else reads. Every launcher we ship sets
+  // HOME (launchd's gui domain, the systemd unit in provisionLinux.ts, any login
+  // shell), so an unset one is a broken unit — and a restart cannot set it.
+  if (!process.env.HOME) {
+    exitDoNotRestart("HOME is not set, so the daemon cannot locate ~/.codecast — set HOME in the launchd or systemd job that starts it");
+  }
+
+  // Config error 2: ~/.codecast cannot be created or written (a read-only home,
+  // an ownership mismatch after a restore, a CODECAST_DIR pointing at a file).
+  // Without it the daemon can neither read its config nor write its pid, and
+  // every restart meets the same filesystem — today that is a launchd and
+  // watchdog hot loop with the reason buried in launchd.err.log.
+  try {
+    ensureConfigDir();
+  } catch (err) {
+    exitDoNotRestart(`Cannot create or write ${CONFIG_DIR}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Past the config gate: re-arm supervision for whatever stopped a previous
+  // daemon, since a human clearly fixed it and started us.
+  clearDaemonExitStamp(CONFIG_DIR);
   ensureCastAlias();
 
   if (!acquireLock()) {
@@ -22016,6 +22094,10 @@ async function main(): Promise<void> {
     flushLogBuffer();
     persistLogQueue();
     if (skipRespawn || underLaunchd) return;
+    // A terminal config exit must not be respawned by the daemon either: its own
+    // crash-backoff loop would relaunch into the same failure and count it as a
+    // crash loop (see exitDoNotRestart).
+    if (code === EXIT_DO_NOT_RESTART) return;
     if (code !== 0) {
       const { count, backoffMinutes } = recordCrash();
       if (backoffMinutes > 0) {
@@ -25028,7 +25110,15 @@ export async function runWatchdog(): Promise<void> {
     } catch {}
   }
 
-  // 4. If daemon is dead, restart it
+  // 4. If daemon is dead, restart it — unless it declared its own exit terminal.
+  // The shell watchdog makes the same check before kickstart; this is the same
+  // rule for the compiled pass, which is what actually spawns the daemon in a
+  // binary install (supervision.ts EXIT_DO_NOT_RESTART).
+  const blockedReason = !daemonAlive ? noRestartReason(CONFIG_DIR) : null;
+  if (blockedReason) {
+    logLine(`Daemon exited ${EXIT_DO_NOT_RESTART} (do not restart): ${blockedReason} — fix it and run 'cast start'`);
+    return;
+  }
   if (!daemonAlive) {
     logLine("Daemon not running, restarting...");
 

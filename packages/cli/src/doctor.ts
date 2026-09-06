@@ -43,6 +43,7 @@ import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
 import { findStaleTmuxServers, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
+import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -64,6 +65,8 @@ export interface DoctorDeps {
     lastWatchdogCheck?: number;
     authExpired?: boolean;
     cursorAccess?: "granted" | "denied";
+    /** Hang marker the daemon consumed at boot (see daemonMarkers.ts). */
+    lastHang?: HangMarker;
   } | null;
   getStuckSyncs: () => Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }>;
 }
@@ -281,6 +284,35 @@ function formatAgo(ts: number | undefined): string {
 
 // ── the doctor ────────────────────────────────────────────────────────────────
 
+// A wedged event loop delivers nothing and logs nothing, so the only witness of
+// a stall is the marker the freeze probe leaves on disk — and it survives the
+// daemon that hung, including one the watchdog killed (daemonMarkers.ts). A
+// stall is history, not a broken machine, so it warns and never fails the run.
+export function loopHangCheck(
+  lastHang: HangMarker | undefined,
+  configDir: string,
+  now: number = Date.now(),
+): { ok: boolean; warn?: boolean; detail: string } {
+  const hang = latestHang(lastHang, configDir, { now });
+  if (!hang) return { ok: true, detail: "no stall in the last 24h" };
+  return { ok: false, warn: true, detail: describeHangMarker(hang, now) };
+}
+
+// Why the daemon is not running. A daemon that declared its own exit terminal
+// is down on purpose and no watchdog will revive it, so "run `cast start`" on
+// its own would send the reader into the same exit (supervision.ts
+// EXIT_DO_NOT_RESTART).
+export function daemonDownDetail(
+  configDir: string,
+  launchd?: { configured: boolean; state: string | null } | null,
+): string {
+  const blocked = noRestartReason(configDir);
+  if (blocked) {
+    return `not running and supervision is disarmed — ${blocked}; fix that, then run \`cast start\``;
+  }
+  return `not running${launchd?.configured ? ` (launchd state: ${launchd.state ?? "unknown"})` : ""} — run \`cast start\``;
+}
+
 export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<DoctorReport> {
   const runId = randomBytes(3).toString("hex");
   const checks: DoctorCheck[] = [];
@@ -339,10 +371,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
     name: "daemon",
     run: () => {
       if (!pid) {
-        return {
-          ok: false,
-          detail: `not running${launchd?.configured ? ` (launchd state: ${launchd.state ?? "unknown"})` : ""} — run \`cast start\``,
-        };
+        return { ok: false, detail: daemonDownDetail(deps.configDir, launchd) };
       }
       const tick = state?.lastHeartbeatTick || state?.lastWatchdogCheck || 0;
       const stale = tick > 0 && Date.now() - tick > HEARTBEAT_FRESH_MS;
@@ -351,6 +380,11 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         detail: `running (pid ${pid}${launchd?.pid === pid ? ", launchd-managed" : ""}), heartbeat ${formatAgo(tick)}${stale ? " — event loop looks wedged, run `cast restart`" : ""}`,
       };
     },
+  });
+
+  passive.push({
+    name: "loop hang",
+    run: () => loopHangCheck(state?.lastHang, deps.configDir),
   });
 
   passive.push({

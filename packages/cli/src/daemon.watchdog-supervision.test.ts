@@ -6,7 +6,9 @@ import {
   buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
   daemonTickStale,
+  DAEMON_EXIT_STAMP_FILE,
   DAEMON_HEARTBEAT_STALE_MS,
+  EXIT_DO_NOT_RESTART,
   extractPlistProgramArguments,
   shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
@@ -16,6 +18,10 @@ import {
   WATCHDOG_HEARTBEAT_STALE_MS,
 } from "./supervision.js";
 import { watchdogSupervisionAction } from "./daemon.js";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Regression: a routine daemon redeploy that landed right before the Mac slept left
 // the daemon dead for 3.5h. The watchdog was a launchd StartInterval one-shot, which
@@ -287,5 +293,101 @@ describe("watchdogSupervisionAction", () => {
     // loop; watchdogHeartbeatStale answers false for a missing stamp.
     expect(watchdogHeartbeatStale(null, now)).toBe(false);
     expect(watchdogSupervisionAction({ loaded: true, plistExists: true, heartbeat: null, now })).toBe("none");
+  });
+});
+
+// A daemon can stop for a configuration fact no restart can change (no HOME, an
+// unusable ~/.codecast). To a supervisor that only sees "the process is gone"
+// that is indistinguishable from a crash, so it revived the daemon every minute
+// into the same failure. Exit code 78 plus the stamp file is how the daemon says
+// "not until a human fixes this" — and BOTH watchdog forms have to honour it.
+describe("exit 78: do not restart", () => {
+  test("the code is sysexits' EX_CONFIG, not an ad-hoc number", () => {
+    expect(EXIT_DO_NOT_RESTART).toBe(78);
+  });
+
+  test("the dev shell watchdog checks the stamp BEFORE it revives anything", () => {
+    const dev = buildWatchdogShellScript({ isBinary: false, watchdogCommand: "" });
+    expect(dev).toContain(DAEMON_EXIT_STAMP_FILE);
+    expect(dev).toContain(`grep -q '"code"[[:space:]]*:[[:space:]]*${EXIT_DO_NOT_RESTART}'`);
+    // Order is the whole point: a guard after the kickstart would restart the
+    // daemon and only then decide it should not have.
+    const guardAt = dev.indexOf(DAEMON_EXIT_STAMP_FILE);
+    const kickstartAt = dev.indexOf("launchctl kickstart -k");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(kickstartAt);
+    // …and it names the way back: the stamp is cleared by the next daemon that
+    // boots past the config gate.
+    expect(dev).toContain("cast start");
+  });
+
+  test("the binary form delegates the decision to the compiled pass, which makes the same check", () => {
+    const bin = buildWatchdogShellScript({ isBinary: true, watchdogCommand: "/Users/x/.local/bin/codecast -- _watchdog" });
+    // The binary loop never restarts the daemon itself — runWatchdog does, and
+    // it calls noRestartReason (daemonMarkers.ts) before spawning.
+    expect(bin).toContain("_watchdog");
+    expect(bin).not.toContain("launchctl kickstart");
+    const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
+    const restartAt = source.indexOf('logLine("Daemon not running, restarting...")');
+    const guardAt = source.indexOf("noRestartReason(CONFIG_DIR)");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(restartAt);
+  });
+
+  test("the daemon's own crash-backoff respawn honours it too", () => {
+    // Otherwise the daemon relaunches itself into the same config failure and
+    // records it as a crash loop.
+    const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
+    expect(source).toContain("if (code === EXIT_DO_NOT_RESTART) return;");
+  });
+
+  // The shell script is the form that actually runs on a from-source install, so
+  // run it: one pass of check_once against a scratch HOME, with launchctl
+  // replaced by a stub that records its arguments. Nothing here can touch the
+  // real daemon — the stub is the only launchctl on PATH.
+  describe("executed against a scratch HOME", () => {
+    const runOnce = (stamp?: string) => {
+      const home = mkdtempSync(join(tmpdir(), "watchdog-run-"));
+      const bin = join(home, "bin");
+      mkdirSync(join(home, ".codecast"), { recursive: true });
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        join(bin, "launchctl"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/launchctl.calls"\nexit 1\n`,
+        { mode: 0o755 },
+      );
+      if (stamp) writeFileSync(join(home, ".codecast", DAEMON_EXIT_STAMP_FILE), stamp);
+      const script = buildWatchdogShellScript({ isBinary: false, watchdogCommand: "" })
+        // The resident loop would never return; run its body exactly once.
+        .replace(/while :;[\s\S]*$/, "check_once\n");
+      const scriptPath = join(home, "watchdog.sh");
+      writeFileSync(scriptPath, script);
+      spawnSync("sh", [scriptPath], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` }, encoding: "utf-8" });
+      const read = (p: string) => { try { return readFileSync(p, "utf-8"); } catch { return ""; } };
+      const result = {
+        launchctl: read(join(home, "launchctl.calls")),
+        log: read(join(home, ".codecast", "watchdog-shell.log")),
+      };
+      rmSync(home, { recursive: true, force: true });
+      return result;
+    };
+
+    test("with no stamp it revives the daemon (the behaviour the guard must not break)", () => {
+      const { launchctl } = runOnce();
+      expect(launchctl).toContain("kickstart");
+    });
+
+    test("with an exit-78 stamp it revives nothing and says why", () => {
+      const { launchctl, log } = runOnce(JSON.stringify({ code: 78, at: 1, reason: "HOME is not set" }));
+      expect(launchctl).not.toContain("kickstart");
+      expect(launchctl).not.toContain("bootstrap");
+      expect(log).toContain("do not restart");
+      expect(log).toContain("HOME is not set");
+    });
+
+    test("a stamp from an ordinary crash still revives it", () => {
+      const { launchctl } = runOnce(JSON.stringify({ code: 1, at: 1, reason: "crashed" }));
+      expect(launchctl).toContain("kickstart");
+    });
   });
 });

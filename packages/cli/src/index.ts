@@ -11,6 +11,7 @@ import { registerCloudCommand } from "./cloud/cli.js";
 import { registerHostsCommand } from "./hosts/cli.js";
 import { registerPublishCommand, missingRouteError } from "./publish.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
+import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 import { registerCapabilityCommand } from "./capabilities/cli.js";
 import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
@@ -534,6 +535,8 @@ interface DaemonState {
   cursorAccess?: "granted" | "denied";
   /** Loop freeze budget written by the daemon's 30s monitor tick (see LoopFreezeLedger). */
   loopFreeze?: LoopFreezeState;
+  /** Hang marker left by a previous daemon and consumed at boot (daemonMarkers.ts). */
+  lastHang?: HangMarker;
   /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
   timestamp?: number;
 }
@@ -5360,8 +5363,24 @@ program
     // Event loop freeze budget. A frozen loop delays every delivery and echo,
     // so a late message reads as "the daemon was blocked", not "the session
     // dropped it". The daemon writes this on its 30s monitor tick.
-    const freezeState = readDaemonState()?.loopFreeze;
+    const daemonState = readDaemonState();
+    const freezeState = daemonState?.loopFreeze;
     console.log(`  ${fmt.muted("Event Loop")}`);
+    // A hang outlives the daemon that suffered it: the freeze probe leaves a
+    // marker on disk and the next boot folds it into the state file, so a stall
+    // that ended in a watchdog kill is still reportable here (daemonMarkers.ts).
+    const hang = latestHang(daemonState?.lastHang, CONFIG_DIR);
+    row(
+      "Last hang",
+      hang
+        ? (hang.self_recovered ? fmt.warning(describeHangMarker(hang)) : fmt.error(describeHangMarker(hang)))
+        : fmt.success("none recorded"),
+      2,
+    );
+    const blockedRestart = noRestartReason(CONFIG_DIR);
+    if (blockedRestart) {
+      row("Restart", fmt.error(`blocked — ${blockedRestart}`), 2);
+    }
     if (!freezeState) {
       row("Freeze (1h)", fmt.muted("not reported yet"), 2);
     } else {
