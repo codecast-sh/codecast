@@ -390,3 +390,8 @@ export async function salvageLocalFirstV2Data(): Promise<number> {
 }
 
 export async function purgeLocalCache(): Promise<void> {}
+
+// Mobile runs one process on one connection, so a schema upgrade is never
+// blocked by another window. Present so the store wires one code path.
+export function setUpgradeBlockedListener(_fn: ((blocked: boolean) => void) | null) {}
+
