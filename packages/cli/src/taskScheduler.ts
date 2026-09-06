@@ -8,6 +8,14 @@ import { deviceId, isRemoteDevice } from "./remote/device.js";
 import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.js";
+import { runTriggerPrecheck } from "./precheckRunner.js";
+import {
+  describeTriggerPrecheckFailure,
+  triggerFiringSource,
+  triggerPrecheckApplies,
+  triggerPrecheckPassed,
+  type TriggerFiringSource,
+} from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -232,6 +240,8 @@ export class TaskScheduler {
 
     this.log(`Claimed task "${task.title}" (${task._id})`);
 
+    if (await this.precheckRefusedRun(task, claimed)) return;
+
     // --context current path: inject the prompt into the originating conversation
     // instead of spawning a fresh agent. The daemon's pending_messages subscription
     // + autoResumeSession handle both live (tmux-inject) and stopped (resurrect
@@ -379,6 +389,63 @@ export class TaskScheduler {
     // completed run of a repeating schedule out of the inbox. completeTaskRun
     // backfills the link at run end if every attempt here loses the race.
     if (runSessionUuid) this.scheduleRunLink(task._id, runSessionUuid);
+  }
+
+  /**
+   * `cast trigger add --precheck "<shell command>"`: run the gate before
+   * spending a session, and record a skipped run when it refuses. Returns true
+   * when the caller must stop — no agent is spawned and nothing is injected.
+   *
+   * Which firings the gate applies to is triggerPrecheckApplies: only the
+   * schedule's own. A manual firing (`cast trigger run`, the web Run now
+   * button) bypasses it — the person asking is the evidence the gate was
+   * looking for, and a Run now that answers with nothing reads as a broken
+   * button. An event firing bypasses it too: a webhook already IS the evidence
+   * that something changed, and re-deriving it from a shell command could only
+   * disagree with the event that woke the trigger.
+   *
+   * The runner is fully async (precheckRunner.ts) so a 60s gate parks on a
+   * timer rather than stalling the daemon's event loop.
+   *
+   * When the skip cannot be recorded the trigger still stops here, and its
+   * lease expires into reclaimStaleTasks — the gate can never strand a trigger
+   * in `running`.
+   */
+  private async precheckRefusedRun(task: any, claimed: any): Promise<boolean> {
+    if (!task.precheck) return false;
+    // Read the source off the CLAIMED row, never the due one: claimTask is
+    // what settles this firing's source, and the due row still carries the
+    // PREVIOUS firing's — one manual run would otherwise leave the gate off
+    // for good. A daemon talking to a server that predates the stamp derives
+    // the source from the schedule, which is what every firing was before Run
+    // now could say otherwise.
+    const source: TriggerFiringSource =
+      claimed?.last_run_source ?? triggerFiringSource(task.schedule_type);
+    if (!triggerPrecheckApplies(source)) {
+      this.log(`Precheck for task "${task.title}" does not apply to a ${source} firing — running ungated`);
+      return false;
+    }
+
+    // The gate is an optimization, not a fence, so it only speaks where it can
+    // speak truthfully. Run it somewhere else and "has this checkout moved?"
+    // answers about the wrong directory — worse than not asking. The missing
+    // checkout itself is already handled downstream (the spawn path fails
+    // loudly; an inject run is delivered by the server, wherever it lives).
+    const cwd = task.project_path || process.env.HOME;
+    if (!cwd || !fs.existsSync(cwd)) {
+      this.log(`Precheck for task "${task.title}" has no directory to run in (${task.project_path}) — running ungated`, "warn");
+      return false;
+    }
+    const result = await runTriggerPrecheck({ command: task.precheck, cwd });
+    if (triggerPrecheckPassed(result)) {
+      this.log(`Precheck passed for task "${task.title}" in ${result.durationMs}ms`);
+      return false;
+    }
+
+    const reason = describeTriggerPrecheckFailure(result);
+    this.log(`Skipping ${source} run of task "${task.title}": ${reason}`);
+    await this.syncService.skipTaskRun(task._id, this.daemonId, result, reason, source);
+    return true;
   }
 
   // Bounded retry chain for linkRunConversation; standalone timers (not tied

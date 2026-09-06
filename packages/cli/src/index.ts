@@ -12708,6 +12708,7 @@ trigger
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
+  .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers ignore it, and so does `cast trigger run`.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
   .option("--thread", "Post results back to the current conversation thread")
@@ -12866,6 +12867,7 @@ trigger
           event_filter,
           mode: options.safe ? "propose" : options.mode,
           max_runtime_ms: maxRuntimeMs,
+          precheck: options.precheck,
         }),
       });
 
@@ -13096,6 +13098,7 @@ trigger
   .option("--agent <type>", "Agent type: claude or codex")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
+  .option("--precheck <command>", "Shell gate run before each scheduled or recurring run; exit 0 runs the trigger. Pass \"\" to remove the gate.")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13160,9 +13163,10 @@ trigger
       }
       body.max_runtime_ms = ms;
     }
+    if (options.precheck !== undefined) body.precheck = options.precheck;
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck.");
       process.exit(1);
     }
 
@@ -13296,12 +13300,32 @@ trigger
       process.exit(1);
     }
 
+    // The gate that decides whether a firing spends a session at all, and the
+    // last firing it refused — a skipped run leaves no conversation to read,
+    // so this line is the only record of it here.
+    if (t.precheck) {
+      console.log(`Precheck: ${c.dim}${t.precheck}${c.reset}`);
+      // A manual firing is never gated (ct-49673), so say so — otherwise the
+      // precheck line above reads as if it decided this run.
+      if (t.last_run_source === "manual") {
+        console.log(fmt.muted("The last run was manual, so the precheck did not run."));
+      }
+      if (t.last_precheck_skip_at) {
+        console.log(
+          `${c.yellow}skipped${c.reset} ${formatMs(Date.now() - t.last_precheck_skip_at)} ago — ` +
+            `${t.last_precheck_skip_reason || "the precheck refused the run"}`,
+        );
+      }
+    }
+
     if (!t.last_run_conversation_id) {
       if (t.last_run_at) {
         // The task has run but its conversation can't be resolved (yet) —
         // distinct from never having run at all.
         console.log(fmt.muted(`Last run ${formatMs(Date.now() - t.last_run_at)} ago — run conversation not synced yet.`));
         if (t.last_run_summary) console.log(t.last_run_summary);
+      } else if (t.last_precheck_skip_at) {
+        console.log(fmt.muted("No agent has run yet — every firing so far was skipped by the precheck."));
       } else {
         console.log(fmt.muted("No run history yet."));
       }
