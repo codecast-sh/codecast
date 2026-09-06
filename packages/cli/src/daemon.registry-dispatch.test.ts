@@ -3,7 +3,7 @@
 // per-client value the old inline branch produced. These are pure assertions
 // against the shared registry plus the small daemon-exported dispatch helpers, so
 // they pin the byte-identical mandate without needing a live daemon.
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, spyOn } from "bun:test";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 import {
   parseTranscriptFor,
@@ -175,7 +175,12 @@ describe("parseTranscriptFor dispatches to the per-client parser", () => {
     expect(parseTranscriptFor("gemini", geminiJson)).toEqual(parseGeminiSessionFile(geminiJson));
   });
   test("cursor -> parseCursorTranscriptFile", () => {
-    expect(parseTranscriptFor("cursor", cursorTranscript)).toEqual(parseCursorTranscriptFile(cursorTranscript));
+    const clock = spyOn(Date, "now").mockReturnValue(1767225600000);
+    try {
+      expect(parseTranscriptFor("cursor", cursorTranscript)).toEqual(parseCursorTranscriptFile(cursorTranscript));
+    } finally {
+      clock.mockRestore();
+    }
   });
   const opencodeSnapshot = JSON.stringify({
     info: { id: "ses_x" },
