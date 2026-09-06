@@ -3846,17 +3846,23 @@ export const backfillTeamIds = internalMutation({
       .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
 
     let updated = 0;
+    let rescoped = 0;
     for (const conv of result.page) {
       if (conv.team_id) continue;
       const userTeamId = userTeamMap.get(conv.user_id.toString());
       if (userTeamId) {
-        await ctx.db.patch(conv._id, { team_id: userTeamId });
+        // Why: stamping team_id also decides the stored workspace ACCESS key of
+        // every task, doc and plan linked to this conversation. A raw
+        // ctx.db.patch leaves them on the old key, so a now team-visible session
+        // keeps work items nobody on the team can read (ct-49655).
+        rescoped += await patchConversationVisibility(ctx, conv, { team_id: userTeamId });
         updated++;
       }
     }
 
     return {
       updated,
+      rescoped,
       cursor: result.continueCursor,
       isDone: result.isDone,
     };
@@ -3930,6 +3936,7 @@ export const backfillUserTeamIds = internalMutation({
     const teamId = args.teamId as any;
     let updated = 0;
     let alreadyHad = 0;
+    let rescoped = 0;
     let cursor: string | null = null;
     do {
       const result = await ctx.db
@@ -3941,13 +3948,15 @@ export const backfillUserTeamIds = internalMutation({
           alreadyHad++;
           continue;
         }
-        await ctx.db.patch(conv._id, { team_id: teamId });
+        // Why: same as backfillTeamIds — the chokepoint patches the row and
+        // rewrites the workspace key of every linked work item (ct-49655).
+        rescoped += await patchConversationVisibility(ctx, conv, { team_id: teamId });
         updated++;
       }
       cursor = result.continueCursor;
       if (result.isDone) break;
     } while (true);
-    return { updated, alreadyHad };
+    return { updated, alreadyHad, rescoped };
   },
 });
 
