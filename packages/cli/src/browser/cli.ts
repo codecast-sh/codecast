@@ -35,7 +35,7 @@ import { BrowserNotLive, explainConnectionLoss, isTabUnresponsive } from "./reco
 import {
   browserHome, clonePath, cloneProfile, formatBytes, keepsOwnLogin, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
-import { matchRefs, nearMatches, snapshotPage } from "./snapshot.js";
+import { matchRefs, nearMatches, pickOrdinal, refLabel, snapshotPage, splitOrdinalQuery } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
   screenshot, scroll, selectOption, setViewport, type, uploadFiles,
@@ -753,18 +753,22 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .action(async (text: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page);
-        const hits = matchRefs(snap.refs, text);
+        // `find "Delete (2nd)"` picks the second of the namesakes the snapshot
+        // printed that way, in document order (ct-49555).
+        const { text: query, nth } = splitOrdinalQuery(text);
+        const matched = matchRefs(snap.refs, query);
+        const hits = nth ? pickOrdinal(snap.refs, matched, nth) : matched;
         if (!hits.length) {
           console.log(`no element matching ${JSON.stringify(text)} (${snap.refs.length} refs on the page)`);
-          const near = nearMatches(snap.refs, text);
+          const near = nearMatches(snap.refs, query);
           if (near.length) {
             console.log("closest:");
-            for (const h of near) console.log(`  ${h.role} ${JSON.stringify(h.name)} #e${h.ref}`);
+            for (const h of near) console.log(`  ${h.role} ${JSON.stringify(refLabel(h))} #e${h.ref}`);
           }
           console.log(fmt.muted("see everything: cast browser snapshot"));
           return;
         }
-        for (const h of hits.slice(0, 25)) console.log(`  ${h.role} ${JSON.stringify(h.name)} #e${h.ref}`);
+        for (const h of hits.slice(0, 25)) console.log(`  ${h.role} ${JSON.stringify(refLabel(h))} #e${h.ref}`);
         if (hits.length > 25) console.log(fmt.muted(`  … and ${hits.length - 25} more`));
       });
     });
