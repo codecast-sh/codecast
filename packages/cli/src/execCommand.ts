@@ -33,6 +33,7 @@ import {
   type PrintOutputFormat,
 } from "./launchCommand.js";
 import { spawn, whichBin } from "./proc.js";
+import { commandGroup } from "./commandGroups.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".codecast");
 const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
@@ -126,26 +127,7 @@ function runChild(
 export function registerExecCommand(program: Command): void {
   program
     .command("exec")
-    .description(
-      "Run a prompt on any agent harness, print the result, and exit\n\n" +
-      "Print mode for every harness we launch. It is the scripting analog of `claude -p`.\n" +
-      "Unified flags (agent, model, effort, permission, output format, resume) map\n" +
-      "onto that client's native headless form. The process is the session: stdout\n" +
-      "is the result, the exit code is the agent's, and there is no inbox card.\n\n" +
-      "Not `cast spawn` (starts a session in your inbox and returns immediately).\n" +
-      "Not `cast ask` (searches conversation history).\n" +
-      "Not `cast claude` (raw pass-through to the Claude binary).\n\n" +
-      "Examples:\n" +
-      "  cast exec \"summarize this repo\"\n" +
-      "  cast exec --agent grok --model grok-4.6 --effort high \"review the diff\"\n" +
-      "  git diff | cast exec --agent claude --model sonnet \"write a commit message\"\n" +
-      "  cast exec --output-format json --max-turns 4 \"list the public API\"\n" +
-      "  cast exec --resume abc123 \"continue from there\"\n" +
-      "  cast exec --dry-run --agent codex \"what would run\"\n" +
-      "  cast exec - <<'EOF'\n" +
-      "  Multi-line prompt, exact newlines preserved.\n" +
-      "  EOF"
-    )
+    .description(commandGroup("exec").description)
     .argument("[prompt...]", "Prompt; omit or pass '-' to read stdin")
     .option("--agent <type>", `Agent: ${AGENT_NAMES}`, "claude")
     .option("-m, --model <model>", "Model (picker key or raw id, e.g. opus, grok-4.6)")
