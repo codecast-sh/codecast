@@ -10,6 +10,7 @@
  * signatures are identical, so only the import line changes.
  */
 import * as cp from "node:child_process";
+import { routeProbe } from "./workers/bridge.js";
 import { promisify } from "node:util";
 import { SLOW_SYNC_SPAWN_MS, reportSpawnTimeout, timeSync } from "./slowSync.js";
 
@@ -94,7 +95,9 @@ export const execSync: typeof cp.execSync = wrapSync("execSync", cp.execSync);
 export const execFile: typeof cp.execFile = wrap(cp.execFile);
 export const execFileSync: typeof cp.execFileSync = wrapSync("execFileSync", cp.execFileSync);
 /** The promise form of the wrapped execFile, shared so no caller promisifies its own copy. */
-export const execFileAsync = promisify(execFile);
+const execFileDirectAsync = promisify(execFile);
+export const execFileAsync: typeof execFileDirectAsync = ((file: string, args: string[], options?: unknown) =>
+  routeProbe(file, args, options, opts => execFileDirectAsync(file, args, opts as cp.ExecFileOptionsWithStringEncoding))) as typeof execFileDirectAsync;
 
 // A keychain read answers in tens of milliseconds on an idle machine. A locked
 // keychain or an access prompt can hang it, and the daemon's credential ticks
