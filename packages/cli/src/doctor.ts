@@ -43,6 +43,8 @@ import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
 import { findStaleTmuxServers, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
+import { helperAvailability, HELPER_BUNDLE_ID } from "./computer/helperApp.js";
+import { getPermissionStatus } from "./computer/permissions.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -492,6 +494,42 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
           return { ok: false, warn: true, detail: "Cursor detected but not synced — run `cast cursor on` (macOS asks to allow access once)" };
         }
         return { ok: true, skip: true, detail: "Cursor not installed" };
+      },
+    });
+
+    // The computer helper's whole scheme is one signed app at one path that
+    // never moves, because macOS keys a TCC grant to the resolved path AND the
+    // signing identity together. Every branch below names a way that scheme can
+    // break, and the fixed-path assertion is what stops a hashed or versioned
+    // directory creeping back in and costing every user a regrant.
+    passive.push({
+      name: "computer helper",
+      run: async () => {
+        const helper = helperAvailability();
+        if (!helper.embedded) return { ok: true, skip: true, detail: "not built into this CLI" };
+        if (helper.pendingSwap) {
+          return { ok: false, warn: true, detail: "an interrupted bundle swap is pending repair — run `cast computer capabilities`" };
+        }
+        if (!helper.materialized) {
+          return { ok: true, skip: true, detail: "not set up yet (`cast computer capabilities` materializes it)" };
+        }
+        if (!helper.atFixedPath) {
+          return { ok: false, detail: `helper is not at its fixed path (${helper.appPath}); TCC grants will not survive updates` };
+        }
+        if (helper.signature === "invalid") {
+          return { ok: false, detail: `helper failed signature verification (${helper.signatureDetail}); reinstall codecast` };
+        }
+        if (helper.signature === "adhoc") {
+          return { ok: false, warn: true, detail: "ad-hoc signed (from-source build); TCC grants reset on every rebuild" };
+        }
+        const status = await getPermissionStatus().catch(() => null);
+        const missing = status?.permissions.filter((p) => p.status !== "granted") ?? [];
+        if (!status) return { ok: false, warn: true, detail: "Developer ID signed; could not read its permissions — run `cast computer permissions`" };
+        if (missing.length) {
+          const names = missing.map((p) => (p.id === "accessibility" ? "Accessibility" : "Screen Recording")).join(" and ");
+          return { ok: false, warn: true, detail: `${names} not granted; run \`cast computer permissions\`` };
+        }
+        return { ok: true, detail: `${HELPER_BUNDLE_ID}, Developer ID signed, Accessibility and Screen Recording granted` };
       },
     });
 
