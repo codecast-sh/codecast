@@ -138,3 +138,40 @@
     animation: none;
   }
 }
+
+/* Session blame: every line of a range carries its session's colour down the
+ * gutter's edge, so a block reads as one hand's work before any label is read.
+ * The label sits on the first line only, like the git gutter. */
+.repo-session-blame {
+  border-left: 3px solid transparent;
+  border-right: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  color: var(--sol-text-dim);
+}
+
+.repo-session-blame[data-session] {
+  border-left-color: var(--session-hue);
+  background: color-mix(in srgb, var(--session-hue) 5%, transparent);
+}
+
+.repo-session-blame.repo-blame-start[data-session] {
+  background: color-mix(in srgb, var(--session-hue) 9%, transparent);
+}
+
+.repo-session-blame:not([data-session]) {
+  border-left-color: color-mix(in srgb, var(--sol-border) 70%, transparent);
+}
+
+/* One session in focus (a chip hovered or picked): the rest of the file steps
+ * back so its lines stand out wherever they are. */
+.repo-code[data-focus-session] .repo-line:not([data-session-focus]) {
+  opacity: 0.38;
+}
+
+.repo-session-chip {
+  transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.repo-session-chip[data-active="true"] {
+  background: color-mix(in srgb, var(--session-hue) 16%, transparent);
+  border-color: color-mix(in srgb, var(--session-hue) 60%, transparent);
+}

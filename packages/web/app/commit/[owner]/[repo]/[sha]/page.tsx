@@ -265,11 +265,12 @@ function CommitWithoutFiles({ repository, sha }: { repository: string; sha: stri
   return (
     <div className="h-full flex flex-col items-center justify-center px-6 text-center text-sol-text-muted">
       {fetchFiles.pending ? (
-        <p className="text-[13px]">Reading this commit's diff from GitHub.</p>
+        <p className="text-[13px]">Reading this commit's diff.</p>
       ) : fetchFiles.reason === "requested" ? (
-        // No GitHub App covers this repository: a teammate's checkout was
-        // asked, and the commit row updates itself when the answer lands.
-        <p className="text-[13px]">Reading this commit's diff from a teammate's checkout. It arrives as soon as their machine answers.</p>
+        // A checkout that publishes this repository was asked, and the commit
+        // row updates itself when the answer lands. GitHub answers instead if
+        // no checkout can.
+        <p className="text-[13px]">Reading this commit's diff from a checkout of this repository. It arrives as soon as that machine answers.</p>
       ) : (
         <>
           <p className="text-[13px] mb-1">

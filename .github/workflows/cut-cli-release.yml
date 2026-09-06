@@ -156,6 +156,16 @@ jobs:
             exit 1
           fi
 
+      - name: Verify macOS agent browser branding
+        shell: bash
+        env:
+          CODECAST_NO_AUTO_UPDATE: "1"
+        run: |
+          set -euo pipefail
+          cd packages/cli
+          bun test src/browser/appIdentity.test.ts src/browser/appIdentity.native.test.ts --timeout 30000
+          bun scripts/test-browser-branding.ts ../web/binaries/codecast-darwin-arm64
+
       - name: Write the artifact manifest
         shell: bash
         run: |

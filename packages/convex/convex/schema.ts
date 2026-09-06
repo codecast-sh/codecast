@@ -2307,6 +2307,14 @@ export default defineSchema({
     requested_by: v.id("users"),
     status: v.union(v.literal("pending"), v.literal("failed")),
     error: v.optional(v.string()),
+    // Publishers whose checkout could not answer. The request fails only once
+    // every publisher has declined; until then another machine may still hold
+    // the ref.
+    declined_by: v.optional(v.array(v.id("users"))),
+    // The GitHub App installation that answers instead when no checkout can:
+    // every publisher declined, or none answered within the grace window.
+    fallback_installation_id: v.optional(v.number()),
+    fallback_team_id: v.optional(v.id("teams")),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -2559,7 +2567,10 @@ export default defineSchema({
       v.literal("conversation"),
       v.literal("artifact"),
       v.literal("chat_channel"),
-      v.literal("device")
+      v.literal("device"),
+      // A place in a repository (`owner/repo@sha` or `owner/repo#12`): a code
+      // comment named the recipient.
+      v.literal("code")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -4422,7 +4433,9 @@ export default defineSchema({
       v.literal("chat_channel"),
       // Device alerts go straight to the machine's owner, so nothing subscribes
       // to a device either. Present for the same reason: one shape.
-      v.literal("device")
+      v.literal("device"),
+      // A code comment names its recipients directly. Same reason: one shape.
+      v.literal("code")
     ),
     entity_id: v.string(),
     reason: v.union(
@@ -4836,11 +4849,13 @@ export default defineSchema({
   // (personal is a value, not a missing pointer). Bots never get a row.
   thread_reads: defineTable({
     user_id: v.id("users"),
-    kind: v.union(v.literal("chat"), v.literal("comment"), v.literal("task"), v.literal("page")),
+    kind: v.union(v.literal("chat"), v.literal("comment"), v.literal("task"), v.literal("page"), v.literal("code")),
     // chat: root chat_messages id. comment: `${conversation_id}:${anchorKey}`
     // where anchorKey is `msg:<message_id>` | `file:<path>:<line>` | `global`
     // (commentAnchorKey in @codecast/shared/comments). task: task id.
-    // page: artifact id (one card per page discussion).
+    // page: artifact id (one card per page discussion). code:
+    // `${repository}@${ref}#${anchorKey}` (codeThreadRootKey), one thread of
+    // review_comments on a commit, a pull request head or a line of either.
     root_key: v.string(),
     team_id: v.optional(v.id("teams")),
     last_activity_at: v.number(),
@@ -4855,6 +4870,10 @@ export default defineSchema({
     message_id: v.optional(v.id("messages")),
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
+    // Code comment anchor (code kind only).
+    repository: v.optional(v.string()),
+    ref: v.optional(v.string()),
+    pull_request_id: v.optional(v.id("pull_requests")),
   })
     .index("by_user_team_activity", ["user_id", "team_id", "last_activity_at"])
     .index("by_user_kind_root", ["user_id", "kind", "root_key"])

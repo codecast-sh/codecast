@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { CheckCircle2, ExternalLink, RotateCcw } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
+import { CommentComposer } from "../comments/CommentComposer";
 import { CommentMarkdown } from "../comments/CommentMarkdown";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useRepositoryTeamId } from "../../hooks/useRepoBrowse";
 import { relTimeShort } from "../../lib/utils";
 import { useTrackedStore } from "../../store/inboxStore";
 import { threadResolved, type CodeCommentRow } from "../../lib/prView";
+import "../chat/chat.css";
 
 // Code comments on the PR page. These are `review_comments` rows, not the
 // conversation's own comments, so they cannot use the comment rail's cards
@@ -28,64 +31,42 @@ function useAuthor(comment: CodeCommentRow): { name: string; image?: string; isA
   };
 }
 
+/**
+ * The composer for a comment on code. The conversation's own MessageInput
+ * underneath (mentions of teammates and sessions, image paste, drafts), scoped
+ * to the team that owns the repository, keyed by the thread it writes into.
+ */
 export function PRComposer({
+  repository,
+  threadKey,
   placeholder,
-  submitLabel,
   autoFocus,
   onSubmit,
   onCancel,
 }: {
+  repository: string;
+  /** The thread's identity (codeThreadRootKey): the draft lives under it. */
+  threadKey: string;
   placeholder: string;
-  submitLabel: string;
   autoFocus?: boolean;
   onSubmit: (content: string) => void | Promise<void>;
   onCancel?: () => void;
 }) {
-  const [value, setValue] = useState("");
-  const send = () => {
-    const content = value.trim();
-    if (!content) return;
-    setValue("");
-    void onSubmit(content);
-  };
+  const { isAuthenticated } = useCurrentUser();
+  const teamId = useRepositoryTeamId(repository);
   return (
-    <div className="rounded-lg border border-sol-border/60 bg-sol-card p-2 focus-within:border-sol-cyan/50 transition-colors">
-      <textarea
-        value={value}
-        autoFocus={autoFocus}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            send();
-          }
-          if (e.key === "Escape" && onCancel) onCancel();
-        }}
-        placeholder={placeholder}
-        rows={2}
-        className="w-full resize-y bg-transparent px-1 py-0.5 text-[13px] text-sol-text placeholder:text-sol-text-dim focus:outline-none"
-      />
-      <div className="mt-1 flex items-center justify-end gap-2">
-        <span className="mr-auto text-[10px] text-sol-text-dim flex items-center gap-1">
-          <KeyCap size="xs">⌘</KeyCap>
-          <KeyCap size="xs">↵</KeyCap>
-          to post
-        </span>
-        {onCancel && (
-          <button type="button" className="cc-comment-btn" onClick={onCancel}>
-            Cancel
-          </button>
-        )}
-        <button
-          type="button"
-          className="rounded-md bg-sol-cyan/15 px-2.5 py-1 text-[11px] font-medium text-sol-cyan hover:bg-sol-cyan/25 disabled:opacity-40 transition-colors"
-          disabled={!value.trim()}
-          onClick={send}
-        >
-          {submitLabel}
-        </button>
-      </div>
-    </div>
+    <CommentComposer
+      conversationId={threadKey}
+      enabled
+      authed={isAuthenticated}
+      mentionTeamId={teamId}
+      chatMentionMode
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      className="ch-composer"
+      onSubmit={onSubmit}
+      onClose={onCancel}
+    />
   );
 }
 
@@ -122,6 +103,8 @@ export function PRCommentCard({ comment }: { comment: CodeCommentRow }) {
  *  resolve control. An empty thread renders as just the composer, which is how
  *  commenting on a fresh line works. */
 export function PRLineThread({
+  repository,
+  threadKey,
   comments,
   authed,
   lineNumber,
@@ -130,6 +113,9 @@ export function PRLineThread({
   onResolve,
   onClose,
 }: {
+  repository: string;
+  /** The thread's identity (codeThreadRootKey), for the composer's draft. */
+  threadKey: string;
   comments: CodeCommentRow[];
   authed: boolean;
   /** The lines this thread covers, so a reader can see what a range comment is
@@ -164,8 +150,9 @@ export function PRLineThread({
 
       {replying && authed ? (
         <PRComposer
+          repository={repository}
+          threadKey={threadKey}
           placeholder={comments.length ? "Reply" : `Comment on ${span ?? "this line"}`}
-          submitLabel={comments.length ? "Reply" : "Comment"}
           autoFocus
           onSubmit={async (content) => {
             await onReply(content);

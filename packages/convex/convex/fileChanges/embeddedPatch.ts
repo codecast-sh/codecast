@@ -1,3 +1,20 @@
+import { getApplyPatchInput } from "./applyPatchParser";
+
+export const SHELL_TOOL_NAMES = new Set(["bash", "shell", "shell_command", "exec_command", "commandexecution", "run_shell_command"]);
+
+export function getToolPatchInputs(tool: { name: string; input: string }): string[] {
+  const name = tool.name.split(".").at(-1)!.toLowerCase();
+  if (name === "apply_patch") return [getApplyPatchInput(tool.input)];
+  if (name !== "exec" && !SHELL_TOOL_NAMES.has(name)) return [];
+  let source = tool.input;
+  try {
+    const params = JSON.parse(tool.input);
+    source = typeof params === "string" ? params : params?.input ?? params?.code ?? params?.script ?? params?.command ?? params?.cmd;
+  } catch {}
+  if (typeof source !== "string") return [];
+  return name === "exec" ? embeddedApplyPatches(source) : shellApplyPatches(source);
+}
+
 export function embeddedApplyPatches(source: string): string[] {
   const patches: string[] = [];
   const tokens = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|\b(?:tools|functions)\.apply_patch\s*\(\s*|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`/g;
@@ -10,7 +27,7 @@ export function embeddedApplyPatches(source: string): string[] {
       endOfCall = match.index + token.length;
       continue;
     }
-    if (expectingPatch && match.index === endOfCall && /^["'`]/.test(token)) {
+    if (expectingPatch && match.index === endOfCall && /^["'`]/.test(token) && /^\s*\)/.test(source.slice(match.index + token.length))) {
       const body = token.slice(1, -1);
       if (token[0] !== "`" || !/(^|[^\\])\$\{/.test(body)) {
         const decoded = body.replace(/\\(u[\da-fA-F]{4}|x[\da-fA-F]{2}|\r?\n|[\s\S])/g, (_, escaped: string) => {

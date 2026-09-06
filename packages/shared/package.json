@@ -20,6 +20,7 @@
     "./time": "./time/index.ts",
     "./vault": "./vault/index.ts",
     "./chat": "./chat/index.ts",
-    "./comments": "./comments/index.ts"
+    "./comments": "./comments/index.ts",
+    "./blame": "./blame/index.ts"
   }
 }

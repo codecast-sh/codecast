@@ -32,6 +32,8 @@ const LOG_PAGE = 30;
 /** Branches, tags and blame-style per-entry lookups are capped so a huge repo costs bounded git calls. */
 const MAX_REFS = 100;
 const MAX_AHEAD_BEHIND = 50;
+/** Commits ahead of upstream are published whole, up to this many: they exist nowhere but here. */
+const MAX_UNPUSHED = 200;
 const MAX_TREE_ROWS = 40;
 const MAX_LAST_COMMIT_ENTRIES = 60;
 /** A readme past this is cut, and says so. */
@@ -208,11 +210,11 @@ async function logPage(
   root: string,
   ref: string,
   htmlBase: string,
-  opts: { skip?: number; path?: string; author?: string } = {},
+  opts: { skip?: number; path?: string; author?: string; limit?: number; branch?: string } = {},
 ): Promise<{ payload: any; commits: MirrorCommit[] }> {
   const out = await tryGit(run, root, [
     "log",
-    `-${LOG_PAGE}`,
+    `-${opts.limit ?? LOG_PAGE}`,
     ...(opts.skip ? [`--skip=${opts.skip}`] : []),
     ...(opts.author ? [`--author=${opts.author}`] : []),
     "--format=%x1e%H%x00%an%x00%ae%x00%at%x00%B%x1f",
@@ -246,7 +248,7 @@ async function logPage(
       files_changed: files,
       insertions,
       deletions,
-      branch: ref,
+      branch: opts.branch ?? ref,
     });
   }
   return {
@@ -354,19 +356,27 @@ export async function buildRepoMirror(root: string, run: GitRunner = runGit): Pr
   rows.push(await readmeRow(run, root, defaultBranch, rootEntries));
 
   // History: the first page for the default branch, and for the checked-out
-  // branch when that is a different one. The same commits feed the commits table.
+  // branch when that is a different one. The same commits feed the commits
+  // table, together with every commit the branch holds ahead of its upstream:
+  // a page can only open a commit that has a row, and one not pushed yet has
+  // no other way to get one.
   const commits: MirrorCommit[] = [];
   const seen = new Set<string>();
-  const pages = [defaultBranch];
-  if (current && current !== "HEAD" && current !== defaultBranch) pages.push(current);
-  for (const branch of pages) {
-    const page = await logPage(run, root, branch, htmlBase);
-    row("log", branch, "#1#", page.payload);
+  const take = (page: { commits: MirrorCommit[] }) => {
     for (const commit of page.commits) {
       if (seen.has(commit.sha)) continue;
       seen.add(commit.sha);
       commits.push(commit);
     }
+  };
+  const pages = [defaultBranch];
+  if (current && current !== "HEAD" && current !== defaultBranch) pages.push(current);
+  for (const branch of pages) {
+    const page = await logPage(run, root, branch, htmlBase);
+    row("log", branch, "#1#", page.payload);
+    take(page);
+    const upstream = await tryGitLine(run, root, ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`]);
+    if (upstream) take(await logPage(run, root, `${upstream}..${branch}`, htmlBase, { limit: MAX_UNPUSHED, branch }));
   }
   if (pages.length > 1 && current) {
     const currentTreeSha = await tryGitLine(run, root, ["rev-parse", `${current}^{tree}`]);
