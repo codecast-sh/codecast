@@ -4027,6 +4027,23 @@ cliRoute("/cli/work/spawn", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.spawnForTask, body);
 });
 
+// ── Review notes (cast review …) ──
+cliRoute("/cli/review/add", async (ctx, body) => {
+  return await ctx.runMutation(api.reviewNotes.add, body);
+});
+cliRoute("/cli/review/list", async (ctx, body) => {
+  return await ctx.runQuery(api.reviewNotes.list, body);
+});
+cliRoute("/cli/review/send", async (ctx, body) => {
+  return await ctx.runMutation(api.reviewNotes.send, body);
+});
+cliRoute("/cli/review/edit", async (ctx, body) => {
+  return await ctx.runMutation(api.codeComments.update, body);
+});
+cliRoute("/cli/review/rm", async (ctx, body) => {
+  return await ctx.runMutation(api.codeComments.remove, body);
+});
+
 // ── Integrations (cast integrations …) ──
 //
 // Connect/disconnect delegate to integrations.ts, which resolves the caller
