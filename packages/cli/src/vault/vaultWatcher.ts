@@ -105,6 +105,7 @@ export class VaultWatchHub {
 
     const watcher = new RecursiveWatcher({
       path: vault.root,
+      scanPolicy: { dirs: "vault", files: "vault" },
       // RecursiveWatcher hands both filters a platform-separator relative path.
       // The ignore rules ARE the scope — the same question the scan asks, so
       // the watcher can never announce an add for a file the scan never lists
