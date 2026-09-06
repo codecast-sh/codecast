@@ -1716,6 +1716,23 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         : {}),
     });
   },
+  // The viewer is looking at this session right now. `at` is the conversation's
+  // own updated_at, so the mark the client already rendered is exactly what
+  // lands and the card cannot flicker back to unread on the echo.
+  ackSessionRead: async (ctx, _userId, [conversationId, at]: [string, number?]) => {
+    if (!isServerId(conversationId)) return;
+    return await ctx.runMutation!(api.sessionReads.acknowledge, {
+      conversation_id: conversationId,
+      ...(typeof at === "number" && at > 0 ? { acknowledged_at: at } : {}),
+    });
+  },
+  // The manual "leave it lit" gesture. Cleared by the next presence ack.
+  markSessionUnread: async (ctx, _userId, [conversationId]: [string]) => {
+    if (!isServerId(conversationId)) return;
+    return await ctx.runMutation!(api.sessionReads.markUnread, {
+      conversation_id: conversationId,
+    });
+  },
   // Two arg shapes: the legacy [rootId] (old bundles and persisted outbox
   // entries, always a chat thread) and [kind, rootKey]. A comment key is
   // `${conversation_id}:${anchor}`, so only its conversation half is an id.
