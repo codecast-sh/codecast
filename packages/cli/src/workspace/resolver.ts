@@ -7,7 +7,7 @@
  *   2. .codecast/workspace.toml file
  *
  * Per-field rules:
- *   - setup.{copy,install,generate,migrate}: file replaces detection per field
+ *   - setup.{copy,share,install,generate,migrate}: file replaces detection per field
  *     if present, else detection is kept. (Replace, not append — explicit lists
  *     mean "this is the full set"; otherwise users couldn't remove a
  *     misdetected step.)
@@ -35,7 +35,13 @@ export const MANIFEST_REL_PATH = ".codecast/workspace.toml";
  */
 export function resolveManifest(repoRoot: string, inputRoot = repoRoot): WorkspaceManifest {
   const detected = detectProject(repoRoot);
-  if (inputRoot !== repoRoot) detected.setup.copy = detectProject(inputRoot).setup.copy;
+  if (inputRoot !== repoRoot) {
+    // The input root is the checkout files are taken from, so its copy and
+    // share lists are the ones that describe real paths on this machine.
+    const fromInput = detectProject(inputRoot);
+    detected.setup.copy = fromInput.setup.copy;
+    detected.setup.share = fromInput.setup.share;
+  }
   const file = parseManifest(path.join(inputRoot, MANIFEST_REL_PATH));
   return mergeManifests(detected, file);
 }
@@ -66,6 +72,7 @@ export function mergeManifests(
   return {
     setup: {
       copy: replaceArrayIfNonEmpty(override.setup.copy, base.setup.copy),
+      share: replaceArrayIfNonEmpty(override.setup.share, base.setup.share),
       install: replaceArrayIfNonEmpty(override.setup.install, base.setup.install),
       generate: replaceArrayIfNonEmpty(override.setup.generate, base.setup.generate),
       migrate: replaceArrayIfNonEmpty(override.setup.migrate, base.setup.migrate),

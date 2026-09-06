@@ -8,6 +8,7 @@
  * Design rule: detection only sets fields it has high confidence in.
  *   - `install` from lockfile (very high confidence)
  *   - `copy` from .env presence (high confidence)
+ *   - `share` from gitignored dependency directories (high confidence)
  *   - `generate` from package.json scripts or prisma (medium confidence)
  *   - `ports` / `services` / `env` / `teardown` left empty — these vary too
  *     much per project to guess.
@@ -16,6 +17,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_BROWSER } from "./manifest.js";
+import { SHARE_CANDIDATES, resolveSharedDirectories } from "./share.js";
 import type { WorkspaceManifest } from "./types.js";
 
 export type JsPackageManager = "bun" | "pnpm" | "yarn" | "npm";
@@ -166,6 +168,13 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Share list: dependency directories a worktree can borrow from this
+  // checkout instead of installing its own. Only what exists here, is
+  // gitignored, and holds no workspace links back into the repo.
+  // ---------------------------------------------------------------------
+  const share = resolveSharedDirectories(repoRoot, SHARE_CANDIDATES);
+
   // Heuristic: web frameworks present → workspace likely needs a browser.
   // We don't auto-enable (could surprise users), but we record the suggestion
   // by setting `browser.enabled=true` so manifests inherit a sensible default.
@@ -173,7 +182,7 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
   const browserEnabled = detectWebFramework(repoRoot);
 
   return {
-    setup: { copy, install, generate, migrate: [] },
+    setup: { copy, share, install, generate, migrate: [] },
     ports: {},
     services: {},
     env: {},

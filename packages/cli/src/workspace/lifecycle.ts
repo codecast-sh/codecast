@@ -11,7 +11,7 @@
  *   5. Persist initial state = "creating"
  *   6. Run before-create hook
  *   7. Create git worktree + branch
- *   8. Copy gitignored files
+ *   8. Copy gitignored files; symlink setup.share directories
  *   9. Run setup (install → generate → migrate)
  *  10. Run after-create hook
  *  11. Validate contract; persist state = "ready" | "broken"
@@ -42,6 +42,7 @@ import { buildHookEnv, runHook } from "./hooks.js";
 import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
 import { withPortReservations, withWorkspaceOperation } from "./portReservations.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
+import { linkSharedDirectories, unlinkSharedDirectories } from "./share.js";
 import { runSetup } from "./setup.js";
 import type {
   AcquireOptions,
@@ -177,6 +178,10 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     // Copy gitignored files from main worktree.
     copyWorkspaceFiles(manifest, repoRoot, worktreePath, inputRoot, freshWorktree);
 
+    // Borrow the shared dependency directories before setup runs, so an
+    // install in the worktree finds them already there (ct-49541).
+    linkSharedDirectories(inputRoot ?? repoRoot, worktreePath, manifest.setup.share);
+
     // Run setup commands.
     if (!opts.skipSetup) {
       await runSetup(manifest, worktreePath, {
@@ -269,6 +274,11 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
       // Teardown errors are logged but don't block destruction.
     }
   }
+
+  // Why first: a shared directory is a symlink git reports as untracked, so
+  // removing the worktree while it is there needs --force and a rename into
+  // the trash would carry the link along (ct-49541).
+  unlinkSharedDirectories(state.path, state.manifest.setup.share);
 
   // git worktree remove
   try {
