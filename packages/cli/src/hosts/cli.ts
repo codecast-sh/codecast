@@ -28,6 +28,7 @@ import {
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { ssh } from "../remote/session-move.js";
+import { commandGroup } from "../commandGroups.js";
 
 const OK = fmt.success(icons.check);
 
@@ -416,7 +417,7 @@ function pick(id: string | undefined, what: string): CloudHost {
  * `cast browser hosts` both call this, so neither can drift from the other.
  */
 export function buildHostsCommand(parent: Command): Command {
-  const hosts = parent.command("hosts").description("Remote machines: what runs on them, and what they cost");
+  const hosts = parent.command("hosts").description(commandGroup("hosts").description);
 
   hosts
     .command("ls", { isDefault: true })

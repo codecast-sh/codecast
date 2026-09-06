@@ -14,11 +14,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
 import { detectImageMediaType, withTimeout, MAX_IMAGE_SIZE } from "./syncService.js";
 import { hashImageBytes, lookupByHash, storeUpload } from "./imageCache.js";
 import { spawnSync } from "./proc.js";
 import { fmt, icons } from "./colors.js";
+import { commandGroup } from "./commandGroups.js";
 
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -161,7 +162,7 @@ export async function uploadOne(deps: PublishDeps, target: string, alt?: string)
 export function registerImageCommand(program: Command, deps: PublishDeps): void {
   program
     .command("image <target...>")
-    .description("Upload images (files or URLs) and print stable links that render inline in messages and canvas")
+    .description(commandGroup("image").description)
     .option("--alt <text>", "Alt text for the printed markdown (defaults to the file name)")
     .option("--json", "Machine-readable output")
     .action(async (targets: string[], options: { alt?: string; json?: boolean }) => {
