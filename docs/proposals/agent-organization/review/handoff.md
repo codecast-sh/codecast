@@ -1,4 +1,12 @@
-# Completion evidence and remaining operational blocker
+# Completion record
+
+## Resolved on 5 September 2026
+
+Coordinator jx70p9m published the final cleanup as version 3 at the existing URL, opened it, and confirmed ten chapters, nine focusable pre blocks, zero generic labels and zero horizontal overflow. ct-48817 and pl-519 are closed. pl-529 remains draft. No further proposal work is required.
+
+The earlier blocker and recovery instructions below are historical; do not repeat them.
+
+## Historical handoff
 
 Public deliverable: https://codecast.sh/a/d0vFfz4flyqj (version 2, opened and browser-verified).
 
