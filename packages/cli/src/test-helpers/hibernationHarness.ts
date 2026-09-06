@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import * as policy from "../hibernation.js";
 import { functionBlock } from "./sourceRegion.js";
 
@@ -34,7 +34,7 @@ export function createHibernationHarness() {
     throw new Error(`Unexpected IO: ${kind}`);
   };
   const deps = {
-    ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES,
+    ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES,
     hasTmux: () => true,
     log: record("log"), reaperLog: record("log"),
     stopCodexPermissionPoller: record("poller-stop"),
@@ -52,7 +52,7 @@ export function createHibernationHarness() {
   };
   const maps = [
     "resumeSessionCache", "lastSentAgentStatus", "lastResumeAt", "lastHeartbeatLogged", "subagentActivityByParent",
-    "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
+    "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt", "turnCompletedAtBySession",
     "pendingOpenTaskReports", "lastOpenTasksSentAt", "lastOpenTasksSentJson", "tmuxTargetLocks",
   ].map((name) => `const ${name} = new Map();`).join("\n");
   const sets = ["managedHeartbeatSessions", "hibernatedSessions", "hibernationStampCleared", "restartingSessionIds"]

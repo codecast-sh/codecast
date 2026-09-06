@@ -220,7 +220,7 @@ import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveR
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -1143,6 +1143,20 @@ const turnStartedAt = new Map<string, number>();
 // stamp that was written later in real time.
 export function markTurnStarted(sessionId: string, ts: number): void {
   if (ts > (turnStartedAt.get(sessionId) ?? 0)) turnStartedAt.set(sessionId, ts);
+  // The previous turn's completion stamp names a turn that is over; this turn
+  // mints its own at its Stop.
+  turnCompletedAtBySession.delete(sessionId);
+}
+
+// When the lead turn behind each session's CURRENT settle ended (ms). Stamped
+// by the Stop hook, dropped by the next turn start, so the value always names
+// the turn the current status belongs to.
+const turnCompletedAtBySession = new Map<string, number>();
+export function markTurnCompleted(sessionId: string, ts: number): void {
+  turnCompletedAtBySession.set(sessionId, ts);
+}
+export function turnCompletedAtFor(sessionId: string): number | undefined {
+  return turnCompletedAtBySession.get(sessionId);
 }
 
 // The newest turn-starting message in a synced batch: a user turn that is not a
@@ -1180,7 +1194,39 @@ const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 // a CLI-first status addition throw on every heartbeatBatch validation and mark
 // live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
-type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
+type HookStatusData = {
+  status: AgentStatus;
+  ts: number;
+  permission_mode?: PermissionMode;
+  message?: string;
+  transcript_path?: string;
+  // The settle is a SESSION BOUNDARY, not a turn ending: SessionStart
+  // (startup/resume/clear) or a manual PostCompact landing the pane at an idle
+  // prompt. Carried to the server so the needs-input push, the settle
+  // classifier and unread all stand down for it (ct-49533).
+  session_boundary?: boolean;
+  // When the lead turn ended, in SECONDS like `ts`. Stamped by the Stop hook.
+  // A session the harness keeps alive for background work settles as "waiting"
+  // and its status then stops moving, so this is the only per-turn identity a
+  // consumer can dedupe on.
+  turn_completed_at?: number;
+};
+// The wire form of the record above. The hook builds ONE dict of extras,
+// urlencodes it for the push and writes the same dict to the fallback file, so
+// both transports deliver the extras as strings. Coercing them in one place
+// keeps every reader (the HTTP handler, the watcher, the boot replay) honest.
+type HookStatusWire = Omit<HookStatusData, "session_boundary" | "turn_completed_at"> & {
+  session_boundary?: boolean | string;
+  turn_completed_at?: number | string;
+};
+export function normalizeHookStatus(raw: HookStatusWire): HookStatusData {
+  const stamp = typeof raw.turn_completed_at === "string" ? parseInt(raw.turn_completed_at, 10) : raw.turn_completed_at;
+  return {
+    ...raw,
+    session_boundary: raw.session_boundary === true || raw.session_boundary === "1" || raw.session_boundary === "true" ? true : undefined,
+    turn_completed_at: typeof stamp === "number" && Number.isFinite(stamp) && stamp > 0 ? stamp : undefined,
+  };
+}
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
 const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
@@ -1526,7 +1572,12 @@ function sendAgentStatus(
   // hibernatedAt stamps or clears the park on managed_sessions in the same
   // write as the status: `now` when the pass parks the pane, null when a resume
   // brings it back.
-  opts?: { hibernatedAt?: number | null },
+  //
+  // sessionBoundary marks a settle produced by a lifecycle event rather than by
+  // a turn ending (see HookStatusData). Only the hook path sets it, and the
+  // server clears it on every write that does not, so a boundary can never
+  // outlive the settle it describes.
+  opts?: { hibernatedAt?: number | null; sessionBoundary?: boolean },
 ): void {
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const isTransition = prevStatus !== status;
@@ -1558,7 +1609,16 @@ function sendAgentStatus(
     lastOpenTasksSentAt.set(sessionId, Date.now());
     lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
   }
-  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+  // The turn stamp rides EVERY settle of that turn, not only the Stop that
+  // minted it: a session the harness keeps alive for background work settles as
+  // "waiting" and then re-publishes that same status on the reconciles, so
+  // without the stamp the server sees one unchanging status across two turns
+  // and the second turn never announces its completion (ct-49533).
+  const settled = status === "idle" || SETTLE_VERDICT_STATUSES.has(status);
+  syncService.updateSessionAgentStatus(
+    conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt,
+    { sessionBoundary: opts?.sessionBoundary, turnCompletedAt: settled ? turnCompletedAtBySession.get(sessionId) : undefined },
+  ).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
@@ -1686,6 +1746,8 @@ function startHookServer(): http.Server {
       const permissionMode = url.searchParams.get("permission_mode") as PermissionMode | undefined;
       const message = url.searchParams.get("message") || undefined;
       const transcriptPath = url.searchParams.get("transcript_path") || undefined;
+      const sessionBoundary = url.searchParams.get("session_boundary") || undefined;
+      const turnCompletedAt = url.searchParams.get("turn_completed_at") || undefined;
 
       if (!sessionId || !status || !ts) {
         res.writeHead(400);
@@ -1704,13 +1766,15 @@ function startHookServer(): http.Server {
         return;
       }
 
-      const data: HookStatusData = {
+      const data: HookStatusData = normalizeHookStatus({
         status,
         ts: parseInt(ts, 10),
         ...(permissionMode && { permission_mode: permissionMode }),
         ...(message && { message }),
         ...(transcriptPath && { transcript_path: transcriptPath }),
-      };
+        ...(sessionBoundary && { session_boundary: sessionBoundary }),
+        ...(turnCompletedAt && { turn_completed_at: turnCompletedAt }),
+      });
 
       if (hookStatusGate.deliver(sessionId, data) === "delivered") {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -21613,7 +21677,7 @@ export async function readAgentStatusFiles(dir = AGENT_STATUS_DIR): Promise<Arra
     }
     let data: HookStatusData | null = null;
     try {
-      data = JSON.parse(raw) as HookStatusData;
+      data = normalizeHookStatus(JSON.parse(raw) as HookStatusWire);
     } catch {
       data = null;
     }
@@ -22931,7 +22995,12 @@ async function main(): Promise<void> {
 
       const prev = lastHookStatus.get(sessionId);
       if (prev && prev.ts > data.ts) return;
-      if (prev && prev.ts === data.ts && prev.status === data.status) return;
+      if (prev && prev.ts === data.ts && prev.status === data.status && !!prev.session_boundary === !!data.session_boundary) return;
+
+      // The Stop hook is the only event that names the end of a lead turn.
+      // Stamp it before the settle resolution below can turn this "idle" into
+      // a "waiting" whose status then stops moving (ct-49533).
+      if (data.turn_completed_at) markTurnCompleted(sessionId, data.turn_completed_at * 1000);
 
       // A live hook (no filePath) primes at the front of the queue: after a
       // restart the boot replay queues every cold transcript, and a Stop
@@ -22947,7 +23016,7 @@ async function main(): Promise<void> {
       // the ts guards above drop this idle if a newer status landed
       // meanwhile, and the persist keeps the on disk record equal to what
       // lastHookStatus holds.
-      if (data.status === "idle" && !opts?.primed) {
+      if (data.status === "idle" && !opts?.primed && !data.session_boundary) {
         const transcript = data.transcript_path || claudeTranscriptFor(sessionId);
         if (transcript) {
           const settle = data;
@@ -22995,7 +23064,11 @@ async function main(): Promise<void> {
       // Monitor) is "waiting", not "idle": the harness will re-invoke the agent
       // when the task ends, so the ball is not in the user's court and the
       // session must not route into needs-input.
-      if (data.status === "idle") {
+      //
+      // A session boundary is exempt: no turn ended, so there is no verdict to
+      // derive and no open-task report to publish — and the transcript scan a
+      // resume would otherwise pay for is pure waste.
+      if (data.status === "idle" && !data.session_boundary) {
         const settled = resolveTurnEndStatus(
           sessionId,
           data.transcript_path ? { path: data.transcript_path, agentType: "claude" } : undefined,
@@ -23006,6 +23079,14 @@ async function main(): Promise<void> {
 
       const statusChanged = !prev || prev.status !== data.status;
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
+      // The KIND of the settle can move while its status does not: a boundary
+      // idle followed by a real idle, or two turns of a background-task session
+      // that both settle as "waiting". Both must reach the server, or the real
+      // settle inherits the boundary's exemption and the second turn never
+      // announces (ct-49533).
+      const settleKindChanged =
+        !!prev?.session_boundary !== !!data.session_boundary ||
+        (prev?.turn_completed_at ?? 0) !== (data.turn_completed_at ?? 0);
       // Keep the open task scan offset at the turn's edge while the agent
       // works (one stat when warm; the read runs under the prime semaphore),
       // so the Stop hook's sync scan covers only the turn's delta.
@@ -23068,8 +23149,8 @@ async function main(): Promise<void> {
         recentSessionInjections.delete(convId);
       }
 
-      if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
-        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+      if (statusChanged || modeChanged || settleKindChanged || pendingOpenTasksChanged(sessionId)) {
+        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode, undefined, { sessionBoundary: data.session_boundary });
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
       } else {
         // Nothing sent, so the open-task report the settle computed must not
@@ -23193,7 +23274,7 @@ async function main(): Promise<void> {
     const sessionId = path.basename(filePath, ".json");
     if (!sessionId || !filePath.endsWith(".json")) return;
     fs.promises.readFile(filePath, "utf-8")
-      .then((raw) => handleStatusData(sessionId, JSON.parse(raw) as HookStatusData, filePath))
+      .then((raw) => handleStatusData(sessionId, normalizeHookStatus(JSON.parse(raw) as HookStatusWire), filePath))
       .catch(() => {});
   }
 

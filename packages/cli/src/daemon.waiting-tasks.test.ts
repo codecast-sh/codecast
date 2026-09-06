@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion.js";
-import { SCAN_CHUNK_BYTES, readFileTailAsync, readFileTailSync, extractPendingToolUseFromTail, extractPendingToolUseFromTranscriptAsync, resolveTurnEndStatus, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { SCAN_CHUNK_BYTES, readFileTailAsync, readFileTailSync, extractPendingToolUseFromTail, extractPendingToolUseFromTranscriptAsync, resolveTurnEndStatus, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, markTurnCompleted, turnCompletedAtFor, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -279,6 +279,33 @@ describe("markTurnStarted + declaredSettleVerdict", () => {
     markTurnStarted(sid, T - 10_000); // the real, current turn
     markTurnStarted(sid, T - 120_000); // stale backlog replay must not rewind
     expect(declaredSettleVerdict(sid, T, undefined, { at: T - 60_000, status: "dormant" })).toBeNull();
+  });
+});
+
+// A session the harness keeps alive for background work settles as "waiting"
+// and re-publishes that same status on every reconcile, so the status alone
+// cannot tell one turn from the next. The Stop hook's stamp can: it names the
+// turn the current settle belongs to, and a new turn drops it (ct-49533).
+describe("markTurnCompleted — the per-turn identity of a settle", () => {
+  test("the stamp names one turn and the next turn start drops it", () => {
+    const sid = "turn-completed-identity";
+    const T = Date.now();
+    markTurnStarted(sid, T - 120_000);
+    markTurnCompleted(sid, T - 90_000);
+    // Every settle of this turn — the Stop, and the "waiting" the reconciles
+    // re-publish while the background task runs — carries the same identity.
+    expect(turnCompletedAtFor(sid)).toBe(T - 90_000);
+
+    // The background task finishes and re-invokes the agent: a new turn.
+    markTurnStarted(sid, T - 30_000);
+    expect(turnCompletedAtFor(sid)).toBeUndefined();
+
+    markTurnCompleted(sid, T - 10_000);
+    expect(turnCompletedAtFor(sid)).toBe(T - 10_000);
+  });
+
+  test("a session that never completed a turn has no identity to publish", () => {
+    expect(turnCompletedAtFor("turn-completed-never")).toBeUndefined();
   });
 });
 

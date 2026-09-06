@@ -1015,7 +1015,9 @@ function installHookScript(fileName: string, script: string, events: readonly st
 
 function installStatusHook(): void {
   installHookScript("codecast-status.sh", CODECAST_STATUS_HOOK, [
-    "UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
+    // PostCompact is the only clearing signal a manual /compact emits: it ends
+    // at an idle prompt and no Stop follows (ct-49533).
+    "UserPromptSubmit", "PreToolUse", "PreCompact", "PostCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
   ]);
 }
 

@@ -46,6 +46,12 @@ elif ev == 'PreCompact':
     status = 'compacting'
 elif ev == 'Stop':
     status = 'idle'
+    # The lead turn ended, whatever the daemon then makes of the settle. A
+    # session the harness keeps alive for background work reports 'waiting'
+    # from here on, and its status stops moving; this stamp is the per-turn
+    # identity every completion-reactive consumer keys on so a second turn
+    # under one unchanged status still announces once.
+    extra['turn_completed_at'] = str(int(time.time()))
 elif ev == 'PermissionRequest':
     # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the
     # generic Notification ('Claude needs your permission', no tool name), it
@@ -78,8 +84,26 @@ elif ev == 'Notification':
     elif nt == 'idle_prompt':
         status = 'idle'
 elif ev == 'SessionStart':
-    if str(d.get('source') or '') == 'compact':
+    src = str(d.get('source') or '')
+    if src == 'compact':
+        # An auto-compact runs INSIDE a turn that then resumes: the agent is
+        # working, not settling.
         status = 'working'
+    elif src in ('startup', 'resume', 'clear'):
+        # The only signal a resumed or cleared session emits before its first
+        # prompt. It lands the pane at an idle prompt with no turn behind it,
+        # so it settles the row as a SESSION BOUNDARY: the daemon and the
+        # server read the flag and keep every completion-reactive consumer
+        # (the needs-input push, the settle classifier, unread) out of it.
+        status = 'idle'
+        extra['session_boundary'] = '1'
+elif ev == 'PostCompact':
+    # A manual /compact swallows the turn boundary: it ends at an idle prompt
+    # and emits no Stop, so this is the pane's only clearing signal. An auto
+    # compact runs inside a turn that emits its own Stop, so it claims nothing.
+    if str(d.get('trigger') or '') == 'manual':
+        status = 'idle'
+        extra['session_boundary'] = '1'
 # A pending AskUserQuestion buffers its whole turn (the reasoning prose AND the
 # tool_use) out of the JSONL until it is answered, so the daemon cannot read the
 # real questions from the transcript. Drop the full tool_input in a per-session

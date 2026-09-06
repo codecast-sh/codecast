@@ -26,7 +26,14 @@ async function scheduleNeedsInputCheck(
   conversationId: Id<"conversations">,
   agentStatus: string,
   statusTs: number,
+  sessionBoundary?: boolean,
 ): Promise<void> {
+  // A SESSION BOUNDARY settles the row without a turn having ended (a resume, a
+  // clear, a manual /compact). Nobody was working, so nobody is waiting: the
+  // push must not chime and the settle classifier must not invent a verdict for
+  // a turn that never happened. Standing the schedule down is what keeps a
+  // resume out of both (ct-49533).
+  if (sessionBoundary) return;
   const delay =
     agentStatus === "idle"
       ? NEEDS_INPUT_IDLE_CHECK_DELAY_MS
@@ -405,6 +412,9 @@ function buildHeartbeatPatch(
     if (!tsStale && agentStatus !== session.agent_status) {
       patch.agent_status = agentStatus;
       patch.agent_status_updated_at = clientTs || now;
+      // A new status is a new settle; the boundary claim described the old one
+      // (ct-49533). undefined deletes the field.
+      patch.agent_status_boundary = undefined;
       statusChanged = true;
     }
   }
@@ -744,6 +754,12 @@ export const updateAgentStatus = mutation({
     // it, and absent leaves it alone — so a resume can undo the park in the
     // same write that reports the new status.
     hibernated_at: v.optional(v.union(v.number(), v.null())),
+    // This settle is a session boundary, not a turn ending (see the schema
+    // field). Absent means "a real settle" — the flag is cleared on every
+    // write that omits it, so it can never outlive its own settle.
+    session_boundary: v.optional(v.boolean()),
+    // When the lead turn behind this status ended (see the schema field).
+    turn_completed_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -763,7 +779,15 @@ export const updateAgentStatus = mutation({
     const patch: Record<string, any> = {
       agent_status: args.agent_status,
       agent_status_write_at: args.client_ts ?? Date.now(),
+      // undefined deletes the field: the flag describes THIS settle, so any
+      // write that does not claim a boundary clears the previous claim.
+      agent_status_boundary: args.session_boundary === true ? true : undefined,
     };
+    // The turn stamp is not cleared the same way: the daemon re-publishes a
+    // parked settle without re-deriving it, and the next turn overwrites it.
+    if (args.turn_completed_at !== undefined) {
+      patch.turn_completed_at = args.turn_completed_at;
+    }
 
     if (args.permission_mode !== undefined) {
       patch.permission_mode = args.permission_mode;
@@ -803,7 +827,7 @@ export const updateAgentStatus = mutation({
     // agent_status_updated_at is only set on an ACTUAL status change — the
     // needs-input push keys off transitions, never re-assertions.
     if (patch.agent_status_updated_at) {
-      await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at);
+      await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at, args.session_boundary);
     }
 
     // An observed processing state proves the message reached the session — ack injected messages

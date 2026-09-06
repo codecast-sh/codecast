@@ -1850,7 +1850,11 @@ export class SyncService {
   // hibernatedAt: a number stamps the park, null clears it, undefined leaves the
   // field alone — so a resume can undo the park in the same write that reports
   // the session is back.
-  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<void> {
+  // `settle` carries the facts about the SETTLE itself rather than the status:
+  // whether it is a session boundary (a resume / clear / manual compact, no
+  // turn behind it) and when the lead turn ended. Both are what let the server
+  // tell a real completion from a lifecycle event (ct-49533).
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null, settle?: { sessionBoundary?: boolean; turnCompletedAt?: number }): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.mutate(
@@ -1866,6 +1870,8 @@ export class SyncService {
           // as delivery proof (managedSessions.activeStatusAcksInjected).
           ...(presumed ? { presumed: true } : {}),
           ...(hibernatedAt !== undefined ? { hibernated_at: hibernatedAt } : {}),
+          ...(settle?.sessionBoundary ? { session_boundary: true } : {}),
+          ...(settle?.turnCompletedAt !== undefined ? { turn_completed_at: settle.turnCompletedAt } : {}),
         }
       );
     } catch {}

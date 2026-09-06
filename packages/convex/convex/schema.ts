@@ -1849,6 +1849,19 @@ export default defineSchema({
     agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
     agent_status_write_at: v.optional(v.number()),
+    // The current agent_status settled the row on a SESSION BOUNDARY — a
+    // resume, a clear, or a manual /compact landing the pane at an idle prompt
+    // — rather than on a turn ending. Written by the hook path only, and
+    // cleared by every status write that does not carry it, so it never
+    // outlives the settle it describes. Every completion-reactive consumer
+    // (the needs-input push, the settle classifier, unread) ignores such a
+    // settle.
+    agent_status_boundary: v.optional(v.boolean()),
+    // When the lead turn behind the current status ended. A session the
+    // harness keeps alive for background work settles as "waiting" and its
+    // status then stops moving, so this stamp — not the status — is the
+    // per-turn identity a completion consumer dedupes on.
+    turn_completed_at: v.optional(v.number()),
     // When the daemon parked this session's pane to stay under the fleet cap.
     // Cleared when the session resumes. Separate from agent_status_updated_at
     // so a later status write does not lose when the park started.

@@ -11,13 +11,37 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 let home: string;
 let hookFile: string;
 
-function runHook(payload: Record<string, unknown>): { status: string; message?: string; permission_mode?: string; transcript_path?: string } {
+type HookRecord = {
+  status: string;
+  ts: number;
+  message?: string;
+  permission_mode?: string;
+  transcript_path?: string;
+  session_boundary?: string;
+  turn_completed_at?: string;
+};
+
+function statusFile(sessionId: unknown): string {
+  return path.join(home, ".codecast", "agent-status", `${sessionId}.json`);
+}
+
+function runHookRaw(payload: Record<string, unknown>): void {
   execFileSync("bash", [hookFile], {
     input: JSON.stringify(payload),
     env: { ...process.env, HOME: home },
   });
-  const file = path.join(home, ".codecast", "agent-status", `${payload.session_id}.json`);
-  return JSON.parse(fs.readFileSync(file, "utf-8"));
+}
+
+function runHook(payload: Record<string, unknown>): HookRecord {
+  runHookRaw(payload);
+  return JSON.parse(fs.readFileSync(statusFile(payload.session_id), "utf-8"));
+}
+
+// An event the hook maps to no status writes nothing at all, so the caller can
+// only ask whether a record appeared.
+function reported(payload: Record<string, unknown>): boolean {
+  runHookRaw(payload);
+  return fs.existsSync(statusFile(payload.session_id));
 }
 
 beforeAll(() => {
@@ -57,6 +81,52 @@ describe("codecast-status hook event mapping", () => {
   test("Stop -> idle and UserPromptSubmit -> thinking are unchanged", () => {
     expect(runHook({ session_id: "stop-1", hook_event_name: "Stop" }).status).toBe("idle");
     expect(runHook({ session_id: "ups-1", hook_event_name: "UserPromptSubmit" }).status).toBe("thinking");
+  });
+
+  // ct-49533. A Stop is the one event that names the end of a lead turn. The
+  // daemon may then settle the session as "waiting" for its open background
+  // work, after which the status stops moving — the stamp is what still tells
+  // one turn from the next.
+  test("Stop stamps when the lead turn ended", () => {
+    const out = runHook({ session_id: "stop-stamp", hook_event_name: "Stop" });
+    expect(out.status).toBe("idle");
+    // Seconds, on the same clock as ts, so the daemon converts both alike.
+    expect(Number(out.turn_completed_at)).toBe(out.ts);
+    expect(out.session_boundary).toBeUndefined();
+  });
+
+  // ct-49533. Before this, a resume reported nothing: the row kept a status
+  // from before the session was restarted, and the settle classifier filled
+  // the vacuum with a verdict for a turn that never happened.
+  for (const source of ["startup", "resume", "clear"]) {
+    test(`SessionStart source=${source} settles the row as a session boundary`, () => {
+      const out = runHook({ session_id: `start-${source}`, hook_event_name: "SessionStart", source });
+      expect(out.status).toBe("idle");
+      expect(out.session_boundary).toBe("1");
+      // No turn ended, so there is nothing to stamp.
+      expect(out.turn_completed_at).toBeUndefined();
+    });
+  }
+
+  test("SessionStart source=compact still reports working", () => {
+    // An auto-compact runs INSIDE a turn that then resumes.
+    const out = runHook({ session_id: "start-compact", hook_event_name: "SessionStart", source: "compact" });
+    expect(out.status).toBe("working");
+    expect(out.session_boundary).toBeUndefined();
+  });
+
+  test("SessionStart with an unknown source reports nothing", () => {
+    expect(reported({ session_id: "start-unknown", hook_event_name: "SessionStart", source: "vscode" })).toBe(false);
+  });
+
+  // A manual /compact ends at an idle prompt and emits no Stop, so PostCompact
+  // is the pane's only clearing signal. An auto compact resumes its turn and
+  // emits its own Stop, so it must claim nothing.
+  test("PostCompact trigger=manual is a boundary; auto reports nothing", () => {
+    const out = runHook({ session_id: "postcompact-manual", hook_event_name: "PostCompact", trigger: "manual" });
+    expect(out.status).toBe("idle");
+    expect(out.session_boundary).toBe("1");
+    expect(reported({ session_id: "postcompact-auto", hook_event_name: "PostCompact", trigger: "auto" })).toBe(false);
   });
 
   // CC >= 2.1.x fires a first-class PermissionRequest event with the real tool
