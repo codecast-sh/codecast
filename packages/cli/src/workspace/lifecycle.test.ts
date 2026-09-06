@@ -86,35 +86,50 @@ describe("workspace port reservations", () => {
     expect((await acquireWorkspace(repoRoot, "same", opts)).workspace.state).toBe("ready");
   });
 
-  test("slow git removal yields the event loop and retires private cache", async () => {
+  test("destroy trashes the worktree, retires private cache, and leaves git consistent", async () => {
     const { workspace } = await acquireWorkspace(repoRoot, "slow-remove", opts);
     const cache = path.join(repoRoot, ".codecast/workspaces/slow-remove/bun-cache");
     fs.mkdirSync(cache, { recursive: true });
     fs.writeFileSync(path.join(cache, "package"), "private");
-    const realGit = execSync("command -v git", { encoding: "utf8" }).trim();
-    const bin = path.join(repoRoot, "fake-bin");
-    fs.mkdirSync(bin);
-    fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nsleep 0.3\nexec ${JSON.stringify(realGit)} "$@"\n`, { mode: 0o755 });
-    const oldPath = process.env.PATH;
-    process.env.PATH = `${bin}:${oldPath}`;
-    let ticks = 0;
-    const timer = setInterval(() => { if (fs.existsSync(workspace.path)) ticks++; }, 10);
-    try {
-      const releasing = releaseWorkspace(repoRoot, workspace.name);
-      for (let i = 0; i < 100 && readState(repoRoot, workspace.name)?.state !== "destroying"; i++) await Bun.sleep(5);
-      await expect(releaseWorkspace(repoRoot, workspace.name)).rejects.toThrow("operation in progress");
-      await releasing;
-      expect(ticks).toBeGreaterThan(2);
-      expect(fs.existsSync(cache)).toBe(false);
-      expect(readState(repoRoot, workspace.name)).toBeNull();
-      expect(fs.readdirSync(path.join(repoRoot, ".codecast/workspaces")).filter((n) => n.startsWith("_released-"))).toEqual([]);
-      const replacement = await acquireWorkspace(repoRoot, workspace.name, opts);
-      expect(replacement.workspace.state).toBe("ready");
-      expect(fs.existsSync(replacement.workspace.path)).toBe(true);
-    } finally {
-      clearInterval(timer);
-      process.env.PATH = oldPath;
-    }
+    fs.writeFileSync(path.join(workspace.path, "keepme.txt"), "recoverable");
+
+    const releasing = releaseWorkspace(repoRoot, workspace.name);
+    for (let i = 0; i < 100 && readState(repoRoot, workspace.name)?.state !== "destroying"; i++) await Bun.sleep(5);
+    await expect(releaseWorkspace(repoRoot, workspace.name)).rejects.toThrow("operation in progress");
+    await releasing;
+
+    expect(fs.existsSync(workspace.path)).toBe(false);
+    const worktreesDir = path.join(repoRoot, ".codecast/worktrees");
+    const trash = fs.readdirSync(worktreesDir).filter((n) => n.startsWith("_trash-"));
+    expect(trash).toHaveLength(1);
+    // The destroy is recoverable while the trash waits out its grace period.
+    expect(fs.readFileSync(path.join(worktreesDir, trash[0]!, "keepme.txt"), "utf8")).toBe("recoverable");
+    expect(fs.existsSync(cache)).toBe(false);
+    expect(readState(repoRoot, workspace.name)).toBeNull();
+    expect(fs.readdirSync(path.join(repoRoot, ".codecast/workspaces")).filter((n) => n.startsWith("_released-"))).toEqual([]);
+    // git no longer holds the destroyed worktree, so its name and branch are free.
+    expect(execSync("git worktree list", { cwd: repoRoot, encoding: "utf8" })).not.toContain("slow-remove");
+
+    const replacement = await acquireWorkspace(repoRoot, workspace.name, opts);
+    expect(replacement.workspace.state).toBe("ready");
+    expect(fs.existsSync(replacement.workspace.path)).toBe(true);
+    expect(fs.existsSync(path.join(replacement.workspace.path, "keepme.txt"))).toBe(false);
+  });
+
+  test("acquire sweeps trash past its grace period and keeps fresh trash", async () => {
+    const { workspace } = await acquireWorkspace(repoRoot, "sweepable", opts);
+    await releaseWorkspace(repoRoot, workspace.name);
+    const worktreesDir = path.join(repoRoot, ".codecast/worktrees");
+    const [fresh] = fs.readdirSync(worktreesDir).filter((n) => n.startsWith("_trash-"));
+    expect(fresh).toBeDefined();
+
+    await acquireWorkspace(repoRoot, "next-one", opts);
+    expect(fs.existsSync(path.join(worktreesDir, fresh!))).toBe(true);
+
+    const longAgo = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(path.join(worktreesDir, fresh!), longAgo, longAgo);
+    await acquireWorkspace(repoRoot, "later-one", opts);
+    expect(fs.readdirSync(worktreesDir).filter((n) => n.startsWith("_trash-"))).toEqual([]);
   });
 
   test("CLI reacquires a ready workspace with a listening service and separates warnings", async () => {

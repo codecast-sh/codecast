@@ -127,6 +127,17 @@ const ROWS: Row[] = [
   { file: "recursiveWatcher.ts", name: "probe", kind: "method", minLines: 5, mustContain: "stat" },
   { file: "recursiveWatcher.ts", name: "runRescan", kind: "method", minLines: 5, mustContain: "walkTree" },
   { file: "recursiveWatcher.ts", name: "walkTree", kind: "method", minLines: 5, mustContain: "walkFiles" },
+  // Worktree GC: the kill path (killConversationBackends) and the idle
+  // terminal reaper both release a worktree, so its git calls — status, fetch,
+  // merge-tree — and the capability cache they consult run on the loop.
+  { file: "worktreeGc.ts", name: "git", kind: "function", minLines: 4, mustContain: "execFileAsync" },
+  { file: "worktreeGc.ts", name: "originDefault", kind: "function", minLines: 5, mustContain: "symbolic-ref" },
+  { file: "worktreeGc.ts", name: "fetchPrune", kind: "function", minLines: 10, mustContain: "--prune" },
+  { file: "worktreeGc.ts", name: "contentAlreadyInBase", kind: "function", minLines: 15, mustContain: "merge-tree" },
+  { file: "worktreeGc.ts", name: "probeWorktree", kind: "function", minLines: 15, mustContain: "rev-list" },
+  { file: "worktreeGc.ts", name: "releaseSessionWorktree", kind: "function", minLines: 30, mustContain: "releaseWorkspace" },
+  { file: "gitCapability.ts", name: "readGitVersion", kind: "function", minLines: 5, mustContain: "--version" },
+  { file: "gitCapability.ts", name: "createGitCapabilityStore", kind: "function", minLines: 40, mustContain: "runWithFallback" },
 ];
 
 // Sync spawns and sync filesystem reads. readFileSync is forbidden outright:

@@ -43,6 +43,7 @@ import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
 import { withPortReservations, withWorkspaceOperation } from "./portReservations.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { runSetup } from "./setup.js";
+import { moveToTrash, sweepTrash } from "./trash.js";
 import type {
   AcquireOptions,
   ChromeBinding,
@@ -80,6 +81,8 @@ export async function acquireWorkspace(
 }
 
 async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: AcquireOptions): Promise<AcquireResult> {
+  // Collect what earlier destroys deferred, now that the grace has passed.
+  await sweepTrash(path.join(repoRoot, WORKTREES_DIR));
   const previous = readState(repoRoot, name);
   const savedInputRoot = previous?.env.CODECAST_WORKSPACE_INPUT_ROOT;
   const inputRoot = savedInputRoot ?? (opts.inputRoot ? fs.realpathSync(opts.inputRoot) : undefined);
@@ -270,15 +273,33 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
     }
   }
 
-  // git worktree remove
-  try {
-    await execFileAsync("git", ["worktree", "remove", "--force", state.path], {
-      cwd: repoRoot,
-    });
-  } catch {
-    // Fall back to filesystem removal.
-    if (fs.existsSync(state.path)) {
+  // Hand the worktree to a trash sibling instead of unlinking it here: the
+  // rename returns at once and leaves a mistaken destroy recoverable.
+  if (fs.existsSync(state.path)) {
+    try {
+      moveToTrash(state.path);
+    } catch {
+      /* the path is still there; the branch below unlinks it in place */
+    }
+  }
+  if (fs.existsSync(state.path)) {
+    // The rename failed (a trash sibling on another filesystem, say): unlink
+    // in place, the way this always used to.
+    try {
+      await execFileAsync("git", ["worktree", "remove", "--force", state.path], {
+        cwd: repoRoot,
+      });
+    } catch {
       await fs.promises.rm(state.path, { recursive: true, force: true });
+    }
+  } else {
+    // Why: the registered worktree path is gone, so `worktree remove` fails
+    // and only prune clears git's admin entry — without it the branch stays
+    // locked to a worktree that no longer exists.
+    try {
+      await execFileAsync("git", ["worktree", "prune"], { cwd: repoRoot });
+    } catch {
+      /* a stale admin entry is pruned by the next git worktree command */
     }
   }
 
@@ -286,6 +307,8 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
   const retiredDir = path.join(repoRoot, WORKSPACES_STATE_DIR, `_released-${randomUUID()}`);
   await withPortReservations(repoRoot, async () => fs.renameSync(stateDir, retiredDir));
   await fs.promises.rm(retiredDir, { recursive: true, force: true });
+  // Deferred: the trash this destroy just made stays for its grace period.
+  void sweepTrash(path.join(repoRoot, WORKTREES_DIR));
 }
 
 /**
