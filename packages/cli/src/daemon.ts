@@ -10,7 +10,7 @@ import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
-import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
+import { descendantRows, findOtherDaemonRows, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, type ProcRow } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
@@ -640,51 +640,56 @@ function validateTmuxTarget(target: string): boolean {
   return /^[a-zA-Z0-9_.:-]+$/.test(target);
 }
 
-// SIGKILL a process AND every descendant. `tmux kill-session` only SIGHUPs the
+// Terminate one or more process trees. `tmux kill-session` only SIGHUPs the
 // pane's foreground group, so claude's children — MCP servers, `caffeinate`,
 // tool subprocesses in their own process groups — routinely survive, orphaned to
-// init. Walk the parent→child tree with `pgrep -P` and kill leaves-first so a
-// dying parent can't reparent a child out from under us before we reach it.
-async function reapPidTree(rootPid: number): Promise<number> {
-  if (!Number.isInteger(rootPid) || rootPid <= 1 || rootPid === process.pid) return 0;
-  const ordered: number[] = [];
-  const queue = [rootPid];
-  const seen = new Set<number>([rootPid]);
-  while (queue.length) {
-    const pid = queue.shift()!;
-    ordered.push(pid);
-    try {
-      const { stdout } = await execAsync(`pgrep -P ${pid}`, { timeout: 3000, killSignal: "SIGKILL" });
-      for (const tok of stdout.trim().split(/\s+/)) {
-        const child = parseInt(tok, 10);
-        if (Number.isInteger(child) && child > 1 && child !== process.pid && !seen.has(child)) {
-          seen.add(child);
-          queue.push(child);
-        }
-      }
-    } catch {}
+// init.
+//
+// The tree is snapshotted ONCE, from a single `ps`, before anything is
+// signalled: the parent links only exist while the roots are alive, and a
+// descendant whose parent dies first reparents to pid 1 and leaves any later
+// walk. killProcessTree then SIGTERMs the whole snapshot at once and hard kills
+// only the survivors the table still identifies (ct-49537). Descendants are
+// signalled leaves first, roots last.
+//
+// Returns how many processes were confirmed dead.
+async function reapPidTrees(rootPids: number[]): Promise<number> {
+  const roots = rootPids.filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
+  if (roots.length === 0) return 0;
+  const procs = await snapshotProcessTableAsync({ timeout: 10_000 });
+  const targets: ProcRow[] = [];
+  const seen = new Set<number>();
+  for (const root of roots) {
+    const rootRow = procs.find((p) => p.pid === root);
+    if (!rootRow) continue; // already gone; its ppid links mean nothing now
+    for (const row of [...descendantRows(procs, root).reverse(), rootRow]) {
+      if (seen.has(row.pid)) continue;
+      seen.add(row.pid);
+      targets.push(row);
+    }
   }
-  let killed = 0;
-  for (const pid of ordered.reverse()) {
-    try { process.kill(pid, "SIGKILL"); killed++; } catch {}
+  if (targets.length === 0) return 0;
+  const { terminated, killed, unverified } = await killProcessTree(targets);
+  if (unverified > 0) {
+    log(`[REAP] ${unverified} of ${targets.length} process(es) under ${roots.join(", ")} survived SIGTERM and could not be identified for SIGKILL`);
   }
-  return killed;
+  return terminated + killed;
 }
 
-// Fully terminate a tmux session: reap each pane's whole process tree (so no
-// orphaned claude/MCP/caffeinate survives), THEN kill the session. Order matters
-// — once the session is gone we can't enumerate its pane pids.
-async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
+const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]);
+
+// Fully terminate a tmux session: reap every pane's process tree (so no orphaned
+// claude/MCP/caffeinate survives), THEN kill the session. Order matters — once
+// the session is gone we can't enumerate its pane pids. All panes go into one
+// reap so the whole session costs one `ps` and one grace window.
+export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
   if (!validateTmuxTarget(tmuxSession)) return;
   try {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
       { timeout: 3000, killSignal: "SIGKILL" },
     );
-    for (const tok of stdout.trim().split(/\s+/)) {
-      const panePid = parseInt(tok, 10);
-      if (Number.isInteger(panePid)) await reapPidTree(panePid);
-    }
+    await reapPidTrees(stdout.trim().split(/\s+/).map((tok) => parseInt(tok, 10)));
   } catch {}
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 }
@@ -20729,16 +20734,16 @@ async function sweepOrphanDaemons(): Promise<void> {
   try {
     const holder = readPidFile(PID_FILE);
     const protectedPid = holder && holder !== process.pid && isProcessRunning(holder) ? holder : null;
-    const pids = findOtherDaemonPids(await snapshotProcessTableAsync({ timeout: 15_000 }))
-      .filter((pid) => pid !== protectedPid)
-      .filter(isProcessRunning);
-    if (pids.length === 0) return;
-    log(`Sweeping ${pids.length} orphan daemon process(es): ${pids.join(", ")}`);
+    const daemons = findOtherDaemonRows(await snapshotProcessTableAsync({ timeout: 15_000 }))
+      .filter((p) => p.pid !== protectedPid)
+      .filter((p) => isProcessRunning(p.pid));
+    if (daemons.length === 0) return;
+    log(`Sweeping ${daemons.length} orphan daemon process(es): ${daemons.map((p) => p.pid).join(", ")}`);
     // The same budget `cast stop` gives a daemon, because the victim runs the
     // same shutdown: it drains the retry queue and gives its command leases
     // back, and both of those have to finish before the hard kill. This sweep
     // runs off the boot path, so waiting longer costs nothing.
-    const { killed } = await killProcessTree(pids, DAEMON_STOP_SIGKILL_MS);
+    const { killed } = await killProcessTree(daemons, DAEMON_STOP_SIGKILL_MS);
     if (killed > 0) log(`Orphan daemon sweep hard killed ${killed} process(es)`);
   } catch {}
 }
@@ -20777,7 +20782,7 @@ async function sweepStaleTmuxServers(): Promise<void> {
     }
     for (const server of stale) {
       log(`[TMUX-SWEEP] WARNING: killing stale tmux server pid ${server.pid} holding ${server.tree.length} process(es), ${server.agents} agent(s) (live server is ${livePid})`);
-      await killProcessTree([...server.tree, server.pid]);
+      await killProcessTree([...server.tree, server.row]);
     }
   } catch (err) {
     log(`[TMUX-SWEEP] sweep error: ${(err as Error)?.message ?? err}`);

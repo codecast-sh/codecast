@@ -81,7 +81,7 @@ describe("daemon restart gating", () => {
   test("the split brain sweeps match off the process table, not pgrep", () => {
     const daemon = src("daemon.ts");
     expect(functionBody(index, "stopDaemon")).toContain("findOtherDaemonPids(snapshotProcessTable(");
-    expect(functionBody(daemon, "sweepOrphanDaemons")).toContain("findOtherDaemonPids(await snapshotProcessTableAsync(");
+    expect(functionBody(daemon, "sweepOrphanDaemons")).toContain("findOtherDaemonRows(await snapshotProcessTableAsync(");
     for (const source of [index, daemon]) {
       expect(source).not.toContain("pgrep -f 'daemon");
     }
@@ -106,7 +106,7 @@ describe("daemon restart gating", () => {
     // The wait is the budget `cast stop` uses, because the victim runs the same
     // shutdown: a shorter one kills it mid retry flush, which is the one case
     // the flush exists for.
-    expect(body).toContain("killProcessTree(pids, DAEMON_STOP_SIGKILL_MS)");
+    expect(body).toContain("killProcessTree(daemons, DAEMON_STOP_SIGKILL_MS)");
     expect(body).not.toContain('"SIGKILL"');
   });
 

@@ -460,12 +460,17 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
           return { ok: false, warn: true, detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` };
         }
         let killed = 0;
+        let left = 0;
         for (const s of stale) {
-          const r = await killProcessTree([...s.tree, s.pid]);
+          const r = await killProcessTree([...s.tree, s.row]);
           killed += r.terminated + r.killed;
+          // A survivor whose pid, start time and process group no longer agree
+          // is not ours to SIGKILL — the pid was recycled while we waited.
+          left += r.unverified;
         }
         cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
-        return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)` };
+        const leftover = left > 0 ? `, left ${left} whose identity no longer matched` : "";
+        return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)${leftover}` };
       },
     });
   }
