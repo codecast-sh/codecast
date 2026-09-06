@@ -2891,6 +2891,11 @@ export default defineSchema({
 
     mode: v.union(v.literal("propose"), v.literal("apply")),
     max_runtime_ms: v.optional(v.number()),
+    // `cast trigger add --precheck "<shell command>"`: a gate the daemon runs
+    // in project_path before a scheduled or recurring run. Exit 0 runs the
+    // trigger; anything else records a skipped run and spends no session.
+    // Event triggers ignore it — the webhook already IS the evidence.
+    precheck: v.optional(v.string()),
 
     status: v.union(
       v.literal("scheduled"),
@@ -2921,6 +2926,10 @@ export default defineSchema({
     // hadn't synced yet at completion. Absent for --context-current runs, which
     // record last_run_conversation_id directly.
     last_run_session_uuid: v.optional(v.string()),
+    // Denormalized newest precheck skip, same role as last_run_* above: the
+    // trigger rows and `cast trigger log` read one row, not the skip history.
+    last_precheck_skip_at: v.optional(v.number()),
+    last_precheck_skip_reason: v.optional(v.string()),
     run_count: v.number(),
     created_at: v.number(),
     // Haiku-generated presentation fields (agentTasks.generateDisplaySummary).
@@ -2980,9 +2989,28 @@ export default defineSchema({
       model: v.optional(v.string()),
       project_path: v.optional(v.string()),
       max_runtime_ms: v.optional(v.number()),
+      precheck: v.optional(v.string()),
     }),
     created_at: v.number(),
   }).index("by_task", ["task_id", "revision"]),
+
+  // One row per run a precheck refused. A skipped run spawns no agent, so it
+  // has no conversation — and conversations are what webListRuns projects a
+  // run history from. Without a row of its own a skip would be invisible, and
+  // "the trigger fired and did nothing" is exactly what the user needs to see.
+  agent_task_precheck_skips: defineTable({
+    task_id: v.id("agent_tasks"),
+    user_id: v.id("users"),
+    command: v.string(),
+    // Absent when the command timed out or never started.
+    exit_code: v.optional(v.number()),
+    timed_out: v.boolean(),
+    duration_ms: v.number(),
+    // Tail of stdout+stderr, capped by TRIGGER_PRECHECK_OUTPUT_CHARS.
+    output: v.optional(v.string()),
+    reason: v.string(),
+    created_at: v.number(),
+  }).index("by_task", ["task_id", "created_at"]),
 
   // --- Task Layer: Projects, Tasks, Docs ---
 

@@ -4,6 +4,8 @@ import * as os from "os";
 import * as path from "path";
 import { TaskScheduler, buildRunLaunch } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
+import { runTriggerPrecheck } from "./precheckRunner.js";
+import { triggerPrecheckPassed } from "@codecast/shared/contracts";
 
 /**
  * Device-affinity regression tests (ct-36854): a daemon must never claim a
@@ -34,13 +36,15 @@ interface MockCalls {
   completed: string[];
   /** The exact prompt each injection carried. */
   prompts: string[];
+  /** Firings the precheck gate refused, with what it reported. */
+  skipped: Array<{ taskId: string; reason: string; command: string; exitCode?: number; timedOut: boolean }>;
 }
 
 function makeScheduler(
   dueTasks: any[],
   opts: { claimResult?: (task: any) => any; filing?: "stashed" | "killed" | null } = {},
 ) {
-  const calls: MockCalls = { claimed: [], failed: [], injected: [], completed: [], prompts: [] };
+  const calls: MockCalls = { claimed: [], failed: [], injected: [], completed: [], prompts: [], skipped: [] };
   const byId = new Map(dueTasks.map((t) => [t._id, t]));
   const syncService = {
     getDueTasks: async () => dueTasks,
@@ -67,6 +71,16 @@ function makeScheduler(
     // the fake must exist at all, or the read throws and the whole injection is
     // reported as a failed run.
     getSessionFiling: async () => opts.filing ?? null,
+    skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string) => {
+      calls.skipped.push({
+        taskId,
+        reason,
+        command: result.command,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+      });
+      return true;
+    },
   };
   const scheduler = new TaskScheduler({
     syncService: syncService as any,
@@ -216,5 +230,82 @@ describe("spawned run launch flags", () => {
     expect(agentBin).toBe("codex");
     expect(extraAgentArgs).toContain("-m");
     expect(extraAgentArgs[extraAgentArgs.indexOf("-m") + 1]).toBe("gpt-5.3-codex");
+  });
+});
+
+// `cast trigger add --precheck`: the gate decides whether a firing spends a
+// session at all. A refused firing must spawn nothing, inject nothing, and
+// leave a skip record — the only trace that the trigger fired.
+describe("precheck gate", () => {
+  const injectTask = (precheck: string, extra: Record<string, any> = {}) => ({
+    ...spawnTask("t1"),
+    originating_conversation_id: "conv123",
+    schedule_type: "recurring",
+    precheck,
+    ...extra,
+  });
+
+  it("exit 0 lets the run proceed and records no skip", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask("exit 0")], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.completed).toEqual(["t1"]);
+    expect(calls.skipped).toEqual([]);
+  });
+
+  it("a non-zero exit skips the run: nothing injected, nothing failed, a skip recorded", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask("exit 3")], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.claimed).toEqual(["t1"]);
+    expect(calls.injected).toEqual([]);
+    expect(calls.completed).toEqual([]);
+    // A skip is not a failure: retrying it would just re-run the same gate.
+    expect(calls.failed).toEqual([]);
+    expect(calls.skipped).toHaveLength(1);
+    expect(calls.skipped[0]).toMatchObject({ taskId: "t1", command: "exit 3", exitCode: 3, timedOut: false });
+    expect(calls.skipped[0].reason).toBe("precheck exited 3");
+  });
+
+  it("gates a spawn run too — the tmux spawn is never reached", async () => {
+    const task = { ...spawnTask("t1", dir), schedule_type: "recurring", precheck: "exit 1" };
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(calls.skipped).toHaveLength(1);
+    expect(calls.failed).toEqual([]);
+  });
+
+  it("a precheck that never answers skips the run rather than stalling the trigger", async () => {
+    // The scheduler's gate is the 60s production timeout, so drive the runner
+    // it calls with a short one — the contract under test is that a timeout
+    // fails closed, which is what turns into a skip above.
+    const started = Date.now();
+    const result = await runTriggerPrecheck({ command: "sleep 30", cwd: dir, timeoutMs: 300 });
+    expect(result.timedOut).toBe(true);
+    expect(triggerPrecheckPassed(result)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("an event trigger ignores the precheck — the webhook already is the evidence", async () => {
+    const task = injectTask("exit 1", { schedule_type: "event" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
+  });
+
+  it("runs ungated when the named directory is gone, rather than answering about $HOME", async () => {
+    const task = injectTask("exit 1", { project_path: path.join(dir, "vanished") });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
+  });
+
+  it("a trigger with no precheck runs exactly as before", async () => {
+    const task = { ...spawnTask("t1"), originating_conversation_id: "conv123" };
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
   });
 });
