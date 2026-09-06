@@ -35,6 +35,7 @@ import type {
 import { moveToTrash, writeVaultFile } from "./vaultFs.js";
 import { findVault, listVaults, setVaultNoteCount } from "./vaultRegistry.js";
 import {
+  isRepoVaultRoot,
   isVaultDocumentPath,
   normalizeVaultPath,
   resolveVaultPath,
@@ -120,6 +121,7 @@ async function handleScan(
     vault: { ...vault, note_count: noteCount },
     files,
     scanned_at: Date.now(),
+    repo: isRepoVaultRoot(vault.root),
   };
   sendJson(res, 200, headers, body);
 }

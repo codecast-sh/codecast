@@ -192,6 +192,7 @@ describe("GET /vault/roots and /vault/scan", () => {
     // Markdown only — the scan lists .txt and .png, but "notes" means notes.
     expect(body.vault.note_count).toBe(3);
     expect(body.scanned_at).toBeGreaterThan(0);
+    expect(body.repo).toBe(false);
   });
 
   test("an unknown vault is a 404", async () => {
