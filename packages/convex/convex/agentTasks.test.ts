@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { applyTaskUpdate, cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
+import {
+  applyRunNow,
+  applyTaskUpdate,
+  cancelTasksBoundToConversation,
+  claimRunSourceFields,
+  reactivateTasksCanceledOnKill,
+} from "./agentTasks";
 
 // Killing a session cancels the schedules that inject into it; restoring the
 // session must bring back exactly those schedules — not ones that completed
@@ -113,6 +119,40 @@ describe("reactivateTasksCanceledOnKill", () => {
   });
 });
 
+// ct-49673: `cast trigger run` and the web Run now button both land on
+// applyRunNow, and the daemon can only tell a person's request apart from the
+// schedule's own firing if that request is written down. The claim settles it:
+// it names the source and consumes the request, so the NEXT firing is the
+// schedule's again.
+describe("firing source", () => {
+  test("Run now stamps the firing as manual and arms it immediately", async () => {
+    const task = taskRow({ _id: "t1", run_at: Date.now() + 60 * 60 * 1000 });
+    const { db } = fakeDb([task, home()]);
+
+    await applyRunNow({ db } as any, task as any);
+
+    expect(task.requested_run_source).toBe("manual");
+    expect(task.status).toBe("scheduled");
+    expect(task.run_at).toBeLessThanOrEqual(Date.now());
+  });
+
+  test("the claim names the source and consumes a manual request", () => {
+    expect(claimRunSourceFields({ schedule_type: "recurring", requested_run_source: "manual" })).toEqual({
+      requested_run_source: undefined,
+      last_run_source: "manual",
+    });
+    // Consumed: the same row on its next, unrequested firing is the schedule's.
+    expect(claimRunSourceFields({ schedule_type: "recurring" }).last_run_source).toBe("recurring");
+    expect(claimRunSourceFields({ schedule_type: "once" }).last_run_source).toBe("scheduled");
+    expect(claimRunSourceFields({ schedule_type: "event" }).last_run_source).toBe("event");
+  });
+
+  test("a manual run of an event trigger still reads as manual", () => {
+    const fields = claimRunSourceFields({ schedule_type: "event", requested_run_source: "manual" });
+    expect(fields.last_run_source).toBe("manual");
+  });
+});
+
 // Every effective edit — CLI or web, both go through applyTaskUpdate — must
 // append an agent_task_revisions row: the pre-edit snapshot (version history)
 // plus who changed what from where (audit log). A no-op edit writes nothing.
@@ -221,5 +261,28 @@ describe("applyTaskUpdate", () => {
       expect(task.title).toBe("Check CI");
       expect(revisionsOf(rows)).toHaveLength(0);
     }
+  });
+
+  // The precheck is an editable field like any other, so `cast trigger update
+  // --precheck` must be versioned and audited — not a quiet patch that leaves
+  // no record of when the gate changed or who changed it.
+  test("setting, changing and clearing the precheck is versioned like any edit", async () => {
+    const task = editable();
+    const { db, rows } = fakeDb([task, home()]);
+
+    const set = await applyTaskUpdate({ db } as any, task as any, { precheck: "make check" }, ACTOR);
+    expect(set).toEqual({ ok: true, changed: ["precheck"] });
+    expect(task.precheck).toBe("make check");
+    expect(revisionsOf(rows)[0].before.precheck).toBeUndefined();
+
+    const same = await applyTaskUpdate({ db } as any, task as any, { precheck: "  make check  " }, ACTOR);
+    expect(same.changed).toEqual([]);
+    expect(revisionsOf(rows)).toHaveLength(1);
+
+    // "" is how the CLI removes the gate.
+    const cleared = await applyTaskUpdate({ db } as any, task as any, { precheck: "" }, ACTOR);
+    expect(cleared.changed).toEqual(["precheck"]);
+    expect(task.precheck).toBeUndefined();
+    expect(revisionsOf(rows)[1].before.precheck).toBe("make check");
   });
 });

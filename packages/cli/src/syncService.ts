@@ -7,7 +7,7 @@ import { countingSemaphore } from "./semaphore.js";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
-import type { OpenTaskReport, AgentStatus } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, TriggerPrecheckResult, TriggerFiringSource } from "@codecast/shared/contracts";
 
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
@@ -2140,6 +2140,39 @@ export class SyncService {
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error, run_session_uuid: runSessionUuid }
       );
       return result as boolean;
+    } catch {
+      return false;
+    }
+  }
+
+  // Record a firing the `--precheck` gate refused: no agent ran, so there is no
+  // conversation for webListRuns to project a run from and the skip row IS the
+  // run record. Re-arms the trigger on its normal cadence server-side.
+  async skipTaskRun(
+    taskId: string,
+    daemonId: string,
+    result: TriggerPrecheckResult,
+    reason: string,
+    source: TriggerFiringSource,
+  ): Promise<boolean> {
+    if (!this.apiToken) return false;
+    try {
+      const ok = await this.mutate(
+        "agentTasks:skipTaskRun" as any,
+        {
+          api_token: this.apiToken,
+          task_id: taskId,
+          daemon_id: daemonId,
+          command: result.command,
+          exit_code: result.exitCode,
+          timed_out: result.timedOut,
+          duration_ms: result.durationMs,
+          output: result.output,
+          reason,
+          source,
+        }
+      );
+      return ok as boolean;
     } catch {
       return false;
     }
