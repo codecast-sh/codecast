@@ -11657,6 +11657,7 @@ export function paneContentAfterLaunchEcho(paneContent: string): string {
 export type TmuxLiveState =
   | "idle"          // empty input prompt — safe to paste
   | "busy"          // spinner / "esc to interrupt" — wait
+  | "starting"      // composer painted but the TUI is still booting — wait, send nothing
   | "interrupted"   // "What should Claude do instead?" dialog — Escape to clear
   | "rewind"        // Rewind/Restore modal — Escape to cancel (NEVER Enter, that rewinds)
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
@@ -11665,6 +11666,20 @@ export type TmuxLiveState =
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
+// The part of the region below its newest box-drawing separator — the last frame
+// the TUI painted. A TUI that redraws its whole header (codex repaints it three
+// times while a resume replays) leaves the earlier frames in the same capture, so
+// a boot marker read from the whole region can belong to a frame that is already
+// over. Everything else in this classifier is about the CURRENT screen, so only
+// the boot marker needs this narrowing.
+function newestPaintedFrame(region: string): string {
+  const lines = region.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/[─━]{20,}/.test(lines[i])) return lines.slice(i + 1).join("\n");
+  }
+  return region;
+}
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -11672,6 +11687,15 @@ export type TmuxLiveState =
 export function classifyTmuxLiveState(region: string): TmuxLiveState {
   if (/Resume this session with:/i.test(region)) return "exited";
   if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(region)) return "exited";
+  // Why: a painted composer is not proof the TUI reads stdin. codex paints
+  // "› Ask Codex to do anything" while it is still replaying a resumed session
+  // ("Resuming session…", header still "model: loading"), the ›-glyph rule below
+  // reads that as idle, and the redraw that ends the replay throws the pasted
+  // text away — so the message is lost and every retry pastes another copy at
+  // the prompt (ct-49614: nine stacked copies, none submitted). Checked before
+  // busy: "not reading input yet" is a stronger statement than "a turn is
+  // running", and the type-ahead paste busy allows is exactly what is unsafe here.
+  if (/^\s*Resuming session[.…]/mi.test(newestPaintedFrame(region))) return "starting";
   if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
@@ -13240,6 +13264,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
   const startedAt = Date.now();
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
+  let loggedStarting = false;
 
   // Glyph-less clients (opencode/pi/grok) are classified from the WHOLE pane via
   // their registry readiness pattern, not the ❯/›-glyph whitelist (see
@@ -13280,6 +13305,20 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
     // booting/redrawing), so poll again until it does or the budget above trips.
     // There are no keys to send.
     if (glyphlessPattern) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      continue;
+    }
+
+    // Why: a TUI still booting has no key to press at — only a composer that is
+    // painted but deaf. Poll until it goes live, bounded by the budget above,
+    // which reports AGENT_NOT_READY for the delivery layer to retry. Returning
+    // here instead would paste into a composer the boot redraw is about to
+    // discard, and the retry would stack a second copy (ct-49614).
+    if (state === "starting") {
+      if (!loggedStarting) {
+        loggedStarting = true;
+        log(`${target} is still starting up, waiting for a live composer before pasting`);
+      }
       await new Promise(resolve => setTimeout(resolve, 300));
       continue;
     }
@@ -13581,6 +13620,18 @@ export function tmuxWatchablePrefix(payload: string): string | null {
   return stripComposerWs(payload).slice(0, 40) || null;
 }
 
+// Does the composer at the LAST prompt glyph hold this payload, with nothing
+// before it? The Enter gate's per-tick test, lifted so the paste path can ask
+// the same question BEFORE it pastes. Text above the last glyph is transcript,
+// so a message the agent already received can never match.
+export function tmuxComposerHoldsPayload(pane: string, payload: string): boolean {
+  const prefix = tmuxWatchablePrefix(payload);
+  if (prefix === null) return false;
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return false;
+  return stripComposerWs(pane.slice(glyphAt + 1)).startsWith(prefix);
+}
+
 export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
@@ -13593,8 +13644,7 @@ export async function awaitTmuxComposerPayload(
   },
 ): Promise<"matched" | "unwatchable"> {
   const exec = opts.exec ?? tmuxExec;
-  const prefix = tmuxWatchablePrefix(payload);
-  if (prefix === null) return "unwatchable";
+  if (tmuxWatchablePrefix(payload) === null) return "unwatchable";
   const deadline = Date.now() + (opts.budgetMs ?? 20_000);
   const tick = () => new Promise(resolve => setTimeout(resolve, 150));
 
@@ -13635,7 +13685,7 @@ export async function awaitTmuxComposerPayload(
     const chip = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/i) : null;
     const matched = chip
       ? !glyphLine.slice(0, chip.index).trim()
-      : stripComposerWs(afterGlyph).startsWith(prefix);
+      : tmuxComposerHoldsPayload(pane, payload);
     if (matched) return "matched";
 
     if (!glyphLine.trim()) {
@@ -13766,42 +13816,65 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const contentPrefix = sanitized.slice(0, 40);
 
   const doPaste = () => pasteTextIntoPane(target, sanitized, bracketed);
+  const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
 
-  // Clear any stale input before pasting to prevent draft text from being
-  // prepended to the injected message or submitted by the trailing Enter —
-  // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
-  // the Enter gate below refuses to submit over anything it missed.
-  //
-  // Escape is the one key here that doubles as "interrupt the current turn", so
-  // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
-  // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
-  // pasted message then rides Claude Code's native queue until the turn ends.
-  if (!busy) {
-    await tmuxExec(["send-keys", "-t", target, "Escape"]);
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  await drainTmuxComposer(target);
-
-  // Capture pane before paste for before/after comparison
-  let prePaste = "";
+  // Why: a retry must never paste a second copy. An earlier attempt can leave
+  // the payload sitting in the composer — it pasted, then failed to submit —
+  // and pasting again stacks copies at the prompt that all submit as one
+  // message the moment anything presses Enter (ct-49614: nine copies of a
+  // multi-line message in a resumed codex pane). The Enter gate's own test
+  // answers "is my payload already at the prompt", so ask it before the drain
+  // and submit what is there rather than adding to it. Only the payload's own
+  // text counts: a collapsed "[Pasted text #1]" chip could be anyone's draft,
+  // and submitting that would ack a message the agent never saw.
+  let alreadyAtPrompt = false;
   try {
     const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-    prePaste = stdout;
+    alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
   } catch {}
 
-  // Paste once
-  await doPaste();
+  // The pane before the paste, for the post-submit verifier's before/after
+  // comparison; empty when nothing was pasted, which is honest — every frame it
+  // then sees counts as a change.
+  let prePaste = "";
+  let gate: "matched" | "unwatchable" = "matched";
 
-  // The payload is its own readiness probe: Enter is only sent once the
-  // composer visibly holds it and nothing else — see awaitTmuxComposerPayload
-  // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
-  // match doubles as paste confirmation for the post-submit verifier.
-  const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
-  const gate = await awaitTmuxComposerPayload(target, sanitized, {
-    multiline: bracketed && sanitized.includes("\n"),
-    prePaste,
-    rePaste: doPaste,
-  });
+  if (alreadyAtPrompt) {
+    log(`Composer in ${target} already holds this payload from an earlier attempt; submitting it instead of pasting again`);
+  } else {
+    // Clear any stale input before pasting to prevent draft text from being
+    // prepended to the injected message or submitted by the trailing Enter —
+    // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
+    // the Enter gate below refuses to submit over anything it missed.
+    //
+    // Escape is the one key here that doubles as "interrupt the current turn", so
+    // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
+    // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
+    // pasted message then rides Claude Code's native queue until the turn ends.
+    if (!busy) {
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    await drainTmuxComposer(target);
+
+    try {
+      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+      prePaste = stdout;
+    } catch {}
+
+    // Paste once
+    await doPaste();
+
+    // The payload is its own readiness probe: Enter is only sent once the
+    // composer visibly holds it and nothing else — see awaitTmuxComposerPayload
+    // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
+    // match doubles as paste confirmation for the post-submit verifier.
+    gate = await awaitTmuxComposerPayload(target, sanitized, {
+      multiline: bracketed && sanitized.includes("\n"),
+      prePaste,
+      rePaste: doPaste,
+    });
+  }
   let pasteConfirmed = gate === "matched";
   if (gate === "matched") {
     await tmuxExec(["send-keys", "-t", target, "Enter"]);

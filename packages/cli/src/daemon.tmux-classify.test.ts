@@ -517,6 +517,74 @@ describe("agent update menu", () => {
   });
 });
 
+// ── A resuming codex pane is not idle (ct-49614) ───────────────────────────
+// Verbatim captures from `codex resume <id>` on codex-cli 0.153.4, taken by the
+// D0 matrix's resume cell at 1.65s and 2.9s after the pane was rebuilt. The TUI
+// paints its composer while the session still replays, so the ›-glyph rule read
+// both frames "idle" and the injection pre-flight pasted into a composer the
+// end-of-replay redraw then discarded — losing the message and leaving every
+// retry to stack another copy at the prompt.
+const CODEX_RESUMING_PANE = `
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)            │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+  Resuming session…
+
+› Ask Codex to do anything
+
+  ? for shortcuts`;
+
+// The same pane 1.3s later: codex has repainted its header, so the capture now
+// holds two frames. The marker read from the newest frame is still live.
+const CODEX_RESUMING_PANE_REPAINTED = `${CODEX_RESUMING_PANE}
+╭─────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)                              │
+│                                                         │
+│ model:       loading   /model to change                 │
+│ directory:   /private/var/folders/…/matrix-codex-NDqA2Z │
+│ permissions: YOLO mode                                  │
+╰─────────────────────────────────────────────────────────╯
+  Resuming session…
+
+› Ask Codex to do anything
+
+  ? for shortcuts`;
+
+// And once the replay is over: the "Resuming session…" lines are scrollback
+// above the newest header box, and the pane is genuinely ready.
+const CODEX_RESUMED_PANE = `${CODEX_RESUMING_PANE_REPAINTED}
+╭─────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)                              │
+│                                                         │
+│ model:       matrix   /model to change                  │
+│ directory:   /private/var/folders/…/matrix-codex-NDqA2Z │
+│ permissions: YOLO mode                                  │
+╰─────────────────────────────────────────────────────────╯
+
+› matrix-preresume-57a5e763: first turn
+
+
+› Ask Codex to do anything
+
+  matrix default · /tmp/matrix-codex-NDqA2Z`;
+
+describe("codex resume", () => {
+  test("a pane still replaying its session is 'starting', not idle", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_RESUMING_PANE))).toBe("starting");
+  });
+
+  test("a repaint that leaves the earlier frame in the capture still reads 'starting'", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_RESUMING_PANE_REPAINTED))).toBe("starting");
+  });
+
+  test("a finished replay reads idle — the marker above the newest frame is scrollback", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_RESUMED_PANE))).toBe("idle");
+  });
+});
+
 // ── Deferral is finite (ct-48187) ──────────────────────────────────────────
 describe("noteUnresolvablePane", () => {
   test("rebuilds only after the threshold, counting well-spaced failures", () => {
