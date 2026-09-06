@@ -15,32 +15,6 @@ export type PersistedCodexThread = {
 };
 
 /**
- * Params to bring a saved thread back, reproducing the policy it actually ran
- * under. A recorded `sandboxPolicy` is authoritative and restores writable roots
- * and network access; a legacy record carrying only the coarse `sandbox` mode
- * replays that mode, which is the most the protocol can express for it.
- *
- * A record with NEITHER may be an invalidation from an older version and resumes read-only.
- * A null policy records invalidation and must resume read-only, even when a
- * stale coarse mode or the configured default grants broader access.
- */
-export function codexResumeParams(
-  record: PersistedCodexThread,
-  approvalPolicy: ApprovalPolicy,
-): ThreadResumeParams {
-  const fromPolicy = sandboxResumeParams(record.sandboxPolicy);
-  const sandbox = record.sandboxPolicy === null ? "read-only" : fromPolicy.sandbox
-    ?? (record.sandboxPolicy ? "read-only" : record.sandbox ?? "read-only");
-  return {
-    threadId: record.threadId,
-    ...(record.cwd ? { cwd: record.cwd } : {}),
-    approvalPolicy,
-    ...(sandbox ? { sandbox } : {}),
-    ...(fromPolicy.config ? { config: fromPolicy.config } : {}),
-  };
-}
-
-/**
  * What to write to disk as a thread's policy. This is the production decision,
  * shared by every persist site in the daemon.
  *
@@ -116,6 +90,32 @@ export function registerPolicyPersistenceHandlers(input: {
 
 export const CODEX_RECOVERY_PROMPT = "Codecast restarted while your previous turn was still running. Continue the user's existing task from the saved conversation and current workspace. First check the results of any commands that may already have run; do not repeat completed actions. Respect any pending permission or user decision. Continue until the requested work is complete or you need the user's input.";
 export const MAX_CODEX_RECOVERY_ATTEMPTS = 3;
+
+/**
+ * Params to bring a saved thread back, reproducing the policy it actually ran
+ * under. A recorded `sandboxPolicy` is authoritative and restores writable roots
+ * and network access; a legacy record carrying only the coarse `sandbox` mode
+ * replays that mode, which is the most the protocol can express for it.
+ *
+ * A record with NEITHER may be an invalidation from an older version and resumes read-only.
+ * A null policy records invalidation and must resume read-only, even when a
+ * stale coarse mode or the configured default grants broader access.
+ */
+export function codexResumeParams(
+  record: PersistedCodexThread,
+  approvalPolicy: ApprovalPolicy,
+): ThreadResumeParams {
+  const fromPolicy = sandboxResumeParams(record.sandboxPolicy);
+  const sandbox = record.sandboxPolicy === null ? "read-only" : fromPolicy.sandbox
+    ?? (record.sandboxPolicy ? "read-only" : record.sandbox ?? "read-only");
+  return {
+    threadId: record.threadId,
+    ...(record.cwd ? { cwd: record.cwd } : {}),
+    approvalPolicy,
+    ...(sandbox ? { sandbox } : {}),
+    ...(fromPolicy.config ? { config: fromPolicy.config } : {}),
+  };
+}
 
 export function codexRecoveryAction(record: PersistedCodexThread, thread: ThreadResumeResponse["thread"]): "none" | "settled" | "active" | "continue" | "exhausted" {
   if (!record.activeTurnId) return "none";

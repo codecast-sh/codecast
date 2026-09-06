@@ -21,6 +21,7 @@ export type SandboxPolicy =
   | { type: "readOnly"; networkAccess: boolean }
   | { type: "externalSandbox"; networkAccess: unknown }
   | { type: "workspaceWrite"; writableRoots: string[]; networkAccess: boolean; excludeTmpdirEnvVar: boolean; excludeSlashTmp: boolean };
+
 /**
  * Resume params that reproduce a policy the server previously reported.
  *
@@ -68,7 +69,6 @@ export function sandboxResumeParams(
       return {};
   }
 }
-
 /**
  * A JSON-RPC error response: the server answered and REFUSED the request. This
  * is authoritative, so the thread's previous policy still holds. It is
@@ -79,11 +79,6 @@ export class CodexRequestRefused extends Error {
   readonly refused = true as const;
 }
 
-/** True only for an answered refusal, never for an ambiguous transport failure. */
-export function isAuthoritativeRefusal(error: unknown): boolean {
-  return !!error && typeof error === "object" && (error as { refused?: unknown }).refused === true;
-}
-
 /**
  * The durability barrier failed: the thread's stored policy could not be cleared
  * before a request that may change it. Thrown BEFORE anything reaches the
@@ -91,6 +86,11 @@ export function isAuthoritativeRefusal(error: unknown): boolean {
  * authorizes the older, broader policy.
  */
 export class CodexPolicyInvalidationFailed extends Error {}
+
+/** True only for an answered refusal, never for an ambiguous transport failure. */
+export function isAuthoritativeRefusal(error: unknown): boolean {
+  return !!error && typeof error === "object" && (error as { refused?: unknown }).refused === true;
+}
 
 export type ApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 export type TurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
