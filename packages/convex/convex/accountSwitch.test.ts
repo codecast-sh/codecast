@@ -17,6 +17,8 @@ import {
   targetAccountEmail,
   continueTargetPin,
   continueNeedsRestart,
+  activeCodexProfile,
+  codexAccountNeedsRestart,
   parkedOnActiveAccount,
   resumePinFor,
   isExhaustionCurrent,
@@ -941,6 +943,54 @@ describe("continueNeedsRestart", () => {
     expect(continueNeedsRestart({ pending_api_error_kind: "auth" }, pinned, now)).toBe(true);
     expect(continueNeedsRestart({ pending_api_error_kind: "auth" }, undefined, now)).toBe(true);
     expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "other" }, { ...pinned, is_remote: true }, now)).toBe(false);
+  });
+});
+
+// A Codex process reads ~/.codex/auth.json once and holds that grant for life,
+// so a machine that has since signed into another account leaves the session
+// spending the old one. Only a restart moves it, and only the panes that
+// actually run the old account should be offered one.
+describe("codexAccountNeedsRestart", () => {
+  const device = {
+    is_remote: false,
+    codex_accounts: {
+      active_email: "a@x.com",
+      profiles: [
+        { name: "ashot", email: "a@x.com" },
+        { name: "footage", email: "f@x.com" },
+      ],
+    },
+  };
+
+  test("the active profile is the one covering the machine's login", () => {
+    expect(activeCodexProfile(device)).toBe("ashot");
+    // A login with no saved profile, no inventory at all, or no device.
+    expect(activeCodexProfile({ ...device, codex_accounts: { active_email: "z@x.com", profiles: [] } })).toBeUndefined();
+    expect(activeCodexProfile({ is_remote: false })).toBeUndefined();
+    expect(activeCodexProfile(undefined)).toBeUndefined();
+  });
+
+  test("a session left on a previous account needs a restart", () => {
+    expect(codexAccountNeedsRestart({ codex_account: "footage" }, device)).toBe(true);
+  });
+
+  test("a session already on the machine's login does not", () => {
+    expect(codexAccountNeedsRestart({ codex_account: "ashot" }, device)).toBe(false);
+  });
+
+  test("an unattributed session is never named — a restart must be justified", () => {
+    expect(codexAccountNeedsRestart({}, device)).toBe(false);
+    expect(codexAccountNeedsRestart({ codex_account: null }, device)).toBe(false);
+  });
+
+  test("a device whose login we cannot name orders no restarts", () => {
+    expect(codexAccountNeedsRestart({ codex_account: "footage" }, undefined)).toBe(false);
+    expect(codexAccountNeedsRestart({ codex_account: "footage" }, { is_remote: false })).toBe(false);
+    expect(
+      codexAccountNeedsRestart({ codex_account: "footage" }, {
+        codex_accounts: { active_email: "z@x.com", profiles: [{ name: "ashot", email: "a@x.com" }] },
+      }),
+    ).toBe(false);
   });
 });
 

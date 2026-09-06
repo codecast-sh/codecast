@@ -69,7 +69,16 @@ import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCur
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames } from "./codexAccounts.js";
+import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames, activeCodexProfileName } from "./codexAccounts.js";
+import {
+  codexPaneListFormat,
+  markCodexPaneEnded,
+  markCodexPaneLive,
+  parseCodexPaneRows,
+  reconcileCodexPanes,
+  seedCodexPanes,
+  staleCodexPanes,
+} from "./codexPaneRegistry.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, agentSessionFromTranscriptPath, decodePiCwdSlug, decodeGrokCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
@@ -687,6 +696,7 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
     }
   } catch {}
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  markCodexPaneEnded(tmuxSession);
 }
 
 // A gap shorter than this is neither a suspend nor a freeze worth recovering
@@ -3148,6 +3158,74 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
 const CC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 let ccUsageRefreshInFlight = false;
 
+/**
+ * Record the Codex account a pane just launched on.
+ *
+ * Three copies of one fact, each for a different reader: the tmux stamp (a
+ * later daemon, or one that never launched this pane, reads it back), the local
+ * registry (this daemon, across its own restart), and the conversation row (the
+ * web, which has no other way to know). A pane whose account we cannot name is
+ * still registered — unattributed, so the staleness check leaves it alone
+ * rather than ordering a restart it cannot justify (ct-49528).
+ */
+async function stampCodexPaneAccount(
+  agentType: string,
+  tmuxSession: string,
+  conversationId?: string,
+): Promise<void> {
+  if (agentType !== "codex") return;
+  let account: string | undefined;
+  try {
+    account = activeCodexProfileName();
+  } catch {
+    /* unreadable profile store — the pane is registered unattributed */
+  }
+  if (account) {
+    await setTmuxSessionOption(tmuxSession, "@codecast_codex_account", account).catch(() => {});
+  }
+  markCodexPaneLive(tmuxSession, { account, conversationId });
+  if (conversationId) {
+    syncServiceRef?.recordCodexAccount(conversationId, account).catch(logConvexFailure);
+  }
+}
+
+/** Rebuild the Codex pane registry from the live tmux list. A tmux that could
+ *  not be reached is not evidence of an empty machine, so the registry is left
+ *  as it stands — except when tmux says it has no server at all, which IS that
+ *  evidence and is what clears the registry after a reboot. */
+async function reconcileCodexPaneRegistry(): Promise<void> {
+  let stdout: string;
+  try {
+    ({ stdout } = await tmuxExec(["list-sessions", "-F", codexPaneListFormat(REAP_FIELD_SEP)], { timeout: 5000 }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/no server running|no such file or directory/i.test(msg)) return;
+    stdout = "";
+  }
+  reconcileCodexPanes(parseCodexPaneRows(stdout, REAP_FIELD_SEP));
+}
+
+// The last set reported, so a condition the user has not fixed yet does not
+// reprint every five minutes for as long as the pane lives.
+let lastStaleCodexNote = "";
+
+/** Log the panes still running a previous Codex account, when that set changes.
+ *  Failures are swallowed on purpose: a corrupt profile index must cost the
+ *  note, never the usage refresh it runs beside. */
+function noteStaleCodexPanes(): void {
+  let note: string;
+  try {
+    note = staleCodexPanes(activeCodexProfileName())
+      .map((p) => `${p.id}(${p.account})`)
+      .join(", ");
+  } catch {
+    return;
+  }
+  if (note === lastStaleCodexNote) return;
+  lastStaleCodexNote = note;
+  if (note) log(`[ACCOUNTS] Codex pane(s) still on a previous account — restart to move them: ${note}`);
+}
+
 // Codex per-account usage: enroll/refresh the active login's profile, probe
 // the active account via the real ~/.codex (RPC + rollout-log model mix), then
 // probe each dormant profile via its CODEX_HOME snapshot dir. Shares the
@@ -3160,12 +3238,19 @@ async function maintainCodexUsageSnapshot(reason: string, opts: { force?: boolea
   if (codexUsageRefreshInFlight) return;
   codexUsageRefreshInFlight = true;
   try {
+    // Same tick, because the two answer one question together: which account is
+    // live now, and which panes are still spending a different one.
+    await reconcileCodexPaneRegistry();
+    noteStaleCodexPanes();
     const res = await refreshCodexUsageSnapshots(opts.force ? { minIntervalMs: 0 } : {});
     if (res.probed.length > 0 || res.failed.length > 0) {
       const failNote = res.failed.length
         ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
         : "";
-      log(`[ACCOUNTS] Codex usage refreshed for ${res.probed.length} account(s) (${reason})${failNote}`);
+      const backendNote = res.backend_failed.length
+        ? ` backend_failed=${res.backend_failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
+        : "";
+      log(`[ACCOUNTS] Codex usage refreshed for ${res.probed.length} account(s) (${reason})${failNote}${backendNote}`);
     }
   } catch (err) {
     log(`[ACCOUNTS] Codex usage refresh failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
@@ -4672,6 +4757,7 @@ async function executeRemoteCommand(
           }
           await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType).catch(() => {});
           await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
+          await stampCodexPaneAccount(agentType, tmuxSession, conversationId);
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
@@ -5685,6 +5771,7 @@ async function executeRemoteCommand(
               await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
               await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", blankAgentType).catch(() => {});
               await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
+              await stampCodexPaneAccount(blankAgentType, tmuxSession, conversationId);
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
               startedSessionTmux.set(conversationId, {
@@ -18703,6 +18790,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
+    // A resume is a new process reading auth.json afresh, so it re-records the
+    // account just like a fresh launch does.
+    await stampCodexPaneAccount(agentType, tmuxSession, conversationId);
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
@@ -22280,6 +22370,17 @@ async function main(): Promise<void> {
   setInterval(() => { maintainCcUsageSnapshots("periodic").catch(() => {}); }, CC_USAGE_REFRESH_INTERVAL_MS);
   setTimeout(() => { maintainCodexUsageSnapshot("daemon start").catch(() => {}); }, 75_000);
   setInterval(() => { maintainCodexUsageSnapshot("periodic").catch(() => {}); }, CC_USAGE_REFRESH_INTERVAL_MS);
+
+  // The Codex panes this daemon's predecessor left running. Restored before the
+  // first reconcile so a restart comes back knowing which account each pane is
+  // on, rather than treating a live fleet as an empty machine (ct-49528).
+  seedCodexPanes()
+    .then((restored) => {
+      if (restored.length > 0) {
+        log(`[ACCOUNTS] Restored ${restored.length} Codex pane(s) from the account registry`);
+      }
+    })
+    .catch(() => {});
 
   // Auto-dispatch: detect active plans with bound workflows that haven't started
   const notifiedPlanWorkflows = new Set<string>();
