@@ -157,6 +157,7 @@ jobs:
           fi
 
       - name: Verify macOS agent browser branding
+        timeout-minutes: 5
         shell: bash
         env:
           CODECAST_NO_AUTO_UPDATE: "1"
@@ -164,7 +165,68 @@ jobs:
           set -euo pipefail
           cd packages/cli
           bun test src/browser/appIdentity.test.ts src/browser/appIdentity.native.test.ts --timeout 30000
+          browser_keychain="$RUNNER_TEMP/browser-test.keychain-db"
+          security create-keychain -p '' "$browser_keychain"
+          security unlock-keychain -p '' "$browser_keychain"
+          security default-keychain -d user -s "$browser_keychain"
+          security list-keychains -d user -s "$browser_keychain"
+          security add-generic-password -a Chrome -s 'Chrome Safe Storage' \
+            -w 'cast-browser-ci-test-only' -T /usr/bin/security \
+            -T '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' "$browser_keychain"
+          security find-generic-password -w -s 'Chrome Safe Storage' -a Chrome "$browser_keychain" > /dev/null
+          osascript > "$RUNNER_TEMP/browser-approval.log" 2>&1 <<'APPLESCRIPT' &
+          tell application "System Events"
+            repeat 600 times
+              if exists process "CoreServicesUIAgent" then
+                tell process "CoreServicesUIAgent"
+                repeat with dialogWindow in windows
+                  if exists button "Open" of dialogWindow then
+                    set labels to value of static texts of dialogWindow as text
+                    if labels contains "Chrome" and labels contains "downloaded from the Internet" then
+                      click button "Open" of dialogWindow
+                    end if
+                  end if
+                end repeat
+                end tell
+              end if
+              delay 0.2
+            end repeat
+          end tell
+          APPLESCRIPT
+          approval_pid=$!
+          trap 'kill -KILL "$approval_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/browser-approval.log"' EXIT
           bun scripts/test-browser-branding.ts ../web/binaries/codecast-darwin-arm64
+
+      - name: Collect browser launch diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          launchctl managername
+          ps -axww -o pid=,command= | grep '[C]hrome' || true
+          for pid in $(pgrep -x 'Google Chrome'); do
+            sample "$pid" 1 -file "$RUNNER_TEMP/chrome-$pid.sample.txt"
+            head -100 "$RUNNER_TEMP/chrome-$pid.sample.txt"
+          done
+          screencapture -x "$RUNNER_TEMP/browser-failure.png" || true
+          sudo /usr/bin/log show --last 5m --style compact --predicate '(process == "syspolicyd" OR process == "amfid" OR process == "Google Chrome") AND type != "activityCreateEvent"' | tail -100
+
+      - name: Keep browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/browser-failure.png
+            ${{ runner.temp }}/chrome-*.sample.txt
+            ${{ runner.temp }}/browser-approval.log
+
+      - name: Remove the browser test keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$RUNNER_TEMP/browser-test.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/browser-test.keychain-db"
+          fi
 
       - name: Write the artifact manifest
         shell: bash
