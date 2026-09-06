@@ -38,12 +38,17 @@
       "notificationRouter.js",
       "osPermissions.js",
       "shortcutSettings.js",
+      "trayIcon.js",
       "updaterNet.js",
       "preload.js",
       "native/notifications.node",
       "assets/icon.png",
       "assets/trayTemplate.png",
-      "assets/trayTemplate@2x.png"
+      "assets/trayTemplate@2x.png",
+      "assets/trayAttention.png",
+      "assets/trayAttention@2x.png",
+      "assets/trayColor.png",
+      "assets/trayColorAttention.png"
     ],
     "asarUnpack": [
       "native/*.node"
