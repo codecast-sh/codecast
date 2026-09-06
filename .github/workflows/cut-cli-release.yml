@@ -157,6 +157,7 @@ jobs:
           fi
 
       - name: Verify macOS agent browser branding
+        timeout-minutes: 5
         shell: bash
         env:
           CODECAST_NO_AUTO_UPDATE: "1"
@@ -169,9 +170,9 @@ jobs:
           security unlock-keychain -p '' "$browser_keychain"
           security default-keychain -d user -s "$browser_keychain"
           security list-keychains -d user -s "$browser_keychain"
-          osascript <<'APPLESCRIPT' &
+          osascript > "$RUNNER_TEMP/browser-approval.log" 2>&1 <<'APPLESCRIPT' &
           tell application "System Events"
-            repeat 1800 times
+            repeat 600 times
               if exists process "CoreServicesUIAgent" then
                 tell process "CoreServicesUIAgent"
                 repeat with dialogWindow in windows
@@ -189,7 +190,7 @@ jobs:
           end tell
           APPLESCRIPT
           approval_pid=$!
-          trap 'kill "$approval_pid" 2>/dev/null || true' EXIT
+          trap 'kill -KILL "$approval_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/browser-approval.log"' EXIT
           bun scripts/test-browser-branding.ts ../web/binaries/codecast-darwin-arm64
 
       - name: Collect browser launch diagnostics
@@ -213,6 +214,7 @@ jobs:
           path: |
             ${{ runner.temp }}/browser-failure.png
             ${{ runner.temp }}/chrome-*.sample.txt
+            ${{ runner.temp }}/browser-approval.log
 
       - name: Remove the browser test keychain
         if: always()
