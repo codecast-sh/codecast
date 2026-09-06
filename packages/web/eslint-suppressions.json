@@ -62,11 +62,6 @@
       "count": 1
     }
   },
-  "hooks/useRecoveryPoll.ts": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
   "hooks/useSyncTasks.ts": {
     "no-restricted-syntax": {
       "count": 3
