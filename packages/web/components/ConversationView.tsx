@@ -1,5 +1,8 @@
-import { sessionRepository } from "../lib/repoNavigation";
-import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
+import { HibernatedMarker } from "./HibernatedMarker";
+import { sessionRepository, githubRepository } from "../lib/repoNavigation";
+import { repoTreeHref, repoCommitsHref, commitPageHref } from "../lib/repoView";
+import { commandLeavesCheckout, gitToolOutcome, madeInTranscript, transcriptGitOutcomes, type GitToolOutcome } from "../lib/gitToolOutcome";
+import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from "../hooks/useSyncTimeline";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import { captureException } from "@sentry/react";
 import { RefreshCw as PaletteRestart, Copy as PaletteCopy, Search as PaletteSearch, Eye as PaletteEye, Pin as PalettePin, GitBranch as PaletteBranch, Rows3 as PaletteRows } from "lucide-react";
@@ -33,9 +36,9 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -87,7 +90,7 @@ import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { tryRenderCanvas, tryRenderHtmlMessage } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
 import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./workingStatus";
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
@@ -134,9 +137,9 @@ import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
-import { GrokIcon as GrokMark } from "./BrandIcons";
+import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
-import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { HeaderModelControl, LaunchModelPill, useLiveSessionMeta } from "./ModelEffortPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -163,7 +166,8 @@ import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./br
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { DecisionStepperContext, usePendingDecisionItem } from "../hooks/useDecisionQueue";
-import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
+import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, type ProjectPathOption } from "../lib/utils";
+import { createProjectFolder, useDirListing } from "../lib/fsBrowse";
 import { findEntityInStore } from "../lib/liveEntities";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
 import { usePendingMessageStatus, usePendingPermissions } from "../hooks/useSyncPendingPermissions";
@@ -173,10 +177,12 @@ import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
+import { MessagePromptPreview } from "./MessagePromptPreview";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, TextWithMentions } from "./EntityIdPill";
+import { EstablishedRefsProvider } from "../hooks/entityMentionScope";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
 import { THREAD_STATE_STATUS_META } from "../lib/threadState";
@@ -185,14 +191,16 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
-import { isStickyEligible, pickStickyFallbackFromLoaded } from "../lib/messageNavigator";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, stickyPromptContent, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent } from "../lib/messageNavigator";
+import { parseInboundSessionMessage, isSessionUpdateBatch, parseSessionUpdateBatch, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
+import { parseSessionUpdateSend } from "./sessionUpdateSend";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
+import { DocDates } from "./DocDates";
 
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
@@ -232,7 +240,7 @@ import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../li
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -1079,7 +1087,11 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // element hasn't mounted yet, during which nothing renders.
   machineSlot?: HTMLElement | null;
 }) {
-  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
+  // No-throw: the ladder below falls back to the store's cached list, so a
+  // backend timeout (the 15 s db-wait cap under saturation) degrades to the
+  // last answer instead of dropping the whole new-session header into its
+  // ErrorBoundary.
+  const { data: freshProjects } = useQueryNoThrow(api.users.getRecentProjectPaths, { limit: 50 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   const { user: currentUser } = useCurrentUser();
@@ -1109,6 +1121,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   }));
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
   const cloudMode = useInboxStore((s) => s.cloudSessionMode);
+  const convex = useConvex();
   // A cloud session always runs in its own worktree — on the HOST. So the
   // isolated toggle reads as on while cloud mode is, but the flag itself is
   // never written from here: turning cloud off must not strand the user with an
@@ -1179,7 +1192,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // The unscoped query stays mounted regardless — it's the shared subscription
   // that keeps the store's recentProjects cache (which the other pickers read)
   // warm. The scoped one deliberately never feeds that cache.
-  const scopedProjects = useQuery(
+  const { data: scopedProjects } = useQueryNoThrow(
     api.users.getRecentProjectPaths,
     scopedDeviceId ? { limit: 50, device_id: scopedDeviceId } : "skip",
   );
@@ -1265,8 +1278,8 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
   // Home dir inferred from real local roots, so "~/…" resolves to the same place
-  // the daemon would cd to.
-  const homeDir = useMemo(
+  // the daemon would cd to — until the daemon's own listing says for sure.
+  const inferredHome = useMemo(
     () => inferHomeDir([currentPath, ...recentProjects.map((p: { path: string }) => p.path)]),
     [currentPath, recentProjects],
   );
@@ -1275,9 +1288,18 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // project (its parent dir), so typing "weekend-hack" means the folder next to
   // the one you're in, not a dead end.
   const projectBase = useMemo(
-    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), homeDir),
-    [currentPath, recentProjects, homeDir],
+    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), inferredHome),
+    [currentPath, recentProjects, inferredHome],
   );
+
+  // The machine's real folders behind the typed text (shell-completion style),
+  // from the daemon on THIS machine — and only while the session routes here:
+  // a cloud session's folders live on the host, another machine's on it.
+  const { listing: diskListing, home: diskHome } = useDirListing(convex, filter, inferredHome, projectBase, {
+    enabled: picking && !cloudMode,
+    deviceId: scopedDeviceId,
+  });
+  const homeDir = diskHome ?? inferredHome;
 
   // While navigating with the keyboard: ALL recent projects (current first —
   // the full fetched list, not just the 6 default chips), or — once the user
@@ -1289,7 +1311,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // (so plain filtering — "co" → codecast — stays clean). The daemon's
   // start_session takes the cwd verbatim, so the fully-resolved path is all it
   // needs, and the chip shows that path so a wrong base guess is visible first.
-  const pickList = useMemo<{ path: string; custom?: boolean; extra?: boolean }[]>(() => {
+  const pickList = useMemo<(ProjectPathOption & { extra?: boolean })[]>(() => {
     if (filter.trim()) {
       return buildProjectPathOptions({
         query: filter,
@@ -1297,6 +1319,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         home: homeDir,
         base: projectBase,
         currentPath,
+        listing: diskListing,
       });
     }
     // Unfiltered browse opens on EXACTLY the resting row — same chips, same
@@ -1312,7 +1335,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       .filter((p) => !shown.has(p.path))
       .map((p) => ({ path: p.path, extra: true }));
     return base.concat(head, rest);
-  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, showSuggested]);
+  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, showSuggested, diskListing]);
 
   // How many folders the collapsed picker is holding back (rarely-used ones
   // plus the machine's never-used roots) — the expander's count.
@@ -1387,6 +1410,25 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     });
   }, [storeSession, conversation._id, convCommand, currentPath, isolated, cloudMode, scopedDeviceId]);
 
+  // A picker row: a folder to switch to, or one to CREATE first. Creation is
+  // optimistic — the switch goes out on the assumption the daemon's mkdir
+  // lands (it's one syscall away); a refusal surfaces as a toast.
+  const pickOption = useCallback((p: ProjectPathOption) => {
+    if (p.create) {
+      createProjectFolder(convex, p.path, scopedDeviceId).catch((err) => {
+        toast.error(err instanceof Error ? err.message : "Couldn't create folder");
+      });
+    }
+    handleSwitch(p.path);
+  }, [convex, scopedDeviceId, handleSwitch]);
+
+  // Tab descends into the highlighted folder: the text becomes that path with
+  // a trailing slash, which lists its children.
+  const descendInto = useCallback((p: ProjectPathOption) => {
+    setFilter(displayPath(p.path, homeDir) + "/");
+    setHi(0);
+  }, [homeDir]);
+
   // Picking a machine moves the (still blank) session there right away rather
   // than waiting on a folder pick the user may never make. That reconfigure only
   // bites when the conversation already exists server-side; every new-session
@@ -1455,7 +1497,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       },
       commitAndClose: () => {
         const sel = pickList[clampedHi];
-        if (sel) handleSwitch(sel.path);
+        if (sel) pickOption(sel);
         exitPicker(false);
       },
     };
@@ -1478,21 +1520,28 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       setHi((i) => (pickList.length ? (i - 1 + pickList.length) % pickList.length : 0));
       return;
     }
+    const sel = pickList[Math.min(hi, Math.max(0, pickList.length - 1))];
     if (e.key === "Enter") {
       e.preventDefault();
-      const sel = pickList[Math.min(hi, Math.max(0, pickList.length - 1))];
-      if (sel) handleSwitch(sel.path);
+      if (sel) pickOption(sel);
       exitPicker();
       return;
     }
-    // ↓/Esc/Tab drop back to the message box (⌥↓ — handled by the chord
-    // router before we see it — commits and moves on to the agent row).
+    // Tab while typing completes into the highlighted folder (shell-style);
+    // with nothing typed it drops back to the message box like ↓/Esc do
+    // (⌥↓ — handled by the chord router before we see it — commits and
+    // moves on to the agent row).
+    if (e.key === "Tab" && !e.shiftKey && filter.trim() && sel && !sel.custom) {
+      e.preventDefault();
+      descendInto(sel);
+      return;
+    }
     if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
       e.preventDefault();
       e.stopPropagation();
       exitPicker();
     }
-  }, [pickList, hi, handleSwitch, exitPicker]);
+  }, [pickList, hi, filter, pickOption, descendInto, exitPicker]);
 
   // Mouse-first, and hidden entirely for the single-machine case so that
   // experience is untouched. Offline machines stay pickable: routing falls
@@ -1570,7 +1619,10 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
             />
             <span className="inline-flex items-center gap-2 text-[11px] font-mono">
               <HintKeys keys={["←", "→"]} label="move" />
-              <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
+              <HintKeys keys={["↵"]} label={pickList[clampedHi]?.create ? "create" : pickList[clampedHi]?.custom ? "open" : "select"} />
+              {filter.trim() && pickList[clampedHi] && !pickList[clampedHi].custom && (
+                <HintKeys keys={["Tab"]} label="into" />
+              )}
               <HintKeys keys={[ALT_CAP, "↓"]} label="agent" />
               <HintKeys keys={["Esc"]} label="back" />
             </span>
@@ -1599,7 +1651,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                   <button
                     // onMouseDown (not onClick) + preventDefault keeps the filter
                     // input focused so the click isn't lost to an onBlur teardown.
-                    onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
+                    onMouseDown={(e) => { e.preventDefault(); pickOption(p); exitPicker(); }}
                     onMouseEnter={() => setHi(i)}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
                       isHi
@@ -1609,13 +1661,13 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                           : isCurrent
                             ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
                             : "border-sol-border/40 text-sol-text-dim"
-                    } ${!isHi && suggestedPaths.has(p.path) ? "opacity-60" : ""}`}
-                    title={p.path}
+                    } ${!isHi && (suggestedPaths.has(p.path) || (p.disk && !p.repo)) ? "opacity-60" : ""}`}
+                    title={p.disk ? `${p.path}${p.repo ? " (git repository)" : ""}` : p.path}
                   >
                     {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
                     {p.custom ? (
                       <span className="truncate">
-                        <span className="opacity-60">open </span>
+                        <span className="opacity-60">{p.create ? "create " : "open "}</span>
                         <span className="font-mono">{displayPath(p.path, homeDir)}</span>
                       </span>
                     ) : (
@@ -2896,6 +2948,10 @@ type UserMessageKind =
   | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
   | { kind: 'agent_switch'; toLabel: string; fromLabel?: string }
   | { kind: 'session_message'; from: string; body: string; name?: string }
+  | { kind: 'session_updates'; batch: ReturnType<typeof parseSessionUpdateBatch> }
+  // A person typed this into the session from the dashboard (<user-message
+  // from="Name">): a normal user bubble attributed to that person.
+  | { kind: 'direct_user'; from: string; body: string }
   | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
   // The human's answer to a `cast decide` question (store answerDecision).
@@ -2942,6 +2998,9 @@ function classifyUserMessage(
   // A spawned schedule run's opening prompt (plain-text wire format from
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
+  const directUser = parseUserMessage(t);
+  if (directUser) return { kind: 'direct_user', from: directUser.from, body: directUser.body };
+  if (isSessionUpdateBatch(t)) return { kind: 'session_updates', batch: parseSessionUpdateBatch(t) };
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) {
     // A huddle that ended in this session's room: the digest rides the
@@ -2999,7 +3058,9 @@ function classifyUserMessage(
   // Legacy stored form: command tags were stripped at sync time, leaving "name\n/name\nargs".
   // isCommandMessage misses it (no leading tag/slash), so catch it explicitly.
   if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
-  if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
+  // Only Codex emits <turn_aborted>; classify by the message, not the conversation's
+  // CURRENT agent_type, which changes when the conversation is switched to another agent.
+  if (isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
   if (isAgentSwitchNotice(tNoReminders) || msg.subtype === "agent_switch") {
     const parsed = parseAgentSwitchNotice(tNoReminders);
@@ -3103,13 +3164,7 @@ function ClaudeIcon() {
 }
 
 function CodexIcon() {
-  return (
-    <div className="w-6 h-6 rounded bg-[#0f0f0f] flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729z" fill="white"/>
-      </svg>
-    </div>
-  );
+  return <CodexMark className="w-6 h-6" />;
 }
 
 function CursorIcon() {
@@ -3201,23 +3256,26 @@ function ConversationMetadata({
   conversationId?: string;
   canEditModel?: boolean;
 }) {
-  if (!agentType && !model && !startedAt && !messageCount) return null;
+  const live = useLiveSessionMeta(conversationId);
+  const resolvedAgent = live?.agentType ?? agentType;
+  const resolvedModel = live ? (live.model ?? undefined) : model;
+  if (!resolvedAgent && !resolvedModel && !startedAt && !messageCount) return null;
 
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim min-w-0 overflow-hidden">
-      {agentType && (
+      {resolvedAgent && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
-          title={formatAgentType(agentType)}
+          title={formatAgentType(resolvedAgent)}
         >
-          <AgentTypeIcon agentType={agentType} />
+          <AgentTypeIcon agentType={resolvedAgent} />
         </div>
       )}
       <HeaderModelControl
         conversationId={conversationId}
-        agentType={agentType}
-        model={model}
-        effort={effort}
+        agentType={resolvedAgent}
+        model={resolvedModel}
+        effort={live ? (live.effort ?? undefined) : effort}
         messageCount={messageCount}
         canEdit={!!canEditModel}
       />
@@ -3852,6 +3910,33 @@ const TOOL_COLOR_CLASS: Record<ToolColorToken, string> = {
   amber: "text-amber-500/80",
 };
 
+/**
+ * The object a shell call produced, as its reference: a commit pill that
+ * resolves once the commit row exists (a push, the daemon's publish) and a
+ * plain link to the commit page until then; a pull request pill that falls
+ * back to the GitHub URL the command printed.
+ */
+function GitOutcomeRow({ outcome, repository }: { outcome: GitToolOutcome; repository: string | null }) {
+  const label = outcome.kind === "commit"
+    ? <><span className="font-mono">{outcome.hash.slice(0, 7)}</span>{outcome.subject && <span className="truncate">{outcome.subject}</span>}</>
+    : <span className="font-mono">{outcome.ref}</span>;
+  const plain = "inline-flex items-center gap-1.5 min-w-0 max-w-full text-[11px] text-sol-text-muted hover:text-sol-text";
+  const fallback = outcome.kind === "commit"
+    ? repository
+      ? <Link href={commitPageHref(repository, outcome.hash)} className={plain} onClick={(e) => e.stopPropagation()}><GitCommitHorizontal className="w-3 h-3 shrink-0 text-sol-yellow" />{label}</Link>
+      : <span className={plain}><GitCommitHorizontal className="w-3 h-3 shrink-0 text-sol-yellow" />{label}</span>
+    : <a href={outcome.url} target="_blank" rel="noopener noreferrer" className={plain} onClick={(e) => e.stopPropagation()}><GitPullRequest className="w-3 h-3 shrink-0 text-sol-green" />{label}</a>;
+  const ref = outcome.kind === "commit" ? (repository ? `${repository}@${outcome.hash}` : null) : outcome.ref;
+  // Sits in the tool card's header strip, so it reads on a collapsed card; the
+  // click must not toggle the card.
+  return (
+    <span className="inline-flex items-center gap-1.5 min-w-0 max-w-[24rem] text-[11px]" onClick={(e) => e.stopPropagation()}>
+      <span className="text-sol-text-dim flex-shrink-0">{outcome.kind === "commit" ? "committed" : "opened"}</span>
+      {ref ? <EntityIdPill type={outcome.kind} id={ref} fallback={fallback} /> : fallback}
+    </span>
+  );
+}
+
 function toolColorClass(name: string): string {
   return TOOL_COLOR_CLASS[toolVisual(name).color];
 }
@@ -4162,16 +4247,23 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     ? formatToolName(nestedActions[0].name)
     : formatToolName(tool.name);
 
-  const executedTabId = useMemo(() => {
-    if (!tool.name.startsWith("mcp__claude-in-chrome__")) return null;
-    const tabId = parsedInput.tabId;
-    if (tabId != null) return String(tabId);
-    if (result?.content) {
-      const tabIdMatch = result.content.match(/Executed on tabId:\s*(\d+)/);
-      if (tabIdMatch) return tabIdMatch[1];
-    }
-    return null;
-  }, [parsedInput.tabId, result?.content, tool.name]);
+  const browserTab = useMemo(() => browserTabOf(tool, null, result?.content, EMPTY_BROWSER_ROWS), [tool, result?.content]);
+
+  // A shell call that made a commit or opened a pull request shows that object
+  // on the call itself — exact attribution, no second row in the transcript.
+  const shellCommand = isBash ? String(parsedInput.command || parsedInput.cmd || "") : "";
+  const gitOutcome = useMemo(
+    () => (shellCommand && result ? gitToolOutcome(shellCommand, safeString(result.content), result.is_error) : null),
+    [shellCommand, result],
+  );
+  // The session's repository names the commit only when the command stayed in
+  // the session's checkout; one that changed directory may have committed
+  // anywhere, so its pill stays unlinked rather than pointing at the wrong repo.
+  const outcomeRepository = useInboxStore((s) =>
+    gitOutcome && conversationId && !commandLeavesCheckout(shellCommand)
+      ? sessionRepository((s.conversations[conversationId as string] ?? s.sessions?.[conversationId as string] ?? {}) as any)
+      : null,
+  );
 
   // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
   const rawResultContent = result ? safeString(result.content) : "";
@@ -4283,21 +4375,8 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
             ) : summary}
           </span>
         )}
-        {executedTabId && (
-          <a
-            href={`https://clau.de/chrome/tab/${executedTabId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={BROWSER_ROW_PILL}
-            onClick={(e) => e.stopPropagation()}
-            title={`View tab ${executedTabId}`}
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-            <span>open tab</span>
-          </a>
-        )}
+        {browserTab && <BrowserTabPill tab={browserTab} />}
+        {gitOutcome && <GitOutcomeRow outcome={gitOutcome} repository={outcomeRepository} />}
         {resultSummary && (
           <span className={`font-mono flex-shrink-0 whitespace-nowrap ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
             {resultSummary}
@@ -4975,7 +5054,11 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
           <span className="flex-1 text-sm text-sol-text truncate">
             {(entity as any).display_title || entity.title}
           </span>
-          <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+          {type === "doc" && (entity as any).created_at ? (
+            <DocDates doc={entity as any} className="text-[10px] text-sol-text-dim flex-shrink-0" />
+          ) : (
+            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+          )}
         </div>
         {type === "plan" && (entity as any).progress && (
           <div className="flex items-center gap-2 mt-1.5">
@@ -5017,20 +5100,23 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
 //   cast read <id> <range>    → compact "read" row with a clickable target pill
 // Both render the target session as an EntityIdPill (clickable card), so they read
 // as conversations between sessions rather than opaque shell invocations.
-function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
-  cat: string; target: string; args: string; fullCmd: string; output: string; isError: boolean;
+function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
+  cat: string; target: string; args: string; rawCmd: string; output: string; isError: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
   if (cat === "send") {
-    const { body, kind } = extractSendBody(args);
+    const update = parseSessionUpdateSend(args, output);
+    const { body, kind } = update ?? extractSendBody(args);
     return (
       <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
         <div className="flex items-center gap-2 px-3 pt-2 pb-1">
           <CornerUpRight className="w-3.5 h-3.5 text-sol-blue/70 shrink-0" />
-          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">{update ? "Update to" : "Message to"}</span>
           <EntityIdPill shortId={target} />
-          {isError ? (
+          {update ? (
+            <span className="text-sol-yellow text-[10px] ml-auto shrink-0">{update.status}</span>
+          ) : isError ? (
             <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">failed</span>
           ) : (
             <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
@@ -5050,6 +5136,12 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
               components={MESSAGE_MD_COMPONENTS}
             >{body}</ReactMarkdown>
           </div>
+        )}
+        {update && output && (
+          <details className="px-3 pb-2 text-[11px] text-sol-text-muted">
+            <summary className="cursor-pointer">Update receipt</summary>
+            <pre className="mt-1 whitespace-pre-wrap break-all">{renderAnsi(output)}</pre>
+          </details>
         )}
       </div>
     );
@@ -5075,7 +5167,7 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
-              $ {fullCmd}
+              $ {rawCmd}
             </pre>
           </div>
           {output && output.trim() ? (
@@ -5134,7 +5226,7 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
 // composer (ThreadStatePanel), so the row stays one line: the declared status
 // as a chip in the panel's own colors, plus the state's first line. The full
 // body would be the same text twice — click still expands the raw command.
-function CastStateBlock({ subcommand, args, fullCmd, output, isError }: { subcommand: string; args: string; fullCmd: string; output: string; isError: boolean }) {
+function CastStateBlock({ subcommand, args, rawCmd, output, isError }: { subcommand: string; args: string; rawCmd: string; output: string; isError: boolean }) {
   const [expanded, setExpanded] = useState(false);
   // `clear`/`show` parse into the subcommand slot; the pinning form's args
   // start with `--status` or a quoted body, so its subcommand is usually empty.
@@ -5173,7 +5265,7 @@ function CastStateBlock({ subcommand, args, fullCmd, output, isError }: { subcom
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
-              $ {fullCmd}
+              $ {rawCmd}
             </pre>
           </div>
           {output && output.trim() ? (
@@ -5218,7 +5310,7 @@ function decideOutputId(output: string, verb: DecideArgs["verb"]): string | null
   return clean.match(pattern)?.[1] ?? null;
 }
 
-function CastDecideBlock({ decide, fullCmd, output, isError, conversationId }: { decide: DecideArgs; fullCmd: string; output: string; isError: boolean; conversationId?: Id<"conversations"> }) {
+function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { decide: DecideArgs; rawCmd: string; output: string; isError: boolean; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
   const convKey = conversationId?.toString();
   const targetId = decide.decisionId ?? (output ? decideOutputId(output, decide.verb) : null);
@@ -5357,7 +5449,7 @@ function CastDecideBlock({ decide, fullCmd, output, isError, conversationId }: {
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
-              $ {fullCmd}
+              $ {rawCmd}
             </pre>
           </div>
           {output && output.trim() ? (
@@ -5375,7 +5467,6 @@ function CastDecideBlock({ decide, fullCmd, output, isError, conversationId }: {
 
 function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
-  const convex = useConvex();
   const cast = parseCastCommand(tool)!;
   const { category, subcommand, args } = cast;
   const output = result?.content || "";
@@ -5508,25 +5599,7 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   // conversation-level carry-forward map supplies the page and tab the browser
   // was already on (see CastBrowserRowContext).
   const carriedBrowserRows = useContext(CastBrowserRowContext);
-  const browserUrl = useMemo(() => {
-    if (cat !== "browser") return null;
-    return extractBrowserPageUrl(subcommand, args, output) ?? carriedBrowserRows[tool.id]?.url ?? null;
-  }, [cat, subcommand, args, output, carriedBrowserRows, tool.id]);
-
-  // "open tab" raises that real tab in the driven Chrome (lib/browserFocus.ts)
-  // and does nothing else: if the tab is gone, the browser stopped, or the
-  // viewer is on another machine, the click is a no-op — never a fresh copy
-  // of the page.
-  const browserTabId = useMemo(() => {
-    if (cat !== "browser") return null;
-    return extractBrowserTabId(output) ?? carriedBrowserRows[tool.id]?.tabId ?? null;
-  }, [cat, output, carriedBrowserRows, tool.id]);
-  // Discovery of the daemon's loopback endpoint can outlast a click's
-  // activation window, so start it as soon as a row that can focus a tab
-  // renders — by the time the human clicks, the endpoint is cached.
-  useWatchEffect(() => {
-    if (browserTabId) prefetchBrowserFocusEndpoint(convex);
-  }, [browserTabId, convex]);
+  const browserTab = useMemo(() => browserTabOf(tool, cast, output, carriedBrowserRows), [tool, output, carriedBrowserRows]);
 
   const renderSummary = () => {
     const isShow = subcommand === "show" || subcommand === "status" || subcommand === "context";
@@ -5627,7 +5700,7 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   // (clickable target pill + body/range) instead of a generic shell-command row.
   const sessionTarget = (cat === "send" || cat === "read") && /^jx[a-z0-9]{5,}$/i.test(subcommand) ? subcommand : null;
   if (sessionTarget) {
-    return <CastSessionRefBlock cat={cat} target={sessionTarget} args={args} fullCmd={cast.fullCmd} output={output} isError={!!isError} />;
+    return <CastSessionRefBlock cat={cat} target={sessionTarget} args={args} rawCmd={cast.raw} output={output} isError={!!isError} />;
   }
   // `cast chat reply <id> "…"` / `cast chat send "…" --channel <id>` — the
   // agent's side of a team-chat exchange, rendered as the outgoing twin of the
@@ -5640,12 +5713,12 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   // `ls` is a plain read and keeps the generic row.
   const decide = cat === "decide" ? extractDecideArgs(subcommand, args) : null;
   if (decide && decide.verb !== "ls") {
-    return <CastDecideBlock decide={decide} fullCmd={cast.fullCmd} output={output} isError={!!isError} conversationId={conversationId} />;
+    return <CastDecideBlock decide={decide} rawCmd={cast.raw} output={output} isError={!!isError} conversationId={conversationId} />;
   }
   // `cast state` — the pinned panel already shows the full text, so the row is
   // a one-line status + headline instead of the generic body render.
   if (cat === "state") {
-    return <CastStateBlock subcommand={subcommand} args={args} fullCmd={cast.fullCmd} output={output} isError={!!isError} />;
+    return <CastStateBlock subcommand={subcommand} args={args} rawCmd={cast.raw} output={output} isError={!!isError} />;
   }
 
   return (
@@ -5659,28 +5732,7 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
           <span className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
         </span>
         {renderSummary()}
-        {browserTabId && (
-          <a
-            href={browserUrl ?? undefined}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={BROWSER_ROW_PILL}
-            onMouseEnter={() => prefetchBrowserFocusEndpoint(convex)}
-            onClick={(e) => {
-              e.stopPropagation();
-              // Modified clicks keep their native open-the-URL behavior.
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-              e.preventDefault();
-              void focusBrowserTab(convex, browserTabId);
-            }}
-            title={`focus tab ${browserTabId} in the agent's browser${browserUrl ? `\n${browserUrl}` : ""}`}
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-            <span>open tab</span>
-          </a>
-        )}
+        {browserTab && <BrowserTabPill tab={browserTab} />}
         {cat === "browser" && conversationId && (
           <BrowserWatchButton conversationId={conversationId} />
         )}
@@ -5725,7 +5777,7 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
-              $ {cast.fullCmd}
+              $ {cast.raw}
             </pre>
           </div>
           {doSteps.length > 0 ? (
@@ -5759,6 +5811,66 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
 const BROWSER_ROW_PILL =
   "flex-shrink-0 inline-flex items-center gap-1 rounded-full border border-sol-border/60 bg-sol-bg-highlight/40 " +
   "px-1.5 py-px text-[10px] leading-4 font-mono text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors";
+
+const EMPTY_BROWSER_ROWS: Record<string, BrowserRowState> = {};
+
+const OPEN_TAB_ICON = (
+  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+  </svg>
+);
+
+/**
+ * "open tab" for the driven browser tab behind a tool call (browserTabOf). A
+ * Claude-in-Chrome tab opens through its clau.de link. A `cast browser` tab is
+ * RAISED in the driven Chrome (lib/browserFocus.ts) and nothing else: if the
+ * tab is gone, the browser stopped, or the viewer is on another machine, the
+ * click is a no-op, never a fresh copy of the page. Modified clicks keep their
+ * native open-the-URL behavior. Discovery of the daemon's loopback endpoint can
+ * outlast a click's activation window, so it starts as soon as the pill
+ * renders — by the time the human clicks, the endpoint is cached.
+ */
+function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
+  const convex = useConvex();
+  const castTabId = tab.kind === "cast" ? tab.tabId : null;
+  useEffect(() => {
+    if (castTabId) prefetchBrowserFocusEndpoint(convex);
+  }, [castTabId, convex]);
+  if (tab.kind === "extension") {
+    return (
+      <a
+        href={`https://clau.de/chrome/tab/${tab.tabId}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={BROWSER_ROW_PILL}
+        onClick={(e) => e.stopPropagation()}
+        title={`View tab ${tab.tabId}`}
+      >
+        {OPEN_TAB_ICON}
+        <span>open tab</span>
+      </a>
+    );
+  }
+  return (
+    <a
+      href={tab.url ?? undefined}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={BROWSER_ROW_PILL}
+      onMouseEnter={() => prefetchBrowserFocusEndpoint(convex)}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        void focusBrowserTab(convex, tab.tabId);
+      }}
+      title={`focus tab ${tab.tabId} in the agent's browser${tab.url ? `\n${tab.url}` : ""}`}
+    >
+      {OPEN_TAB_ICON}
+      <span>open tab</span>
+    </a>
+  );
+}
 
 /**
  * "watch live" on a `cast browser` row: opens the read-only stream of the tab
@@ -6643,16 +6755,8 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
 //   tagged    "<command-message>x</command-message>\n<command-name>/x</command-name>\n<command-args>a</command-args>"
 //   slash     "/x a"                                   (user-typed, single line)
 //   stripped  "x\n/x\na"                               (legacy: tags removed, values kept on lines)
-// The stripped form is what older sync versions persisted; isStrippedCommand below
-// recognizes it (line 2 is "/" + line 1) so it still classifies + renders as a command.
-function isStrippedCommand(content: string): { cmdName: string; rest: string } | null {
-  const lines = content.split("\n");
-  const first = lines[0]?.trim() ?? "";
-  if (lines.length >= 2 && /^[A-Za-z][\w-]*$/.test(first) && lines[1].trim() === "/" + first) {
-    return { cmdName: first, rest: lines.slice(2).join("\n") };
-  }
-  return null;
-}
+// The stripped form is what older sync versions persisted; isStrippedCommand
+// (conversationProcessor) recognizes it so it still classifies + renders as a command.
 
 function parseCommandInvocation(raw: string): { cmdName: string; args: string } {
   const stripImages = (s: string) =>
@@ -6921,16 +7025,6 @@ function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { conte
 function isInterruptMessage(content: string): boolean {
   const trimmed = content.trim();
   return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
-}
-
-function isCodexTurnAbortedMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return trimmed.startsWith("<turn_aborted>") && trimmed.includes("</turn_aborted>");
-}
-
-function isInterruptLikeMessage(content: string, agentType?: string): boolean {
-  if (isInterruptMessage(content)) return true;
-  return agentType === "codex" && isCodexTurnAbortedMessage(content);
 }
 
 function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { label?: string; tone?: "sky" | "amber" }) {
@@ -7330,7 +7424,23 @@ function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCall; resu
   );
 }
 
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string; linkToConversationId?: string }) {
+function SessionUpdateBatchBlock({ batch, pendingStatus }: { batch: ReturnType<typeof parseSessionUpdateBatch>; pendingStatus?: string }) {
+  const count = batch?.members.length;
+  const deliveryLabel = !pendingStatus ? null : pendingStatus === "failed" ? "Delivery failed" : pendingStatus === "undeliverable" ? "Undeliverable" : "Queued for delivery";
+  return (
+    <section aria-label="Session updates" className="mb-3">
+      <div className="mx-1 px-3 py-1.5 flex flex-wrap items-center gap-2 text-[11px] text-sol-text-dim">
+        <span>{count === undefined ? "Session updates" : `${count} session update${count === 1 ? "" : "s"}`}</span>
+        {deliveryLabel && <span className="text-sol-yellow">{deliveryLabel}</span>}
+      </div>
+      {batch ? batch.members.map(member => (
+        <SessionMessageBlock key={member.id} variant="update" from={member.from} body={member.body} timestamp={member.sent_at} />
+      )) : <p className="mx-4 text-sm text-sol-text-muted">This update batch could not be read.</p>}
+    </section>
+  );
+}
+
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate" | "update"; color?: string; summary?: string; linkToConversationId?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
   const isPending = !!pendingStatus;
@@ -7358,7 +7468,7 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
     <div className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : "Message from"}</span>
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : variant === "update" ? "Update from" : "Message from"}</span>
         {isTeammate ? (
           // A teammate's name isn't a session id, so it can't be an EntityIdPill —
           // but when the sender is resolvable (team-lead → this conversation's
@@ -7397,9 +7507,13 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
           thread's — it starts clipped so a long handoff doesn't bury the reply. */}
       <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
         <div className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-            components={MESSAGE_MD_COMPONENTS}
-          >{body}</ReactMarkdown>
+          {/* The header just named the sender, so its mentions in the body are
+              repeats and render as the short name. */}
+          <EstablishedRefsProvider ids={[isTeammate ? null : from]}>
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+              components={MESSAGE_MD_COMPONENTS}
+            >{body}</ReactMarkdown>
+          </EstablishedRefsProvider>
         </div>
       </CollapsibleBody>
     </div>
@@ -8559,10 +8673,11 @@ type ReceiptEntry = { messageId: string; messageUuid?: string; timestamp: number
 type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: () => void };
 
 // One distinct receipt standing in for a segment's tool activity in the
-// condensed feed. Closed, it is a faint inset chip, clearly NOT prose: a busy
+// condensed feed. Closed, it is a faint footnote under the prose, with no box
+// of its own so the eye reads the agent's text and skips the receipts: a busy
 // segment counts ("read 3 files · ran 2 commands · 1 search"); one or two
 // tools fit their real subject in the same space, so they say it ("ran npm
-// test"). Screenshots taken by the folded tools ride along as clickable
+// test", "read lib/foo.ts"). Screenshots taken by the folded tools ride along as clickable
 // thumbnails, so images stay reachable without opening the group — which is
 // why the root is a div, not a button (thumbnails are interactive, and
 // buttons can't nest).
@@ -8575,18 +8690,26 @@ type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: 
 // The disclosure triangle leads in both states so the open/closed change is
 // unmistakable, and the header keeps its position and size across the toggle
 // so the click target never moves under the pointer.
-const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, renderTool }: {
+const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, resultFor, conversationId, renderTool }: {
   entries: ReceiptEntry[];
   expanded: boolean;
   onToggle: () => void;
   images?: ImageData[];
   globalImageMap?: Record<string, ImageData[]>;
+  resultFor: (tc: ToolCall) => ToolResult | undefined;
+  conversationId?: Id<"conversations">;
   renderTool: (tc: ToolCall, entry: ReceiptEntry) => React.ReactNode;
 }) {
-  const { summary, counted, screenshots } = useMemo(() => {
+  const carriedBrowserRows = useContext(CastBrowserRowContext);
+  const { summary, counted, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
     const counts = new Map<string, number>();
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
+    // The browser tabs the folded tools drove, one per distinct tab in the
+    // order first seen, so "open tab" stays reachable without opening the
+    // group — the same reason screenshots ride along as thumbnails.
+    const tabs = new Map<string, BrowserTabRef>();
+    let droveCastBrowser = false;
     for (const entry of entries) {
       for (const tc of entry.tools) {
         const nested = extractNestedActions(tc);
@@ -8598,6 +8721,9 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
         let toolImages = images?.filter(img => img.tool_use_id === tc.id) ?? [];
         if (!toolImages.length) toolImages = globalImageMap?.[tc.id] ?? [];
         toolImages.forEach((image, i) => shots.push({ id: `${tc.id}:${i}`, image }));
+        const tab = browserTabOf(tc, parseCastCommand(tc), resultFor(tc)?.content, carriedBrowserRows);
+        if (tab) tabs.set(`${tab.kind}:${tab.tabId}`, tab);
+        if (tab?.kind === "cast") droveCastBrowser = true;
       }
     }
     const counted = [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
@@ -8605,8 +8731,10 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       summary: (actions.length <= 2 && describeSmallToolGroup(actions)) || counted,
       counted,
       screenshots: shots,
+      browserTabs: [...tabs.values()],
+      droveCastBrowser,
     };
-  }, [entries, images, globalImageMap]);
+  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows]);
   const header = (
     <div
       data-cc-tool-receipt
@@ -8615,20 +8743,21 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-      className={`flex items-center flex-wrap gap-x-2 gap-y-1 max-w-full cursor-pointer pl-2 pr-2.5 py-0.5 text-[11px] transition-colors ${
+      className={`flex items-center flex-wrap gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer -ml-1 pl-1 pr-2 py-0.5 rounded-md text-[11px] transition-colors ${
         expanded
-          ? "w-fit rounded-md text-sol-text-secondary hover:bg-sol-bg-alt/70"
-          : "w-fit rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
+          ? "text-sol-text-secondary hover:bg-sol-bg-alt/70"
+          : "text-sol-text-dim/70 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
       }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
-      <ChevronRight className={`w-3 h-3 shrink-0 opacity-70 transition-transform ${expanded ? "rotate-90 text-sol-cyan" : ""}`} />
-      <Wrench className="w-3 h-3 shrink-0 opacity-70" />
-      <span className="truncate font-medium tracking-tight">{expanded ? counted : summary}</span>
+      <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90 text-sol-cyan opacity-100" : ""}`} />
+      <span className="truncate tracking-tight">{expanded ? counted : summary}</span>
+      {!expanded && browserTabs.map((tab) => <BrowserTabPill key={`${tab.kind}:${tab.tabId}`} tab={tab} />)}
+      {!expanded && droveCastBrowser && conversationId && <BrowserWatchButton conversationId={conversationId} />}
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
     </div>
   );
-  if (!expanded) return <div className="not-prose mt-1 flex">{header}</div>;
+  if (!expanded) return <div className="not-prose mt-2 flex">{header}</div>;
   return (
     <div className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
       {header}
@@ -8819,6 +8948,13 @@ function AssistantBlockImpl({
     }
     return map;
   }, [toolResults]);
+  // A tool's result, from this message or the conversation-wide map when the
+  // result landed in a later message (the receipt chip and the folded tool
+  // blocks both resolve through this one lookup).
+  const resultFor = useCallback(
+    (tc: ToolCall): ToolResult | undefined => toolResultMap[tc.id] ?? globalToolResultMap?.[tc.id],
+    [toolResultMap, globalToolResultMap],
+  );
 
   // One switch for every tool block this row can render, whether the tool is
   // this message's own or folded into this row's condensed receipt from a
@@ -8936,7 +9072,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -9137,7 +9273,9 @@ function AssistantBlockImpl({
             onToggle={condensedReceipt.onToggle}
             images={images}
             globalImageMap={globalImageMap}
-            renderTool={(tc, entry) => renderToolBlock(tc, toolResultMap[tc.id] ?? globalToolResultMap?.[tc.id], entry)}
+            resultFor={resultFor}
+            conversationId={conversationId}
+            renderTool={(tc, entry) => renderToolBlock(tc, resultFor(tc), entry)}
           />
         )}
 
@@ -9715,15 +9853,9 @@ function GitBranchBadge({
 }) {
   const isClean = gitStatus === "(clean)" || gitStatus === "clean" || !gitStatus;
 
-  const githubUrl = gitRemoteUrl
-    ? (() => {
-        const match = gitRemoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
-        if (match) {
-          return `https://github.com/${match[1]}/tree/${gitBranch}`;
-        }
-        return null;
-      })()
-    : null;
+  // The branch opens the repository's tree at that branch inside the app.
+  const repository = githubRepository(gitRemoteUrl);
+  const branchHref = repository && gitBranch ? repoTreeHref(repository, gitBranch) : null;
 
   return (
     <button
@@ -9732,16 +9864,14 @@ function GitBranchBadge({
       title={hasDiff ? (diffExpanded ? "hide diff" : "show diff") : undefined}
     >
       (
-      {githubUrl ? (
-        <a
-          href={githubUrl}
-          target="_blank"
-          rel="noopener noreferrer"
+      {branchHref ? (
+        <Link
+          href={branchHref}
           className="text-sol-green hover:underline"
           onClick={(e) => e.stopPropagation()}
         >
           {gitBranch}
-        </a>
+        </Link>
       ) : (
         <span className="text-sol-green">{gitBranch}</span>
       )}
@@ -12262,7 +12392,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </div>
               ) : (
                 <div className="flex items-end gap-2">
-                  <div className="relative flex-1 min-w-0">
+                  {/* One grid cell for the textarea and the ghost suggestion: the
+                      cell takes the taller of the two, so a wrapped suggestion
+                      grows the box and the textarea stretches to cover it. */}
+                  <div className="grid flex-1 min-w-0">
                   <textarea
                     ref={textareaRef}
                     data-chat-input
@@ -12276,7 +12409,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     placeholder={ghostVisible ? "" : bareComposer ? (composerPlaceholder ?? "Comment…") : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
                     rows={1}
                     style={FIELD_SIZING_STYLE}
-                    className={`block w-full bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
+                    className={`block w-full [grid-area:1/1] bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
                     <ComposerSuggestion
@@ -13460,11 +13593,33 @@ const ConversationViewInner = (
   // than this arrived while you were here watching and must not be split off.
   const enteredAt = useInboxStore((s) => s._lastViewedAt[pendingConvId] ?? 0);
 
+  // Commits and pull requests linked to this session but made outside the
+  // transcript: a push the webhook matched to it, a commit the daemon
+  // published from its checkout, a PR opened from a terminal on its branch.
+  // The ones a shell call here produced already render on that call, so they
+  // are left out; what remains earns a card of its own in the timeline.
+  const gitLinkConversationId = conversation?._id ? String(conversation._id) : undefined;
+  useSyncConversationCommits(gitLinkConversationId);
+  useSyncConversationPullRequests(gitLinkConversationId);
+  const linkedCommits = useConversationCommits(gitLinkConversationId);
+  const linkedPullRequests = useConversationPullRequests(gitLinkConversationId);
+  const transcriptOutcomes = useMemo(() => transcriptGitOutcomes(messages as any), [messages]);
+  const outsideCommits = useMemo(
+    () => linkedCommits.filter((c: any) => typeof c.sha === "string" && !madeInTranscript(c.sha, transcriptOutcomes.commitShas)),
+    [linkedCommits, transcriptOutcomes],
+  );
+  const outsidePullRequests = useMemo(
+    () => linkedPullRequests.filter((p: any) => !transcriptOutcomes.prRefs.has(`${p.repository}#${p.number}`)),
+    [linkedPullRequests, transcriptOutcomes],
+  );
+  const allCommits = useMemo(() => (outsideCommits.length ? [...commits, ...outsideCommits] : commits), [commits, outsideCommits]);
+  const allPullRequests = useMemo(() => (outsidePullRequests.length ? [...pullRequests, ...outsidePullRequests] : pullRequests), [pullRequests, outsidePullRequests]);
+
   const timeline: TimelineItem[] = useMemo(() => {
     const base = buildCompositeTimeline(
       messages,
-      commits,
-      pullRequests,
+      allCommits,
+      allPullRequests,
       conversationExternalEvents,
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
@@ -13511,7 +13666,7 @@ const ConversationViewInner = (
     }
     if (toAdd.length === 0) return base;
     return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
-  }, [messages, commits, pullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
+  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -13718,7 +13873,7 @@ const ConversationViewInner = (
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'command', 'plan', 'session_message', 'chat_wake', 'agent_switch']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'session_updates', 'chat_wake', 'agent_switch']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -13943,6 +14098,13 @@ const ConversationViewInner = (
       return val;
     });
   }, []);
+
+  const stickyMessageId = activeStickyMsg?.id;
+  const stickyImages = useMemo(() => {
+    if (!stickyMessageId) return undefined;
+    return messages.find(message => message._id === stickyMessageId)?.images
+      ?? serverUserMessages?.find(message => message._id === stickyMessageId)?.images;
+  }, [stickyMessageId, messages, serverUserMessages]);
 
   // Collapse and re-measure clamping whenever the sticky switches to a different message.
   useWatchEffect(() => {
@@ -14468,14 +14630,20 @@ const ConversationViewInner = (
   // opened tools push the chip up and away. So a toggle latches userScrolled
   // (the reader took the view; the tail-follow re-arms the moment they scroll
   // back down) and names its row for a short window during which that row's
-  // resize leaves scrollTop alone. Every other row keeps the default rule.
+  // resize leaves scrollTop alone. Every other row follows the rule in
+  // shouldAdjustScrollForResize (the library rule minus its scroll-direction
+  // clause — see there for why).
   const scrollHoldRef = useRef<{ key: string | number; until: number } | null>(null);
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
     const hold = scrollHoldRef.current;
-    if (hold && item.key === hold.key && Date.now() < hold.until) return false;
-    // The library default, restated (getScrollOffset/scrollAdjustments are not on the public type).
+    // getScrollOffset/scrollAdjustments are not on the public type.
     const v = instance as unknown as { getScrollOffset: () => number; scrollAdjustments: number };
-    return item.start < v.getScrollOffset() + (v.scrollAdjustments ?? 0) && instance.scrollDirection !== "backward";
+    return shouldAdjustScrollForResize({
+      itemStart: item.start,
+      scrollOffset: v.getScrollOffset() + (v.scrollAdjustments ?? 0),
+      scrollDirection: instance.scrollDirection,
+      held: !!hold && item.key === hold.key && Date.now() < hold.until,
+    });
   };
   const rowLookupRef = useRef({ timeline, getItemKey });
   rowLookupRef.current = { timeline, getItemKey };
@@ -15604,13 +15772,13 @@ const ConversationViewInner = (
     { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("codex"); } },
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
-    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, available: hasAnyThinking, run: () => setShowThinking(s => !s) },
+    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, shortcutAction: "conv.toggleThinking", available: hasAnyThinking, run: () => setShowThinking(s => !s) },
     { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
     { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_diff", label: diffExpanded ? "Hide git diff" : "Show git diff", icon: PaletteBranch, available: !!conversation?.git_branch, run: () => setDiffExpanded(s => !s) },
-    { key: "view_branches", label: "Branch map", icon: PaletteBranch, available: !!isOwner, run: toggleMap },
-    { key: "view_density", label: "Cycle message density", icon: PaletteRows, run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
+    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner, run: toggleMap },
+    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
 
   useWatchEffect(() => {
@@ -15951,6 +16119,21 @@ const ConversationViewInner = (
     return fn;
   };
 
+  // A client that forks natively copies its whole context (grok), so its fork
+  // control is offered on the latest message only; rebuild/API clients fork
+  // from any message. The tip is the last timeline message carrying a uuid.
+  const forkAnyMessage = agentForksFromAnyMessage(conversation?.agent_type);
+  const forkTipUuid = useMemo(() => {
+    if (forkAnyMessage) return undefined;
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const it = timeline[i];
+      if (it.type === 'message' && it.data.message_uuid) return it.data.message_uuid;
+    }
+    return undefined;
+  }, [forkAnyMessage, timeline]);
+  const forkHandlerFor = (messageUuid: string | undefined) =>
+    forkHandler && (forkAnyMessage || (!!messageUuid && messageUuid === forkTipUuid)) ? forkHandler : undefined;
+
   const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
@@ -16059,6 +16242,8 @@ const ConversationViewInner = (
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
           return <SessionMessageBlock key={msg._id} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
+        case 'session_updates':
+          return <SessionUpdateBatchBlock key={msg._id} batch={kind.batch} pendingStatus={(msg as any)._serverPendingStatus} />;
         case 'huddle_summary':
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
@@ -16071,15 +16256,20 @@ const ConversationViewInner = (
           return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
+        case 'direct_user':
         case 'decision_answer':
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const msgSender = resolveMsgSender(msg);
-          const userName = msgSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          // A direct send names its sender on the wire, so the bubble is theirs
+          // even when the roster can't resolve the row (no from_user_id yet, or
+          // a sender outside the viewer's team).
+          const directFrom = kind.kind === 'direct_user' ? kind.from : undefined;
+          const userName = msgSender?.name || directFrom || conversation?.user?.name || conversation?.user?.email?.split("@")[0];
           // A decision answer is a normal user bubble whose body is the chosen
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
-          return <UserPrompt key={msg._id} content={decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -16179,7 +16369,7 @@ const ConversationViewInner = (
           agentType={messageAuthors.get(msg._id)}
           taskSubjectMap={taskSubjectMap}
           taskRecordMap={taskRecordMap}
-          onForkFromMessage={forkHandler}
+          onForkFromMessage={forkHandlerFor(msg.message_uuid)}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
           onBranchSwitch={handleBranchSwitch}
           activeBranchId={activeBranchId}
@@ -16325,7 +16515,7 @@ const ConversationViewInner = (
             )}
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
 
-            {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
+            {managedSession?.agent_status === "hibernated" ? <HibernatedMarker status={managedSession.agent_status} /> : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
               <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
@@ -16811,7 +17001,7 @@ const ConversationViewInner = (
                           <DropdownMenuSubContent>
                             {AGENT_LAUNCH_OPTIONS
                               .map((a) => a.convexType)
-                              .filter((t) => t !== conversation.agent_type)
+                              .filter((t) => t !== conversation.agent_type && canSessionBecomeAgent(t, conversation.message_count))
                               .map((t) => (
                                 <DropdownMenuItem
                                   key={`switch-${t}`}
@@ -17001,19 +17191,25 @@ const ConversationViewInner = (
                     return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
                   }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
+                  const stickyDirectFrom = kind?.kind === "direct_user" ? kind.from : undefined;
                   return (
                     <>
-                      <UserIcon avatarUrl={stickySender ? stickySender.avatar_url : conversation?.user?.avatar_url} />
-                      <span className="text-sol-blue text-xs font-medium">{stickySender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
+                      <UserIcon avatarUrl={stickySender ? stickySender.avatar_url : stickyDirectFrom ? null : conversation?.user?.avatar_url} />
+                      <span className="text-sol-blue text-xs font-medium">{stickySender?.name || stickyDirectFrom || conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
                     </>
                   );
                 })()}
               </div>
-              <div
-                ref={stickyTextRef}
-                className={`text-sm text-sol-text whitespace-pre-wrap break-words pl-8 pr-4 ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
-                onClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
-              >{cleanStickyContent(activeStickyMsg.content)}</div>
+              <div className="pl-8 pr-4">
+                <MessagePromptPreview
+                  content={cleanStickyContent(activeStickyMsg.content)}
+                  images={stickyImages}
+                  variant="sticky"
+                  textRef={stickyTextRef}
+                  textClassName={`text-sm text-sol-text whitespace-pre-wrap ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
+                  onTextClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -17044,7 +17240,7 @@ const ConversationViewInner = (
           </div>
         </div>
       )}
-      <div ref={containerRef} data-sv-feed className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
+      <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
@@ -17242,6 +17438,7 @@ const ConversationViewInner = (
           onClose={() => setTreePopoverOpen(false)}
           onSwitchToConversation={handleTreeSwitchConversation}
           onForkFromBranch={handleForkFromBranch}
+          forkAnyMessage={forkAnyMessage}
           onRewindCurrent={handleRewindCurrent}
         />
       )}
@@ -17309,6 +17506,7 @@ const ConversationViewInner = (
                   onClose={() => setTreePopoverOpen(false)}
                   onSwitchToConversation={handleTreeSwitchConversation}
                   onForkFromBranch={handleForkFromBranch}
+                  forkAnyMessage={forkAnyMessage}
                   onRewindCurrent={handleRewindCurrent}
                 />
               ) : null} />

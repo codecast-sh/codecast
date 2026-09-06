@@ -23,7 +23,6 @@ import "../../../components/editor/editor.css";
 import {
   Pin,
   Archive,
-  Clock,
   Circle,
   CircleDot,
   CheckCircle2,
@@ -38,6 +37,7 @@ import {
 import Link from "next/link";
 import { toast } from "sonner";
 import { undoableArchiveDoc } from "../../../store/undoActions";
+import { DocDates } from "../../../components/DocDates";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 const api = _api as any;
@@ -67,16 +67,6 @@ const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; label: string; color
   low: { icon: ArrowDown, label: "Low", color: "text-sol-text-dim" },
   none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
-
-function formatDate(ts: number) {
-  return new Date(ts).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function DocTypeSelector({
   value,
@@ -256,6 +246,7 @@ function DocDetailContent() {
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
               {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow" />}
               <WatchButton entityType="doc" entityId={doc._id} />
+              <DocDates doc={doc} variant="full" className="text-xs text-sol-text-dim" />
             </>
           }
           topBarRight={
@@ -304,13 +295,6 @@ function DocDetailContent() {
                   ? <Link href={`/team/${(doc as any).author_username}`}>{authorContent}</Link>
                   : authorContent;
               })()}
-              <span className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {formatDate(doc.created_at)}
-              </span>
-              {doc.updated_at !== doc.created_at && (
-                <span>Updated {formatDate(doc.updated_at)}</span>
-              )}
               {doc.labels && doc.labels.length > 0 && (
                 <span className="flex items-center gap-1.5">
                   <Tag className="w-3 h-3" />

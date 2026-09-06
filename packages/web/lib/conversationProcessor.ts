@@ -22,7 +22,10 @@ const COMMAND_PATTERNS = [
   /^<local-command-stdout>/,
   /^<local-command-stderr>/,
   /^Caveat:/,
-  /^\/[a-z][\w-]*/i,
+  // A typed invocation ("/model opus"). The command name must end the line or
+  // be followed by a space: without that boundary an absolute path the human
+  // pasted ("/Users/ashot/shot.png look at this") reads as a command too.
+  /^\/[a-z][\w-]*(?=\s|$)/i,
 ];
 
 const SKILL_EXPANSION_PATTERN = /Base directory for this skill:\s*([^\n]+)/;
@@ -115,6 +118,19 @@ export function parseBashOutput(content: string): { stdout: string; stderr: stri
 export function isCommandMessage(content: string): boolean {
   const trimmed = content.trim();
   return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
+}
+
+// Legacy stored form of an invocation: older sync versions dropped the tags and
+// kept their values on their own lines ("model\n/model\nopus"), so line 2 is
+// "/" + line 1. isCommandMessage misses it (no leading tag, no leading slash),
+// so every surface that classifies commands checks this too.
+export function isStrippedCommand(content: string): { cmdName: string; rest: string } | null {
+  const lines = content.split("\n");
+  const first = lines[0]?.trim() ?? "";
+  if (lines.length >= 2 && /^[A-Za-z][\w-]*$/.test(first) && lines[1].trim() === "/" + first) {
+    return { cmdName: first, rest: lines.slice(2).join("\n") };
+  }
+  return null;
 }
 
 // Recognize a custom slash command's expanded prompt. Claude Code echoes the
@@ -292,6 +308,14 @@ export function isBackgroundAgentStoppedNotice(content: string | null | undefine
   return !!content && BACKGROUND_AGENT_STOPPED_RE.test(content.trim());
 }
 
+/** Codex records a user-initiated interrupt as a `<turn_aborted>` user message.
+ * Only Codex emits the tag, so the check is on the message alone — never on the
+ * conversation's current agent_type, which moves when the conversation is
+ * switched to another agent and would strand every earlier notice. */
+export function isCodexTurnAbortedMessage(content: string | null | undefined): boolean {
+  return !!content && content.trimStart().startsWith("<turn_aborted>");
+}
+
 /** True when a user-role message is machine-generated noise that no person
  * typed — so feeds and previews hide it instead of dumping the raw XML. */
 export function isNoiseUserMessage(content: string | null | undefined): boolean {
@@ -303,7 +327,7 @@ export function isNoiseUserMessage(content: string | null | undefined): boolean 
   if (/^<scheduled-task[\s>]/.test(raw)) return true;
   if (isSkillExpansion(raw)) return true;
   if (isCompactionPrompt(raw)) return true;
-  if (raw.startsWith("<turn_aborted>")) return true;
+  if (isCodexTurnAbortedMessage(raw)) return true;
   // Bash-mode command echo: machine-recorded output, not something a person typed.
   if (parseBashOutput(raw)) return true;
   if (isBackgroundAgentStoppedNotice(raw)) return true;
