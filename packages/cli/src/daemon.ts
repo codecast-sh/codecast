@@ -11189,6 +11189,10 @@ export function extractAssistantProseAbovePrompt(paneText: string): string {
 // the card is full-fidelity instead of a box-art-stripped scrape. Stale files (>5min, or
 // from a prior question) are ignored; the live menu's question is the cross-check.
 function readAskUserQuestionInput(sessionId: string): { questions: any[] } | null {
+  // Why: the hook only writes a sidecar for an id of this shape (ct-49677), so an
+  // id that walks out of the directory can only name a file some other writer put
+  // there. Refuse it on the read side too rather than trusting the writer.
+  if (!isSafeStatusSessionId(sessionId)) return null;
   try {
     const p = path.join(ASK_INPUT_DIR, `${sessionId}.json`);
     const stat = fs.statSync(p);
@@ -16618,6 +16622,7 @@ function findReapTranscript(sessionId: string, now: number = Date.now()): Sessio
 // asked one. See askUserQuestionStillPending for why mtime and not existence.
 // Async because both callers run on the maintenance tick.
 async function askInputSidecarMtimeMs(sessionId: string): Promise<number | null> {
+  if (!isSafeStatusSessionId(sessionId)) return null;
   try {
     return (await fs.promises.stat(path.join(ASK_INPUT_DIR, `${sessionId}.json`))).mtimeMs;
   } catch {
