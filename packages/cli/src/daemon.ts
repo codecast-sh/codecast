@@ -13528,10 +13528,26 @@ export async function verifyTmuxSubmitAfterPaste(
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
+//
+// `onlyWhenDrafted` withholds the keys when the composer visibly holds nothing.
+// Why: a cold pane records the clearing bytes as message text and the Enter
+// gate cannot see them — claude 2.1.263 draws C-a/C-k as nothing, so the pane
+// reads clean while the buffer in front of the payload still holds them, and
+// the message arrives as "\v\x01\v\x01\v<payload>" (ct-49610,
+// cold_boot_clearing_keys_land_as_text). A composer with no draft has nothing
+// to drain, so the keys are pure risk there. Only the pre-paste call opts in.
+// The gate's own drain stays unconditional: there the keys are load-bearing,
+// riding the pty stream ahead of the second paste to wipe any late flush of
+// the first, which is what makes a doubled message impossible.
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
-): Promise<void> {
+  opts: { onlyWhenDrafted?: boolean } = {},
+): Promise<boolean> {
+  if (opts.onlyWhenDrafted && (await tmuxComposerDraft(target, exec)) === "") {
+    log(`Composer in ${target} is empty, skipping the clearing keys`);
+    return false;
+  }
   for (let i = 0; i < 3; i++) {
     await exec(["send-keys", "-t", target, "C-a"]);
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -13539,6 +13555,28 @@ export async function drainTmuxComposer(
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   await new Promise(resolve => setTimeout(resolve, 50));
+  return true;
+}
+
+// What the composer holds, read off the screen: the text after the last ❯/›
+// on that glyph's line, or null when the pane shows no composer at all (a
+// glyphless client, a redraw, a capture that failed). A wrapped draft's later
+// lines are not read — the first line carries text whenever a draft exists,
+// and a draft this misses still fails the Enter gate, which drains and
+// re-pastes. Null is deliberately NOT "empty": nothing was proven.
+export async function tmuxComposerDraft(
+  target: string,
+  exec: typeof tmuxExec = tmuxExec,
+): Promise<string | null> {
+  let pane: string;
+  try {
+    ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+  } catch {
+    return null;
+  }
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return null;
+  return pane.slice(glyphAt + 1).split("\n", 1)[0].trim();
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -13769,8 +13807,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter —
-  // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
-  // the Enter gate below refuses to submit over anything it missed.
+  // see drainTmuxComposer for why C-a/C-k cycles, and why an empty composer
+  // gets no keys at all. The drain is best-effort: the Enter gate below
+  // refuses to submit over anything it missed.
   //
   // Escape is the one key here that doubles as "interrupt the current turn", so
   // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
@@ -13780,7 +13819,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await tmuxExec(["send-keys", "-t", target, "Escape"]);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  await drainTmuxComposer(target);
+  await drainTmuxComposer(target, tmuxExec, { onlyWhenDrafted: true });
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";

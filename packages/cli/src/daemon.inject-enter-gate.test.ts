@@ -213,6 +213,104 @@ describe("awaitTmuxComposerPayload", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Per-client composer shapes (the D0 matrix's CI half, ct-49536)
+//
+// The real-client matrix in messaging.e2e.test.ts needs the binaries installed,
+// so it skips on every CI runner. These frames were captured from live panes of
+// each client (2026-09-06) with the same multi-line payload pasted and not yet
+// submitted, so the gate's per-client behaviour is pinned everywhere — a
+// renamed paste chip or a lost prompt glyph fails here without a binary.
+// ---------------------------------------------------------------------------
+
+const MULTILINE = "matrix payload first line\nsecond line\n\nfourth after a blank line";
+
+const CLAUDE_PASTED = `
+ ▐▛███▛█   Claude Code v2.1.263
+▝▜██████▀  Fable 5.1 with high effort · API Usage Billing
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+                                                       ● high · /effort
+────────────────────────────────────────────────────────────────────────
+❯ [Pasted text #1 +3 lines]
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`;
+
+const CODEX_PASTED = `
+╭─────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)              │
+│                                         │
+│ model:       matrix   /model to change  │
+│ directory:   /private/tmp/matrix-codex  │
+│ permissions: YOLO mode                  │
+╰─────────────────────────────────────────╯
+› matrix payload first line
+  second line
+  fourth after a blank line
+  matrix default · /private/tmp/matrix-codex
+`;
+
+const GROK_PASTED = `
+  /private/tmp/matrix-grok                                    1.5K / 200K
+                          ╭──────────────────────────────────────────────╮
+                          │matrix payload first line                     │
+                          │second line                                   │
+                          │                                              │
+                          │fourth after a blank line                     │
+                          ╰─ paste again or double-click to expand ──────╯
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 4 lines]                                                │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`;
+
+const OPENCODE_PASTED = `
+                    ┃
+                    ┃  [Pasted ~4 lines]
+                    ┃
+                    ┃  Build · matrix-model matrix
+                    ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`;
+
+describe("awaitTmuxComposerPayload — real client composers", () => {
+  const gate = async (pane: string, payload: string): Promise<string> => {
+    const exec = async (args: Args): Promise<{ stdout: string }> => {
+      if (args[0] === "capture-pane") return { stdout: pane };
+      if (args[0] === "send-keys") throw new Error(`must not type into a settled composer: ${args.join(" ")}`);
+      return { stdout: "" };
+    };
+    return awaitTmuxComposerPayload("t:0.0", payload, {
+      multiline: payload.includes("\n"),
+      rePaste: async () => { throw new Error("must not re-paste a composer that holds the payload"); },
+      budgetMs: 2_000,
+      exec: exec as any,
+    });
+  };
+
+  test("claude collapses the paste to a chip and the gate accepts it", async () => {
+    expect(await gate(CLAUDE_PASTED, MULTILINE)).toBe("matched");
+  });
+
+  test("codex renders the lines at its › prompt (the blank line is not drawn)", async () => {
+    // The composer drops the empty line; the gate compares whitespace-free, so
+    // the prefix still matches what was pasted.
+    expect(await gate(CODEX_PASTED, MULTILINE)).toBe("matched");
+  });
+
+  test("grok's own chip wording is accepted too", async () => {
+    // "[Pasted: 4 lines]" — a different string from claude's, matched by shape.
+    expect(await gate(GROK_PASTED, MULTILINE)).toBe("matched");
+  });
+
+  test("opencode has no prompt glyph, so the gate hands back to legacy timing", async () => {
+    // Nothing is typed and nothing is re-pasted: the post-submit verifier is
+    // the safety net for glyphless clients.
+    expect(await gate(OPENCODE_PASTED, MULTILINE)).toBe("unwatchable");
+  });
+});
+
 describe("drainTmuxComposer", () => {
   test("sends three blind C-a/C-k cycles", async () => {
     const sends: string[] = [];
@@ -221,6 +319,44 @@ describe("drainTmuxComposer", () => {
       return { stdout: "" };
     };
     await drainTmuxComposer("t:0.0", exec as any);
+    expect(sends).toEqual(["C-a", "C-k", "C-a", "C-k", "C-a", "C-k"]);
+  });
+
+  // ct-49610: on a cold pane the clearing keys are recorded as message text —
+  // claude 2.1.263 draws them as nothing, so the Enter gate reads a clean
+  // composer and submits "\v\x01\v\x01\v<payload>". An empty composer has
+  // nothing to clear, so `onlyWhenDrafted` withholds the keys there.
+  const drainOver = async (pane: string, opts?: { onlyWhenDrafted?: boolean }) => {
+    const sends: string[] = [];
+    const exec = async (args: Args): Promise<{ stdout: string }> => {
+      if (args[0] === "send-keys") sends.push(args[args.length - 1]);
+      return { stdout: args[0] === "capture-pane" ? pane : "" };
+    };
+    const drained = await drainTmuxComposer("t:0.0", exec as any, opts);
+    return { sends, drained };
+  };
+
+  test("onlyWhenDrafted: an empty composer gets no clearing keys", async () => {
+    expect(await drainOver(BOX(""), { onlyWhenDrafted: true })).toEqual({ sends: [], drained: false });
+  });
+
+  test("onlyWhenDrafted: a draft at the prompt is still drained", async () => {
+    const { sends, drained } = await drainOver(BOX("half-typed thought"), { onlyWhenDrafted: true });
+    expect(drained).toBe(true);
+    expect(sends).toEqual(["C-a", "C-k", "C-a", "C-k", "C-a", "C-k"]);
+  });
+
+  test("onlyWhenDrafted: an unreadable composer is not proof of empty", async () => {
+    // A glyphless client, or a redraw that hid the box: nothing was proven, so
+    // the legacy blind drain stands.
+    expect((await drainOver("no composer here", { onlyWhenDrafted: true })).drained).toBe(true);
+  });
+
+  test("without the flag the keys always go, whatever the pane shows", async () => {
+    // The Enter gate's re-paste depends on them: the clearing keys ride the pty
+    // stream ahead of the second copy and wipe a late flush of the first, which
+    // is what makes a doubled message impossible.
+    const { sends } = await drainOver(BOX(""));
     expect(sends).toEqual(["C-a", "C-k", "C-a", "C-k", "C-a", "C-k"]);
   });
 });
