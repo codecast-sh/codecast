@@ -170,6 +170,10 @@ jobs:
           security unlock-keychain -p '' "$browser_keychain"
           security default-keychain -d user -s "$browser_keychain"
           security list-keychains -d user -s "$browser_keychain"
+          security add-generic-password -a Chrome -s 'Chrome Safe Storage' \
+            -w 'cast-browser-ci-test-only' -T /usr/bin/security \
+            -T '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' "$browser_keychain"
+          security find-generic-password -w -s 'Chrome Safe Storage' -a Chrome "$browser_keychain" > /dev/null
           osascript > "$RUNNER_TEMP/browser-approval.log" 2>&1 <<'APPLESCRIPT' &
           tell application "System Events"
             repeat 600 times
