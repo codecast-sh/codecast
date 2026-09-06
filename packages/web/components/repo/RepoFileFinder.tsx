@@ -5,7 +5,8 @@
 // and never on the way into a page. GitHub truncates very large trees and says
 // so; when it does, this says so too rather than quietly offering a partial
 // index as if it were the whole repository.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileCode, Search } from "lucide-react";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -48,8 +49,8 @@ export function RepoFileFinder({ repository, refName, family, anchorRef }: {
   );
   const hits = useMemo(() => rankPaths(files, query.trim()), [files, query]);
 
-  useEffect(() => { setCursor(0); }, [query]);
-  useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+  useWatchEffect(() => { setCursor(0); }, [query]);
+  useWatchEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
 
   useEventListener("keydown", (event: KeyboardEvent) => {
     if (open || event.key !== "t") return;

@@ -295,14 +295,17 @@ export function walkieKeySig(s: WalkieStatus, roomKey: string | undefined): stri
  *  Exported for its own render test — it IS the subscription, so mounting it is
  *  the honest way to count what a bar of faces costs. */
 export function useWalkieKeySig(roomKey: string | undefined): string {
-  // Plus the call facts a key's words read for THIS room. In a browser they
-  // arrive through the store subscription beside this one; from a voice host
-  // they arrive on the same wire as the status, so the key has to wake for
-  // them here — a mute the host applied is a different sentence on the key.
+  // From a voice host the call facts ride the same wire as the status, so the
+  // key has to wake for them here — a mute the host applied is a different
+  // sentence on the key. In a browser they arrive through the store
+  // subscription beside this one, and folding them in here as well would wake
+  // every key in a bar of faces on somebody else's burst.
   const read = useCallback(() => {
+    const sig = walkieKeySig(getWalkieStatus(), roomKey);
+    if (!voiceHostElsewhere()) return sig;
     const call = walkieCallState();
     const here = call.roomKey === roomKey ? `${call.phase}:${call.muted ? 1 : 0}:${call.micDenied ? 1 : 0}` : "";
-    return `${walkieKeySig(getWalkieStatus(), roomKey)}|${here}`;
+    return `${sig}|${here}`;
   }, [roomKey]);
   return useSyncExternalStore(subscribeWalkie, read, read);
 }

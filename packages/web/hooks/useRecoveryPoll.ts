@@ -1,4 +1,5 @@
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useWatchEffect } from "./useWatchEffect";
+import { useRef, type MutableRefObject } from "react";
 import { onSyncWake } from "./syncWake";
 import { beginSyncInflight } from "../store/syncActivity";
 
@@ -145,7 +146,7 @@ export function useRecoveryPoll(
   const fnRef = useRef(fetchAndApply);
   fnRef.current = fetchAndApply;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const controller = createRecoveryController({
       getLastSync: () => lastSyncRef.current,
       fetchAndApply: () => fnRef.current(),
