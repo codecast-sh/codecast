@@ -76,6 +76,18 @@ try {
   assert.ok(persisted.result.value.cookie.includes("cast-test=saved"));
   assert.deepEqual(fs.readFileSync(path.join(source, "Contents/Info.plist")), sourceInfo);
   console.log("PASS: compiled CLI, native copy, signatures, browser navigation, screenshot, restart, app reuse, local storage and cookies");
+} catch (error) {
+  const controlRoot = path.join(root, "stock-control");
+  const control = spawnSync(binary, ["browser", "start", "--fresh"], { env: { ...env, CODECAST_DIR: controlRoot, CODECAST_CHROMIUM: path.join(source, "Contents/MacOS/Google Chrome") }, encoding: "utf8", timeout: 90_000 });
+  console.error("Stock Chrome control:", control.status, control.stdout, control.stderr);
+  const controlFile = path.join(controlRoot, "browser/instance.json");
+  if (fs.existsSync(controlFile)) {
+    const state = JSON.parse(fs.readFileSync(controlFile, "utf8"));
+    const connection = await CdpConnection.fromPort(state.port);
+    await Promise.allSettled([connection.send("Browser.close")]);
+    connection.close();
+  }
+  throw error;
 } finally {
   try {
     await stop();
