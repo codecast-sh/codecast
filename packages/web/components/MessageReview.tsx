@@ -722,10 +722,10 @@ function CommentEditor({
           onBlur={() => save(false)}
         />
         <div className="cc-comment-editor-footer">
-          {/* Closing keeps the quote either way. On a fresh quote say so — "Cancel"
-              read as cancelling the quote itself; on a saved note it discards the edit. */}
+          {/* Closing keeps the quote either way. On a fresh quote, "None" means no
+              note (not "cancel the quote"). On a saved note it discards the edit. */}
           <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => cancel(true)}>
-            {comment.body ? "Cancel" : "Skip note"}
+            {comment.body ? "Cancel" : "None"}
             <KeyCap size="xs">Esc</KeyCap>
           </button>
           <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => save(true)}>

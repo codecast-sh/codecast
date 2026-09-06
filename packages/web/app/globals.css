@@ -1373,13 +1373,8 @@ pre[class*="language-"] {
    at its padding edge. MessageReview measures the real visible gutter into
    --cc-gutter-l / --cc-gutter-r (set in measure(), fresh whenever the handle
    is up); clamp the offset to it so the handle sits as deep in the gutter as
-   fits — never clipped, and off the text whenever the gutter allows. Sized
-   down to match the compact type. */
-.simple-view .cc-block-quote,
-.simple-view .cc-block-comment {
-  width: 1.2rem;
-  height: 1.15rem;
-}
+   fits — never clipped, and off the text whenever the gutter allows. Size
+   follows the feed type (1lh) so this view does not need its own box. */
 .simple-view .cc-block-quote {
   left: calc(-1 * min(1.45rem, var(--cc-gutter-l, 1.45rem) - 0.2rem));
 }
@@ -1773,11 +1768,16 @@ pre[class*="language-"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.55rem;
-  height: 1.45rem;
-  margin-top: -1px;
+  /* Inherit the prose type so the box is one line tall in simple, default,
+     and minimal — a rem box plus a 14px glyph was taller than the text in
+     simple view and shorter than it in minimal. */
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
+  width: 1lh;
+  height: 1lh;
   border: 1px solid var(--sol-border);
-  border-radius: 7px;
+  border-radius: 0.28lh;
   /* Same surface as .cc-sel-toolbar / the corner toolbars — NOT --sol-card,
      which is pure white in light mode and reads off-theme over the cream. */
   background: var(--sol-bg);
@@ -1787,6 +1787,11 @@ pre[class*="language-"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   animation: ccPop 120ms ease-out;
   transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-block-quote svg {
+  display: block;
+  width: 1em;
+  height: 1em;
 }
 .cc-block-quote:hover {
   color: var(--sol-cyan);
@@ -1837,11 +1842,13 @@ pre[class*="language-"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.55rem;
-  height: 1.45rem;
-  margin-top: -1px;
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
+  width: 1lh;
+  height: 1lh;
   border: 1px solid var(--sol-border);
-  border-radius: 7px;
+  border-radius: 0.28lh;
   background: var(--sol-bg);
   color: var(--sol-text-muted);
   cursor: pointer;
@@ -1849,6 +1856,11 @@ pre[class*="language-"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   animation: ccPop 120ms ease-out;
   transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-block-comment svg {
+  display: block;
+  width: 1em;
+  height: 1em;
 }
 .cc-block-comment:hover {
   color: var(--sol-cyan);
@@ -1967,6 +1979,7 @@ pre[class*="language-"] {
 .cc-comment-editor-footer {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: nowrap;
   gap: 0.25rem;
 }
 .cc-comment-editor-footer {
@@ -1993,6 +2006,8 @@ pre[class*="language-"] {
   background: transparent;
   color: var(--sol-text-dim);
   cursor: pointer;
+  white-space: nowrap;
+  flex: none;
   transition: background 120ms, color 120ms;
 }
 .cc-comment-btn:hover {
