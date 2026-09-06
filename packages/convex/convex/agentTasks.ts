@@ -1149,6 +1149,51 @@ async function canViewTask(
   return false;
 }
 
+// Every trigger anchored to the given conversations — own AND team-visible
+// foreign rows. One access check per conversation (canAccessConversation), then
+// the two anchor indexes; `is_own` tells the client whether to offer the
+// management verbs. Shared by the single-conversation header query and the
+// batched roster query below, so both grade access by exactly the same rule.
+async function tasksAnchoredToConversations(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  conversationIds: Id<"conversations">[]
+) {
+  const seen = new Set<string>();
+  const tasks: Doc<"agent_tasks">[] = [];
+  for (const convId of conversationIds) {
+    const conv = await ctx.db.get(convId);
+    if (!conv || !(await canAccessConversation(ctx as any, userId, conv))) continue;
+    const [created, originating] = await Promise.all([
+      ctx.db
+        .query("agent_tasks")
+        .withIndex("by_created_by_conversation", (q: any) =>
+          q.eq("created_by_conversation_id", convId)
+        )
+        .collect(),
+      ctx.db
+        .query("agent_tasks")
+        .withIndex("by_originating_conversation", (q: any) =>
+          q.eq("originating_conversation_id", convId)
+        )
+        .collect(),
+    ]);
+    for (const t of [...created, ...originating]) {
+      if (seen.has(t._id.toString())) continue;
+      seen.add(t._id.toString());
+      tasks.push(t);
+    }
+  }
+  const enriched = await withResolvedRunConversations(ctx, userId, tasks);
+  return await Promise.all(
+    enriched.map(async (t) => {
+      const is_own = t.user_id.toString() === userId.toString();
+      const owner = is_own ? null : await ctx.db.get(t.user_id);
+      return { ...t, is_own, owner_name: owner?.name ?? owner?.email };
+    })
+  );
+}
+
 // Every trigger anchored to one conversation — own AND team-visible foreign
 // rows — for the conversation header strip. The per-user webList can't carry a
 // bot-owned trigger, so the strip merges this on top. Gated on the viewer's
@@ -1159,37 +1204,29 @@ export const webListForConversation = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || !(await canAccessConversation(ctx, userId, conv))) return [];
+    return await tasksAnchoredToConversations(ctx, userId, [args.conversation_id]);
+  },
+});
 
-    const [created, originating] = await Promise.all([
-      ctx.db
-        .query("agent_tasks")
-        .withIndex("by_created_by_conversation", (q) =>
-          q.eq("created_by_conversation_id", args.conversation_id)
-        )
-        .collect(),
-      ctx.db
-        .query("agent_tasks")
-        .withIndex("by_originating_conversation", (q) =>
-          q.eq("originating_conversation_id", args.conversation_id)
-        )
-        .collect(),
-    ]);
-    const seen = new Set<string>();
-    const tasks: Doc<"agent_tasks">[] = [];
-    for (const t of [...created, ...originating]) {
-      if (seen.has(t._id.toString())) continue;
-      seen.add(t._id.toString());
-      tasks.push(t);
-    }
-    const enriched = await withResolvedRunConversations(ctx, userId, tasks);
-    return await Promise.all(
-      enriched.map(async (t) => {
-        const is_own = t.user_id.toString() === userId.toString();
-        const owner = is_own ? null : await ctx.db.get(t.user_id);
-        return { ...t, is_own, owner_name: owner?.name ?? owner?.email };
-      })
+// The batched form, for the trigger ROSTER (inbox section, /triggers, palette).
+// webList is indexed by user_id alone, so a trigger armed by a remote daemon's
+// bot login never reached the roster even when it drives a conversation the
+// viewer owns — it showed in that conversation's header strip and nowhere else.
+// The client picks the candidates off rows it already has (conversations
+// stamped armed_trigger_kind that its own roster does not explain), so this set
+// is a handful of ids, not the viewer's whole inbox. Capped so a client that
+// gets the candidate set wrong cannot turn one subscription into a table walk.
+export const MAX_ANCHOR_CONVERSATIONS = 64;
+
+export const webListForConversations = query({
+  args: { conversation_ids: v.array(v.id("conversations")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return await tasksAnchoredToConversations(
+      ctx,
+      userId,
+      args.conversation_ids.slice(0, MAX_ANCHOR_CONVERSATIONS)
     );
   },
 });

@@ -4233,6 +4233,9 @@ cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
+cliRoute("/cli/messages/update", async (ctx, body) => ctx.runMutation(api.sessionUpdates.queueUpdate, body));
+cliRoute("/cli/messages/update-status", async (ctx, body) => ctx.runQuery(api.sessionUpdates.getUpdateStatus, body));
+cliRoute("/cli/messages/update-cancel", async (ctx, body) => ctx.runMutation(api.sessionUpdates.cancelUpdate, body));
 
 // Session labels (personal filing). List the catalog, file/unfile a session,
 // and manage the label catalog itself.
@@ -4270,6 +4273,7 @@ cliRoute("/cli/sessions/resume", async (ctx, body) => ctx.runMutation(api.conver
 // wake on the next message. `cast wake` posts to /cli/sessions/resume above.
 // body: { api_token, session }.
 cliRoute("/cli/sessions/hibernate", async (ctx, body) => ctx.runMutation(api.conversations.cliHibernateSession, body));
+cliRoute("/cli/sessions/command-results", async (ctx, body) => ctx.runQuery((api as any).sessionCommands.results, body));
 
 // Restart (cast restart <session>): kill the agent and resume it through the
 // daemon's resume ladder — the web header's "Restart session", from a shell.
