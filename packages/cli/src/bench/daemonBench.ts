@@ -1,21 +1,12 @@
-// `cast bench daemon`: observe the live daemon (loop lag, route latency, the
-// daemon.log report) and optionally put N stand-in panes of load on it. Writes
-// JSON plus a markdown table to ~/.codecast/bench/<timestamp>.{json,md} so a
-// run before a change and a run after it compare side by side.
-//
-// Leaf module: no daemon.ts import (the daemon is a separate bundle entrypoint).
-
-import * as fs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { snapshotProcessTable } from "../processTable.js";
-import { tmuxRun } from "../tmux.js";
-import { fmt } from "../colors.js";
+import { createHash } from "node:crypto";
 import type { Config } from "../config/types.js";
-import { type SpawnGroup, buildLogReport, readSleepWindows, type LogReport } from "./logReport.js";
-import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
-import { runLoadBench, type LoadResult } from "./load.js";
-import type { LatencySummary } from "./stats.js";
+import { buildLogReport, readSleepWindows, type LogReport, type SleepWindow } from "./logReport.js";
+import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, benchClock, type ProbeIdentity, type RouteProbes } from "./probes.js";
+import { runLoadBench, type LoadResult, type RuntimeIdentity, type LoadIO } from "./load.js";
+import { childProcess } from "./fixture.js";
 
 export interface BenchDeps {
   config: Config;
@@ -26,7 +17,6 @@ export interface BenchDeps {
   getDaemonPid: () => number | null;
   readDaemonState: () => { connected?: boolean; lastHeartbeatTick?: number; runtimeVersion?: string } | null;
 }
-
 export interface BenchOptions {
   load?: number;
   sample: number;
@@ -36,184 +26,160 @@ export interface BenchOptions {
   keep: boolean;
   projectDir?: string;
   churnIntervalMs: number;
+  signal?: AbortSignal;
 }
-
+export interface BenchContext {
+  at: string;
+  runtime: RuntimeIdentity;
+  daemonConnected: boolean | null;
+  heartbeatAgeMs: number | null;
+  cliVersion: string;
+  testerRuntime: string;
+  loadAvg: number[];
+  processCount: number | null;
+  tmuxPanes: number | null;
+  freeMemMb: number;
+  port: number | null;
+  termAuth: string;
+  source: { commit: string | null; dirty: { path: string; status: string; sha256: string | null }[]; error: string | null };
+  diskWorkerSetting: boolean;
+}
 export interface BenchReport {
-  schema: 1;
+  schema: 2;
   startedAt: string;
   finishedAt: string;
-  context: {
-    daemonPid: number | null;
-    daemonConnected: boolean | null;
-    daemonRuntimeVersion: string | null;
-    heartbeatAgeMs: number | null;
-    cliVersion: string;
-    loadAvg: number[];
-    processCount: number;
-    tmuxSessions: number;
-    freeMemMb: number;
-    port: number | null;
-    termAuth: string;
-  };
-  observe: {
-    durationMs: number;
-    loopLag: LoopLagResult;
-    hookStatus: LatencyProbeResult;
-    termSessions: LatencyProbeResult | null;
-    log: LogReport;
-  };
+  context: BenchContext | null;
+  after: BenchContext | null;
+  observe: RouteProbes | null;
+  log: LogReport | null;
+  sleepWindows: SleepWindow[];
+  sleepCoverage: "darwin pmset historical only" | "unavailable";
   load: LoadResult | null;
+  errors: string[];
+  acceptance: { status: "FAIL" | "NOT ESTABLISHED"; reasons: string[] };
   notes: string[];
   outputs: { json: string; md: string };
 }
-
 export const BENCH_NOTES = [
-  "/hook/status is timed on its 400 path (no params), so it measures route dispatch on the loop, not status handling.",
-  "LOOP-FREEZE lines exist only for stalls of 5s or more; the /health probe is the meter below that.",
-  "Sleep is decided from pmset windows (darwin). Without pmset coverage, a gap of 5 minutes or more with under 1% CPU is sleep.",
-  "The daemon's own 'Sleep detected' lines are ignored: they call any low CPU gap sleep, including real freezes.",
-  "The bench never restarts the daemon and never boots one.",
+  "Health HTTP RTT includes client scheduling and network; it is not a direct main-loop timer measurement.",
+  "Observe hooks use invalid dispatch (HTTP 400). Load hooks require a verified owned stub and HTTP 200.",
+  "Successful percentiles exclude failures; raw records and full scheduled denominators retain every outcome.",
+  "Missing boot/listen markers, runtime config or routing evidence means NOT ESTABLISHED. Mapping is not boot blackout.",
+  "Persisted daemon.build is an observed boot marker, not proof of a disk source checkout or current worker routing.",
+  "Sleep windows are retained separately. Historical log classification is heuristic and does not excuse missing probe slots.",
+  "The bench never starts or restarts a daemon. Worker-off/on live runs require parent coordination.",
 ];
+const hash = (raw: string | Buffer) => createHash("sha256").update(raw).digest("hex");
+const optionalRead = (file: string) => fs.readFile(file, "utf8").catch(() => null);
 
-export async function runDaemonBench(deps: BenchDeps, opts: BenchOptions, say: (line: string) => void = console.log): Promise<BenchReport> {
-  const startedAt = new Date();
-  const identity = readLoopbackIdentity(deps.configDir);
-  if (identity.port === null) throw new Error("no hook-port file: is the daemon running? (`cast start`)");
-  const port = identity.port;
-  const authHeaders = identity.token ? localAuthHeaders(port, identity.token) : null;
+export async function observeRuntime(deps: BenchDeps): Promise<RuntimeIdentity> {
+  const pid = deps.getDaemonPid();
+  const [build, processIdentity] = await Promise.all([
+    optionalRead(path.join(deps.configDir, "daemon.build")),
+    pid ? childProcess("ps", ["-p", String(pid), "-o", "pid=,uid=,lstart=,comm="]).then(s => s.trim(), () => null) : null,
+  ]);
+  const afterPid = deps.getDaemonPid();
+  return { pid: afterPid, processIdentity: pid === afterPid ? processIdentity : null, build: pid === afterPid && processIdentity ? build?.trim() || null : null,
+    runtime: deps.readDaemonState()?.runtimeVersion ?? null, workerSetting: null, workerRouting: null, configHash: null };
+}
+
+export async function benchContext(deps: BenchDeps, identity: ProbeIdentity): Promise<BenchContext> {
   const state = deps.readDaemonState();
-
-  const context: BenchReport["context"] = {
-    daemonPid: deps.getDaemonPid(),
-    daemonConnected: state?.connected ?? null,
-    daemonRuntimeVersion: state?.runtimeVersion ?? null,
-    heartbeatAgeMs: state?.lastHeartbeatTick ? Date.now() - state.lastHeartbeatTick : null,
-    cliVersion: deps.version,
-    loadAvg: os.loadavg().map((v) => Math.round(v * 10) / 10),
-    processCount: snapshotProcessTable().length,
-    tmuxSessions: tmuxRun(["list-sessions", "-F", "#{session_name}"]).stdout.split("\n").filter(Boolean).length,
-    freeMemMb: Math.round(os.freemem() / 1024 / 1024),
-    port,
-    termAuth: identity.token ? "token from loopback-identity.json" : `no token (${identity.reason})`,
-  };
-  say(fmt.muted(`  daemon pid ${context.daemonPid ?? "none"} on port ${port}; load ${context.loadAvg.join(" ")}; ${context.processCount} processes; ${context.tmuxSessions} tmux sessions`));
-
-  say(fmt.muted(`  observing for ${Math.round(opts.durationMs / 1000)}s`));
-  const { loopLag, hookStatus, termSessions } = await runRouteProbes({ port, durationMs: opts.durationMs, authHeaders });
-
-  say(fmt.muted("  reading daemon.log"));
-  const log = buildLogReport(readDaemonLogLines(deps.configDir), {
-    sinceMs: Date.now() - opts.logSinceMs,
-    sleepWindows: readSleepWindows(),
-  });
-
-  let load: LoadResult | null = null;
-  if (opts.load && opts.load > 0) {
-    say(fmt.muted(`  load: ${opts.load} panes, ${opts.sample} sampled`));
-    load = await runLoadBench(
-      deps,
-      { n: opts.load, sample: opts.sample, durationMs: opts.durationMs, churnIntervalMs: opts.churnIntervalMs, keep: opts.keep, projectDir: opts.projectDir, port, authHeaders },
-      (line) => say(fmt.muted(line)),
-    );
-  }
-
-  const benchDir = path.join(deps.configDir, "bench");
-  fs.mkdirSync(benchDir, { recursive: true });
-  const stamp = startedAt.toISOString().replace(/:/g, "-");
-  const outputs = { json: path.join(benchDir, `${stamp}.json`), md: path.join(benchDir, `${stamp}.md`) };
-  const report: BenchReport = {
-    schema: 1,
-    startedAt: startedAt.toISOString(),
-    finishedAt: new Date().toISOString(),
-    context,
-    observe: { durationMs: opts.durationMs, loopLag: { ...loopLag, samples: [] }, hookStatus, termSessions, log },
-    load: load ? { ...load, loopLag: load.loopLag ? { ...load.loopLag, samples: [] } : null } : null,
-    notes: BENCH_NOTES,
-    outputs,
-  };
-  fs.writeFileSync(outputs.json, JSON.stringify(report, null, 2));
-  fs.writeFileSync(outputs.md, renderMarkdown(report));
-  return report;
-}
-
-function* readDaemonLogLines(configDir: string): Generator<string> {
-  let raw = "";
+  const [runtime, processes, panes] = await Promise.all([
+    observeRuntime(deps),
+    childProcess("ps", ["-axo", "pid="]).then(s => s.trim().split("\n").length, () => null),
+    childProcess("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]).then(s => s.trim().split("\n").length, () => null),
+  ]);
+  const source: BenchContext["source"] = { commit: null, dirty: [], error: null };
   try {
-    raw = fs.readFileSync(path.join(configDir, "daemon.log"), "utf-8");
-  } catch {
-    return;
-  }
-  let start = 0;
-  while (start < raw.length) {
-    const nl = raw.indexOf("\n", start);
-    const end = nl === -1 ? raw.length : nl;
-    yield raw.slice(start, end);
-    start = end + 1;
-  }
+    const root = (await childProcess("git", ["rev-parse", "--show-toplevel"])).trim();
+    source.commit = (await childProcess("git", ["rev-parse", "HEAD"])).trim();
+    const rows = (await childProcess("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).split("\0");
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]; if (!row) continue;
+      const file = row.slice(3);
+      if (/[RC]/.test(row.slice(0, 2))) i++;
+      const content = await fs.readFile(path.join(root, file)).catch(() => null);
+      source.dirty.push({ path: file, status: row.slice(0, 2), sha256: content ? hash(content) : null });
+    }
+  } catch { source.error = "source manifest unavailable or incomplete"; }
+  return { at: new Date().toISOString(), runtime, daemonConnected: state?.connected ?? null,
+    heartbeatAgeMs: state?.lastHeartbeatTick ? Date.now() - state.lastHeartbeatTick : null,
+    cliVersion: deps.version, testerRuntime: `${process.release.name} ${process.version}${typeof Bun !== "undefined" ? ` Bun ${Bun.version}` : ""}`,
+    loadAvg: os.loadavg(), processCount: processes, tmuxPanes: panes, freeMemMb: Math.round(os.freemem() / 1024 / 1024), port: identity.port,
+    termAuth: identity.token ? "available (private credential omitted)" : `unavailable: ${identity.reason}`, source, diskWorkerSetting: deps.config.daemon_workers === true };
 }
 
-// ── markdown ──────────────────────────────────────────────────────────────────
+export interface DaemonBenchIO {
+  identity: () => ProbeIdentity;
+  context: (identity: ProbeIdentity) => Promise<BenchContext>;
+  routes: typeof runRouteProbes;
+  load: typeof runLoadBench;
+  loadIO?: Partial<LoadIO>;
+  logs: () => Promise<{ log: LogReport; windows: SleepWindow[] }>;
+  write: (file: string, value: string) => Promise<void>;
+}
 
-const ms = (v: number | null | undefined) => (v === null || v === undefined ? "-" : `${Math.round(v)}ms`);
-const holdRow = (h: { n: number; groups: SpawnGroup[] }) =>
-  `n=${h.n}; ${h.groups.map((g) => `${g.command} x${g.count} (mean ${ms(g.meanMs)}, max ${ms(g.maxMs)})`).join("; ") || "-"}`;
-const lat = (s: LatencySummary) => `n=${s.n} p50=${ms(s.p50)} p90=${ms(s.p90)} p99=${ms(s.p99)} max=${ms(s.max)} over1s=${s.over1s}`;
-
-function table(title: string, rows: Array<[string, string]>): string {
-  return [`### ${title}`, "", "| metric | value |", "|---|---|", ...rows.map(([k, v]) => `| ${k} | ${v} |`), ""].join("\n");
+export async function runDaemonBench(deps: BenchDeps, opts: BenchOptions, say: (line: string) => void = console.log, overrides: Partial<DaemonBenchIO> = {}): Promise<BenchReport> {
+  const startedAt = new Date().toISOString();
+  const prefix = path.join(deps.configDir, "bench", `${startedAt.replaceAll(":", "-")}-${process.pid}`);
+  const r: BenchReport = { schema: 2, startedAt, finishedAt: startedAt, context: null, after: null, observe: null, log: null, sleepWindows: [], sleepCoverage: process.platform === "darwin" ? "darwin pmset historical only" : "unavailable", load: null, errors: [], acceptance: { status: "NOT ESTABLISHED", reasons: [] }, notes: BENCH_NOTES, outputs: { json: `${prefix}.json`, md: `${prefix}.md` } };
+  const io: DaemonBenchIO = { identity: () => readLoopbackIdentity(deps.configDir), context: identity => benchContext(deps, identity), routes: runRouteProbes, load: runLoadBench,
+    logs: async () => { const windows = readSleepWindows(); const raw = await optionalRead(path.join(deps.configDir, "daemon.log")); if (raw === null) throw new Error("daemon log unavailable"); return { log: buildLogReport(raw.split("\n"), { sinceMs: Date.now() - opts.logSinceMs, sleepWindows: windows }), windows }; },
+    write: async (file, value) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, value, { mode: 0o600, flag: "wx" }); }, ...overrides };
+  const cancellation = new AbortController();
+  const abort = () => cancellation.abort(new DOMException("bench cancelled", "AbortError"));
+  process.once("SIGINT", abort); process.once("SIGTERM", abort);
+  if (opts.signal?.aborted) abort(); else opts.signal?.addEventListener("abort", abort, { once: true });
+  let identity: ProbeIdentity | null = null;
+  try {
+    identity = io.identity();
+    r.context = await io.context(identity);
+    if (identity.port === null) throw new Error("no loopback port");
+    const authHeaders = identity.token ? localAuthHeaders(identity.port, identity.token) : null;
+    say(`observing health HTTP RTT for ${opts.durationMs}ms`);
+    r.observe = await io.routes({ port: identity.port, durationMs: opts.durationMs, authHeaders, signal: cancellation.signal });
+    cancellation.signal.throwIfAborted();
+    if (opts.load && opts.load > 0) r.load = await io.load({ ...deps, observeRuntime: async () => (await io.context(io.identity())).runtime }, { n: opts.load, sample: opts.sample, durationMs: opts.durationMs, churnIntervalMs: opts.churnIntervalMs, keep: opts.keep, projectDir: opts.projectDir, port: identity.port, authHeaders, signal: cancellation.signal }, say, io.loadIO);
+  } catch { r.errors.push(cancellation.signal.aborted ? "bench cancelled" : "benchmark operation failed; inspect partial records"); }
+  finally {
+    try { r.after = await io.context(io.identity()); } catch { r.errors.push("after identity unavailable"); }
+    try { const logs = await io.logs(); r.log = logs.log; r.sleepWindows = logs.windows; } catch { r.errors.push("log or sleep evidence unavailable"); }
+    (process as NodeJS.EventEmitter).off("SIGINT", abort); (process as NodeJS.EventEmitter).off("SIGTERM", abort); opts.signal?.removeEventListener("abort", abort);
+  }
+  for (const [label, probe] of [["health", r.observe?.loopLag], ["hook dispatch", r.observe?.hookStatus], ["terminal", r.observe?.termSessions]] as const) {
+    if (probe && (probe.records.length !== probe.expected || probe.records.some(slot => slot.outcome !== "ok"))) r.errors.push(`observe ${label}: incomplete or failed slots`);
+  }
+  if ((r.observe?.loopLag.summary.over1s ?? 0) > 0) r.errors.push("observe health RTT >=1000ms");
+  if ((r.observe?.termSessions?.summary.p99 ?? 0) >= 50) r.errors.push("observe terminal p99 >=50ms");
+  if (r.context && r.after && (r.context.port !== r.after.port || JSON.stringify(r.context.runtime) !== JSON.stringify(r.after.runtime))) r.errors.push("observed runtime identity changed");
+  const reasons = [...r.errors, ...(r.load?.acceptance.reasons ?? ["load delivery not measured"])];
+  if (!r.context || !r.after || JSON.stringify(r.context.runtime) !== JSON.stringify(r.after.runtime)) reasons.push("runtime identity drift or missing");
+  if (!r.context || !r.after || JSON.stringify(r.context.source) !== JSON.stringify(r.after.source)) reasons.push("source manifest drift or missing");
+  if (!r.observe?.termSessions) reasons.push("authenticated terminal evidence missing");
+  if (!r.context?.runtime.workerRouting || r.context.runtime.workerSetting === null || !r.context.runtime.configHash) reasons.push("running configuration/routing not established");
+  reasons.push("coordinated boot blackout and independent F3 acceptance not established");
+  r.acceptance = { status: r.errors.length || r.load?.acceptance.status === "FAIL" ? "FAIL" : "NOT ESTABLISHED", reasons };
+  r.finishedAt = new Date().toISOString();
+  const secrets = [deps.apiToken, identity?.token].filter((s): s is string => !!s);
+  const redacted = JSON.parse(JSON.stringify(r, (_key, value) => typeof value === "string" ? secrets.reduce((s, token) => s.replaceAll(token, "[redacted]"), value) : value)) as BenchReport;
+  const persistenceFailure = () => {
+    if (!redacted.errors.includes("report persistence failed")) { redacted.errors.push("report persistence failed"); redacted.acceptance.reasons.push("report persistence failed"); }
+    redacted.acceptance.status = "FAIL";
+  };
+  try { await io.write(r.outputs.md, renderMarkdown(redacted)); }
+  catch { persistenceFailure(); }
+  try { await io.write(r.outputs.json, JSON.stringify(redacted, null, 2)); }
+  catch { persistenceFailure(); say(JSON.stringify(redacted)); }
+  return redacted;
 }
 
 export function renderMarkdown(r: BenchReport): string {
-  const c = r.context;
-  const o = r.observe;
-  const parts: string[] = [`## cast bench daemon ${r.startedAt}`, ""];
-  parts.push(table("context", [
-    ["daemon pid", String(c.daemonPid ?? "none")],
-    ["daemon runtime", c.daemonRuntimeVersion ?? "-"],
-    ["cli version", c.cliVersion],
-    ["heartbeat age", ms(c.heartbeatAgeMs)],
-    ["load average", c.loadAvg.join(" / ")],
-    ["processes", String(c.processCount)],
-    ["tmux sessions", String(c.tmuxSessions)],
-    ["free memory", `${c.freeMemMb} MB`],
-    ["port", String(c.port)],
-    ["/term/sessions auth", c.termAuth],
-  ]));
-  parts.push(table(`observe (${Math.round(o.durationMs / 1000)}s)`, [
-    ["loop lag (/health every 100ms)", lat(o.loopLag.summary)],
-    ["loop lag skipped ticks / errors", `${o.loopLag.skipped} / ${o.loopLag.errors}`],
-    ["/hook/status", `${lat(o.hookStatus.summary)} statuses=${JSON.stringify(o.hookStatus.statuses)}`],
-    ["/term/sessions", o.termSessions ? `${lat(o.termSessions.summary)} statuses=${JSON.stringify(o.termSessions.statuses)}` : `skipped: ${c.termAuth}`],
-  ]));
-  const f = o.log.freezes;
-  parts.push(table(`daemon.log since ${new Date(o.log.sinceMs).toISOString()} (${o.log.linesRead} lines, ${o.log.sleepWindows} sleep windows)`, [
-    ["LOOP-FREEZE raw / sleep / freeze", `${f.rawCount} / ${f.sleepCount} / ${f.freezeCount}`],
-    ["freeze total / max", `${Math.round(f.totalMs / 1000)}s / ${Math.round(f.maxMs / 1000)}s`],
-    ["freeze per hour", f.perHour.map((h) => `${h.hour.slice(5)}: ${h.count} (${Math.round(h.totalMs / 1000)}s, max ${Math.round(h.maxMs / 1000)}s)`).join("; ") || "-"],
-    ["top stacks", f.topStacks.map((s) => `${s.key} x${s.count}`).join("; ") || "-"],
-    ["top last log", f.topLastLog.map((s) => `${s.key} x${s.count}`).join("; ") || "-"],
-    ["PS-SNAPSHOT", `n=${o.log.psSnapshot.n} mean=${ms(o.log.psSnapshot.meanMs)} max=${ms(o.log.psSnapshot.maxMs)}; ${o.log.psSnapshot.buckets.map((b) => `${b.label}: ${b.count}`).join(", ")}`],
-    ["SLOW-SYNC-SPAWN", holdRow(o.log.slowSpawn)],
-    ["SLOW-SYNC-FS", holdRow(o.log.slowFs)],
-    ["boots (blackout)", o.log.boots.map((b) => `${b.startedAt.slice(5, 19)} v${b.version}: ${b.blackoutMs === null ? "no listen line" : `${Math.round(b.blackoutMs / 1000)}s`}`).join("; ") || "-"],
-  ]));
-  if (r.load) {
-    const l = r.load;
-    parts.push(table(`load (N=${l.n}, sample=${l.roundTrips.length}, run ${l.runId})`, [
-      ["spawned", `${l.spawned}/${l.n}${l.spawnErrors.length ? ` (${l.spawnErrors.length} errors)` : ""}`],
-      ["spawn per pane", lat(l.spawnMs)],
-      ["mapped to conversations", `${l.mapped}/${l.spawned}`],
-      ["mapping time", lat(l.mappingMs)],
-      ["churn", `${l.churn.linesAppended} lines over ${Math.round(l.churn.durationMs / 1000)}s`],
-      ["loop lag under load", l.loopLag ? `${lat(l.loopLag.summary)} skipped=${l.loopLag.skipped}` : "-"],
-      ["/hook/status under load", l.hookStatus ? lat(l.hookStatus.summary) : "-"],
-      ["/term/sessions under load", l.termSessions ? lat(l.termSessions.summary) : "-"],
-      ["up leg (append to export)", `${lat(l.upMs)} timeouts=${l.roundTrips.filter((t) => t.upMs === null).length}`],
-      ["delivery (send to pane)", `${lat(l.injectedMs)} timeouts=${l.roundTrips.filter((t) => t.injectedMs === null).length}`],
-      ["echo (send to export)", `${lat(l.echoedMs)} timeouts=${l.roundTrips.filter((t) => t.echoedMs === null).length}`],
-      ["teardown", l.teardown.kept ? "kept" : `${l.teardown.conversationsDeleted} conversations deleted${l.teardown.warnings.length ? `; WARN ${l.teardown.warnings.join(" | ")}` : ""}`],
-    ]));
+  const lines = [`# Daemon measurement ${r.startedAt}`, "", `**${r.acceptance.status}**`, "", ...r.acceptance.reasons.map(reason => `- ${reason}`), "", "| Route | Successful / scheduled | p99 / max RTT ms | Errors / timeouts / cancelled / skipped / missing | Tester lateness max ms |", "| --- | --- | --- | --- | --- |"];
+  for (const [phase, routes] of [["observe", r.observe], ["load", r.load]] as const) {
+    for (const probe of [routes?.loopLag, routes?.hookStatus, routes?.termSessions]) if (probe) lines.push(`| ${phase}: ${probe.label} | ${probe.summary.n} / ${probe.expected} | ${probe.summary.p99 ?? "unknown"} / ${probe.summary.max ?? "unknown"} | ${probe.errors} / ${probe.timeouts} / ${probe.cancelled} / ${probe.skipped} / ${probe.missing} | ${probe.lateness.max ?? "unknown"} |`);
   }
-  parts.push("Notes:", ...r.notes.map((n) => `- ${n}`), "", `Files: ${r.outputs.json}, ${r.outputs.md}`, "");
-  return parts.join("\n");
+  if (r.load) lines.push("", `Fleet: ${r.load.spawned}/${r.load.n} spawned, ${r.load.mapped}/${r.load.n} mapped. Delivery: ${r.load.echoedMs.n}/${r.load.sampleRequested} assistant echoes. Cleanup: ${r.load.teardown.verified ? "verified" : "unverified"}.`, "", `Cleanup failures: ${r.load.teardown.warnings.join("; ") || "none"}`);
+  lines.push("", "Runtime before/after, source manifests, phase timestamps, full probe slots, delivery legs, sleep windows and cleanup ledger are retained in JSON.", "", ...r.notes.map(note => `- ${note}`), "", `JSON: ${r.outputs.json}`, "");
+  return lines.join("\n");
 }
