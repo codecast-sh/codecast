@@ -25,6 +25,28 @@ import type { PageSession } from "./instance.js";
 export const RECORDER_MAX = 500;
 
 /**
+ * The stamp that tells a codecast page an agent drives this tab.
+ *
+ * The web's desktop hand-off gate (packages/web/lib/desktopHandoff.ts) holds
+ * a background tab for two minutes, then hands it to the desktop app when the
+ * human looks at it — right for a cmd-clicked link, fatal for a tab an agent
+ * opened to read a page. Every driver writes this key before any page script
+ * runs (this recorder, the extension's overlay script, the engine's init
+ * script) and dispatches the event for the case where it attached to a
+ * document already parsing, so a gate that is holding boots at once. Key and
+ * event names are the gate's; a test on the web side pins all three copies.
+ */
+export const AGENT_TAB_KEY = "codecast-agent-tab";
+export const AGENT_TAB_EVENT = "cast:driven";
+
+export function agentTabStampSource(): string {
+  return `(() => {
+  try { sessionStorage.setItem(${JSON.stringify(AGENT_TAB_KEY)}, "1"); } catch {}
+  try { document.dispatchEvent(new Event(${JSON.stringify(AGENT_TAB_EVENT)})); } catch {}
+})()`;
+}
+
+/**
  * The in-page recorder. Written as a single expression so it can be installed
  * both as a new-document script and evaluated into an already-open page.
  *
@@ -34,7 +56,8 @@ export const RECORDER_MAX = 500;
  * page's own code went near it.
  */
 export function recorderSource(max = RECORDER_MAX): string {
-  return `(() => {
+  return `${agentTabStampSource()};
+(() => {
   if (window.__cast && window.__cast.v === 1) return;
   // Whether the recorder beat the page's own scripts. readyState is the honest
   // test: "loading" means the parser has not finished, so we are ahead of
