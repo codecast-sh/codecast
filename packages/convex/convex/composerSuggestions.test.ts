@@ -7,6 +7,7 @@ import {
   parseMinedProfile,
   rankInputs,
   sanitizeSuggestions,
+  parseJsonBlock,
 } from "./composerSuggestions";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -98,6 +99,17 @@ describe("getRecentUserInputs", () => {
     expect(texts.filter((t) => t === "plan and task this out deeply")).toHaveLength(1);
     expect(texts).toContain("take the other branch here");
     expect(texts.some((t) => t.startsWith("Adversarially"))).toBe(false);
+  });
+
+  test("skips peer-session notices and codecast's own notices carried as user rows", async () => {
+    const conv = { _id: "c1", _creationTime: 100, user_id: "u1", updated_at: 900 };
+    const messages = [
+      { _id: "p", conversation_id: "c1", role: "user", content: 'Another Claude session sent a message: <teammate-message teammate_id="review-ct1" color="green"> {"type":"idle_notification"} </teammate-message>', timestamp: 200 },
+      { _id: "n", conversation_id: "c1", role: "user", content: "[codecast] Now using Codex (was Claude · Fable). This session continues here.", timestamp: 201 },
+      { _id: "t", conversation_id: "c1", role: "user", content: "verify it in the browser before you call it done", timestamp: 300 },
+    ];
+    const texts = (await collect([conv], messages)).map((r) => r.text);
+    expect(texts).toEqual(["verify it in the browser before you call it done"]);
   });
 
   test("skips a slash command's expanded body along with its wrapper", async () => {
@@ -305,6 +317,17 @@ describe("sanitizeSuggestions", () => {
         banned,
       ),
     ).toEqual([reusable]);
+  });
+});
+
+describe("parseJsonBlock", () => {
+  test("takes the leading JSON value and drops trailing commentary", () => {
+    expect(parseJsonBlock("[]\n\nThe developer is waiting on a passkey touch; nothing to predict.")).toEqual([]);
+    expect(parseJsonBlock('[{"text": "ship it - [1] and {2}", "confidence": 0.8}] trailing')).toEqual([
+      { text: "ship it - [1] and {2}", confidence: 0.8 },
+    ]);
+    expect(parseJsonBlock("```json\n[]\n```")).toEqual([]);
+    expect(parseJsonBlock("no json here")).toBeNull();
   });
 });
 

@@ -7,6 +7,11 @@ import { enqueuePendingMessage } from "./pendingMessages";
 // something happened to the session, so the human sees it. A HIDDEN stash
 // (`cast stash --hide`, "Stash and hide") survives machine wakes and clears
 // only on a human send. Dismissed and killed clear on every send regardless.
+//
+// The pinned thread state follows the same split the other way round: it is
+// the agent's declaration of who acts next, so only a message a PERSON wrote
+// (`human: true`) answers it and takes it down. A session's relay and a
+// trigger's wake leave it standing.
 
 function world(conv: Record<string, any>) {
   const tables: Record<string, any[]> = {
@@ -54,5 +59,46 @@ describe("stash wake rules at enqueue", () => {
     expect(conv.inbox_killed_at).toBeUndefined();
     expect(conv.status).toBe("active");
     expect(conv.inbox_stashed_at).toBe(100);
+  });
+});
+
+describe("the pinned thread state at enqueue", () => {
+  const pinned = {
+    thread_state: "Eval suite cleanup\nStatus: report is in the thread",
+    thread_state_at: 1_000,
+    thread_state_msg_count: 40,
+    thread_state_status: "done",
+  };
+
+  test("a human send takes the pin down — all four fields", async () => {
+    const { ctx, conv } = world(pinned);
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "one more thing", human: true });
+    expect(conv.thread_state).toBeUndefined();
+    expect(conv.thread_state_at).toBeUndefined();
+    expect(conv.thread_state_msg_count).toBeUndefined();
+    expect(conv.thread_state_status).toBeUndefined();
+    expect(conv.has_pending_messages).toBe(true);
+  });
+
+  test("a trigger wake leaves the pin standing", async () => {
+    const { ctx, conv } = world(pinned);
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "tick", origin: "scheduler" });
+    expect(conv.thread_state).toBe(pinned.thread_state);
+    expect(conv.thread_state_status).toBe("done");
+  });
+
+  test("a send nobody marked as human leaves the pin standing", async () => {
+    // Session relays, account-switch continues, undeliverable receipts: the
+    // flag is positive, so an unmarked path keeps the pin.
+    const { ctx, conv } = world(pinned);
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "<session-message from=\"jx2\">done</session-message>" });
+    expect(conv.thread_state).toBe(pinned.thread_state);
+    expect(conv.thread_state_at).toBe(1_000);
+  });
+
+  test("a human send into a row with no pin writes nothing about it", async () => {
+    const { ctx, conv } = world({});
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "hi", human: true });
+    expect("thread_state" in conv).toBe(false);
   });
 });

@@ -2462,12 +2462,27 @@ function getConversationProjectPath(conv: { git_root?: string | null; project_pa
 // distinct projects. Keyed by git root when present, else project path. The
 // window is by updated_at, not creation time: a project whose sessions are
 // old but still in use must not fall out behind a burst of fresh sessions.
-async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 600) {
-  const conversations = await ctx.db
+// The one scan every "recent projects" fold walks: the viewer's conversations,
+// most recently active first, optionally bounded to a window. It rides the hot
+// `by_user_updated` index, so every conversation write for the user re-runs
+// the subscribing query; keep `take` as small as the fold can stand.
+async function scanRecentConversations(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  take: number,
+  since?: number,
+) {
+  return ctx.db
     .query("conversations")
-    .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+    .withIndex("by_user_updated", (q) =>
+      since === undefined ? q.eq("user_id", userId) : q.eq("user_id", userId).gte("updated_at", since)
+    )
     .order("desc")
     .take(take);
+}
+
+async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 600) {
+  const conversations = await scanRecentConversations(ctx, userId, take);
 
   const projectMap = new Map<string, {
     path: string;
@@ -3121,15 +3136,19 @@ export const getRecentProjectPaths = query({
     if (!userId) {
       return [];
     }
+    return performGetRecentProjectPaths(ctx, userId, args);
+  },
+});
+
+export async function performGetRecentProjectPaths(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  args: { limit?: number; device_id?: string },
+) {
+  {
     const limit = args.limit ?? 10;
     const windowStart = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gte("updated_at", windowStart)
-      )
-      .order("desc")
-      .take(500);
+    const conversations = await scanRecentConversations(ctx, userId, 500, windowStart);
 
     // Hide paths none of the user's machines can see locally. Read the union of
     // online devices' roots (NOT the per-user field, which every daemon clobbers
@@ -3204,8 +3223,8 @@ export const getRecentProjectPaths = query({
     }
 
     return recents;
-  },
-});
+  }
+}
 
 export const adminSetTeamMemberVisibility = internalMutation({
   args: {

@@ -15,7 +15,7 @@ import {
   classifyWorkState,
   needsInputKind,
   subagentKeepsParentWorking,
-  isUserDormant,
+  userRestOf,
   isSettleVerdictCurrent,
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
@@ -725,7 +725,7 @@ export async function performNeedsInputCheck(
     isUnresponsive: activity.isUnresponsive,
     messageCount: conv.message_count || 0,
     killed: !!conv.inbox_killed_at,
-    userDormant: isUserDormant(conv),
+    userRest: userRestOf(conv),
     armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
     armedLoopHome: isArmedLoopHome(conv, now),
     armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),

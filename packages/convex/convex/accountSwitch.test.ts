@@ -6,6 +6,7 @@ import {
   isRemoteAuthBlocked,
   isSubagentConversation,
   actedBlockedConversations,
+  skippedBlockedWorkers,
   isDeviceOnline,
   isValidProfileName,
   shouldSweepStaleFlag,
@@ -838,6 +839,19 @@ describe("actedBlockedConversations", () => {
     // were in-process workflow agents; auto-including them resumed 53 copies.
     expect(actedBlockedConversations([worker, flagged], false)).toEqual([]);
     expect(actedBlockedConversations([], true)).toEqual([]);
+  });
+
+  test("the workers a revive leaves out are exactly the ones it dismisses", () => {
+    // Opting out is a decision: every recoverable worker not acted on is
+    // dismissed in the same gesture, and the two sets partition the
+    // recoverable rows. A safety stop belongs to neither — it waits for review.
+    const safety = { _id: "safety", is_subagent: true, pending_api_error_kind: "safety" };
+    const all = [worker, top, flagged, safety];
+    expect(skippedBlockedWorkers(all, false)).toEqual([worker, flagged]);
+    expect(skippedBlockedWorkers(all, true)).toEqual([]);
+    const acted = actedBlockedConversations(all, false);
+    const skipped = skippedBlockedWorkers(all, false);
+    expect([...acted, ...skipped].map((c) => c._id).sort()).toEqual(["flagged", "top", "worker"]);
   });
 });
 

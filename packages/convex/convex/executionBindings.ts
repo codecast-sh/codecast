@@ -13,10 +13,12 @@ import {
   AGENT_MODEL_CONFIG,
   agentSupportsExecutionTransport,
   isStashHidden,
+  isSessionUpdateBatch,
 } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { insertRiskResendPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { isConversationSafetyBlocked } from "./conversationSafety";
 
 export const EXECUTION_PROTOCOL_VERSION = 1 as const;
 
@@ -459,6 +461,22 @@ export async function beginLegacyQuiescenceInDb(
     fail("EXECUTION_PROTOCOL_INVARIANT", "execution head exists without conversation marker");
   }
 
+  let inspected = 0;
+  for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
+    const messages = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", args.conversationId).eq("status", status))
+      .take(129 - inspected);
+    inspected += messages.length;
+    if (inspected > 128) {
+      fail("LEGACY_PENDING_QUEUE_REQUIRES_DRAIN", "drain the unresolved legacy queue to at most 128 messages before migration");
+    }
+    if (messages.some((message: any) => isSessionUpdateBatch(message.content))) {
+      fail("LEGACY_SESSION_UPDATES_REQUIRE_RESOLUTION", "deliver or explicitly cancel unresolved session updates before migration");
+    }
+  }
+
   await ctx.db.insert("conversation_execution_heads", {
     conversation_id: args.conversationId,
     owner_user_id: userId,
@@ -614,6 +632,14 @@ export async function activateAfterLegacyQuiescenceInDb(
     fail(
       "LEGACY_DELIVERY_OUTCOME_UNRESOLVED",
       `legacy message ${String(unsafe._id)} is ${unsafe.status}; resolve it before activation`,
+    );
+  }
+
+  const outstandingUpdate = legacyInFlight.find((message: any) => isSessionUpdateBatch(message.content));
+  if (outstandingUpdate) {
+    fail(
+      "LEGACY_SESSION_UPDATES_REQUIRE_RESOLUTION",
+      `legacy session update ${String(outstandingUpdate._id)} must be delivered or explicitly cancelled before activation`,
     );
   }
 
@@ -1525,7 +1551,8 @@ export async function claimNextDeliveryInDb(
     now: number;
   },
 ): Promise<any> {
-  await requireOwnedConversation(ctx, args.conversationId, userId);
+  const conversation = await requireOwnedConversation(ctx, args.conversationId, userId);
+  if (isConversationSafetyBlocked(conversation)) return { state: "busy", reason: "safety" };
   const head = await executionHead(ctx, args.conversationId);
   const binding = await executionBinding(ctx, args.conversationId, args.executionEpoch);
   if (!head) fail("EXECUTION_HEAD_MISSING", "conversation has no execution head");
@@ -1737,10 +1764,11 @@ export async function startDeliveryInDb(
   userId: Id<"users">,
   fence: PermitFence & { now: number },
 ): Promise<any> {
-  const { head, message, attempt } = await verifyAttemptFence(ctx, userId, fence, [
+  const { conversation, head, message, attempt } = await verifyAttemptFence(ctx, userId, fence, [
     "claimed",
     "delivery-started",
   ]);
+  if (isConversationSafetyBlocked(conversation)) fail("CONVERSATION_SAFETY_BLOCKED", "Delivery is held for safety review");
   if (
     attempt.state === "delivery-started" &&
     head.active_delivery_state === "delivery-started" &&
@@ -2246,6 +2274,7 @@ export async function cancelFencedDeliveriesOnKill(
   conversationId: Id<"conversations">,
   now: number = Date.now(),
   limit: number = 300,
+  maxKillGeneration?: number,
 ): Promise<{ cancelled: number; inFlight: number }> {
   const head = await executionHead(ctx, conversationId);
   // Read the NON-TERMINAL queue through the status index, never the whole
@@ -2257,11 +2286,13 @@ export async function cancelFencedDeliveriesOnKill(
   const messages: any[] = [];
   for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
     if (messages.length >= limit) break;
-    const rows = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_conversation_status", (q: any) =>
-        q.eq("conversation_id", conversationId).eq("status", status),
-      )
+    const query = ctx.db.query("pending_messages");
+    const rows = await (maxKillGeneration === undefined
+      ? query.withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("status", status))
+      : query.withIndex("by_conversation_status_kill_generation", (q: any) =>
+          q.eq("conversation_id", conversationId).eq("status", status)
+            .lte("kill_generation", maxKillGeneration)))
       .take(limit - messages.length);
     for (const row of rows) {
       if (row.delivery_protocol_version !== undefined) messages.push(row);
@@ -3173,6 +3204,8 @@ export const listExecutionWork = query({
       .collect();
     const work: any[] = [];
     for (const head of heads) {
+      const conversation = await ctx.db.get(head.conversation_id as Id<"conversations">);
+      if (conversation && isConversationSafetyBlocked(conversation)) continue;
       if (head.protocol_version !== args.protocol_version) {
         fail("EXECUTION_PROTOCOL_VERSION_MISMATCH", "stored head differs from daemon handshake");
       }

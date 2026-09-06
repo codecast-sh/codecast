@@ -665,6 +665,53 @@ export function actedBlockedConversations<T extends {
   return includeSubagents ? [...topLevel, ...recoverable.filter(isSubagentConversation)] : topLevel;
 }
 
+// The complement of the acted set: the workers a revive leaves out when the
+// caller did not opt them in. Leaving a worker out is a DECISION, not a
+// deferral — nobody comes back for it — so the revive dismisses these from
+// the blocked set in the same gesture and the count drops to what was acted
+// on. Safety stops never appear here: they wait for a review, not a revive.
+// Shared by the server (which clears the flag) and the web banner (which
+// paints the clear and names the count on the button), so both agree on
+// exactly which rows go.
+export function skippedBlockedWorkers<T extends {
+  pending_api_error_kind?: string | null;
+  is_subagent?: boolean;
+  parent_conversation_id?: string | null;
+}>(blocked: T[], includeSubagents: boolean): T[] {
+  if (includeSubagents) return [];
+  return blocked.filter((c) => c.pending_api_error_kind !== "safety" && isSubagentConversation(c));
+}
+
+// The one-line cause a blocked FLEET is reported on — the banner headline and
+// the blocked-notification title both read it here, so a push and the banner
+// can never name different causes for the same incident.
+//
+// Two rules earn their own definition. It is computed over the WHOLE blocked
+// set, the same set whose size the headline states: deriving it from the
+// ACTED set (subagent workers are held out by default) named a cause nothing
+// was in — 44 workers parked on a usage limit left every acted count at zero,
+// and the label fell through to the first entry, "safety review". And the
+// order breaks ties toward the ordinary cause, so "safety review" leads only
+// when it is strictly the largest slice.
+export function blockedHeadlineCause<T extends { pending_api_error_kind?: string | null }>(blocked: T[]): string {
+  const of = (kind: string) => blocked.filter((c) => c.pending_api_error_kind === kind).length;
+  const auth = of("auth");
+  const conn = of("connection");
+  const fatal = of("fatal");
+  const throttle = of("throttle");
+  const safety = of("safety");
+  // A park with no kind recorded is a usage limit — the original park shape.
+  const limit = blocked.length - auth - conn - fatal - throttle - safety;
+  return ([
+    [limit, "usage limits"],
+    [auth, "login"],
+    [throttle, "rate-limit bursts"],
+    [conn, "dropped connections"],
+    [fatal, "api errors"],
+    [safety, "safety review"],
+  ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1];
+}
+
 // The parent-link fields every inbox session row MUST carry so the client can
 // tell a subagent from a top-level session and nest it under its parent. The
 // client reads exactly these via isSubagentConversation; without them a row

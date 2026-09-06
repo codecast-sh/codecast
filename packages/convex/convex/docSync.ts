@@ -104,6 +104,24 @@ export const getSnapshot = query({
   },
 });
 
+// What a collab snapshot writes back to the docs row. The editor's first block
+// is the title heading, so the stored title follows it (docs.docTextUpdates is
+// the same rule for the CLI paths). Only a CHANGED body counts as an edit:
+// the editor snapshots on open and on compaction too, and stamping updated_at
+// for a byte-identical body made every doc read as "Updated just now" the
+// moment someone looked at it. A title-only repair (stored title disagreeing
+// with an unchanged heading) is not an edit either.
+export function snapshotDocPatch(
+  md: string,
+  doc: { content?: string | null; title: string },
+  now: number,
+): { content: string; title: string; updated_at: number } | { title: string } | null {
+  const title = docTitleFromContent(md, doc.title);
+  if (md !== (doc.content ?? "").trim()) return { content: md, title, updated_at: now };
+  if (title !== doc.title) return { title };
+  return null;
+}
+
 export const submitSnapshot = mutation({
   args: {
     id: v.string(),
@@ -183,13 +201,8 @@ export const submitSnapshot = mutation({
     try {
       const doc = docForGuard;
       if (doc && parsed) {
-        // The editor's first block is the title heading: the stored title
-        // follows it (docs.docTextUpdates is the same rule for the CLI paths).
-        await ctx.db.patch(doc._id, {
-          content: md,
-          title: docTitleFromContent(md, doc.title),
-          updated_at: Date.now(),
-        });
+        const patch = snapshotDocPatch(md, doc as any, Date.now());
+        if (patch) await ctx.db.patch(doc._id, patch);
 
         const newMentions = extractPersonMentionIds(parsed);
         if (newMentions.size > 0) {

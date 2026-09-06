@@ -323,13 +323,13 @@ export function subagentKeepsParentWorking(input: {
 // live in @codecast/shared/contracts/inboxProjection — the shared row placement
 // needs them, and one rule must decide "does this stamp still describe the row"
 // on every surface. Re-exported for existing importers.
-export { isUserDormant, isSettleVerdictCurrent } from "@codecast/shared/contracts";
+export { userRestOf, userRestStampOf, isSettleVerdictCurrent } from "@codecast/shared/contracts";
 
 // Accepted `--state` filter values for CLI discovery, normalized to a canonical
 // token. "pinned" and "live" are orthogonal to work_state (they filter the
 // is_pinned / is_live flags), so callers handle them specially. Returns null for
 // "all"/unset/garbage so an unrecognized value transparently means "no filter".
-export type WorkStateFilter = WorkState | "pinned" | "live";
+export type WorkStateFilter = WorkState | "pinned" | "live" | "hibernated";
 
 export function normalizeWorkStateFilter(raw: string | undefined | null): WorkStateFilter | null {
   const v = (raw || "").trim().toLowerCase().replace(/[\s_]+/g, "-");
@@ -360,6 +360,8 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
     case "idle":
     case "blank":
       return "idle";
+    case "hibernated":
+      return "hibernated";
     case "pinned":
     case "pin":
       return "pinned";

@@ -1,3 +1,4 @@
+import type { RegisteredQuery } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { Id, type Doc } from "./_generated/dataModel";
@@ -2401,8 +2402,17 @@ export const webToggleDocLink = mutation({
   },
 });
 
+type WebDocTreeEntry = Pick<
+  Doc<"docs">,
+  "_id" | "title" | "doc_type" | "source" | "updated_at" | "created_at"
+> & {
+  parent_id: Id<"docs"> | null;
+  sort_order: number;
+  pinned: Doc<"docs">["pinned"];
+};
+
 /** Lightweight query for sidebar doc tree — returns id, title, parent_id, sort_order, doc_type only */
-export const webDocTree = query({
+export const webDocTree: RegisteredQuery<"public", Record<string, never>, Promise<WebDocTreeEntry[]>> = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];

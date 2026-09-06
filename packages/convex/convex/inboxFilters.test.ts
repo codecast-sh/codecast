@@ -742,7 +742,11 @@ describe("classifyWorkState", () => {
   test("hard blocks outrank every rest verdict", () => {
     expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true, awaitingInput: true }))).toBe("needs_input");
     expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, isUnresponsive: true }))).toBe("needs_input");
-    expect(classifyWorkState(wsi({ isIdle: true, userDormant: true, awaitingInput: true }))).toBe("needs_input");
+    // The USER's verdict is triage, not a claim: it stands over the open ask
+    // they already saw, until the next activity expires the stamp.
+    expect(classifyWorkState(wsi({ isIdle: true, userRest: "dormant", awaitingInput: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ agentStatus: "stopped", isIdle: true, userRest: "done" }))).toBe("done");
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, userRest: "needs_input" }))).toBe("needs_input");
     expect(classifyWorkState(wsi({ isIdle: true, armedTriggerHome: true, isUnresponsive: true }))).toBe("needs_input");
     // A killed row is retired, whatever it declared.
     expect(classifyWorkState(wsi({ killed: true, agentStatus: "dormant", isIdle: true }))).toBe("idle");
@@ -750,7 +754,7 @@ describe("classifyWorkState", () => {
 
   test("structural + user dormancy: an armed inject trigger's home, or the user's park stamp", () => {
     expect(classifyWorkState(wsi({ isIdle: true, armedTriggerHome: true }))).toBe("dormant");
-    expect(classifyWorkState(wsi({ isIdle: true, userDormant: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ isIdle: true, userRest: "dormant" }))).toBe("dormant");
     // Dormant beats done: a session that both delivered and parked is parked.
     expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, armedTriggerHome: true }))).toBe("dormant");
     // …but a wake in flight is working, whatever the home's standing state.
@@ -780,6 +784,21 @@ describe("classifyWorkState", () => {
     expect(classifyWorkState(wsi({ isIdle: true, declaredStatus: "blocked", settleVerdict: "done" }))).toBe("needs_input");
     // …but the agent's own next declaration overrides its old pin.
     expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, declaredStatus: "blocked" }))).toBe("done");
+  });
+
+  test("a blocked pin outranks a standing trigger or loop park", () => {
+    // jx7bfp5 (2026-09-06): a daily inject trigger kept filing its home under
+    // Dormant while the card's pin read "Needs input". The standing wake keeps
+    // firing, but the agent said a human must act, so the card files where
+    // the human looks — with a live daemon (idle) and with none at all.
+    expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, declaredStatus: "blocked", armedTriggerHome: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ isIdle: true, declaredStatus: "blocked", armedTriggerHome: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, declaredStatus: "blocked", armedLoopHome: true }))).toBe("needs_input");
+    // A fresher declaration the daemon carries (dormant / waiting) still parks.
+    expect(classifyWorkState(wsi({ agentStatus: "dormant", isIdle: true, declaredStatus: "blocked", armedTriggerHome: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ agentStatus: "waiting", isIdle: true, declaredStatus: "blocked" }))).toBe("dormant");
+    // The pin is the agent's claim, so the user's own triage still outranks it.
+    expect(classifyWorkState(wsi({ isIdle: true, declaredStatus: "blocked", userRest: "dormant" }))).toBe("dormant");
   });
 
   test("the settle classifier speaks only for an UNDECLARED settle", () => {

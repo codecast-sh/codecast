@@ -10,6 +10,7 @@ import {
   resetConversationPendingMessages,
   updatePendingMessageStatusForDaemon,
   cancelQueuedMessagesOnKill,
+  continueKillCancellation,
   updateMessageStatus,
 } from "./pendingMessages";
 import { makeFakeDb } from "./testDb";
@@ -425,6 +426,7 @@ const createCollectCtx = (messages: Array<Record<string, any>>) => {
   const patches: Array<{ id: string; patch: Record<string, unknown> }> = [];
   const ctx = {
     db: {
+      async get() { return { _id: "c1" }; },
       query() {
         return {
           withIndex(_index: string, builder: (q: any) => unknown) {
@@ -554,6 +556,24 @@ describe("cancelQueuedMessagesOnKill", () => {
       pending_messages: rows.map((r) => ({ conversation_id: CONV, retry_count: 0, ...r })),
     });
 
+  test("the fixture orders missing generation values before generation zero", async () => {
+    const db = mkDb([
+      { _id: "missing", status: "pending" },
+      { _id: "zero", status: "pending", kill_generation: 0 },
+      { _id: "one", status: "pending", kill_generation: 1 },
+    ]);
+    for (const [op, expected] of [
+      ["lt", ["missing"]], ["lte", ["missing", "zero"]],
+      ["gt", ["one"]], ["gte", ["zero", "one"]],
+    ] as const) {
+      const rows = await db.query("pending_messages")
+        .withIndex("by_conversation_status_kill_generation", (q: any) =>
+          q.eq("conversation_id", CONV).eq("status", "pending")[op]("kill_generation", 0))
+        .collect();
+      expect(rows.map((row: any) => row._id)).toEqual([...expected]);
+    }
+  });
+
   test("cancels every non-terminal queued message and clears the conversation flag", async () => {
     const db = mkDb([
       { _id: "m_pending", status: "pending" },
@@ -625,7 +645,7 @@ describe("cancelQueuedMessagesOnKill", () => {
 
     expect(await cancelQueuedMessagesOnKill({ db } as any, CONV as any)).toBe(1);
     expect(indexes.length).toBeGreaterThan(0);
-    expect(indexes.every((i) => i === "by_conversation_status")).toBe(true);
+    expect(indexes.every((i) => i === "by_conversation_status" || i === "by_conversation_status_kill_generation")).toBe(true);
     expect(db._tables.pending_messages.filter((r: any) => r.status === "delivered")).toHaveLength(2000);
   });
 
@@ -649,12 +669,14 @@ describe("cancelQueuedMessagesOnKill", () => {
 
     expect(await cancelQueuedMessagesOnKill(ctx as any, CONV as any)).toBe(300);
     expect(scheduled).toHaveLength(1);
-    expect(scheduled[0][1]).toEqual({ conversation_id: CONV });
+    expect(scheduled[0][1]).toEqual({ conversation_id: CONV, cutoff_generation: 0 });
     expect(db._tables.pending_messages.filter((r: any) => r.status === "pending")).toHaveLength(50);
 
     // The continuation finishes the job (and doesn't need another).
+    const args = scheduled[0][1];
     scheduled.length = 0;
-    expect(await cancelQueuedMessagesOnKill(ctx as any, CONV as any)).toBe(50);
+    expect(await (continueKillCancellation as any)._handler(ctx, args)).toEqual({ cancelled: 50 });
+    expect(db._tables.conversations[0].pending_kill_generation).toBe(1);
     expect(db._tables.pending_messages.every((r: any) => r.status === "cancelled")).toBe(true);
     expect(scheduled).toHaveLength(0);
   });
