@@ -366,10 +366,14 @@ export function outboxCoalesceKeyFor(
 // How long a durable enqueue may stay uncommitted before storage is reported
 // unhealthy. The dispatch path no longer waits on storage, so a slow or wedged
 // IndexedDB degrades durability only — but silently degraded durability is how
-// wedges go unnoticed for hours, so surface it. The target is multi-minute
-// wedges, not transient contention (boot hydration, a large flush), so the
-// deadline is generous — a stall that resolves inside it is not worth a banner.
-export const STORAGE_WATCHDOG_MS = 10_000;
+// wedges go unnoticed for hours, so surface it. The target is a wedge — a
+// write that never lands — never contention. A cold boot on a large cache
+// replays its catch-up into the same database this write queues behind, and
+// every window on the origin shares that database, so one enqueue routinely
+// waits tens of seconds while every other write still commits. A ten-second
+// deadline tripped on exactly that and raised the banner on every boot; a
+// full minute is past anything contention explains.
+export const STORAGE_WATCHDOG_MS = 60_000;
 
 // When the watchdog timer fires far past its deadline, the event loop itself
 // was paused (hidden/frozen tab, system sleep) — the measurement is the pause,
