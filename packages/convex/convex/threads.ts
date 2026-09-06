@@ -20,7 +20,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { isSilentAgentRow } from "@codecast/shared/chat";
-import { parseCommentThreadRootKey } from "@codecast/shared/comments";
+import { parseCodeThreadRootKey, parseCommentThreadRootKey } from "@codecast/shared/comments";
 import { UNREAD_CAP, plainPreview } from "./chatText";
 import {
   THREAD_UNREAD_SCAN,
@@ -32,6 +32,7 @@ import {
   type ThreadSummary,
 } from "./chat";
 import { commentsForAnchor, isInCommentThread } from "./comments";
+import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import {
   THREAD_BADGE_SCAN,
@@ -67,6 +68,9 @@ export type ThreadInboxEntry = {
   message_id?: string;
   file_path?: string;
   line_number?: number;
+  repository?: string;
+  ref?: string;
+  pull_request_id?: string;
   last_activity_at: number;
   last_read_at: number;
   updated_at: number;
@@ -109,6 +113,10 @@ export type ListMinePayload = {
   comments: CommentWithUser[];
   tasks: Array<Doc<"tasks"> & { comments: Doc<"task_comments">[] }>;
   pages: PageThreadEntity[];
+  /** Code comment threads (review_comments), each thread's newest rows. The
+   *  web lands them in its codeComments collection, the one the commit and
+   *  pull request pages read. */
+  codeComments: Doc<"review_comments">[];
 };
 
 /** Per-request memo: the same channel, conversation, task and author repeat
@@ -125,6 +133,7 @@ type PageCache = {
   taskComments: Map<string, Doc<"task_comments">[]>;
   artifacts: Map<string, Doc<"artifacts"> | null>;
   artifactComments: Map<string, Doc<"artifact_comments">[]>;
+  codeThreads: Map<string, Doc<"review_comments">[]>;
   users: Map<string, Doc<"users"> | null>;
 };
 
@@ -140,6 +149,7 @@ function newPageCache(): PageCache {
     taskComments: new Map(),
     artifacts: new Map(),
     artifactComments: new Map(),
+    codeThreads: new Map(),
     users: new Map(),
   };
 }
@@ -493,11 +503,77 @@ const pageKind: ThreadKindResolver = {
   },
 };
 
+// ── code ────────────────────────────────────────────────────────────────────
+
+/** The whole thread, oldest first: every review_comments row on the anchor
+ *  the root key names. The row's typed refs win over the parsed key. */
+async function codeThreadFor(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<Doc<"review_comments">[]> {
+  return await memo(cache.codeThreads, row.root_key, () => {
+    const parsed = parseCodeThreadRootKey(row.root_key);
+    return codeThreadRows(ctx as any, {
+      repository: row.repository ?? parsed.repository,
+      ref: row.ref ?? parsed.ref,
+      file_path: row.file_path ?? parsed.filePath,
+      line_number: row.line_number ?? parsed.lineNumber,
+    });
+  });
+}
+
+function isOthersCodeComment(c: Doc<"review_comments">, userId: Id<"users">): boolean {
+  // A GitHub or agent row has no codecast author; it is always news.
+  return !c.author_user_id || String(c.author_user_id) !== String(userId);
+}
+
+async function codeAuthorName(ctx: ReadCtx, cache: PageCache, c: Doc<"review_comments">): Promise<string | undefined> {
+  if (c.author_kind === "agent") return "Agent";
+  return displayName(await userFor(ctx, cache, c.author_user_id)) ?? c.author_github_username ?? undefined;
+}
+
+const codeKind: ThreadKindResolver = {
+  // A thread is readable when its root is: the author, the pull request, the
+  // session it came from, or the team that installed the App. One check per
+  // thread, on its oldest row.
+  async access(ctx, userId, row, cache) {
+    const rows = await codeThreadFor(ctx, row, cache);
+    const root = rows[0];
+    return !!root && (await canAccessComment(ctx as any, userId, root));
+  },
+  async unread(ctx, userId, row, cache) {
+    const rows = await codeThreadFor(ctx, row, cache);
+    const counted = rows.filter((c) => c.created_at > row.last_read_at && isOthersCodeComment(c, userId)).length;
+    return capped(counted);
+  },
+  async newestAt(ctx, row, cache) {
+    const rows = await codeThreadFor(ctx, row, cache);
+    let newest = 0;
+    for (const c of rows) if (c.created_at > newest) newest = c.created_at;
+    return newest;
+  },
+  async load(ctx, _userId, row, cache, payload) {
+    const rows = (await codeThreadFor(ctx, row, cache)).slice(-THREAD_PAYLOAD_ROWS);
+    payload.codeComments.push(...rows);
+  },
+  async preview(ctx, row, cache) {
+    const rows = await codeThreadFor(ctx, row, cache);
+    const newest = rows[rows.length - 1];
+    if (!newest) return null;
+    return {
+      _id: String(newest._id),
+      user_id: newest.author_user_id ? String(newest.author_user_id) : undefined,
+      author_kind: newest.author_kind === "agent" ? "agent" : "user",
+      author_name: await codeAuthorName(ctx, cache, newest),
+      created_at: newest.created_at,
+      preview: plainPreview(newest.content, 160),
+    };
+  },
+};
+
 const THREAD_KINDS: Record<ThreadKind, ThreadKindResolver> = {
   chat: chatKind,
   comment: commentKind,
   task: taskKind,
   page: pageKind,
+  code: codeKind,
 };
 
 // ── Queries ─────────────────────────────────────────────────────────────────
@@ -535,6 +611,7 @@ export const listMine = query({
       comments: [],
       tasks: [],
       pages: [],
+      codeComments: [],
     };
     const empty = { entries: [] as ThreadInboxEntry[], payload, has_more: false, next_cursor: null as string | null };
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
@@ -567,6 +644,9 @@ export const listMine = query({
         message_id: row.message_id,
         file_path: row.file_path,
         line_number: row.line_number,
+        repository: row.repository,
+        ref: row.ref,
+        pull_request_id: row.pull_request_id,
         last_activity_at: row.last_activity_at,
         last_read_at: row.last_read_at,
         updated_at: row.updated_at,
