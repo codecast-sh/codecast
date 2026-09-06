@@ -469,6 +469,36 @@ const GROK_MODEL: AgentModelConfig = {
 };
 
 /**
+ * Pane chrome that means "a turn is running right now", for the clients whose
+ * readiness is classified whole-pane against `promptReadyPattern` (opencode, pi,
+ * grok — see the daemon's classifyGlyphlessClientPaneState). It lives beside the
+ * ready patterns because it answers the same question in the opposite direction:
+ * a pane matching this is busy no matter what its ready marker says, and the
+ * injection pre-flight must skip the interrupting Escape and paste into the
+ * type-ahead box instead. Every marker is verbatim from a live capture:
+ *
+ *  - The footer words `esc interrupt`, and a run of `⬝` (U+2B1D) — opencode
+ *    1.18.29 mid-turn. Its `ctrl+p commands` ready marker stays on screen for
+ *    the whole turn, so without these a running opencode pane read idle and
+ *    delivery sent Escape into the turn (ct-49608). The words carry it: the dot
+ *    run is an eight-cell animation whose cells alternate between ⬝ and ■
+ *    (U+25A0), so a frame can land with no ⬝ at all. Two or more, because one ⬝
+ *    is a bullet a client may draw anywhere.
+ *  - Braille spinner frames — opencode's older builds and pi.
+ *  - `esc to interrupt` — codex's footer, and older opencode.
+ *  - `Esc:cancel`, `Waiting for response`, `[stop]` — grok's mid-turn chrome
+ *    (v1.0.5). Each stands alone because grok's spinner sits in its HEADER,
+ *    which a short capture window can crop.
+ *
+ * CAUTION: keep every marker literal. grok's IDLE footer reads "send a message
+ * to interrupt", so a generic /interrupt/ heuristic would read an idle grok pane
+ * as busy forever — which is why the opencode marker is the two words `esc
+ * interrupt`, not the one word.
+ */
+export const GLYPHLESS_PANE_BUSY_PATTERN =
+  /⬝{2,}|esc interrupt|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt|Esc:cancel|Waiting for response|\[stop\]/i;
+
+/**
  * The four supported clients, populated from the facts currently hardcoded across
  * the daemon (binaries, resume commands, transcript roots, watcher kinds, tmux
  * prefixes, prompt-ready glyphs). Nothing consumes the registry at runtime yet —

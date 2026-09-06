@@ -220,7 +220,7 @@ import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveR
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, GLYPHLESS_PANE_BUSY_PATTERN, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -11786,14 +11786,14 @@ export function classifyGlyphlessClientPaneState(
   readyPattern: RegExp,
 ): TmuxLiveState {
   if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(paneContent)) return "exited";
-  // Busy before ready, always. Braille spinner frames + "esc to interrupt" cover
-  // opencode/pi; `Esc:cancel` / `Waiting for response` / `[stop]` are grok's busy
-  // chrome (live pane capture, v1.0.5 — the spinner sits in grok's HEADER, which a
-  // short capture window can crop, so the footer/status text must count too).
-  // CAUTION: keep these markers literal — grok's IDLE states contain the words
-  // "send a message to interrupt", so a generic /interrupt/ heuristic would read
-  // an idle grok pane as busy forever.
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
+  // Busy before ready, always: every client here keeps its ready marker on screen
+  // through the whole turn, so a ready match proves nothing about turn state. The
+  // markers live in the registry beside the ready patterns
+  // (GLYPHLESS_PANE_BUSY_PATTERN) — read that comment before touching one.
+  // Why: opencode 1.18.29's mid-turn footer (⬝ dots + "esc interrupt") was in
+  // neither list, so a running opencode pane classified idle and delivery sent
+  // the interrupting Escape into the turn (ct-49608).
+  if (GLYPHLESS_PANE_BUSY_PATTERN.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";
 }
