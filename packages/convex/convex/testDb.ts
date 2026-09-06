@@ -22,10 +22,10 @@ function evalFilter(expr: FilterExpr, row: any): any {
   switch (expr.op) {
     case "eq": return a[0] === a[1];
     case "neq": return a[0] !== a[1];
-    case "lt": return a[0] < a[1];
-    case "lte": return a[0] <= a[1];
-    case "gt": return a[0] > a[1];
-    case "gte": return a[0] >= a[1];
+    case "lt": return a[0] === undefined ? a[1] !== undefined : a[1] !== undefined && a[0] < a[1];
+    case "lte": return a[0] === undefined || (a[1] !== undefined && a[0] <= a[1]);
+    case "gt": return a[1] === undefined ? a[0] !== undefined : a[0] !== undefined && a[0] > a[1];
+    case "gte": return a[1] === undefined || (a[0] !== undefined && a[0] >= a[1]);
     case "and": return a.every(Boolean);
     case "or": return a.some(Boolean);
     case "not": return !a[0];

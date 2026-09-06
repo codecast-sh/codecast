@@ -113,6 +113,7 @@ export function isGcableEmptyConversation(c: {
   is_workflow_sub?: boolean;
   is_workflow_primary?: boolean;
   inbox_pinned_at?: number;
+  inbox_snoozed_until?: number;
   is_favorite?: boolean;
   share_token?: string;
   title_is_custom?: boolean;
@@ -124,7 +125,7 @@ export function isGcableEmptyConversation(c: {
   if (c.is_subagent || c.parent_conversation_id) return false;
   if (c.forked_from || c.fork_status) return false;
   if (c.workflow_run_id || c.is_workflow_sub || c.is_workflow_primary) return false;
-  if (c.inbox_pinned_at || c.is_favorite) return false;
+  if (c.inbox_pinned_at || c.is_favorite || c.inbox_snoozed_until) return false;
   if (c.share_token) return false;
   if (c.title_is_custom) return false;
   return true;
@@ -159,6 +160,11 @@ export async function conversationHasNoWork(
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id))
     .first();
   if (hasPending) return false;
+  const hasUpdate = await ctx.db
+    .query("session_updates")
+    .withIndex("by_conversation_state_created", (q: any) => q.eq("conversation_id", conv._id).eq("state", "queued"))
+    .first();
+  if (hasUpdate) return false;
   const cs = await ctx.db
     .query("client_state")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id))
@@ -474,6 +480,11 @@ export const gcEmptyConversations = internalMutation({
         .withIndex("by_conversation_status", (q) => q.eq("conversation_id", c._id))
         .first();
       if (hasPending) continue;
+      const hasUpdate = await ctx.db
+        .query("session_updates")
+        .withIndex("by_conversation_state_created", (q) => q.eq("conversation_id", c._id).eq("state", "queued"))
+        .first();
+      if (hasUpdate) continue;
 
       const managed = await ctx.db
         .query("managed_sessions")

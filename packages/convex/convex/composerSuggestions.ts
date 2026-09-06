@@ -23,7 +23,7 @@ const MAX_SUGGESTION_CHARS = 1000;
 // A message row that carries a real human-readable turn (mirrors
 // idleSummary.isSummarizableMessage without the low-signal filter, which we
 // apply only to USER rows — an assistant tail is context however it's phrased).
-function isConversationTurn(m: {
+export function isConversationTurn(m: {
   role?: string;
   content?: string | null;
   tool_results?: unknown[] | null;
@@ -123,6 +123,32 @@ export function isMachineDrivenConversation(conv: {
   );
 }
 
+// A user-role row the person did not type: a peer session's message (the
+// harness renders those as "Another Claude session sent a message: <teammate-
+// message …>"), a session message or task notification carried as markup, a
+// slash-command wrapper, or codecast's own notices ("[codecast] Now using
+// Codex"). Everything the habit miner and the suggestion eval must ignore.
+export function isMachineCarrierText(text: string): boolean {
+  const head = text.trimStart().slice(0, 200);
+  return (
+    head.startsWith("<") ||
+    head.startsWith("[codecast]") ||
+    /<(teammate-message|session-message|task-notification|cast-decision|command-(?:message|name))\b/.test(head)
+  );
+}
+
+// Bare continuation nudges are never worth a pill: the user types them in one
+// keystroke, so a suggestion earns its place only by carrying content. The
+// prompt forbids them too; this is the backstop.
+const GENERIC_NUDGES = new Set([
+  "continue", "go", "proceed", "go ahead", "keep going", "do it", "yes", "ok",
+  "okay", "sure", "yes please", "sounds good", "looks good", "lgtm", "done",
+  "next", "fix it", "try again", "ship it",
+]);
+export function isGenericNudge(text: string): boolean {
+  return GENERIC_NUDGES.has(normalizeForMatch(text));
+}
+
 // Per conversation: the opening brief plus the newest inputs. Standing
 // instructions ("polish this to perfection… do 10 more rounds") ride on the
 // FIRST message of a session; in a long session that row is hundreds of
@@ -192,12 +218,12 @@ export const getRecentUserInputs = internalQuery({
         // prompt a developer reuses across sessions — is the richest input
         // the miner gets, so it must survive whole.
         if (text.length > 2000 || isLowSignalPrompt(text)) continue;
-        // Machine-carrier turns (session messages, scheduled-task briefings,
-        // pasted transcripts) start with markup — not something the user typed.
-        if (text.startsWith("<")) continue;
+        // Machine-carrier turns (peer-session messages, scheduled-task
+        // briefings, pasted transcripts) are not something the user typed.
+        if (isMachineCarrierText(text)) continue;
         // A bare nudge ("continue") is a keystroke, not a habit; it would be
         // half the corpus and carries nothing for any consumer downstream.
-        if (GENERIC_NUDGES.has(normalizeForMatch(text))) continue;
+        if (isGenericNudge(text)) continue;
         out.push({ text, ts: m.timestamp });
       }
     }
@@ -402,15 +428,6 @@ export function rankInputs(rows: Array<{ text: string; ts: number }>, now: numbe
   return { frequent, phrases, recent };
 }
 
-// Bare continuation nudges are never worth a pill: the user types them in one
-// keystroke, so a suggestion earns its place only by carrying content. The
-// prompt forbids them too; this is the backstop.
-const GENERIC_NUDGES = new Set([
-  "continue", "go", "proceed", "go ahead", "keep going", "do it", "yes", "ok",
-  "okay", "sure", "yes please", "sounds good", "looks good", "lgtm", "done",
-  "next", "fix it", "try again", "ship it",
-]);
-
 // Normalization used to compare a suggestion against historical messages.
 export function normalizeForMatch(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").replace(/[.!?…]+$/, "").trim();
@@ -557,7 +574,7 @@ export async function minePatternsWithLLM(
   return mined ? { ...mined, usage: completion.usage } : null;
 }
 
-function buildPrompt(
+export function buildPrompt(
   context: {
     conversation: {
       title?: string;
@@ -630,11 +647,17 @@ function buildPrompt(
 
 Return ONLY a JSON array: [{"text": string, "confidence": number}] — 0 to 2 entries (a third only for an explicit multi-choice moment where each option is near-certain). "confidence" is your probability (0..1) that the developer would actually send this text or a trivial variant of it; omit anything below 0.7. No wrapper object, no markdown, no commentary. [] is the expected answer for most moments.
 
-Read the moment first — the agent's final message decides everything:
-- The agent asked a question or offered options → suggest the most likely answers, phrased the way this developer would phrase them.
-- The agent proposed a plan or showed a diff → suggest this developer's likely verdict: approval in their usual words, or a pushback they would plausibly raise from the session itself.
-- The agent finished work → suggest the natural next directive, grounded in what this session shows is still undone (verify, test, commit, deploy, fix the thing it flagged).
-- The agent is mid-task, or the reply needs knowledge only the developer has (their opinion, product intent, something outside the session) → return [].
+The test for every suggestion: the developer reads it and thinks "I was just about to type that." You are predicting what THEY would type, not what would be sensible to do next — a reasonable engineering step they would never have asked for is a miss, however good it is.
+
+Calibrate against the base rate. Measured over real sessions, fewer than one next message in ten was predictable at all: the developer's reply usually brings something new — a fresh question, a reaction to one detail, a change of course, context from outside the session. A confidence of 0.7 claims this moment is one of the rare predictable ones. Most moments are not, and [] is the right answer for them.
+
+Read the moment — the agent's final message decides everything:
+- The agent asked a direct question with a small answer space (yes or no, which of these, confirm this) → suggest the most likely answers, phrased the way this developer would phrase them. This is where predictable replies live.
+- The agent stopped to ask for a verdict — a plan awaiting go-ahead, a diff awaiting review — → suggest approval in this developer's usual words, or a pushback the session itself supports. A delivered artifact (a page, a deck, a writeup) is not this case: it draws edits, and which edit is theirs to choose.
+- The agent delivered a result and nothing is waiting on the developer → almost always []. Speak only when something specific in the session names the next step: a part of the original request still owed, a next step the agent asked to be told to take, or a standing reusable prompt this developer sends at exactly this point.
+- The agent asked the developer for something only they hold — a fact, a date, a file, a URL, a credential, a decision made with someone else — or asked them to act outside the session (sign in, click a link) → []. The reply carries information you do not have; an answer you would have to make up is a fabrication, not a prediction. Never turn the agent's instruction to the developer into the developer's message.
+- The agent got something wrong — misread the request, went off course, or produced a result the session shows to be broken → []. The next message is a correction, and only the developer knows what it should say.
+- The agent is mid-task, or the reply needs knowledge only the developer has (their opinion, product intent, something outside the session) → [].
 
 The profile has two kinds of evidence, and they work differently:
 - HABITS are generalized tendencies, each with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats a habit's example is wrong by definition, because it is about some other conversation.
@@ -646,6 +669,7 @@ Hard rules:
 - Quality over count. One suggestion the developer actually sends is the win; two mediocre ones teach them to ignore the feature. When you're not confident, return [].
 - Never suggest a bare continuation nudge — "continue", "go", "proceed", "do it", "yes", or anything the developer could type in one keystroke. A suggestion earns its place by carrying content: a concrete directive, answer, or decision specific to this moment.
 - Never replay a habit's example quote or an ordinary past message verbatim or near-verbatim; only its habit transfers. Reusable prompts are the one exception — they are meant to be resent.
+- Every suggestion is the developer speaking to the agent: never the agent's voice ("I'll handle…", "Sending you…"), and never the developer restating or summarizing what the agent just said — people do not type recaps back to the agent.
 - Suggestions must differ in intent, not phrasing.
 - Length follows the moment: a verdict or an answer stays short; a full working prompt can run several sentences. Never pad, never truncate a reusable prompt to make it look tidy.
 - Never repeat what has already been said, asked, or done in the session; never contradict the developer's last instruction. Do not suggest a reusable prompt the developer already sent in this session unless the agent has since completed a full round of work that invites it again.
@@ -721,11 +745,37 @@ export async function llmComplete(opts: {
   }
 }
 
+// The JSON value the reply starts with. A model that answers `[]` and then
+// explains why it stayed silent has still answered; the explanation is
+// dropped, not the answer. Fences are stripped the same way.
 export function parseJsonBlock(raw: string): unknown | null {
   const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   try {
     return JSON.parse(cleaned);
   } catch {
+    const start = cleaned.search(/[\[{]/);
+    if (start < 0) return null;
+    const open = cleaned[start];
+    const close = open === "[" ? "]" : "}";
+    let depth = 0;
+    let inString = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === open) depth++;
+      else if (ch === close && --depth === 0) {
+        try {
+          return JSON.parse(cleaned.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
     return null;
   }
 }
@@ -734,7 +784,7 @@ export function parseJsonBlock(raw: string): unknown | null {
 // stops a runaway completion.
 const SUGGEST_MAX_TOKENS = 1200;
 
-type StoredProfile = {
+export type StoredProfile = {
   frequent: Array<{ text: string; count: number }>;
   phrases?: Array<{ text: string; count: number }>;
   patterns?: Array<{ pattern: string; example: string; count: number }>;
@@ -855,6 +905,40 @@ export const bakeoffSuggestions = internalAction({
   },
 });
 
+// The whole prediction, from stored context and profile to press-send-ready
+// strings: render the prompt, complete, parse, sanitize. Shared by the live
+// action and the eval script (scripts/suggest-eval.ts), so what the eval
+// grades is exactly what ships. `error` names the failing stage.
+export async function predictSuggestions(
+  context: Parameters<typeof buildPrompt>[0],
+  profile: StoredProfile,
+  provider: "anthropic" | "openai",
+): Promise<{ suggestions: string[]; error?: "provider_failed" | "invalid_json"; raw?: string }> {
+  const prompt = buildPrompt(context, profileForPrompt(profile));
+  // Anything the user has literally said before — recent messages, mined
+  // examples, repeated whole inputs — may not come back as a pill…
+  const bannedVerbatim = new Set<string>([
+    ...profile.recent.map(normalizeForMatch),
+    ...profile.frequent.map((f) => normalizeForMatch(f.text)),
+    ...(profile.patterns ?? []).map((p) => normalizeForMatch(p.example)),
+    ...context.turns.filter((t) => t.role === "user").map((t) => normalizeForMatch(t.content)),
+  ]);
+  // …except a reusable prompt, which the user resends on purpose. The
+  // last-user-message check in sanitizeSuggestions still stops an
+  // immediate echo.
+  for (const p of profile.prompts ?? []) bannedVerbatim.delete(normalizeForMatch(p.text));
+
+  const completion = await llmComplete({ provider, prompt, maxTokens: SUGGEST_MAX_TOKENS });
+  if (!completion) return { suggestions: [], error: "provider_failed" };
+  const parsed = parseJsonBlock(completion.text);
+  if (parsed === null) return { suggestions: [], error: "invalid_json", raw: completion.text };
+  const lastUser = [...context.turns].reverse().find((t) => t.role === "user");
+  return {
+    suggestions: sanitizeSuggestions(parsed, lastUser?.content ?? null, bannedVerbatim),
+    raw: completion.text,
+  };
+}
+
 export const generateComposerSuggestions = action({
   args: { conversation_id: v.id("conversations") },
   handler: async (
@@ -898,29 +982,11 @@ export const generateComposerSuggestions = action({
       profile = await refreshProfile(ctx, user._id, now);
     }
 
-    const prompt = buildPrompt(context, profileForPrompt(profile));
-    // Anything the user has literally said before — recent messages, mined
-    // examples, repeated whole inputs — may not come back as a pill…
-    const bannedVerbatim = new Set<string>([
-      ...profile.recent.map(normalizeForMatch),
-      ...profile.frequent.map((f) => normalizeForMatch(f.text)),
-      ...(profile.patterns ?? []).map((p) => normalizeForMatch(p.example)),
-      ...context.turns.filter((t) => t.role === "user").map((t) => normalizeForMatch(t.content)),
-    ]);
-    // …except a reusable prompt, which the user resends on purpose. The
-    // last-user-message check in sanitizeSuggestions still stops an
-    // immediate echo.
-    for (const p of profile.prompts ?? []) bannedVerbatim.delete(normalizeForMatch(p.text));
-
     try {
       const provider = process.env.SUGGESTIONS_PROVIDER === "openai" ? "openai" : "anthropic";
-      const completion = await llmComplete({ provider, prompt, maxTokens: SUGGEST_MAX_TOKENS });
-      if (!completion) return { status: "error", reason: "provider_failed" };
-      const parsed = parseJsonBlock(completion.text);
-      if (parsed === null) return { status: "error", reason: "invalid_json" };
-
-      const lastUser = [...context.turns].reverse().find((t) => t.role === "user");
-      const suggestions = sanitizeSuggestions(parsed, lastUser?.content ?? null, bannedVerbatim);
+      const predicted = await predictSuggestions(context, profile, provider);
+      if (predicted.error) return { status: "error", reason: predicted.error };
+      const suggestions = predicted.suggestions;
 
       // Store even an empty result: it records "this anchor was evaluated",
       // which is what stops clients from re-asking every render.
