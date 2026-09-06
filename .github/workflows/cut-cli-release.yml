@@ -182,7 +182,7 @@ jobs:
             head -100 "$RUNNER_TEMP/chrome-$pid.sample.txt"
           done
           screencapture -x "$RUNNER_TEMP/browser-failure.png" || true
-          sudo /usr/bin/log show --last 5m --style compact --predicate '(process == "syspolicyd" OR process == "amfid" OR process == "Google Chrome") AND messageType != activityCreateEvent' | tail -100
+          sudo /usr/bin/log show --last 5m --style compact --predicate '(process == "syspolicyd" OR process == "amfid" OR process == "Google Chrome") AND type != activityCreateEvent' | tail -100
 
       - name: Keep browser failure evidence
         if: failure()
