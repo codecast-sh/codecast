@@ -1,8 +1,8 @@
 // Claude Code account profiles: save and swap the machine-global CC login
 // without the OAuth browser flow. An "account" is exactly two artifacts:
-//   1. the credential blob — macOS Keychain item "Claude Code-credentials"
-//      (Linux/older CC: ~/.claude/.credentials.json): OAuth access + refresh
-//      tokens, subscription tier
+//   1. the credential blob — the macOS Keychain item CC's config dir scopes it
+//      to (ccKeychain.ts; Linux/older CC: ~/.claude/.credentials.json): OAuth
+//      access + refresh tokens, subscription tier
 //   2. the oauthAccount identity block in ~/.claude.json (email/org/uuid —
 //      what /status displays)
 // A profile snapshots both. Secrets live where CC's own secret lives (keychain
@@ -28,8 +28,8 @@ import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
+import { ccKeychainWriteItem, type CcKeychainItem } from "./ccKeychain.js";
 
-const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
 
 export interface CcProfile {
@@ -214,16 +214,16 @@ function activeCredentialFile(): string {
 }
 
 /** The keychain item's account attribute ("acct"). CC created the item, so
- * match whatever it used; fall back to the unix username (observed value). */
-function keychainAcct(): string {
+ * match whatever it used; fall back to the name CC would pick itself. */
+function keychainAcct(item: CcKeychainItem): string {
   try {
-    const meta = execFileSync("security", ["find-generic-password", "-s", ACTIVE_KEYCHAIN_SERVICE], {
+    const meta = execFileSync("security", ["find-generic-password", "-s", item.service], {
       encoding: "utf-8",
     });
     const m = meta.match(/"acct"<blob>="([^"]*)"/);
     if (m?.[1]) return m[1];
   } catch {}
-  return os.userInfo().username;
+  return item.account;
 }
 
 export function writeActiveCredential(credentialJson: string): void {
@@ -238,13 +238,14 @@ export function writeActiveCredential(credentialJson: string): void {
   }
   // -U updates in place, preserving the item (and its ACL) so claude keeps
   // reading it without a keychain prompt — never delete+recreate.
+  const item = ccKeychainWriteItem();
   execFileSync("security", [
     "add-generic-password",
     "-U",
     "-a",
-    keychainAcct(),
+    keychainAcct(item),
     "-s",
-    ACTIVE_KEYCHAIN_SERVICE,
+    item.service,
     "-w",
     credentialJson,
   ]);
