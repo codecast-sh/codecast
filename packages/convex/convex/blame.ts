@@ -8,6 +8,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
+import { contentLinesToMatch, MAX_CONTENT_LINES } from "@codecast/shared/blame";
 import { checkConversationAccess } from "./privacy";
 import {
   extractCommitHashFromContent,
@@ -27,18 +28,40 @@ import {
 } from "./blameCore";
 
 const MAX_SHAS = 500;
-const MAX_UNCOMMITTED_LINES = 400;
+const MAX_UNCOMMITTED_LINES = MAX_CONTENT_LINES;
 // Row budget for the uncommitted-line content match. new_content can be a
 // whole file (Write rows), so reading too many recent edits risks the query
 // byte limit; uncommitted code is recent by definition, so a small window of
 // the newest edits to the file is enough.
 const MAX_FILE_EDIT_ROWS = 80;
 
-type SessionRef = {
+export type SessionRef = {
   conversation_id: Id<"conversations">;
+  short_id?: string;
   title: string;
   author_name?: string;
+  author_image?: string;
 };
+
+// How a line reached its session. `commit`: the commits table names the
+// session (daemon publish or webhook). `hash`: a file_changes commit row whose
+// stored short hash prefixes the sha. `subject`: a commit row matched by
+// subject line and time. `edit`: the line's text found in an edit the session
+// made, which is the authoring session even when a different one committed.
+export type BlameVia = "commit" | "hash" | "subject" | "edit";
+
+export type ResolvedSession = SessionRef & { message_id?: Id<"messages">; via: BlameVia };
+
+export type CommitDescriptor = { sha: string; summary?: string; author_time?: number };
+
+type ResolveCaches = {
+  conversations: Map<string, Doc<"conversations"> | null>;
+  users: Map<string, { name?: string; image?: string }>;
+};
+
+export function newResolveCaches(): ResolveCaches {
+  return { conversations: new Map(), users: new Map() };
+}
 
 async function accessibleConversation(
   ctx: { db: any },
@@ -61,18 +84,165 @@ async function accessibleConversation(
 async function sessionRefFor(
   ctx: { db: any },
   conv: Doc<"conversations">,
-  userNames: Map<string, string | undefined>,
+  users: ResolveCaches["users"],
 ): Promise<SessionRef> {
   const userKey = conv.user_id.toString();
-  if (!userNames.has(userKey)) {
+  if (!users.has(userKey)) {
     const user = await ctx.db.get(conv.user_id);
-    userNames.set(userKey, user?.name ?? undefined);
+    users.set(userKey, { name: user?.name ?? undefined, image: user?.image ?? undefined });
   }
+  const user = users.get(userKey)!;
   return {
     conversation_id: conv._id,
+    short_id: conv.short_id ?? undefined,
     title: conv.title || "Untitled",
-    author_name: userNames.get(userKey),
+    author_name: user.name,
+    author_image: user.image,
   };
+}
+
+/**
+ * The session behind each commit sha, for a caller who may see it.
+ *
+ * Three sources, cheapest and surest first. The commits table names a session
+ * outright when the daemon that made the commit published it. Sessions also
+ * record every commit they run as a file_changes row whose stored hash is the
+ * short prefix git printed, so a range scan over [sha7, sha] finds it. When
+ * neither names the sha (compound commands print no hash; a rebase rewrites
+ * it) a commit row with the same subject inside a short time window is taken.
+ */
+export async function resolveCommitSessions(
+  ctx: { db: any },
+  userId: Id<"users">,
+  descriptors: CommitDescriptor[],
+  caches: ResolveCaches = newResolveCaches(),
+): Promise<Record<string, ResolvedSession>> {
+  const byKey = new Map<string, CommitDescriptor>();
+  for (const d of descriptors) byKey.set(d.sha.toLowerCase(), d);
+  const shas = [...byKey.keys()].filter(isValidBlameSha).slice(0, MAX_SHAS);
+
+  const resolved: Record<string, ResolvedSession> = {};
+  for (const sha of shas) {
+    const desc = byKey.get(sha)!;
+    let conv: Doc<"conversations"> | null = null;
+    let messageId: Id<"messages"> | undefined;
+    let via: BlameVia = "commit";
+
+    const named = await ctx.db
+      .query("commits")
+      .withIndex("by_sha", (q: any) => q.eq("sha", sha))
+      .collect();
+    for (const row of named) {
+      if (!row.conversation_id) continue;
+      conv = await accessibleConversation(ctx, userId, caches.conversations, row.conversation_id);
+      if (conv) break;
+    }
+
+    if (!conv) {
+      // Stored hashes are short prefixes of the full SHA, so every stored
+      // prefix of `sha` sorts within [sha7, sha]. Same-prefix non-matches can
+      // land in the range too; pickRowForSha verifies with startsWith.
+      const prefix = sha.slice(0, MIN_SHA_PREFIX);
+      const candidates = await ctx.db
+        .query("file_changes")
+        .withIndex("by_commit_hash", (q: any) =>
+          q.gte("commit_hash", prefix).lte("commit_hash", sha),
+        )
+        .collect();
+      const accessible: CommitRowLite[] = [];
+      for (const row of candidates) {
+        if (await accessibleConversation(ctx, userId, caches.conversations, row.conversation_id))
+          accessible.push(row);
+      }
+      const best = pickRowForSha(sha, accessible);
+      if (best) {
+        conv = caches.conversations.get(best.conversation_id.toString()) ?? null;
+        messageId = best.message_id as Id<"messages">;
+        via = "hash";
+      }
+    }
+
+    if (!conv && desc.summary && desc.author_time) {
+      // Subject match is cheap, so filter before paying for access checks.
+      const windowRows = await ctx.db
+        .query("file_changes")
+        .withIndex("by_type_timestamp", (q: any) =>
+          q
+            .eq("change_type", "commit")
+            .gte("timestamp", desc.author_time! - SUMMARY_MATCH_WINDOW_MS)
+            .lte("timestamp", desc.author_time! + SUMMARY_MATCH_WINDOW_MS),
+        )
+        .take(400);
+      for (const row of rankRowsBySummary(desc.summary, desc.author_time, windowRows)) {
+        const candidate = await accessibleConversation(
+          ctx,
+          userId,
+          caches.conversations,
+          row.conversation_id as Id<"conversations">,
+        );
+        if (candidate) {
+          conv = candidate;
+          messageId = row.message_id as Id<"messages">;
+          via = "subject";
+          break;
+        }
+      }
+    }
+
+    if (conv) {
+      resolved[sha] = { ...(await sessionRefFor(ctx, conv, caches.users)), message_id: messageId, via };
+    }
+  }
+  return resolved;
+}
+
+/**
+ * The session whose edit wrote each line, found by text.
+ *
+ * A session's edits to the file are stored with their new content, so a line
+ * that appears verbatim in one of them was written there. This is the
+ * authoring session, which beats the committing one: in a workflow where one
+ * session commits everyone's work, the reasoning behind a line lives in the
+ * session that typed it. Rows are matched newest first under each line's
+ * deadline, so a later rewrite cannot claim an older line.
+ */
+export async function matchFileLines(
+  ctx: { db: any },
+  userId: Id<"users">,
+  filePaths: string[],
+  lines: MatchLine[],
+  caches: ResolveCaches = newResolveCaches(),
+): Promise<Array<ResolvedSession & { line: string }>> {
+  // Array of {line, ...} pairs, NOT a Record keyed by line text — Convex
+  // field names must be ASCII, and source lines contain anything.
+  const matches: Array<ResolvedSession & { line: string }> = [];
+  const wanted = lines.slice(0, MAX_UNCOMMITTED_LINES);
+  if (wanted.length === 0 || filePaths.length === 0) return matches;
+
+  const editRows: (EditRowLite & { message_id: Id<"messages"> })[] = [];
+  for (const filePath of filePaths) {
+    const recentEdits = await ctx.db
+      .query("file_changes")
+      .withIndex("by_file_path", (q: any) => q.eq("file_path", filePath))
+      .order("desc")
+      .take(MAX_FILE_EDIT_ROWS);
+    for (const row of recentEdits) {
+      if (row.change_type !== "edit" && row.change_type !== "write") continue;
+      if (await accessibleConversation(ctx, userId, caches.conversations, row.conversation_id))
+        editRows.push(row);
+    }
+  }
+
+  for (const [line, row] of matchLinesToEdits(wanted, editRows)) {
+    const conv = caches.conversations.get(row.conversation_id.toString())!;
+    matches.push({
+      line,
+      ...(await sessionRefFor(ctx, conv, caches.users)),
+      message_id: (row as EditRowLite & { message_id: Id<"messages"> }).message_id,
+      via: "edit",
+    });
+  }
+  return matches;
 }
 
 /**
@@ -80,11 +250,11 @@ async function sessionRefFor(
  * full SHAs from `git blame --porcelain` (plus, optionally, the texts of
  * uncommitted lines); this maps each to the conversation that produced it.
  *
- * SHAs resolve through file_changes commit rows (short hash parsed from the
- * `git commit` tool output at ingest), visible if the caller owns the
- * conversation or is on its team. Uncommitted lines resolve by content match
- * against the caller's own recent edits to the file — uncommitted code is
- * local to the caller's machine, so self-scope is correct, not a shortcut.
+ * SHAs resolve through the shared resolver (commits table, stored commit
+ * hashes, subject + time), visible if the caller owns the conversation or is
+ * on its team. Uncommitted lines resolve by content match against recent
+ * edits to the file — uncommitted code is local to the caller's machine, so
+ * the caller's own sessions are the ones that can have written it.
  */
 export const resolveBlame = query({
   args: {
@@ -118,107 +288,22 @@ export const resolveBlame = query({
       return { error: "Unauthorized" };
     }
     const userId = auth.userId;
+    const caches = newResolveCaches();
 
-    const descriptors = new Map<string, { summary?: string; author_time?: number }>();
-    for (const sha of args.shas ?? []) descriptors.set(sha.toLowerCase(), {});
-    for (const c of args.commits ?? []) {
-      descriptors.set(c.sha.toLowerCase(), { summary: c.summary, author_time: c.author_time });
-    }
-    const shas = [...descriptors.keys()].filter(isValidBlameSha).slice(0, MAX_SHAS);
+    const resolved = await resolveCommitSessions(
+      ctx,
+      userId,
+      [...(args.shas ?? []).map((sha) => ({ sha })), ...(args.commits ?? [])],
+      caches,
+    );
 
-    const convCache = new Map<string, Doc<"conversations"> | null>();
-    const userNames = new Map<string, string | undefined>();
-
-    const resolved: Record<string, SessionRef & { message_id: Id<"messages"> }> = {};
-    for (const sha of shas) {
-      // Precise path: stored hashes are short prefixes of the full SHA, so
-      // every stored prefix of `sha` sorts within [sha7, sha]. Same-prefix
-      // non-matches can land in the range too; pickRowForSha verifies with
-      // startsWith.
-      const prefix = sha.slice(0, MIN_SHA_PREFIX);
-      const candidates = await ctx.db
-        .query("file_changes")
-        .withIndex("by_commit_hash", (q: any) =>
-          q.gte("commit_hash", prefix).lte("commit_hash", sha),
-        )
-        .collect();
-      const accessible: CommitRowLite[] = [];
-      for (const row of candidates) {
-        const conv = await accessibleConversation(ctx, userId, convCache, row.conversation_id);
-        if (conv) accessible.push(row);
-      }
-      let best: CommitRowLite | null = pickRowForSha(sha, accessible);
-
-      // Fallback: sessions often commit via compound commands whose output
-      // carries no `[branch hash]` line, so the row stores only the parsed
-      // commit message. Match by subject + timestamp proximity (also survives
-      // rebase/amend, which rewrite the sha but keep the subject). Subject
-      // match is cheap, so filter before paying for access checks.
-      const desc = descriptors.get(sha);
-      if (!best && desc?.summary && desc.author_time) {
-        const windowRows = await ctx.db
-          .query("file_changes")
-          .withIndex("by_type_timestamp", (q: any) =>
-            q
-              .eq("change_type", "commit")
-              .gte("timestamp", desc.author_time! - SUMMARY_MATCH_WINDOW_MS)
-              .lte("timestamp", desc.author_time! + SUMMARY_MATCH_WINDOW_MS),
-          )
-          .take(400);
-        for (const row of rankRowsBySummary(desc.summary, desc.author_time, windowRows)) {
-          const conv = await accessibleConversation(
-            ctx,
-            userId,
-            convCache,
-            row.conversation_id as Id<"conversations">,
-          );
-          if (conv) {
-            best = row;
-            break;
-          }
-        }
-      }
-
-      if (best) {
-        const conv = convCache.get(best.conversation_id.toString())!;
-        resolved[sha] = {
-          ...(await sessionRefFor(ctx, conv, userNames)),
-          message_id: best.message_id as Id<"messages">,
-        };
-      }
-    }
-
-    // Array of {line, ...} pairs, NOT a Record keyed by line text — Convex
-    // field names must be ASCII, and source lines contain anything.
-    const lineMatches: Array<SessionRef & { line: string; message_id: Id<"messages"> }> = [];
     const lines: MatchLine[] = [
       ...(args.uncommitted_lines ?? []).map((text) => ({ text })),
       ...(args.content_lines ?? []).map((l) => ({ text: l.t, deadline: l.d })),
-    ].slice(0, MAX_UNCOMMITTED_LINES);
-    if (args.file_path && lines.length > 0) {
-      const recentEdits = await ctx.db
-        .query("file_changes")
-        .withIndex("by_file_path", (q: any) => q.eq("file_path", args.file_path))
-        .order("desc")
-        .take(MAX_FILE_EDIT_ROWS);
-
-      const editRows: (EditRowLite & { message_id: Id<"messages"> })[] = [];
-      for (const row of recentEdits) {
-        if (row.change_type !== "edit" && row.change_type !== "write") continue;
-        const conv = await accessibleConversation(ctx, userId, convCache, row.conversation_id);
-        if (conv) editRows.push(row);
-      }
-
-      const matches = matchLinesToEdits(lines, editRows);
-      for (const [line, row] of matches) {
-        const conv = convCache.get(row.conversation_id.toString())!;
-        lineMatches.push({
-          line,
-          ...(await sessionRefFor(ctx, conv, userNames)),
-          message_id: (row as EditRowLite & { message_id: Id<"messages"> }).message_id,
-        });
-      }
-    }
+    ];
+    const lineMatches = args.file_path
+      ? await matchFileLines(ctx, userId, [args.file_path], lines, caches)
+      : [];
 
     return { resolved, line_matches: lineMatches };
   },

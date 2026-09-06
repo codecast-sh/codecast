@@ -10,6 +10,7 @@
 
 import type * as accountSwitch from "../accountSwitch.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
+import type * as agentPromptRepair from "../agentPromptRepair.js";
 import type * as agentTasks from "../agentTasks.js";
 import type * as analytics from "../analytics.js";
 import type * as anchors from "../anchors.js";
@@ -117,6 +118,7 @@ import type * as lib_gitRefs from "../lib/gitRefs.js";
 import type * as lib_httpRateLimit from "../lib/httpRateLimit.js";
 import type * as lib_issueMapping from "../lib/issueMapping.js";
 import type * as lib_liveSessions from "../lib/liveSessions.js";
+import type * as lib_mentionResolve from "../lib/mentionResolve.js";
 import type * as lib_openTasksValidator from "../lib/openTasksValidator.js";
 import type * as lib_repoSearch from "../lib/repoSearch.js";
 import type * as lib_sanitize from "../lib/sanitize.js";
@@ -213,6 +215,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accountSwitch: typeof accountSwitch;
   admin_mergeUser: typeof admin_mergeUser;
+  agentPromptRepair: typeof agentPromptRepair;
   agentTasks: typeof agentTasks;
   analytics: typeof analytics;
   anchors: typeof anchors;
@@ -320,6 +323,7 @@ declare const fullApi: ApiFromModules<{
   "lib/httpRateLimit": typeof lib_httpRateLimit;
   "lib/issueMapping": typeof lib_issueMapping;
   "lib/liveSessions": typeof lib_liveSessions;
+  "lib/mentionResolve": typeof lib_mentionResolve;
   "lib/openTasksValidator": typeof lib_openTasksValidator;
   "lib/repoSearch": typeof lib_repoSearch;
   "lib/sanitize": typeof lib_sanitize;
