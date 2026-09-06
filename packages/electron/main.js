@@ -52,7 +52,7 @@ for (const dir of ["downloads", "temp"]) {
   app.setPath(dir, p);
 }
 
-const { pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+const { pickWindow, chooseLeader, BannerGate } = require("./notificationRouter");
 const {
   shouldHandBackCall,
   shouldHideCallWindow,
@@ -1618,7 +1618,12 @@ ipcMain.handle("get-faces-window-open", () => facesOverlayWanted());
 const windowStates = new Map();
 // BrowserWindow.id → last time it held focus (tie-breaker for routing/leader)
 const lastFocusedAt = new Map();
-const recentBanners = new RecentKeys();
+// Whether a banner goes up at all: duplicate collapse, the focused-and-on-screen
+// rule, the per-conversation burst cooldown and the completion grace. Policy is
+// in notificationRouter.js; this only says how a banner is actually shown.
+const bannerGate = new BannerGate({
+  deliver: (p) => showNativeNotification(p.title, p.body, () => openNotificationTarget(p.data)),
+});
 
 // The app windows that count for routing: main + detached tab windows + the
 // people window. The palette is a floating summon, never a place a banner
@@ -1653,10 +1658,6 @@ function describeWindows() {
       inCall: st.inCall === true,
     };
   });
-}
-
-function isAppFocused() {
-  return appWindows().some((w) => w.isFocused());
 }
 
 // Tell every window its role. Coalesced to a tick: focus flips, reports and
@@ -2662,22 +2663,13 @@ ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
 // Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
 // which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
 ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
-// Returns { shown } so the renderer knows whether IT announced the event.
-// Every window reports the same server row; the first report wins the banner,
-// duplicates inside the TTL are dropped, and nothing banners while an app
-// window is focused (the user already sees the bell / toast there).
-ipcMain.handle("show-notification", (_e, payload) => {
-  const { title, body, data } = payload || {};
-  // A ring is for a person who is not looking: it goes up whatever is
-  // focused. Everything else stays quiet while the app is in front, where
-  // the toast and the bell already say it.
-  if (isAppFocused() && !(data && data.force === true)) return { shown: false, reason: "focused" };
-  if (!recentBanners.claim(RecentKeys.keyFor(payload))) return { shown: false, reason: "duplicate" };
-  // `route` is the one click target (chat message, task, doc...); the bare
-  // conversationId form predates it and stays as the fallback.
-  showNativeNotification(title, body, () => openNotificationTarget(data));
-  return { shown: true };
-});
+// Returns { shown } so the renderer knows whether IT announced the event —
+// a promise while a banner waits out the completion grace. Every window reports
+// the same server row, so the first report wins the banner and the rest collapse
+// into it. The gate holds the rest of the policy (notificationRouter.js): a
+// banner is silent only when a FOCUSED window already shows the conversation it
+// is about, and a burst for one conversation fires once.
+ipcMain.handle("show-notification", (_e, payload) => bannerGate.admit(describeWindows(), payload));
 
 // OS-level permissions (notifications, microphone, camera, screen) read from
 // the OS itself — see osPermissions.js. Unpackaged dev runs register with

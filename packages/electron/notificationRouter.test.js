@@ -1,7 +1,9 @@
 // Run: node --test packages/electron/notificationRouter.test.js
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { classifyRoute, sameEntity, pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+const {
+  classifyRoute, sameEntity, pickWindow, chooseLeader, RecentKeys, BannerGate, bannerRank,
+} = require("./notificationRouter");
 
 const main = (over = {}) => ({
   id: 1,
@@ -147,5 +149,175 @@ test("call and walkie banners land in the people window", () => {
     pickWindow([main(), tabWin(2, "/calls", { inCall: true })], { route: null, kind: "call" }).window.id,
     2,
   );
+});
+
+// --- BannerGate: whether a banner goes up at all (ct-49551) ------------------
+// A manual scheduler, so the 250 ms grace runs without real time.
+
+function fakeClock() {
+  let t = 0;
+  const timers = new Map();
+  let next = 1;
+  return {
+    now: () => t,
+    setTimer: (fn, ms) => {
+      const id = next++;
+      timers.set(id, { fn, at: t + ms });
+      return id;
+    },
+    clearTimer: (id) => timers.delete(id),
+    // Move time forward and run everything due, oldest first.
+    async advance(ms) {
+      t += ms;
+      for (const [id, timer] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+        if (timer.at <= t) {
+          timers.delete(id);
+          timer.fn();
+        }
+      }
+      await Promise.resolve();
+    },
+  };
+}
+
+function gateRig(over = {}) {
+  const clock = fakeClock();
+  const shown = [];
+  const gate = new BannerGate({
+    deliver: (p) => shown.push(p),
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    ...over,
+  });
+  return { clock, shown, gate };
+}
+
+let bannerSeq = 0;
+const banner = (over = {}) => ({ title: "t", body: "b", data: { key: `k${++bannerSeq}`, ...over } });
+
+test("a focused window silences only the conversation it shows", async () => {
+  const { gate, shown } = gateRig();
+  const windows = [main({ focused: true, active: "/conversation/c1" })];
+  // The thing on screen: the toast and the bell already say it.
+  assert.deepEqual(
+    gate.admit(windows, banner({ conversationId: "c1", kind: "session_idle" })),
+    { shown: false, reason: "focused-active" },
+  );
+  // Another conversation, same focused app: the old rule swallowed this.
+  assert.equal((await gate.admit(windows, banner({ conversationId: "c2", kind: "session_idle" }))).shown, true);
+  // A focused window on a list page names no entity, so nothing is on screen.
+  assert.equal(
+    (await gate.admit([main({ focused: true, active: "/inbox" })], banner({ conversationId: "c3", kind: "session_idle" }))).shown,
+    true,
+  );
+  // An unfocused window never silences a banner, whatever it shows.
+  assert.equal(
+    (await gate.admit([main({ active: "/conversation/c4" })], banner({ conversationId: "c4", kind: "session_idle" }))).shown,
+    true,
+  );
+  assert.equal(shown.length, 3);
+});
+
+test("a ring goes up over the conversation it is about", async () => {
+  const { gate } = gateRig();
+  const windows = [main({ focused: true, active: "/conversation/c1" })];
+  assert.equal((await gate.admit(windows, banner({ conversationId: "c1", force: true }))).shown, true);
+  // Two windows reporting the same ring still make one banner.
+  const payload = banner({ conversationId: "c1", force: true });
+  assert.equal((await gate.admit(windows, payload)).shown, true);
+  assert.deepEqual(gate.admit(windows, payload), { shown: false, reason: "duplicate" });
+});
+
+test("one conversation banners once per 5 s burst", async () => {
+  const { gate, clock, shown } = gateRig();
+  const windows = [main()];
+  assert.equal((await gate.admit(windows, banner({ conversationId: "c1", kind: "session_idle" }))).shown, true);
+  await clock.advance(1000);
+  // Answered at once: a banner the cooldown will drop must not sit out the
+  // grace first.
+  assert.deepEqual(
+    gate.admit(windows, banner({ conversationId: "c1", kind: "session_error" })),
+    { shown: false, reason: "cooldown" },
+  );
+  // A different conversation is a different burst.
+  assert.equal((await gate.admit(windows, banner({ conversationId: "c2", kind: "session_idle" }))).shown, true);
+  await clock.advance(5000);
+  assert.equal((await gate.admit(windows, banner({ conversationId: "c1", kind: "session_idle" }))).shown, true);
+  assert.equal(shown.length, 3);
+});
+
+test("the cooldown remembers at most 50 conversations", async () => {
+  const { gate, shown } = gateRig();
+  for (let i = 0; i < 60; i++) {
+    await gate.admit([main()], banner({ conversationId: `c${i}`, kind: "session_idle" }));
+  }
+  assert.equal(shown.length, 60);
+  assert.equal(gate.cooldown.seen.size, 50);
+  // The oldest keys went first; the newest are still held.
+  assert.equal(gate.cooldown.seen.has("conversation:c0"), false);
+  assert.equal(gate.cooldown.seen.has("conversation:c59"), true);
+});
+
+test("a completion arriving with a permission request is the one that fires", async () => {
+  const { gate, clock, shown } = gateRig();
+  const windows = [main()];
+  const request = gate.admit(windows, banner({ conversationId: "c1", kind: "permission_request" }));
+  assert.ok(request instanceof Promise, "the request waits out the grace");
+  // The completion lands inside the grace: it goes up now and takes the burst.
+  assert.equal(gate.admit(windows, banner({ conversationId: "c1", kind: "session_idle" })).shown, true);
+  assert.deepEqual(await request, { shown: false, reason: "superseded" });
+  await clock.advance(500);
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].data.kind, "session_idle");
+});
+
+test("a permission request alone still banners, once the grace passes", async () => {
+  const { gate, clock, shown } = gateRig();
+  const windows = [main()];
+  const request = gate.admit(windows, banner({ conversationId: "c1", kind: "permission_request" }));
+  assert.equal(shown.length, 0, "nothing fires during the grace");
+  // A second request in the same burst rides the one already waiting.
+  assert.deepEqual(
+    gate.admit(windows, banner({ conversationId: "c1", kind: "permission_request" })),
+    { shown: false, reason: "burst" },
+  );
+  await clock.advance(250);
+  assert.deepEqual(await request, { shown: true });
+  assert.equal(shown.length, 1);
+});
+
+test("a request that follows a fired completion is held by the cooldown", async () => {
+  const { gate, clock, shown } = gateRig();
+  const windows = [main()];
+  assert.equal(gate.admit(windows, banner({ conversationId: "c1", kind: "session_idle" })).shown, true);
+  assert.deepEqual(
+    gate.admit(windows, banner({ conversationId: "c1", kind: "permission_request" })),
+    { shown: false, reason: "cooldown" },
+  );
+  await clock.advance(250);
+  assert.equal(shown.length, 1);
+});
+
+test("banners with no conversation keep the plain duplicate rule", async () => {
+  const { gate, shown } = gateRig();
+  const windows = [main()];
+  // Chat, task and doc rows carry no conversation: no cooldown, no grace.
+  assert.equal((await gate.admit(windows, banner({ route: "/chat/general" }))).shown, true);
+  const second = banner({ route: "/chat/general" });
+  assert.equal((await gate.admit(windows, second)).shown, true);
+  assert.deepEqual(gate.admit(windows, second), { shown: false, reason: "duplicate" });
+  assert.equal(shown.length, 2);
+  // A focused window reading that channel still silences it.
+  assert.deepEqual(
+    gate.admit([main({ focused: true, active: "/chat/general" })], banner({ route: "/chat/general?m=9" })),
+    { shown: false, reason: "focused-active" },
+  );
+});
+
+test("bannerRank puts a completion above everything else", () => {
+  assert.equal(bannerRank("session_idle"), 1);
+  assert.equal(bannerRank("permission_request"), 0);
+  assert.equal(bannerRank(undefined), 0);
 });
 
