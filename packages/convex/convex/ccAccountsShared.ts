@@ -443,9 +443,19 @@ export function targetAccountEmail(
 
 export type AutoSwitchDecision =
   | { action: "continue" } // active account's window rolled — plain continue un-parks for free
+  // Spend one of the Codex account's rate-limit reset credits instead of moving
+  // the machine to another account. `profile` is the machine-local Codex
+  // profile name; the daemon resolves it to that account's CODEX_HOME.
+  | { action: "redeem_reset_credit"; profile: string }
   | { action: "switch"; profile: string }
   | { action: "wait"; retry_at: number } // active account just changed; its meter hasn't been read since
   | { action: "exhausted"; retry_at: number }; // every account spent — when to look again
+
+// Attempt-history key for a redeem, so one park can't trigger a second one
+// while the first is still settling. Same shape as AUTO_SWITCH_CONTINUE_KEY.
+export function resetCreditAttemptKey(profile: string): string {
+  return `reset-credit:${profile}`;
+}
 
 /**
  * Pick the cheapest recovery for limit-parked sessions:
@@ -511,6 +521,11 @@ export function decideAutoSwitch(input: {
   // An auth park proves the active login is DEAD (refresh token revoked, not a
   // spent window), so "continue" can never un-park — a switch is the only cure.
   activeDead?: boolean;
+  // An unspent rate-limit reset credit on the Codex account this machine is
+  // currently running. Present ONLY when the human turned redemption on for
+  // that device (it spends something they earned), so this function never has
+  // to know about the flag: absent means "not on the table".
+  resetCredit?: { profile: string; available: number } | null;
 }): AutoSwitchDecision {
   const { now, parkedAt, activeEmail, activeSince, profiles, attempts } = input;
   const allowSwitch = input.allowSwitch !== false;
@@ -550,6 +565,23 @@ export function decideAutoSwitch(input: {
     (!lastContinue || lastContinue < parkedAt)
   ) {
     return { action: "continue" };
+  }
+
+  // A reset credit beats a switch outright: it clears the windows on the
+  // account the sessions are already pinned to, so nothing moves and no other
+  // account's week is spent. It is offered only when the human opted in, and
+  // only once per park — a redeem whose effect hasn't landed yet must not
+  // trigger a second one, and if it did not un-park the sessions the next pass
+  // falls through to the switch below.
+  // A dead login is excluded: a credit clears rate-limit windows, and a revoked
+  // refresh token is not one — spending a credit there would burn it and leave
+  // every session exactly as parked.
+  const resetCredit = input.activeDead ? null : input.resetCredit;
+  if (resetCredit && resetCredit.available > 0) {
+    const lastRedeem = lastAttemptAt(resetCreditAttemptKey(resetCredit.profile));
+    if (!lastRedeem || lastRedeem < parkedAt) {
+      return { action: "redeem_reset_credit", profile: resetCredit.profile };
+    }
   }
 
   if (allowSwitch) {
