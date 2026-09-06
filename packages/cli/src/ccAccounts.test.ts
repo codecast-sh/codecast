@@ -27,6 +27,8 @@ import {
   refreshUsageSnapshots,
   readUsageCache,
   readActiveStamp,
+  parseStatusLineUsage,
+  ingestStatusLineUsage,
   CcAccountError,
   createMtimeGatedCache,
   writeAccountToken,
@@ -866,6 +868,137 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(byName.c.usage?.session?.percent).toBe(28);
   });
 
+  // --- Live usage forwarded by a session's statusLine command (ct-49525) ---
+  // A running session reports its account's windows every turn, which is both
+  // fresher and free next to the five-minute OAuth poll. These cover who a post
+  // is attributed to, and which of the two readings wins when they disagree.
+
+  const statusLinePayload = (fiveHour: number, sevenDay: number) => ({
+    session_id: "f03e4098-8b2b-44e0-9370-de3b4fc2edd0",
+    cost: { total_duration_ms: 17462 },
+    rate_limits: {
+      five_hour: { used_percentage: fiveHour, resets_at: 1_788_759_000 },
+      seven_day: { used_percentage: sevenDay, resets_at: 1_789_016_400 },
+    },
+  });
+
+  it("reads the windows Claude Code 2.1.263 actually sends, seconds converted to ms", () => {
+    const snap = parseStatusLineUsage(statusLinePayload(7, 32), NOW);
+    expect(snap).toEqual({
+      fetched_at: NOW,
+      source: "live-session",
+      session: { percent: 7, resets_at: 1_788_759_000_000 },
+      weekly: { percent: 32, resets_at: 1_789_016_400_000 },
+    });
+    expect(parseStatusLineUsage({ cost: { total_duration_ms: 1 } }, NOW)).toBeNull();
+    expect(parseStatusLineUsage({ rate_limits: {} }, NOW)).toBeNull();
+  });
+
+  it("attributes a post to the session's pinned account, and an unpinned one to the active login", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    expect((await ingestStatusLineUsage(statusLinePayload(11, 12), { account: "b", now: NOW + 1000 }))?.key).toBe("uuid-b");
+    // No account name: the session runs on the keychain login, which the
+    // activation stamp names without a keychain read.
+    expect((await ingestStatusLineUsage(statusLinePayload(13, 14), { account: undefined, now: NOW + 1000 }))?.key).toBe("uuid-a");
+    expect(await ingestStatusLineUsage(statusLinePayload(1, 2), { account: "../x", now: NOW })).toBeNull();
+    const cache = readUsageCache();
+    expect(cache.accounts["uuid-b"]?.session?.percent).toBe(11);
+    expect(cache.accounts["uuid-a"]?.session?.percent).toBe(13);
+  });
+
+  it("carries the live reading to the heartbeat without the local source marker", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(44, 55), { account: "b", now: NOW + 1000 });
+    invalidateAccountsCache();
+    const b = (getAccountsHeartbeatPayload()?.profiles ?? []).find((p) => p.name === "b");
+    expect(b?.usage?.session?.percent).toBe(44);
+    // Convex's ccUsageValidator accepts no unknown field: a daemon that sent
+    // this would have its whole account inventory rejected.
+    expect(b?.usage && "source" in b.usage).toBe(false);
+  });
+
+  it("keeps the model-scoped window the poll found — the live payload has none", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    const cache = readUsageCache();
+    cache.accounts["uuid-b"]!.weekly_scoped = { percent: 100, resets_at: NOW + 3600_000, label: "Fable" };
+    fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify(cache));
+    await ingestStatusLineUsage(statusLinePayload(2, 3), { account: "b", now: NOW + 1000 });
+    // Dropping it would read as headroom on an account whose Fable window is
+    // pegged, and auto-switch would send sessions there.
+    expect(readUsageCache().accounts["uuid-b"]?.weekly_scoped?.percent).toBe(100);
+  });
+
+  it("suppresses the poll for an account a live session is feeding, and resumes when it goes quiet", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(60, 61), { account: "b", now: NOW + 60_000 });
+
+    const during: string[] = [];
+    const res = await refreshUsageSnapshots({ now: NOW + 5 * 60_000, fetchImpl: usageFetch(during) });
+    expect(during).not.toContain("at-b");
+    expect(res.skipped).toContain("b");
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(60);
+
+    // Five minutes past the last post the feed counts as gone and the endpoint
+    // is the only reading left.
+    const after: string[] = [];
+    await refreshUsageSnapshots({ now: NOW + 11 * 60_000, fetchImpl: usageFetch(after) });
+    expect(after).toContain("at-b");
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
+  });
+
+  // The live payload has no model-scoped window. An account posting without
+  // pause would otherwise keep its Fable meter frozen at the last poll's
+  // reading, and auto-switch would send sessions to an account that pegged
+  // hours ago.
+  it("polls anyway once the endpoint has been silent for half an hour", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    const post = async (at: number) => {
+      await ingestStatusLineUsage(statusLinePayload(3, 4), { account: "b", now: at });
+      const calls: string[] = [];
+      await refreshUsageSnapshots({ now: at + 60_000, fetchImpl: usageFetch(calls) });
+      return calls;
+    };
+    // A feed that keeps posting holds the poll off — until the floor.
+    expect(await post(NOW + 10 * 60_000)).not.toContain("at-b");
+    expect(await post(NOW + 20 * 60_000)).not.toContain("at-b");
+    expect(await post(NOW + 31 * 60_000)).toContain("at-b");
+  });
+
+  it("never lets a failed or slow poll overwrite a live reading", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(70, 71), { account: "b", now: NOW + 6 * 60_000 });
+
+    // A poll that fails leaves the live reading standing.
+    await refreshUsageSnapshots({
+      now: NOW + 12 * 60_000,
+      fetchImpl: (async () => new Response("overloaded", { status: 529 })) as any,
+    });
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(70);
+
+    // And a post that lands WHILE the probes run is not written back over: the
+    // pass re-reads the cache instead of flushing the copy it started with.
+    let posted = false;
+    await refreshUsageSnapshots({
+      now: NOW + 20 * 60_000,
+      fetchImpl: (async (url: any, init: any) => {
+        if (!posted) {
+          posted = true;
+          await ingestStatusLineUsage(statusLinePayload(80, 81), { account: "b", now: NOW + 20 * 60_000 + 1 });
+        }
+        return usageFetch([])(url, init);
+      }) as any,
+    });
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(80);
+  });
+
+  it("does not rewrite the cache for an unchanged reading", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    expect((await ingestStatusLineUsage(statusLinePayload(5, 6), { account: "b", now: NOW + 1000 }))?.wrote).toBe(true);
+    expect((await ingestStatusLineUsage(statusLinePayload(5, 6), { account: "b", now: NOW + 16_000 }))?.wrote).toBe(false);
+    // A real move is always written, however soon it arrives.
+    expect((await ingestStatusLineUsage(statusLinePayload(6, 6), { account: "b", now: NOW + 31_000 }))?.wrote).toBe(true);
+  });
+
   // The token endpoint + usage endpoint behind one fetch: a refresh with the
   // expected refresh token rotates; anything else is refused with the given
   // status. Usage answers carry the bearer token so the test can see which
@@ -1022,7 +1155,11 @@ describe("account setup-token file", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("cast accounts token union");
     const file = writeAccountToken("union", TOKEN);
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(`. ${file} 2>/dev/null || true; `);
+    // The account NAME rides along so the statusLine hook can attribute the
+    // session's live usage; the token stays inside the sourced file.
+    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(
+      `. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=union; `,
+    );
     expect(warnings).toHaveLength(1);
     // The secret never appears on the launch line.
     expect(accountSourcePrefix("union")).not.toContain("sk-ant");

@@ -64,7 +64,9 @@ import {
   attributeFingerprintToProfile,
   readActiveOauth,
   createMtimeGatedCache,
+  ingestStatusLineUsage,
 } from "./ccAccounts.js";
+import { STATUSLINE_HOOK_PATH } from "./statuslineHook.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
@@ -1671,6 +1673,61 @@ function startVaultMirror(): void {
   vaultMirror.start();
 }
 
+// --- Live usage from a session's statusLine command ---
+// Claude Code hands every turn's rate-limit windows to the statusLine command,
+// and codecast-statusline.sh posts them here (see statuslineHook.ts). That is a
+// reading per turn where the OAuth usage endpoint gives one per five minutes,
+// so it is what auto-switch gets to see when an account is burning down fast.
+//
+// Unauthenticated, like /hook/status beside it: both are loopback-only, and a
+// local process could already forge a status event. What it writes is a
+// percentage, never a token. A forged post can at worst make auto-switch move
+// sessions to another saved account — visible, reversible, and it costs the
+// forger nothing to instead post the same thing as a real session.
+const STATUSLINE_MAX_BODY = 64 * 1024;
+const STATUSLINE_LOG_EVERY_MS = 10 * 60 * 1000;
+const statusLineLogged = new Map<string, number>();
+
+export function handleStatusLinePost(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let aborted = false;
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > STATUSLINE_MAX_BODY) {
+      aborted = true;
+      res.writeHead(413);
+      res.end();
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on("end", () => {
+    if (aborted) return;
+    // The hook fires and forgets, so nothing here retries and nothing may
+    // throw out of the request: a bad payload is dropped, not reported.
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ok");
+    void (async () => {
+      try {
+        const account = new URL(req.url ?? "/", "http://localhost").searchParams.get("account") || undefined;
+        const result = await ingestStatusLineUsage(JSON.parse(Buffer.concat(chunks).toString("utf-8")), { account });
+        if (!result?.wrote) return;
+        const last = statusLineLogged.get(result.key) ?? 0;
+        const now = Date.now();
+        if (now - last < STATUSLINE_LOG_EVERY_MS) return;
+        statusLineLogged.set(result.key, now);
+        const pct = (w?: { percent: number }) => (w ? `${w.percent}%` : "—");
+        log(
+          `[CC-USAGE] live ${account ?? "active"} (${result.key.slice(0, 8)}) session=${pct(result.snapshot.session)} weekly=${pct(result.snapshot.weekly)}`,
+        );
+      } catch {}
+    })();
+  });
+}
+
 function startHookServer(): http.Server {
   // Reading the saved port and token is the first thing boot does with the
   // config dir. It is one small file read in another module, which is what
@@ -1678,6 +1735,14 @@ function startHookServer(): http.Server {
   loopbackIdentity = loadOrCreateIdentity(CONFIG_DIR);
 
   const server = http.createServer((req, res) => {
+    // Live account usage forwarded by a session's statusLine command
+    // (statuslineHook.ts). Ahead of /hook/status because their paths share a
+    // prefix; the method keeps them apart, and this makes that explicit.
+    if (req.method === "POST" && req.url?.startsWith(STATUSLINE_HOOK_PATH)) {
+      handleStatusLinePost(req, res);
+      return;
+    }
+
     if (req.method === "GET" && req.url?.startsWith("/hook/status")) {
       const url = new URL(req.url, `http://localhost`);
       const sessionId = url.searchParams.get("session_id");

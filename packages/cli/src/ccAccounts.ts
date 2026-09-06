@@ -20,7 +20,7 @@
 //     adopt the new account (the daemon's switch_account command does this).
 
 import { execFileSync, keychainReadAsync } from "./proc.js";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -852,7 +852,13 @@ export function accountSourcePrefix(name: string | undefined, warn?: (msg: strin
   if (info.expires_at <= Date.now()) {
     warn?.(`cc_account "${name}" setup-token is past its one-year lifetime — re-mint with: claude setup-token | cast accounts token ${name}`);
   }
-  return sourceFilePrefix(info.file);
+  // The name rides along in the env so the statusLine hook can say which
+  // account its live usage belongs to. Nothing else can: the setup-token is
+  // scope-less, so a session pinned to one account is indistinguishable from a
+  // session on the keychain login by anything the payload carries. Safe on the
+  // command line — accountTokenFilePath already refused anything but a profile
+  // name, and the token itself stays inside the sourced file.
+  return `${sourceFilePrefix(info.file)}export CODECAST_CC_ACCOUNT=${name}; `;
 }
 
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its
@@ -1308,6 +1314,18 @@ export interface CcUsageSnapshot {
   weekly?: CcUsageWindow; // 7d, all models
   weekly_scoped?: CcUsageWindow; // 7d, model-scoped (the /usage screen's third bar)
   extra?: { percent: number; enabled: boolean }; // overflow usage credits
+  // The two fields below are LOCAL ONLY — stripped before the heartbeat,
+  // because Convex's ccUsageValidator rejects unknown fields and a daemon that
+  // sent one would have every heartbeat's account inventory refused.
+  //
+  // Where this reading came from. Absent means the OAuth usage endpoint;
+  // "live-session" means a running session's statusLine command forwarded the
+  // windows the Messages API had just reported (statuslineHook.ts).
+  source?: "live-session";
+  // When the usage endpoint last answered for this account, carried across live
+  // updates. The live payload has no model-scoped window, so this is what
+  // bounds how long a live feed may hold the poll off.
+  polled_at?: number;
 }
 
 /** Normalize the usage API response to the compact snapshot we store/publish.
@@ -1381,6 +1399,191 @@ export function readUsageCache(): UsageCache {
     if (parsed && typeof parsed.accounts === "object") return parsed;
   } catch {}
   return { accounts: {} };
+}
+
+// ---------------------------------------------------------------------------
+// Live usage from a session's statusLine command
+// ---------------------------------------------------------------------------
+// Every turn of every Claude session carries the account's rate-limit windows,
+// and the statusLine hook forwards them (statuslineHook.ts). That feed is
+// fresher AND cheaper than the OAuth usage endpoint, so while it is running it
+// takes precedence: the poll skips an account with a fresh live reading, and a
+// poll that fails or arrives late never overwrites one.
+
+// How long a live reading stands in for a poll.
+const LIVE_USAGE_FRESH_MS = 5 * 60 * 1000;
+
+// But never for longer than this. The statusLine payload carries the two
+// unified windows and no model-scoped one, so an account whose sessions post
+// continuously would keep its Fable meter frozen at whatever the last poll saw
+// — and auto-switch reads that meter. It would then send sessions to an account
+// whose scoped window pegged hours ago, and continue them there each time they
+// park. One poll every half hour is enough to keep that window honest and still
+// cuts the endpoint's traffic for a busy account roughly sixfold.
+const LIVE_USAGE_POLL_FLOOR_MS = 30 * 60 * 1000;
+
+// A live post lands every 15s per active session. Rewriting the cache each time
+// would invalidate the accounts payload and re-push the whole inventory on the
+// next heartbeat for no new information, so an unchanged reading is only
+// re-stamped this often.
+const LIVE_USAGE_RESTAMP_MS = 60 * 1000;
+
+/** A live reading recent enough to stand in for a usage poll. */
+function isLiveUsageFresh(snap: CcUsageSnapshot | undefined, now: number): boolean {
+  return snap?.source === "live-session" && now - snap.fetched_at < LIVE_USAGE_FRESH_MS;
+}
+
+/** The floor above. A live feed keeps `fetched_at` moving, so it holds off the
+ *  ordinary throttle just as surely as the live skip — this is the one
+ *  condition that overrides both. An account that has never been polled has no
+ *  scoped window at all, so it is overdue from the start. */
+function isLivePollOverdue(snap: CcUsageSnapshot | undefined, now: number): boolean {
+  return snap?.source === "live-session" && now - (snap.polled_at ?? 0) >= LIVE_USAGE_POLL_FLOOR_MS;
+}
+
+/**
+ * The usage windows out of a Claude Code statusLine payload, or null when it
+ * carries none. Verified against 2.1.263: `rate_limits.five_hour` and
+ * `.seven_day`, each `{ used_percentage, resets_at }` with `resets_at` in epoch
+ * SECONDS (the usage endpoint answers ISO strings, hence the conversion).
+ */
+export function parseStatusLineUsage(payload: unknown, now: number): CcUsageSnapshot | null {
+  const limits = (payload as any)?.rate_limits;
+  if (!limits || typeof limits !== "object") return null;
+  const window = (raw: any): CcUsageWindow | undefined => {
+    if (typeof raw?.used_percentage !== "number" || !Number.isFinite(raw.used_percentage)) return undefined;
+    const secs = raw.resets_at;
+    const w: CcUsageWindow = { percent: raw.used_percentage };
+    if (typeof secs === "number" && Number.isFinite(secs) && secs > 0) w.resets_at = Math.round(secs * 1000);
+    return w;
+  };
+  const session = window(limits.five_hour);
+  const weekly = window(limits.seven_day);
+  if (!session && !weekly) return null;
+  return { fetched_at: now, source: "live-session", ...(session && { session }), ...(weekly && { weekly }) };
+}
+
+/**
+ * The live reading folded onto whatever the last poll left, or null when it
+ * says nothing new.
+ *
+ * The statusLine payload carries only the two unified windows, so the model-
+ * scoped window and the usage-credit block are carried over — dropping them
+ * would read as headroom on an account whose Fable window is pegged, and
+ * auto-switch would send sessions there. The tradeoff is that `fetched_at`
+ * advances while `weekly_scoped` stays as old as the last poll, which is why
+ * the live feed only holds the poll off for five minutes at a time and never
+ * past the half-hour floor.
+ *
+ * Null for an unchanged reading: a post lands every 15s per active session, and
+ * rewriting the cache each time would invalidate the accounts payload and
+ * re-push the whole inventory on the next heartbeat for no new information.
+ */
+function mergeLiveUsage(
+  prev: CcUsageSnapshot | undefined,
+  snap: CcUsageSnapshot,
+): CcUsageSnapshot | null {
+  const merged: CcUsageSnapshot = {
+    ...snap,
+    ...(prev?.weekly_scoped && { weekly_scoped: prev.weekly_scoped }),
+    ...(prev?.extra && { extra: prev.extra }),
+    ...(prev?.polled_at !== undefined && { polled_at: prev.polled_at }),
+    ...(!snap.weekly && prev?.weekly && { weekly: prev.weekly }),
+    ...(!snap.session && prev?.session && { session: prev.session }),
+  };
+  const unchanged =
+    prev?.source === "live-session" &&
+    snap.fetched_at - prev.fetched_at < LIVE_USAGE_RESTAMP_MS &&
+    prev.session?.percent === merged.session?.percent &&
+    prev.weekly?.percent === merged.weekly?.percent;
+  return unchanged ? null : merged;
+}
+
+export interface StatusLineIngest {
+  key: string;
+  snapshot: CcUsageSnapshot;
+  wrote: boolean;
+}
+
+// Read-modify-write of one file from a route that can fire several times a
+// second: without a chain two posts arriving together would both read the old
+// cache and the second would erase the first.
+let liveUsageWriteChain: Promise<void> = Promise.resolve();
+
+/**
+ * The whole /hook/statusline body -> the usage cache, so the daemon route stays
+ * a parser and this stays testable. Null when the payload carries no windows or
+ * no account can be named for it.
+ *
+ * Every filesystem call here is async on purpose: this runs on the daemon's
+ * loopback server, where one synchronous read stalls delivery, injection, the
+ * heartbeat and the watchdog alike (daemon.loopBudget.guard.test.ts).
+ */
+export async function ingestStatusLineUsage(
+  payload: unknown,
+  opts: { account?: string; now?: number } = {},
+): Promise<StatusLineIngest | null> {
+  const now = opts.now ?? Date.now();
+  const snapshot = parseStatusLineUsage(payload, now);
+  if (!snapshot) return null;
+  const key = await usageKeyForSessionAsync(opts.account);
+  if (!key) return null;
+
+  let wrote = false;
+  liveUsageWriteChain = liveUsageWriteChain.then(async () => {
+    const stored = await readJsonAsync<UsageCache>(usageCachePath());
+    const cache: UsageCache = stored?.accounts ? stored : { accounts: {} };
+    const merged = mergeLiveUsage(cache.accounts[key], snapshot);
+    if (!merged) return;
+    cache.accounts[key] = merged;
+    await writeJsonAsync(usageCachePath(), cache);
+    wrote = true;
+  });
+  await liveUsageWriteChain;
+  return { key, snapshot, wrote };
+}
+
+/** The usage-cache key for a session: its pinned profile, else whichever
+ *  account is active on this machine. Never `activeAccountSummary` — that
+ *  reads the keychain, which answered in seconds under load.
+ *
+ *  The fallback is an assumption, and it can be wrong: a session started before
+ *  `cast accounts use` still runs on the credential it launched with, because
+ *  the process holds it. Nothing in the payload names the account, and the
+ *  session's own age cannot tell them apart (`total_duration_ms` carries across
+ *  a resume, measured on 2.1.263). So an unpinned terminal that outlived a
+ *  switch reports its old account's windows against the new one — bounded by
+ *  the half-hour poll floor above, which overwrites them with the truth. Every
+ *  session codecast launches for an account IS pinned, and takes this branch
+ *  only when it is genuinely on the keychain login. */
+async function usageKeyForSessionAsync(account: string | undefined): Promise<string | undefined> {
+  if (account) {
+    if (!VALID_PROFILE_NAME.test(account)) return undefined;
+    // The index is read for two strings, so the validating reader
+    // (readProfileIndex) would only add a synchronous file read here.
+    const index = await readJsonAsync<ProfileIndex>(indexPath());
+    const meta = index?.profiles?.[account];
+    return meta?.uuid || meta?.email || undefined;
+  }
+  return (await readJsonAsync<ActiveStamp>(activeStampPath()))?.key;
+}
+
+async function readJsonAsync<T>(file: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fs.promises.readFile(file, "utf-8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Temp file plus rename, without the two fsyncs `atomicWriteFile` does: this
+ *  is a cache of percentages that the next poll rebuilds, so durability across
+ *  a power cut is not worth a synchronous flush on the daemon's loop. */
+async function writeJsonAsync(file: string, value: unknown): Promise<void> {
+  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  await fs.promises.writeFile(temp, JSON.stringify(value, null, 2), { mode: 0o644 });
+  await fs.promises.rename(temp, file);
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,6 +1714,7 @@ export async function refreshUsageSnapshots(
   }
   if (activeKey) knownKeys.add(activeKey);
 
+  const probed = new Map<string, CcUsageSnapshot>();
   for (const [key, job] of jobs) {
     const prev = cache.accounts[key];
     // A just-activated account is probed regardless of the throttle: its last
@@ -1518,24 +1722,48 @@ export async function refreshUsageSnapshots(
     // account until one fetched after the activation lands.
     const predatesActivation =
       key === activeKey && activeSince !== undefined && !!prev && prev.fetched_at < activeSince;
-    if (prev && !predatesActivation && now - prev.fetched_at < minInterval) {
+    const mustProbe = predatesActivation || isLivePollOverdue(prev, now);
+    // A session of this account feeds the windows every turn, so a poll would
+    // spend the usage endpoint's tight budget for a staler answer.
+    if (!mustProbe && (isLiveUsageFresh(prev, now) || (prev && now - prev.fetched_at < minInterval))) {
       summary.skipped.push(job.label);
       continue;
     }
     try {
-      cache.accounts[key] = await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now });
+      // polled_at is what bounds the live feed's hold on this poll; it rides
+      // the snapshot so a later live update can carry it forward.
+      probed.set(key, { ...(await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now })), polled_at: now });
       summary.probed.push(job.label);
     } catch (err) {
       summary.failed.push({ name: job.label, reason: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  if (summary.probed.length > 0) {
-    // Drop entries for deleted profiles so the cache can't grow unbounded.
-    for (const key of Object.keys(cache.accounts)) {
-      if (!knownKeys.has(key)) delete cache.accounts[key];
+  if (probed.size > 0) {
+    // Re-read rather than write back the copy taken before the probes: a live
+    // statusLine post can land during them (keychain reads and the endpoint
+    // together run for seconds), and writing the stale copy would erase it.
+    const latest = readUsageCache();
+    for (const [key, snap] of probed) {
+      const disk = latest.accounts[key];
+      // A live post landed while this pass ran. Its unified windows are newer,
+      // so keep them and take from the endpoint only what it alone can say —
+      // including the stamp that lets the feed hold off the next poll.
+      latest.accounts[key] =
+        disk && disk.fetched_at > snap.fetched_at
+          ? {
+              ...disk,
+              polled_at: snap.polled_at,
+              ...(snap.weekly_scoped && { weekly_scoped: snap.weekly_scoped }),
+              ...(snap.extra && { extra: snap.extra }),
+            }
+          : snap;
     }
-    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
+    // Drop entries for deleted profiles so the cache can't grow unbounded.
+    for (const key of Object.keys(latest.accounts)) {
+      if (!knownKeys.has(key)) delete latest.accounts[key];
+    }
+    atomicWriteFile(usageCachePath(), JSON.stringify(latest, null, 2), { mode: 0o644 });
   }
   return summary;
 }
@@ -1562,6 +1790,15 @@ export interface AccountsHeartbeatPayload {
     // The saved login is dead (refresh refused) — see CcProfileMeta.
     login_expired_at?: number;
   }>;
+}
+
+/** A cached snapshot as the heartbeat may send it. `source` and `polled_at` are
+ *  local markers and Convex's `ccUsageValidator` accepts no unknown field, so a
+ *  daemon that sent one would have every heartbeat's inventory rejected. */
+function publishableUsage(snap: CcUsageSnapshot | undefined): CcUsageSnapshot | undefined {
+  if (!snap) return undefined;
+  const { source, polled_at, ...rest } = snap;
+  return rest;
 }
 
 // Keyed on the mtimes of the files the payload derives from rather than a TTL:
@@ -1623,7 +1860,7 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
           email,
           tier,
           subscription,
-          usage: usage[uuid || email || ""] ?? undefined,
+          usage: publishableUsage(usage[uuid || email || ""]),
           ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
           ...(login_expired_at ? { login_expired_at } : {}),
         };

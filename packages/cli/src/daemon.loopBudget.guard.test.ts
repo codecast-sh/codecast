@@ -59,6 +59,13 @@ const ROWS: Row[] = [
   { file: D, name: "logHealthSummary", kind: "function", minLines: 10, mustContain: "getSystemMetrics" },
   { file: D, name: "ensureWatchdogSupervised", kind: "function", minLines: 10, mustContain: "watchdogSupervisionAction" },
   { file: D, name: "startHookServer", kind: "function", minLines: 40, mustContain: "handleTerminalHttp" },
+  // /hook/statusline: a live usage post per turn per session, so its whole
+  // read-modify-write of the usage cache has to stay off the loop.
+  { file: D, name: "handleStatusLinePost", kind: "function", minLines: 20, mustContain: "ingestStatusLineUsage" },
+  { file: "ccAccounts.ts", name: "ingestStatusLineUsage", kind: "function", minLines: 15, mustContain: "usageKeyForSessionAsync" },
+  { file: "ccAccounts.ts", name: "usageKeyForSessionAsync", kind: "function", minLines: 8, mustContain: "readJsonAsync" },
+  { file: "ccAccounts.ts", name: "readJsonAsync", kind: "function", minLines: 3, mustContain: "JSON.parse" },
+  { file: "ccAccounts.ts", name: "writeJsonAsync", kind: "function", minLines: 3, mustContain: "rename" },
   { file: D, name: "startEventLoopMonitor", kind: "function", minLines: 10, mustContain: "saveDaemonState" },
   { file: D, name: "startLoopFreezeProbe", kind: "function", minLines: 10, mustContain: "loopFreezes.record" },
   { file: D, name: "startVersionChecker", kind: "function", minLines: 8, mustContain: "checkForForcedUpdate" },

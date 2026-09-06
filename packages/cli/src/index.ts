@@ -77,6 +77,8 @@ import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartb
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
+import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
+import { installOwnedStatusLine, removeOwnedStatusLine } from "./capabilities/hooks.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -1031,6 +1033,24 @@ function installTaskPulseHook(): void {
   installHookScript("task-pulse.sh", TASK_PULSE_HOOK, ["UserPromptSubmit"]);
 }
 
+// Not a hook: `statusLine` is a single command Claude Code runs to draw the bar
+// under the composer, so a user who set their own has a status line they look
+// at. installOwnedStatusLine writes it only when the key is free (or ours) and
+// reports a conflict otherwise, and the ownership ledger is what lets
+// `cast uninstall` take it back out without touching a value we did not write.
+function installStatusLineHook(): void {
+  const home = process.env.HOME || "";
+  const hookFile = path.join(home, ".claude", "hooks", STATUSLINE_HOOK_FILE);
+  try {
+    fs.mkdirSync(path.dirname(hookFile), { recursive: true });
+    fs.writeFileSync(hookFile, CODECAST_STATUSLINE_HOOK, { mode: 0o755 });
+    installOwnedStatusLine(hookFile, { settingsPath: path.join(home, ".claude", "settings.json") });
+  } catch {
+    // Live usage is an enhancement over the 5-minute poll, never a reason to
+    // fail an install.
+  }
+}
+
 function showWelcome(): void {
   console.log(`${c.dim}${"─".repeat(50)}${c.reset}`);
   console.log(`\n  ${c.bold}Welcome to cast${c.reset} ${fmt.muted("— sync & search your agent sessions")}\n`);
@@ -1732,6 +1752,7 @@ async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
   installSessionRegisterHook();
   installStatusHook();
+  installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
 
@@ -2404,6 +2425,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.orch_enabled) installOrchestration(true);
   installSessionRegisterHook();
   installStatusHook();
+  installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
 }
@@ -9029,7 +9051,18 @@ program
     // 3. Remove hooks from ~/.claude/settings.json and hook scripts
     const claudeDir = path.join(home, ".claude");
     const settingsFile = path.join(claudeDir, "settings.json");
-    const hookFiles = ["codecast-status.sh", "session-register.sh", "stable-feed.sh", "task-pulse.sh"];
+    const hookFiles = [
+      "codecast-status.sh",
+      "session-register.sh",
+      "stable-feed.sh",
+      "task-pulse.sh",
+      STATUSLINE_HOOK_FILE,
+    ];
+
+    // The status line is a top-level key rather than an entry in a hooks array,
+    // and the ownership ledger is the only thing that knows whether the value
+    // there is ours to remove — so it comes out through its own writer.
+    try { removeOwnedStatusLine({ settingsPath: settingsFile }); } catch {}
 
     if (fs.existsSync(settingsFile)) {
       try {
@@ -18066,6 +18099,7 @@ if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUp
     if (config?.orch_enabled) installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
+    installStatusLineHook();
     installTaskPulseHook();
     installThreadStateHook();
 
