@@ -31,6 +31,7 @@ export const SolarizedLight = {
 
   green: '#859900',
   greenBright: '#10b981',
+  yellow: '#b58900',
   cyan: '#2aa198',
   magenta: '#d33682',
   violet: '#6c71c4',
@@ -82,6 +83,7 @@ export const SolarizedDark = {
 
   green: '#859900',
   greenBright: '#10b981',
+  yellow: '#b58900',
   cyan: '#2aa198',
   magenta: '#d33682',
   violet: '#6c71c4',

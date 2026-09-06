@@ -26,6 +26,8 @@ const TYPE_LABEL: Record<EntityType, string> = {
   doc: 'Doc',
   project: 'Project',
   trigger: 'Trigger',
+  pr: 'Pull request',
+  commit: 'Commit',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -37,6 +39,8 @@ const TYPE_COLOR: Record<EntityType, string> = {
   doc: Theme.green,
   project: Theme.textMuted,
   trigger: Theme.orange,
+  pr: Theme.green,
+  commit: Theme.yellow,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -46,6 +50,8 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   doc: 'file-text',
   project: 'folder',
   trigger: 'zap',
+  pr: 'git-pull-request',
+  commit: 'git-commit',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the

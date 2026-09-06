@@ -41,6 +41,7 @@ export type CallSnapshot = {
   participants: Array<{
     identity: string;
     name: string;
+    image?: string;
     isLocal: boolean;
     micMuted: boolean;
     hasCamera: boolean;
@@ -89,6 +90,17 @@ export function getRoom(): Room | null {
   return room;
 }
 
+// The avatar rides the LiveKit token: mintAccessToken stamps {image} into
+// participant metadata, so every seat carries its own picture and no roster
+// lookup is needed mid-call. Same contract web reads.
+function participantImage(p: Participant): string | undefined {
+  try {
+    return (p.metadata ? JSON.parse(p.metadata) : null)?.image ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function rebuildParticipants() {
   if (!room) {
     emit({ participants: [] });
@@ -104,6 +116,7 @@ function rebuildParticipants() {
       return {
         identity: p.identity,
         name: p.name || p.identity,
+        image: participantImage(p),
         isLocal: p === room!.localParticipant,
         micMuted: mic ? mic.isMuted : true,
         hasCamera: subscribed(cam) && !cam!.isMuted,
@@ -409,6 +422,16 @@ export async function ringInto(roomKey: string, toUserIds: string[], anchorTitle
   }
 }
 
+// May we still enter this room, and is anyone actually in it? Occupancy
+// answers both at once: getRoomOccupancy returns a key only for a room the
+// caller may join, and only while someone live is in it.
+async function roomStillLive(roomKey: string): Promise<boolean> {
+  const live = await convex
+    .query(api.calls.getRoomOccupancy, { room_keys: [roomKey] })
+    .catch(() => null);
+  return !!(live as any)?.[roomKey]?.length;
+}
+
 export async function acceptInvite(inviteId: string, roomKey: string, opts: JoinOpts = {}): Promise<void> {
   // Accepting while in ANOTHER live call must not destroy that call on
   // failure: remember it, and restore it if the ring turns out expired — an
@@ -424,9 +447,16 @@ export async function acceptInvite(inviteId: string, roomKey: string, opts: Join
       invite_id: inviteId as any,
       accept: true,
     });
-    if (res?.expired) {
+    // A ring always outlives its invite. CallKit counts its 45s from when the
+    // push LANDS; the invite counts the same 45s from when the server wrote
+    // it, so the last seconds of every ring answer an invite that is already
+    // expired. Failing there is wrong twice over: the phone was still ringing,
+    // and the caller is usually still sitting in the room waiting. So a late
+    // answer joins anyway when the call is genuinely still going — which is
+    // what answering a phone means. Only a call nobody is in ends the attempt.
+    if (res?.expired && !(await roomStillLive(roomKey))) {
       if (switching) emit({ ...prior });
-      else emit({ phase: "error", error: "That ring expired" });
+      else emit({ phase: "error", error: "That call already ended" });
       return;
     }
     // Release the old seat immediately — joinCall tears down its media, but
@@ -434,7 +464,8 @@ export async function acceptInvite(inviteId: string, roomKey: string, opts: Join
     if (switching && prior.roomKey) {
       convex.mutation(api.calls.leaveRoom, { room_key: prior.roomKey }).catch(() => {});
     }
-    // Join the room the server ACCEPTED — a re-ring can move an invite.
+    // Join the room the server ACCEPTED — a re-ring can move an invite. An
+    // expired ring names no room, so fall back to the one we were rung into.
     await joinCall(res?.room_key ?? roomKey, opts);
   } catch (err: any) {
     if (switching) emit({ ...prior });

@@ -3,7 +3,7 @@ import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import type { DocItem as DocItemType } from "@codecast/web/store/inboxStore";
-import { formatRelativeTime } from "./SessionItem";
+import { formatDateSmart, wasEdited } from "@codecast/shared/time";
 
 type IconName = React.ComponentProps<typeof FontAwesome>["name"];
 
@@ -37,7 +37,7 @@ export function DocItemRow({
             <FontAwesome name="thumb-tack" size={10} color={Theme.accent} style={{ marginLeft: 4 }} />
           )}
         </RNView>
-        <RNText style={styles.age}>{formatRelativeTime(doc.updated_at)}</RNText>
+        <RNText style={styles.age}>{formatDateSmart(wasEdited(doc) ? doc.updated_at : doc.created_at)}</RNText>
       </RNView>
 
       <RNView style={styles.metaLine}>
