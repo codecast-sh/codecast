@@ -25,6 +25,16 @@
  * direct parent: an unnamed <span> takes its own text as its accessible name,
  * so comparing with the parent silently deletes the text (this is how "458
  * points" vanished from a Hacker News snapshot during development).
+ *
+ * ## What the accessibility tree misses
+ *
+ * A <div> styled as a button carries no ARIA role, so it has no AX node worth
+ * printing and an agent cannot see it at all — and that pattern is everywhere
+ * in modern apps. After the AX walk, `scanClickables` asks the page directly
+ * for elements that behave like controls (cursor:pointer, an onclick handler,
+ * a focusable tabindex, contenteditable) and appends them under the invented
+ * role `clickable`, with the same `#e<backendNodeId>` refs, so click, hover
+ * and type work on them unchanged.
  */
 
 import type { PageSession } from "./instance.js";
@@ -35,6 +45,9 @@ const INTERACTIVE = new Set([
   "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "switch", "slider",
   "option", "listbox", "spinbutton", "textarea", "SearchBox", "treeitem",
   "scrollbar", "colorwell", "datetime", "menu", "menubar",
+  // Not an AX role: minted by scanClickables for controls the tree has no
+  // role for. Listed here so find/matchRefs rank it like any other control.
+  "clickable",
 ]);
 
 /** Roles that shape the page but are never clicked. Printed when named. */
@@ -59,6 +72,8 @@ export interface SnapshotRef {
   ref: number;
   role: string;
   name: string;
+  /** Set on a role-less control that takes typed text (contenteditable). */
+  editable?: boolean;
 }
 
 export interface Snapshot {
@@ -98,6 +113,168 @@ export interface SnapshotOptions {
   interactiveOnly?: boolean;
   /** Descend into child frames. Default true. */
   frames?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Role-less controls
+// ---------------------------------------------------------------------------
+
+/** How many role-less controls one snapshot will report. */
+const CLICKABLE_LIMIT = 50;
+
+/** How many elements the cursor sweep will look at before giving up, so a
+ *  page with 100k nodes cannot turn a snapshot into a stall. */
+const CLICKABLE_SCAN_CAP = 4000;
+
+/** Where the scan parks its matches between the two round trips. */
+const STASH = "window.__castClickable";
+
+/** Objects the scan mints, released in one call when it is done. */
+const OBJECT_GROUP = "cast-clickable";
+
+/** An element inside one of these is already represented by its host control,
+ *  so reporting it would give the same button two refs. Built from the roles
+ *  the AX walk already covers plus the native tags that carry them. */
+const HOSTED_SELECTOR = ["a", "button", "input", "select", "textarea", "option", "summary"]
+  .concat([...INTERACTIVE].map((r) => `[role="${r.toLowerCase()}"]`))
+  .join(",");
+
+/**
+ * Find the controls the accessibility tree has no role for.
+ *
+ * One `Runtime.evaluate` does all the DOM work and parks the matches on a
+ * window property; `Runtime.getProperties` then hands back a remote reference
+ * per match in a single call, and `DOM.describeNode` turns each one into the
+ * backendNodeId a ref is made of. That is N+4 round trips for N controls,
+ * against the 2N+2 a naive per-element evaluate would cost.
+ *
+ * Main frame only. Child frames each need their own execution context, and
+ * the AX walk already covers what they expose with real roles.
+ */
+async function scanClickables(page: PageSession, taken: Set<number>): Promise<SnapshotRef[]> {
+  const { conn, sessionId } = page;
+  const expression = `(() => {
+    const HOSTED = ${JSON.stringify(HOSTED_SELECTOR)};
+    const editable = (el) => {
+      const ce = el.getAttribute("contenteditable");
+      return ce === "" || ce === "true" || ce === "plaintext-only";
+    };
+    const eligible = (el) => {
+      if (el.closest(HOSTED)) return false;
+      if (el.getAttribute("aria-hidden") === "true") return false;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      const st = getComputedStyle(el);
+      return st.visibility !== "hidden" && st.display !== "none";
+    };
+    const nameOf = (el) => (
+      el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("alt") ||
+      el.getAttribute("placeholder") || el.getAttribute("data-placeholder") ||
+      el.innerText || el.textContent || ""
+    ).replace(/\\s+/g, " ").trim().slice(0, 80);
+
+    const hits = [];
+    const seen = new Set();
+    const consider = (el, edit) => {
+      if (seen.has(el) || hits.length >= ${CLICKABLE_LIMIT * 4}) return;
+      seen.add(el);
+      if (!eligible(el)) return;
+      const name = nameOf(el);
+      // An empty editor still matters — it is where the agent has to type.
+      if (!name && !edit) return;
+      hits.push({ el, name, edit });
+    };
+
+    for (const el of document.querySelectorAll("[contenteditable]")) {
+      if (editable(el)) consider(el, true);
+    }
+    for (const el of document.querySelectorAll('[onclick],[tabindex]:not([tabindex="-1"])')) {
+      consider(el, false);
+    }
+    let scanned = 0;
+    for (const el of document.querySelectorAll("div,span,li,td,img,svg,label,p,section")) {
+      if (++scanned > ${CLICKABLE_SCAN_CAP}) break;
+      try { if (getComputedStyle(el).cursor === "pointer") consider(el, false); } catch {}
+    }
+
+    // cursor:pointer inherits, so a styled div button and every span inside it
+    // all match. Keeping only the outermost gives one ref per visual control.
+    const all = hits.map((h) => h.el);
+    const kept = hits.filter((h) => !all.some((o) => o !== h.el && o.contains(h.el)));
+    kept.sort((a, b) =>
+      a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+    const top = kept.slice(0, ${CLICKABLE_LIMIT});
+    ${STASH} = top.map((h) => h.el);
+    return JSON.stringify(top.map((h) => ({ name: h.name, edit: h.edit })));
+  })()`;
+
+  let found: Array<{ name: string; edit: boolean }>;
+  try {
+    const res = await conn.send<any>(
+      "Runtime.evaluate",
+      { expression, returnByValue: true, objectGroup: OBJECT_GROUP },
+      sessionId,
+    );
+    found = JSON.parse(res.result?.value ?? "[]");
+  } catch {
+    return []; // a page that refuses to run script is not a snapshot failure
+  }
+  if (!found.length) {
+    await cleanupClickables(page);
+    return [];
+  }
+
+  const refs: SnapshotRef[] = [];
+  try {
+    const stash = await conn.send<any>(
+      "Runtime.evaluate",
+      { expression: STASH, objectGroup: OBJECT_GROUP },
+      sessionId,
+    );
+    const arrayId = stash.result?.objectId as string | undefined;
+    if (!arrayId) return [];
+    const props = await conn.send<any>(
+      "Runtime.getProperties",
+      { objectId: arrayId, ownProperties: true },
+      sessionId,
+    );
+    const byIndex = new Map<number, string>();
+    for (const p of (props.result ?? []) as Array<{ name: string; value?: { objectId?: string } }>) {
+      const i = Number(p.name);
+      if (Number.isInteger(i) && p.value?.objectId) byIndex.set(i, p.value.objectId);
+    }
+
+    const nodes = await Promise.all(
+      found.map(async (_, i) => {
+        const objectId = byIndex.get(i);
+        if (!objectId) return undefined;
+        return await conn
+          .send<any>("DOM.describeNode", { objectId }, sessionId)
+          .then((r) => r.node?.backendNodeId as number | undefined)
+          .catch(() => undefined);
+      }),
+    );
+
+    for (let i = 0; i < found.length; i++) {
+      const ref = nodes[i];
+      if (!ref || taken.has(ref)) continue;
+      taken.add(ref);
+      refs.push({ ref, role: "clickable", name: found[i].name, editable: found[i].edit });
+    }
+  } catch {
+    /* the page moved under us — report whatever resolved */
+  } finally {
+    await cleanupClickables(page);
+  }
+  return refs;
+}
+
+async function cleanupClickables(page: PageSession): Promise<void> {
+  const { conn, sessionId } = page;
+  await conn.send("Runtime.releaseObjectGroup", { objectGroup: OBJECT_GROUP }, sessionId).catch(() => {});
+  await conn
+    .send("Runtime.evaluate", { expression: `delete ${STASH}`, returnByValue: true }, sessionId)
+    .catch(() => {});
 }
 
 export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}): Promise<Snapshot> {
@@ -219,6 +396,27 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
     walk(root, baseDepth, "");
   }
 
+  // Role-less controls, appended after the tree. Skipped when there is no room
+  // left for a line: `find` and `open` call this with maxChars 1 purely for the
+  // url and title, and must not pay for a DOM sweep they will not print.
+  if (!truncated && chars + 24 <= maxChars) {
+    const taken = new Set(refs.map((r) => r.ref));
+    for (const c of await scanClickables(page, taken)) {
+      const bits = ["clickable"];
+      if (c.name) bits.push(JSON.stringify(c.name));
+      if (c.editable) bits.push("[editable]");
+      bits.push(`#e${c.ref}`);
+      const line = bits.join(" ");
+      if (chars + line.length + 1 > maxChars) {
+        truncated = true;
+        break;
+      }
+      out.push(line);
+      chars += line.length + 1;
+      refs.push(c);
+    }
+  }
+
   return {
     text: out.join("\n"),
     refs,
@@ -255,8 +453,10 @@ interface Named {
 /** What a human might mean by a trailing role word. Deliberately generous
  *  about `button`: menus, dropdowns and toggles usually render as buttons. */
 const QUERY_ROLES: Record<string, string[]> = {
-  button: ["button"],
-  link: ["link"],
+  // A div styled as a button is what people mean by "button" more often than
+  // not, so `clickable` must not be demoted by a trailing role word.
+  button: ["button", "clickable"],
+  link: ["link", "clickable"],
   tab: ["tab"],
   checkbox: ["checkbox"],
   radio: ["radio"],
