@@ -15,6 +15,7 @@
 
 export * from "./statuses";
 export * from "./relatedDocs";
+export * from "./foreignText";
 
 // ---------------------------------------------------------------------------
 // Origin

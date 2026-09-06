@@ -8,6 +8,7 @@ import { docRelatesToTask } from "@codecast/shared/tasks";
 import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
+  buildTaskSpawnPrompt,
   isActiveTask,
   isHumanOrigin,
   subtaskProgressOf,
@@ -3098,18 +3099,15 @@ export async function spawnSessionForTask(
   // session linked via active_task_id, so clobbering assignee only lost the
   // human owner and dropped the task out of the launcher's "assigned to me" view.
 
-  // Build minimal task prompt
-  const lines = [`You have been assigned the following task:\n\n**${task.title}**`];
-  if ((task as any).description) lines.push(`\n${(task as any).description}`);
-  if ((task as any).acceptance_criteria?.length) {
-    lines.push("\n**Acceptance criteria:**");
-    (task as any).acceptance_criteria.forEach((c: string) => lines.push(`- ${c}`));
-  }
-  lines.push(`\nTask ID: ${task.short_id} · Priority: ${(task as any).priority || "medium"}`);
-
-  // Lead with the user's instruction when supplied, then the task scaffold.
-  const lead = initial_message?.trim();
-  const content = lead ? `${lead}\n\n${lines.join("\n")}` : lines.join("\n");
+  // The task prompt. The user's typed instruction leads; the task's own prose
+  // follows inside a fence.
+  //
+  // Why: title, description and criteria are whatever the filer typed, and for
+  // an imported task that filer is anyone who can open an issue on a connected
+  // repo. Interpolated raw they read as the prompt's own voice, so "ignore
+  // your instructions" arrived as an instruction. The shared builder fences
+  // them, names the source and caps the size (ct-49559).
+  const content = buildTaskSpawnPrompt(task as any, initial_message);
 
   // Single canonical writer: stamps owner_user_id for the daemon's delivery poll and flips
   // has_pending_messages. The task session is the launcher's own, so owner == sender.

@@ -45,6 +45,9 @@ export * from "./capabilityResolver";
 export * from "./fleetDiff";
 export * from "./capabilityScopes";
 export * from "./sanitizeText";
+// Provenance fencing for foreign text — the capability store, the task prompt
+// Convex builds, and `cast task context` all wrap third-party prose with it.
+export * from "./fence";
 // Machine-delivered message detection: web/mobile previews and the convex
 // send classifier must agree on what a human-typed message is.
 export * from "./machineMessages";

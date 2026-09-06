@@ -60,8 +60,9 @@ import {
   TRIGGER_EVENT_NAMES,
   isPrTriggerEvent,
   triggerEventShorthand,
+  inlineForeignText,
 } from "@codecast/shared/contracts";
-import { buildTaskTree } from "@codecast/shared/tasks";
+import { buildTaskTree, renderFencedTaskRecord } from "@codecast/shared/tasks";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import {
   loadWorkspaceRoster,
@@ -14386,14 +14387,28 @@ work
       return;
     }
     const t = result.task;
-    console.log(`\n# ${t.title}`);
+    // Why: every title here reaches a terminal an agent is reading, so raw
+    // ANSI or bidi characters in one could repaint the output around it
+    // (ct-49559).
+    console.log(`\n# ${inlineForeignText(t.title)}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
     if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}`);
     if (t.labels?.length) console.log(`Labels: ${t.labels.join(", ")}`);
     if (result.parent) {
-      console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);
+      console.log(`Subtask of: ${result.parent.short_id} ${inlineForeignText(result.parent.title)} [${result.parent.status}]`);
     }
-    if (t.description) console.log(`\n${t.description}`);
+    // Why: description and comments are the task's foreign prose — for an
+    // imported task, whatever a stranger wrote in the issue. One fenced,
+    // capped block for both, so the agent reading this output can see where
+    // quoted material begins and ends (ct-49559).
+    const foreignBlock = renderFencedTaskRecord({
+      short_id: t.short_id,
+      description: t.description,
+      acceptance_criteria: t.acceptance_criteria,
+      comments: result.comments,
+      external: t.external,
+    });
+    if (foreignBlock) console.log(`\n${foreignBlock}`);
     if (result.project) {
       console.log(`\nProject: ${result.project.title}`);
       if (result.project.description) console.log(result.project.description);
@@ -14403,19 +14418,13 @@ work
       console.log(`\n## Subtasks${p ? ` (${p.done}/${p.total} done)` : ""}`);
       const printSub = (sub: any, indent: string) => {
         const who = sub.assignee_name ? ` @${sub.assignee_name}` : "";
-        console.log(`${indent}- ${sub.short_id}: ${sub.title} [${sub.status}]${who}`);
+        console.log(`${indent}- ${sub.short_id}: ${inlineForeignText(sub.title)} [${sub.status}]${who}`);
         for (const child of sub.subtasks || []) printSub(child, indent + "  ");
       };
       for (const sub of result.subtasks) printSub(sub, "");
     }
     if (t.blocked_by?.length) console.log(`\nBlocked by: ${t.blocked_by.join(", ")}`);
     if (t.blocks?.length) console.log(`Blocks: ${t.blocks.join(", ")}`);
-    if (result.comments?.length) {
-      console.log(`\n## Comments`);
-      for (const cm of result.comments) {
-        console.log(`- [${cm.author}] ${cm.text}`);
-      }
-    }
     if (result.relatedDocs?.length) {
       console.log(`\n## Related Plans`);
       for (const d of result.relatedDocs) {
