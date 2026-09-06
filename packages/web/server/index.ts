@@ -7,7 +7,7 @@ import { join } from "path";
 import { createRequire } from "module";
 import { botMetaMiddleware, prerenderedRouteCount } from "./bot-meta";
 import { registerShareRoutes, getShellHtml, shareSsrReady } from "./share";
-import { registerHashedAssets, registerMissingArtifactGuard } from "./staticAssets";
+import { registerHashedAssets, registerMissingArtifactGuard, registerStableEntryPoints } from "./staticAssets";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -147,6 +147,7 @@ app.use("*", botMetaMiddleware);
 // middleware so crawlers keep getting their meta/prerender pages.
 registerShareRoutes(app);
 
+registerStableEntryPoints(app);
 app.use("*", serveStatic({ root: DIST_DIR }));
 registerMissingArtifactGuard(app);
 
