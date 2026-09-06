@@ -31,7 +31,7 @@ import {
 } from "./instance.js";
 import { describeHolders, planStop, releaseSession } from "./refcount.js";
 import { openDriver, type BrowserDriver } from "./driver.js";
-import { BrowserNotLive, explainConnectionLoss, isTabUnresponsive } from "./recovery.js";
+import { BrowserNotLive, explainConnectionLoss, isReachable, isTabUnresponsive } from "./recovery.js";
 import {
   browserHome, clonePath, cloneProfile, formatBytes, keepsOwnLogin, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
@@ -67,6 +67,7 @@ import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
 import type { PublishDeps } from "../publish.js";
+import { authorizesTeardown } from "@codecast/shared/contracts";
 import { fmt, icons } from "../colors.js";
 
 // colors.ts exposes semantic helpers, not raw colour names.
@@ -280,15 +281,13 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const state = readState();
       if (!state) return console.log(`${fmt.muted(icons.dot)} not started — \`cast browser start\``);
       const live = await probeLiveness(state);
-      if (live === "dead") {
-        console.log(`${WARN} recorded instance (pid ${state.pid}) is gone — \`cast browser start\` to relaunch`);
-        return;
-      }
-      if (live === "unresponsive") {
-        console.log(
-          `${WARN} browser pid ${state.pid} is running but CDP is not answering — ` +
-            `likely overloaded; retry shortly rather than restarting it`,
-        );
+      if (!isReachable(live)) {
+        // Gone, or merely silent? Only the first is an invitation to relaunch,
+        // so the line the human reads is decided by the same gate the code uses.
+        console.log(authorizesTeardown(live)
+          ? `${WARN} recorded instance (pid ${state.pid}) is gone — \`cast browser start\` to relaunch`
+          : `${WARN} browser pid ${state.pid} is running but CDP is not answering — ` +
+              `likely overloaded; retry shortly rather than restarting it`);
         return;
       }
       const mins = Math.round((Date.now() - state.startedAt) / 60000);
@@ -411,7 +410,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       } else {
         // Never navigate a tab this session does not own: the rest are the
         // human's. A fresh tab costs nothing and is visibly the agent's.
-        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url })).targetId;
+        // `background: true` because this one lands in the human's OWN Chrome:
+        // the bridge maps it to `tabs.create {active: false}`, and without it
+        // every `open` pulls their window in front of what they were doing
+        // (focusRaise.guard.test.ts now fails a create without it — ct-49625).
+        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url, background: true })).targetId;
         created = true;
       }
       const page = await attachToTarget(conn, targetId);
@@ -451,7 +454,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         driver = await openDriver();
       } catch (err) {
         if (!(err instanceof BrowserNotLive)) die(explainConnectionLoss((err as Error).message));
-        if (err.liveness !== "dead") die(err.problem.message, err.problem.hint);
+        // Auto-start only over a browser that is demonstrably gone. A silent one
+        // is `unverifiable`, and launching over it kills the tabs of every agent
+        // still using it (ct-49625).
+        if (!authorizesTeardown(err.liveness)) die(err.problem.message, err.problem.hint);
         // Keep the command's promise ("starts the browser if needed"). The
         // launch lock makes this safe under contention: concurrent auto-starts
         // collapse into one launch that everyone reuses.

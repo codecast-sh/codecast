@@ -12,7 +12,8 @@
  */
 
 import type { CdpTarget } from "../cdp.js";
-import type { InstanceState, Liveness } from "../instance.js";
+import type { InstanceState } from "../instance.js";
+import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 /** Path on the daemon's loopback hook server. */
 export const RESIDENT_WS_PATH = "/browser/cdp";
@@ -46,7 +47,7 @@ export type WireMessage = WireReply | WireEvent;
 /** `cast.hello` — first call on every connection. */
 export interface HelloResult {
   version: number;
-  liveness: Liveness;
+  liveness: LivenessVerdict;
   state: InstanceState | null;
 }
 
