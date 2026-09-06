@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { classifyStartedPane } from "./daemon.js";
+import { CODEX_TRUST_ACCEPTED_PANE, CODEX_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 // Regression coverage for the unbound blank new session (root-caused 2026-09-02).
 //
@@ -51,6 +52,43 @@ describe("classifyStartedPane", () => {
   test("the workspace trust prompt is trust, never ready, even though it paints ❯", () => {
     const pane = [LAUNCH_ECHO, "Quick safety check", "Do you trust this folder?", "❯ 1. Yes, I trust this folder", "  2. No"].join("\n");
     expect(classifyStartedPane(pane, claudePrompt)).toBe("trust");
+  });
+
+  // ── Codex's trust dialog on the launch path (ct-49749) ───────────────────
+  // The detector here knew claude's wording only, so this frame classified
+  // "booting": codex's readiness pattern wants a line ending in ">", the trust
+  // screen has none, and discovery polled a dialog nobody was answering for its
+  // full 120s budget while the session never bound.
+  const codexPrompt = AGENT_CLIENTS.codex.promptReadyPattern;
+
+  test("codex's numbered trust dialog is trust, not booting", () => {
+    expect(classifyStartedPane(CODEX_TRUST_PANE, codexPrompt)).toBe("trust");
+  });
+
+  test("the same frame below a launch echo still reads trust", () => {
+    // The launch line is above the dialog and the rule reads the pane's live
+    // tail, so a pane that has not yet scrolled its echo away classifies the
+    // same way.
+    expect(classifyStartedPane(LAUNCH_ECHO + "\n" + CODEX_TRUST_PANE, codexPrompt)).toBe("trust");
+  });
+
+  test("the answered dialog, still in scrollback, is no longer trust", () => {
+    // Codex scrolls the dialog away instead of clearing it, so the option rows
+    // stay in the capture with the composer painted below them. Read over the
+    // whole capture the verdict would stay "trust" forever and every 2s poll
+    // would press Enter again at a live composer.
+    expect(CODEX_TRUST_ACCEPTED_PANE).toContain("1. Yes, continue");
+    expect(classifyStartedPane(CODEX_TRUST_ACCEPTED_PANE, codexPrompt)).not.toBe("trust");
+  });
+
+  test("codex at its ordinary prompt is ready, not trust", () => {
+    // The rule keys on codex's "Yes, continue"/"No, quit" option pair, so an
+    // ordinary pane — and codex's update menu, which offers "Update now" and
+    // "Skip" — must be untouched by it.
+    const idle = [LAUNCH_ECHO, "› Ask Codex to do anything", "  ? for shortcuts", ">"].join("\n");
+    expect(classifyStartedPane(idle, codexPrompt)).toBe("ready");
+    const updateMenu = [LAUNCH_ECHO, "› 1. Update now", "  2. Skip", "  Press enter to continue"].join("\n");
+    expect(classifyStartedPane(updateMenu, codexPrompt)).toBe("booting");
   });
 
   test("a launch error below the echo is fatal; shell rc noise above it is not", () => {
