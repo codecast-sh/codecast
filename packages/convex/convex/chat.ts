@@ -32,6 +32,7 @@ import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } fro
 import { dmKeyFor, isAgentTurnInFlight, isLiveVoiceRow, isSilentAgentRow, isVisibleAgentPending } from "@codecast/shared/chat";
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
+import { matchHandle, resolveMentions, teamRoster } from "./lib/mentionResolve";
 import { purgeUserTeam, touchThread } from "./threadReads";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -261,70 +262,10 @@ export async function patchChat(
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
-async function teamRoster(ctx: ReadCtx, teamId: Id<"teams">): Promise<Doc<"users">[]> {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-    .collect();
-  const users = await Promise.all(
-    memberships.map((m: { user_id: Id<"users"> }) => ctx.db.get(m.user_id)),
-  );
-  return users.filter((u): u is Doc<"users"> => u !== null);
-}
-
 function displayName(user: Doc<"users"> | null): string {
   return user?.name || user?.github_username || user?.email || "Someone";
 }
 
-function emailHandle(user: Doc<"users">): string | null {
-  return emailLocalHandle(user.email ?? undefined);
-}
-
-// Resolve the handles WRITTEN in a message to real users, against this team's
-// roster only. Never against `user.name` for a human: display names are
-// self-editable, so matching them would let a member rename themselves to
-// intercept a teammate's mentions. Bots are matched on their name because an
-// anchor's name is admin-set, and a bot has no GitHub handle to match instead.
-// An ambiguous handle resolves to nobody rather than to a guess.
-// One handle → at most one roster member: a GitHub login first, then an email
-// local part, then a bot's name — and only when exactly one member matches at
-// that level. Shared by @mention resolution and by `--dm <handle>`.
-function matchHandle(roster: Doc<"users">[], rawHandle: string): Doc<"users"> | null {
-  const handle = rawHandle.replace(/^@/, "").toLowerCase();
-  const byGithub = roster.filter(
-    (u) => !u.is_bot && u.github_username?.toLowerCase() === handle,
-  );
-  const byEmail = roster.filter((u) => !u.is_bot && emailHandle(u) === handle);
-  const byBot = roster.filter((u) => u.is_bot && botHandle(u.name) === handle);
-  return byGithub.length === 1 ? byGithub[0]
-    : byGithub.length === 0 && byEmail.length === 1 ? byEmail[0]
-    : byGithub.length === 0 && byEmail.length === 0 && byBot.length === 1 ? byBot[0]
-    : null;
-}
-
-async function resolveMentions(
-  ctx: ReadCtx,
-  teamId: Id<"teams">,
-  content: string,
-  senderId: Id<"users">,
-): Promise<Id<"users">[]> {
-  const handles = extractMentionHandles(content);
-  if (handles.length === 0) return [];
-  const roster = await teamRoster(ctx, teamId);
-
-  const resolved: Id<"users">[] = [];
-  const seen = new Set<string>();
-  for (const handle of handles) {
-    const match = matchHandle(roster, handle);
-    if (!match) continue;
-    const key = match._id.toString();
-    if (key === senderId.toString() || seen.has(key)) continue;
-    seen.add(key);
-    resolved.push(match._id);
-    if (resolved.length >= MAX_MENTIONS) break;
-  }
-  return resolved;
-}
 
 // ── Notifications ───────────────────────────────────────────────────────────
 //

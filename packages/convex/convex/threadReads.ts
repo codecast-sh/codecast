@@ -17,12 +17,13 @@ import { isSilentAgentRow } from "@codecast/shared/chat";
 import { commentThreadRootKey } from "@codecast/shared/comments";
 import { isHumanOrigin } from "@codecast/shared/tasks";
 
-export type ThreadKind = "chat" | "comment" | "task" | "page";
+export type ThreadKind = "chat" | "comment" | "task" | "page" | "code";
 export const threadKindValidator = v.union(
   v.literal("chat"),
   v.literal("comment"),
   v.literal("task"),
   v.literal("page"),
+  v.literal("code"),
 );
 
 /** How many participants one touch may file. A thread with more readers than
@@ -43,6 +44,11 @@ export type ThreadRefs = {
   message_id?: Id<"messages">;
   file_path?: string;
   line_number?: number;
+  // Code comment anchor (code kind only): the repository and the ref the
+  // thread hangs on, and the pull request when the ref is one's head.
+  repository?: string;
+  ref?: string;
+  pull_request_id?: Id<"pull_requests">;
 };
 
 export type TouchThreadOptions = {

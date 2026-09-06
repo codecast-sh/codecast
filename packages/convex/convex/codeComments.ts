@@ -22,7 +22,13 @@ import {
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
-import { commitUrl, normalizeRepository } from "./lib/gitRefs";
+import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
+import { resolveMentions, resolveSessionMentions } from "./lib/mentionResolve";
+import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
+import { webBaseUrl } from "./slack";
+import { touchThread } from "./threadReads";
+import type { MutationCtx } from "./_generated/server";
+import { codeThreadRootKey } from "@codecast/shared/comments";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const SUMMARY_LENGTH = 140;
@@ -37,7 +43,7 @@ type Ctx = { db: any; scheduler?: any };
  * request, a session comment follows the session, and a bare repository comment
  * follows membership of the team that installed the App on that repository.
  */
-async function canAccessComment(
+export async function canAccessComment(
   ctx: Ctx,
   userId: Id<"users">,
   comment: Doc<"review_comments">,
@@ -99,6 +105,207 @@ async function openPRsTouchingFile(
   );
 }
 
+/**
+ * Every comment on one anchor: a line of a file at a ref, or the ref itself.
+ * Replies share their root's anchor, so the anchor IS the thread. The index
+ * takes an absent file_path as a value, which is how the ref-level thread is
+ * read without a scan.
+ */
+export async function codeThreadRows(
+  ctx: Ctx,
+  anchor: { repository: string; ref?: string; file_path?: string; line_number?: number },
+): Promise<Doc<"review_comments">[]> {
+  const rows: Doc<"review_comments">[] = await ctx.db
+    .query("review_comments")
+    .withIndex("by_repository_file", (q: any) =>
+      q.eq("repository", normalizeRepository(anchor.repository)).eq("file_path", anchor.file_path))
+    .collect();
+  return rows
+    .filter((c) => c.ref === anchor.ref && (c.line_number ?? undefined) === (anchor.line_number ?? undefined))
+    .sort((a, b) => a.created_at - b.created_at);
+}
+
+/** Where a comment is, for a person: `foo.ts:42` or `commit 1a2b3c4`. */
+function codeCommentPlace(c: { ref?: string; file_path?: string; line_number?: number; line_end?: number }): string {
+  if (c.file_path) {
+    const name = c.file_path.split("/").pop();
+    const range = c.line_number
+      ? `:${c.line_number}${c.line_end && c.line_end !== c.line_number ? `-${c.line_end}` : ""}`
+      : "";
+    return `${name}${range}`;
+  }
+  return c.ref ? `commit ${shortSha(c.ref)}` : "the pull request";
+}
+
+/** The page a code comment is read on: the pull request when it has one, the
+ *  commit otherwise. Relative, so the web routes it in place. */
+async function codeCommentPath(ctx: Ctx, c: Doc<"review_comments">): Promise<string | null> {
+  if (c.pull_request_id) {
+    const pr = await ctx.db.get(c.pull_request_id);
+    if (pr) return `/pr/${pr.repository}/${pr.number}`;
+  }
+  if (c.repository && c.ref) return `/commit/${c.repository}/${c.ref}`;
+  return null;
+}
+
+/** `owner/repo#12` or `owner/repo@sha`: the notification entity of a code comment. */
+async function codeCommentEntityId(ctx: Ctx, c: Doc<"review_comments">): Promise<string | null> {
+  if (c.pull_request_id) {
+    const pr = await ctx.db.get(c.pull_request_id);
+    if (pr) return `${pr.repository}#${pr.number}`;
+  }
+  if (c.repository && c.ref) return `${c.repository}@${c.ref}`;
+  return null;
+}
+
+/**
+ * What a mentioned session is told. The comment is quoted whole, the place is
+ * named so the agent reads the code before answering, and the page is linked
+ * so its answer lands in the same thread.
+ */
+export function buildCodeCommentPrompt(opts: {
+  actorName: string;
+  repository: string;
+  ref?: string;
+  filePath?: string;
+  lineNumber?: number;
+  lineEnd?: number;
+  content: string;
+  url: string | null;
+  isReply: boolean;
+}): string {
+  const lines: string[] = [];
+  const where = opts.filePath
+    ? `${opts.filePath}${opts.lineNumber ? `:${opts.lineNumber}${opts.lineEnd && opts.lineEnd !== opts.lineNumber ? `-${opts.lineEnd}` : ""}` : ""}`
+    : null;
+  lines.push(
+    `${opts.actorName} mentioned you in a ${opts.isReply ? "reply in a " : ""}code comment on ${opts.repository}` +
+      `${opts.ref ? `@${shortSha(opts.ref)}` : ""}${where ? `, at ${where}` : ""}.`,
+  );
+  if (where) {
+    lines.push("");
+    lines.push(
+      `Read that spot in the repository at ${opts.ref ? `commit ${opts.ref}` : "the current head"} before answering. ` +
+        "If the comment asks for a change there, make the change and say what you did.",
+    );
+  }
+  lines.push("");
+  for (const line of opts.content.split("\n")) lines.push(`> ${line}`);
+  if (opts.url) {
+    lines.push("");
+    lines.push(`The thread: ${opts.url}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * A code comment landed. Everyone it concerns hears about it once: people it
+ * names get a notification, sessions it names get the comment as a message,
+ * and the thread files in the Threads inbox of its authors, its readers and
+ * the session that wrote the commit.
+ */
+async function fanOutCodeComment(
+  ctx: MutationCtx,
+  comment: Doc<"review_comments">,
+  opts: { teamId: Id<"teams">; actorId: Id<"users">; parent?: Doc<"review_comments"> | null },
+): Promise<void> {
+  const actor = await ctx.db.get(opts.actorId);
+  const actorName = actor?.name || actor?.github_username || actor?.email || "Someone";
+  const repository = comment.repository ?? "";
+  const place = codeCommentPlace(comment);
+  const entityId = await codeCommentEntityId(ctx, comment);
+  const path = await codeCommentPath(ctx, comment);
+  const url = path ? `${webBaseUrl()}${path}` : null;
+  const notified = new Set<string>([String(opts.actorId)]);
+
+  const emit = async (userId: Id<"users">, eventType: "mention" | "comment_reply" | "conversation_comment", message: string) => {
+    if (notified.has(String(userId)) || !entityId) return;
+    notified.add(String(userId));
+    await ctx.runMutation(internal.notificationRouter.emit, {
+      event_type: eventType,
+      actor_user_id: opts.actorId,
+      entity_type: "code",
+      entity_id: entityId,
+      message,
+      direct_recipient_id: userId,
+      ...(comment.conversation_id ? { conversation_id: comment.conversation_id } : {}),
+    });
+  };
+
+  // People named in the comment, against the repository's team.
+  const mentioned = await resolveMentions(ctx, opts.teamId, comment.content, opts.actorId);
+  for (const userId of mentioned) await emit(userId, "mention", `${actorName} mentioned you on ${place}`);
+
+  // Sessions named in the comment: the comment arrives as a message, exactly
+  // as `cast send` would deliver it, gated by the writer's send access.
+  const sessions = await resolveSessionMentions(ctx, comment.content, (conversation) =>
+    canSendProductMessage(ctx, opts.actorId, conversation));
+  for (const conversation of sessions) {
+    await enqueuePendingMessage(ctx, conversation, opts.actorId, {
+      content: buildCodeCommentPrompt({
+        actorName,
+        repository,
+        ref: comment.ref,
+        filePath: comment.file_path,
+        lineNumber: comment.line_number,
+        lineEnd: comment.line_end,
+        content: comment.content,
+        url,
+        isReply: !!opts.parent,
+      }),
+      client_id: `code-comment:${comment._id}:${conversation._id}`,
+      human: true,
+    });
+  }
+
+  // A reply reaches the comment it answers.
+  if (opts.parent?.author_user_id) {
+    await emit(opts.parent.author_user_id, "comment_reply", `${actorName} replied to your comment on ${place}`);
+  }
+
+  // The session that wrote the commit, when codecast knows it.
+  let commitOwner: Id<"users"> | undefined;
+  if (comment.ref) {
+    const commit = await ctx.db
+      .query("commits")
+      .withIndex("by_sha", (q: any) => q.eq("sha", comment.ref))
+      .filter((q: any) => q.eq(q.field("repository"), repository))
+      .first();
+    const conversation = commit?.conversation_id ? await ctx.db.get(commit.conversation_id) : null;
+    commitOwner = conversation?.user_id;
+    if (commitOwner) await emit(commitOwner, "conversation_comment", `${actorName} commented on ${place}`);
+  }
+
+  // The thread, in everyone's inbox who is part of it.
+  const thread = await codeThreadRows(ctx, {
+    repository,
+    ref: comment.ref,
+    file_path: comment.file_path,
+    line_number: comment.line_number,
+  });
+  await touchThread(ctx, {
+    kind: "code",
+    rootKey: codeThreadRootKey(repository, comment.ref ?? "", comment),
+    teamId: opts.teamId,
+    refs: {
+      repository,
+      ref: comment.ref,
+      file_path: comment.file_path,
+      line_number: comment.line_number,
+      pull_request_id: comment.pull_request_id,
+      conversation_id: comment.conversation_id,
+    },
+    participants: [
+      ...thread.map((c) => c.author_user_id),
+      ...mentioned,
+      ...sessions.map((c) => c.user_id),
+      commitOwner,
+    ].filter((id): id is Id<"users"> => !!id),
+    actorId: opts.actorId,
+    activityAt: comment.created_at,
+  });
+}
+
 export const create = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -140,8 +347,9 @@ export const create = mutation({
     // A reply belongs where its parent does, whatever the caller said.
     let pullRequestId = args.pull_request_id;
     let parentRef: string | undefined;
+    let parent: Doc<"review_comments"> | null = null;
     if (args.parent_id) {
-      const parent = await ctx.db.get(args.parent_id);
+      parent = await ctx.db.get(args.parent_id);
       if (!parent || !(await canAccessComment(ctx, userId, parent))) throw new Error("Parent comment not found");
       pullRequestId = pullRequestId ?? parent.pull_request_id;
       parentRef = parent.ref;
@@ -174,6 +382,9 @@ export const create = mutation({
       client_id: args.client_id,
       codecast_origin: true,
     });
+
+    const inserted = await ctx.db.get(commentId);
+    if (inserted) await fanOutCodeComment(ctx, inserted, { teamId, actorId: userId, parent });
 
     const where = args.file_path
       ? (args.line_number ? `${args.file_path}:${args.line_number}` : args.file_path)

@@ -238,6 +238,52 @@ export const webGet = query({
   },
 });
 
+/**
+ * The commits either side of one, in this repository's history.
+ *
+ * The commit page's arrows. A row carries no parent list, so "next" and
+ * "previous" are the nearest commits by time on the same branch when the
+ * commit names one, and the nearest in the repository otherwise. Each side
+ * walks a short window of the index, which keeps the answer to two small rows
+ * (sha, subject, branch) and never loads a patch.
+ */
+export const neighbours = query({
+  args: {
+    repository: v.string(),
+    sha: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const repository = normalizeRepository(args.repository);
+    const commit = await ctx.db
+      .query("commits")
+      .withIndex("by_sha", (q) => q.eq("sha", args.sha))
+      .filter((q) => q.eq(q.field("repository"), repository))
+      .first();
+    if (!commit) return null;
+
+    const WINDOW = 12;
+    const side = async (direction: "newer" | "older") => {
+      const rows = await ctx.db
+        .query("commits")
+        .withIndex("by_repository_timestamp", (q) =>
+          direction === "newer"
+            ? q.eq("repository", repository).gt("timestamp", commit.timestamp)
+            : q.eq("repository", repository).lt("timestamp", commit.timestamp),
+        )
+        .order(direction === "newer" ? "asc" : "desc")
+        .take(WINDOW);
+      const allowed = await accessibleCommits(ctx, userId, rows);
+      const pick =
+        (commit.branch && allowed.find((c) => c.branch === commit.branch)) || allowed[0];
+      return pick ? { sha: pick.sha, message: pick.message, branch: pick.branch ?? null } : null;
+    };
+
+    return { newer: await side("newer"), older: await side("older") };
+  },
+});
+
 export const getCommitsByRepository = query({
   args: {
     repository: v.string(),
