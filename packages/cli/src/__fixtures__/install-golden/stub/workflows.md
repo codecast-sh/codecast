@@ -1,33 +1,9 @@
 
 ## Workflows
 
-Workflows are execution graphs (DOT syntax) that define multi-step processes with loops, conditions, and human approval gates. They bind to tasks or plans.
+Execution graphs with approval gates (cast workflow). Adds `cast workflow` for running .cast files — directed graphs in DOT syntax where each node is an agent session, a shell command, or a human approval gate. Workflows only run when you explicitly invoke them.
 
-```bash
-cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
-cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
-cast workflow list                          # Available templates
-cast workflow push                          # Push workflow to web UI
-```
-
-Workflow nodes can be: agent sessions (`backend=claude`), shell commands, human approval gates, or conditionals. The web dashboard shows workflow progress and gate buttons.
-
-When collaborating on workflow creation, use DOT syntax:
-```dot
-digraph my_flow {
-  graph [goal="$task_title"]
-  start [shape=Mdiamond]
-  implement [label="Implement", backend=claude, prompt="..."]
-  verify [label="Verify", shape=parallelogram, script="npx tsc --noEmit"]
-  review [label="Review", shape=hexagon]
-  exit [shape=Msquare]
-  start -> implement -> verify
-  verify -> review [condition="outcome = success"]
-  verify -> implement [condition="outcome = failure"]
-  review -> exit [label="[A] Approve"]
-  review -> implement [label="[R] Revise"]
-}
-```
+Run `cast guide workflows` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->
 

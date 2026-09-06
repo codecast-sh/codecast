@@ -36,6 +36,7 @@ import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
 import { ensureClaudeSettingsPersistence, leakedTmuxGlobalMarkers } from "./agentEnv.js";
 import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
+import { getSnippetTargets, guidanceMode, guidanceSectionStatus } from "./snippets.js";
 import { c, fmt } from "./colors.js";
 import type { Config } from "./config/types.js";
 import { getMachineKey, hardwareId } from "./machineKey.js";
@@ -411,6 +412,54 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
       },
     });
   }
+
+  // ── the guidance an agent actually reads ──
+  // Every install stamps the cast version above the section's end marker, so a
+  // CLAUDE.md says which binary wrote it. A section whose text no longer
+  // matches what this cast renders is guidance for another release — the agent
+  // reads flags from one version and runs another.
+  passive.push({
+    name: "guidance",
+    run: () => {
+      const files: Array<{ label: string; text: string }> = [];
+      for (const target of getSnippetTargets()) {
+        try {
+          files.push({
+            label: target.label ?? target.filePath,
+            text: fs.readFileSync(target.filePath, "utf-8"),
+          });
+        } catch {
+          // A target that does not exist yet is reported by the missing rows
+          // its enabled snippets produce, not as a file-level failure.
+          files.push({ label: target.label ?? target.filePath, text: "" });
+        }
+      }
+      const rows = guidanceSectionStatus({
+        files,
+        config: deps.config,
+        version: deps.version,
+        mode: guidanceMode(),
+      });
+      if (rows.length === 0) return { ok: true, detail: "no snippets enabled" };
+      const slugsOf = (subset: typeof rows) => [...new Set(subset.map((r) => r.slug))].join(", ");
+      const stale = rows.filter((r) => r.state === "stale");
+      const missing = rows.filter((r) => r.state === "missing");
+      if (stale.length === 0 && missing.length === 0) {
+        return {
+          ok: true,
+          detail: `${rows.length} section(s) in ${files.length} file(s) match cast v${deps.version} (${guidanceMode()})`,
+        };
+      }
+      // Which release wrote the drifted copy is the part the stamp adds; a
+      // section installed before stamps shipped can only say it has none.
+      const stamps = [...new Set(stale.map((r) => r.stamp ?? "an unstamped cast"))].join(", ");
+      const parts = [
+        stale.length ? `${slugsOf(stale)} written by ${stamps}, not v${deps.version}` : "",
+        missing.length ? `${slugsOf(missing)} enabled but absent` : "",
+      ].filter(Boolean);
+      return { ok: false, warn: true, detail: `${parts.join("; ")} — run \`cast install --all\`` };
+    },
+  });
 
   // Settings-level backstop for the same class: ~/.claude/settings.json pins
   // CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 for every claude on the machine,

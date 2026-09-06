@@ -144,6 +144,12 @@ export interface Config {
   // beat, so a hand `--disable` sticks until the team flips again); the
   // install wizard skips a snippet known to be off for every team.
   snippet_availability?: Record<string, boolean>;
+  // How much of each capability the installed sections carry: "full" (the
+  // default) writes the whole guide into CLAUDE.md, "stub" writes what the
+  // capability is and when to reach for it and leaves the flags to
+  // `cast guide <topic>`. Set by `cast install --stubs` / `--full`; every
+  // section writer reads it (snippets.ts) so a refresh keeps the mode.
+  guidance_mode?: "full" | "stub";
 
   // --- Cross-machine project-path resolution (daemon.ts) ---
   // Explicit project-path overrides for resuming sessions/forks recorded on another

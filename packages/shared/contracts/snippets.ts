@@ -1190,3 +1190,120 @@ export function snippetSection(slug: string): SnippetSection {
 export function snippetContentHash(body: string): string {
   return manifestHash({ scripts: [body] });
 }
+
+// ------------------------------------------------------- version stamp + stubs
+//
+// Two problems this half solves, both of them "the file on disk and the binary
+// that will run the commands disagree".
+//
+//   1. An installed section named no version, so nothing could tell a CLAUDE.md
+//      written by last month's cast from one written by the binary in $PATH.
+//      Every install now writes a stamp line just above the section's end
+//      marker; `cast doctor` reads it, and `cast guide` prints the same version
+//      beside the body it serves.
+//   2. The full sections are long. `cast guide <slug>` serves the body from the
+//      binary, so a CLAUDE.md can carry a short stub instead — what the
+//      capability is, when to reach for it, and where the flags live.
+//
+// The stamp sits INSIDE the section window (between the heading and the end
+// marker), so the section engine rewrites it with the rest of the block and the
+// end marker keeps its exact bytes. A marker carrying the version instead would
+// stop matching the sections already installed on every machine.
+
+/** How much of a capability the installed section carries. */
+export type GuidanceMode = "full" | "stub";
+
+const STAMP_PREFIX = "<!-- cast ";
+const STAMP_SUFFIX = " -->";
+/** Anchored to its own line, so it can never match prose inside a body. */
+const STAMP_LINE = /^<!-- cast ([^\s>]+) -->\n/m;
+
+/** The stamp line an install writes: which cast produced these bytes. */
+export function snippetStamp(version: string): string {
+  return `${STAMP_PREFIX}${version}${STAMP_SUFFIX}`;
+}
+
+/** The cast version stamped in an installed section, or null for a section
+ *  written before stamps existed. */
+export function readSnippetStamp(text: string): string | null {
+  return STAMP_LINE.exec(text)?.[1] ?? null;
+}
+
+/** The same text without its stamp line — how two sections are compared for
+ *  real drift, so a version bump alone never reads as changed content. */
+export function stripSnippetStamp(text: string): string {
+  return text.replace(STAMP_LINE, "");
+}
+
+/**
+ * `body` with exactly one stamp line, immediately above its end marker.
+ *
+ * Idempotent: an existing stamp is dropped first, so stamping bytes this
+ * function already produced reproduces them and an update settles on its
+ * second run.
+ */
+export function stampSectionBody(body: string, endMarker: string, version: string): string {
+  const clean = stripSnippetStamp(body);
+  const at = clean.lastIndexOf(endMarker);
+  if (at === -1) return clean; // no marker to anchor to; leave the bytes alone
+  return clean.slice(0, at) + snippetStamp(version) + "\n" + clean.slice(at);
+}
+
+/**
+ * The short form of a section: what the capability is, when to reach for it,
+ * and the one command that serves the rest.
+ *
+ * Generated from the catalog's own display fields rather than written per
+ * snippet — the same `desc` and `detail` the install wizard and the web
+ * Settings page already show. A snippet added to the catalog therefore has a
+ * stub, a `cast guide` topic and a doctor check the moment it exists, with no
+ * second table to keep in step.
+ */
+export function stubSectionBody(descriptor: SnippetDescriptor): string {
+  const section = descriptor.section;
+  if (!section) throw new Error(`snippet "${descriptor.slug}" has no markdown section`);
+  return (
+    `\n${section.spec.headings[0]}\n\n` +
+    `${descriptor.desc}. ${descriptor.detail}\n\n` +
+    `Run \`cast guide ${descriptor.slug}\` for the commands and flags. The guide ships ` +
+    `inside the binary you run, so it always matches the \`cast\` that will execute them.\n` +
+    `${section.spec.endMarker}\n`
+  );
+}
+
+/**
+ * The markdown one install writes for `descriptor`: full body or stub, with
+ * this binary's version stamped in. The single place either mode is rendered,
+ * so the installer, the daemon's refresh pass and doctor's comparison agree.
+ *
+ * A stub only replaces a section it makes substantially smaller — under two
+ * thirds of it. `calls` (754 bytes) and `limits` (767) are short enough that
+ * their stub saves 30 bytes or 220, and paying a `cast guide` run to save that
+ * is a worse trade than keeping the guidance in the file. Stub mode exists to
+ * spend fewer tokens, not to replace prose with pointers wherever it can.
+ */
+export function renderSectionBody(
+  descriptor: SnippetDescriptor,
+  mode: GuidanceMode,
+  version: string,
+): string {
+  const section = descriptor.section;
+  if (!section) throw new Error(`snippet "${descriptor.slug}" has no markdown section`);
+  const stub = mode === "stub" ? stubSectionBody(descriptor) : null;
+  const worthIt = stub !== null && stub.length * 3 < section.body.length * 2;
+  const body = worthIt ? stub! : section.body;
+  return stampSectionBody(body, section.spec.endMarker, version);
+}
+
+/** The catalog entry that owns an end marker. The installer is handed specs,
+ *  not slugs, and the shared "Referencing objects" section belongs to no
+ *  snippet at all — it answers undefined for that one. */
+export function snippetByEndMarker(endMarker: string): SnippetDescriptor | undefined {
+  return SNIPPET_CATALOG.find((s) => s.section?.spec.endMarker === endMarker);
+}
+
+/** Every topic `cast guide` serves: the snippets that install markdown. A6's
+ *  `computer` section (ct-49522) joins the list by landing in the catalog. */
+export function guideTopics(): SnippetDescriptor[] {
+  return SNIPPET_CATALOG.filter((s) => s.section);
+}

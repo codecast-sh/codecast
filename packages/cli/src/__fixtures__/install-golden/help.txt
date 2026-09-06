@@ -29,6 +29,7 @@ Examples:
   cast install workflows            Install just the Workflows snippet
   cast install workflows --disable  Turn the Workflows snippet off
   cast install --disable            Turn all snippets off
+  cast install --all --stubs        Install short stubs; agents read `cast guide <topic>`
 
 Arguments:
   snippet     install just one snippet by name (e.g. workflows); omit for the
@@ -37,4 +38,7 @@ Arguments:
 Options:
   --all       Enable all snippets without prompting
   --disable   Disable the named snippet (or all snippets when none is named)
+  --stubs     Write short sections (what the capability is, when to use it) and
+              leave the flags to `cast guide <topic>`
+  --full      Write the complete sections (the default)
   -h, --help  display help for command

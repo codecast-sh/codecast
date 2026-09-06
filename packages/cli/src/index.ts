@@ -23,6 +23,7 @@ import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import { registerBrowserCommand } from "./browser/cli.js";
 import { registerAppCommand } from "./app/cli.js";
 import { registerExecCommand } from "./execCommand.js";
+import { registerGuideCommand } from "./guide.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -2973,6 +2974,7 @@ registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerExecCommand(program);
+registerGuideCommand(program);
 
 program
   .command("auth")
@@ -9784,12 +9786,24 @@ program
     "  cast install --all                Install everything, no prompts\n" +
     "  cast install workflows            Install just the Workflows snippet\n" +
     "  cast install workflows --disable  Turn the Workflows snippet off\n" +
-    "  cast install --disable            Turn all snippets off"
+    "  cast install --disable            Turn all snippets off\n" +
+    "  cast install --all --stubs        Install short stubs; agents read `cast guide <topic>`"
   )
   .option("--all", "Enable all snippets without prompting")
   .option("--disable", "Disable the named snippet (or all snippets when none is named)")
+  .option("--stubs", "Write short sections (what the capability is, when to use it) and leave the flags to `cast guide <topic>`")
+  .option("--full", "Write the complete sections (the default)")
   .action(async (snippetArg: string | undefined, options) => {
     const config = readConfig() || {};
+
+    // Full sections or stubs, for this run AND every later refresh: the section
+    // writers read `guidance_mode` back off config.json (snippets.ts), so the
+    // choice has to be on disk before the first install runs. Full stays the
+    // default until a `cast decide` settles it (ct-49544).
+    if (options.stubs || options.full) {
+      (config as any).guidance_mode = options.stubs ? "stub" : "full";
+      writeConfig(config);
+    }
     const targets = getSnippetTargets();
     const targetList = targets.map(t => t.label).join(", ");
 
