@@ -156,6 +156,22 @@ jobs:
             exit 1
           fi
 
+      - name: Verify the embedded cast computer helper
+        # build-binaries.sh already built, signed and verified the helper; this
+        # re-runs the same script with the facts only CI knows — that the bundle
+        # inside the shipped binaries is signed by the certificate held in the
+        # repo secrets, under this release's version. It also proves the darwin
+        # binaries can read the embedded tar back and that the linux and windows
+        # ones carry no macOS helper. (ct-49524)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/cli
+          bun scripts/computer-helper-release.ts verify ../web/binaries \
+            --identity "$CODECAST_SIGN_IDENTITY" \
+            --team "$SIGN_TEAM_ID" \
+            --version "$RELEASE_VERSION"
+
       - name: Verify macOS agent browser branding
         timeout-minutes: 5
         shell: bash
@@ -242,11 +258,20 @@ jobs:
             codecast-windows-x64.exe; do
             sha=$(shasum -a 256 "$artifact" | awk '{print $1}')
             size=$(stat -f%z "$artifact")
+            # The cast computer helper is part of a darwin artifact's identity:
+            # it is a separately signed app bundle inside the binary that the
+            # artifact's own sha256 covers but does not name. computer-helper.json
+            # is written by the verify step above, which proved each artifact
+            # really carries this helper (or, off darwin, carries none). (ct-49524)
+            helper=$(jq -r --arg artifact "$artifact" '.artifacts[$artifact] // "none"' computer-helper.json)
             manifest=$(jq -c \
               --arg artifact "$artifact" \
               --arg sha "$sha" \
               --argjson size "$size" \
-              '.[$artifact] = {sha256: $sha, size: $size}' <<<"$manifest")
+              --arg helper "$helper" \
+              '.[$artifact] = ({sha256: $sha, size: $size}
+                               + (if $helper == "none" then {} else {computer_helper_sha256: $helper} end))' \
+              <<<"$manifest")
           done
           jq -c -n \
             --arg version "$RELEASE_VERSION" \
@@ -276,6 +301,8 @@ jobs:
           path: |
             packages/web/binaries/codecast-darwin-arm64
             packages/web/binaries/codecast-darwin-x64
+            packages/web/binaries/computer-helper.tar
+            packages/web/binaries/computer-helper.json
             ${{ runner.temp }}/release-manifest.json
 
       - name: Upload the staging objects to R2

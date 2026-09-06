@@ -49,6 +49,25 @@ export function runFastPath(argv: string[]): boolean {
       .catch(fail);
     return true;
   }
+  if (argv[2] === "_computer-helper-tar") {
+    // Why: the `codecast computer.app` tar rides in as a bundled file asset, so
+    // the ONLY place its bytes can be observed is a compiled binary at runtime.
+    // The release scripts run this on the built artifact to prove the asset
+    // survived `bun build --compile` and to record the helper's sha256 in the
+    // artifact manifest (ct-49524). Prints the sha256, or "none" when this
+    // build carries no helper; writes the bytes to argv[3] when given. Lives
+    // beside `_build-id` for the same reason: no commander, no daemon, two
+    // tiny modules.
+    Promise.all([import("./computer/helperPayload.js"), import("node:crypto"), import("node:fs")])
+      .then(([{ computerHelperTar }, crypto, fs]) => {
+        const tar = computerHelperTar();
+        if (!tar) return console.log("none");
+        if (argv[3]) fs.writeFileSync(argv[3], tar);
+        console.log(crypto.createHash("sha256").update(tar).digest("hex"));
+      })
+      .catch(fail);
+    return true;
+  }
   if (isStableContextFastPath(argv)) {
     // SessionStart hook. Stdout must be exactly one stable-context block (or
     // empty): no Commander, no preAction logging or daemon startup, no update
