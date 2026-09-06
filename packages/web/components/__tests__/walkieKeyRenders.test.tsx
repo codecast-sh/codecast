@@ -138,6 +138,11 @@ describe("walkie: a bar of faces through somebody else's burst", () => {
   async function bindEngine() {
     const walkie = await import("../../lib/calls/walkie");
     walkie.bindWalkie({ mutation: async () => null, action: async () => null } as any);
+    // A clean slate. The engine's status is module state, so a walkie left
+    // mid-report by an earlier test file in this process would give one of the
+    // six faces a key that moves under the churn below — and this test counts
+    // renders, so that reads as a regression it did not cause.
+    walkie.observeWalkie({ bursts: [], doorOpen: false });
     return walkie;
   }
 

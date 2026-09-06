@@ -144,18 +144,27 @@ describe("placeSections rest sections", () => {
     expect(ids(needsInput)).toEqual(["n1", "n2"]);
   });
 
-  it("a declared-dormant home quiet for a day stays Dormant while its daemon heartbeats; with the daemon gone it is the human's again", () => {
-    // Declared verdicts skip the quiet-time decay (the agent named its wake),
-    // so a day of silence changes nothing — but the dead-daemon leg still
-    // applies: nobody can deliver the wake, so the row resurfaces. The
-    // replica applies both legs from the replicated heartbeat fact, exactly
-    // as the server does (ct-47609).
-    const stale = mk("stale", { agent_status: "dormant", updated_at: Date.now() - 24 * 3_600_000, last_heartbeat: NOW - 5_000 });
-    const { needsInput, dormant } = cat({ stale });
-    expect(ids(dormant)).toEqual(["stale"]);
-    const orphaned = mk("orphaned", { agent_status: "dormant", updated_at: Date.now() - 24 * 3_600_000, last_heartbeat: null });
+  it("a bare dormant claim expires into Needs Input; a verifiable wake keeps the park, heartbeat or not", () => {
+    // A declared dormant is a promise about a wake, and the status only
+    // re-derives when that wake lands — so a promise nothing can verify used
+    // to have no expiry at all. Past DORMANT_CLAIM_TTL_MS of quiet a BARE
+    // claim is the human's again, and a heartbeating daemon does not save it:
+    // the daemon being up is not evidence that anything will wake this row.
+    // An armed trigger is such evidence, and outlives the window. The replica
+    // reads this the same way the server does (ct-47609).
+    const quiet = { updated_at: Date.now() - 24 * 3_600_000 };
+    const beating = mk("beating", { agent_status: "dormant", ...quiet, last_heartbeat: NOW - 5_000 });
+    const orphaned = mk("orphaned", { agent_status: "dormant", ...quiet, last_heartbeat: null });
+    expect(ids(cat({ beating }).needsInput)).toEqual(["beating"]);
+    expect(cat({ beating }).dormant).toEqual([]);
     expect(ids(cat({ orphaned }).needsInput)).toEqual(["orphaned"]);
-    expect(needsInput).toEqual([]);
+
+    // Inside the window the claim is still good, and a named wake holds it
+    // parked well past it.
+    const fresh = mk("fresh", { agent_status: "dormant", updated_at: NOW - 60_000, last_heartbeat: NOW - 5_000 });
+    expect(ids(cat({ fresh }).dormant)).toEqual(["fresh"]);
+    const armed = mk("armed", { agent_status: "dormant", ...quiet, last_heartbeat: NOW - 5_000, armed_trigger_kind: "standing" });
+    expect(ids(cat({ armed }).dormant)).toEqual(["armed"]);
   });
 
   it("pinned rows never enter the rest sections", () => {
