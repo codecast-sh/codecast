@@ -20,7 +20,7 @@ import {
 } from "./instance.js";
 import { armRecorder } from "./observe.js";
 import { setViewport } from "./actions.js";
-import { BrowserNotLive } from "./recovery.js";
+import { BrowserNotLive, isReachable } from "./recovery.js";
 import { readHookPort, ResidentClient } from "./resident/client.js";
 import { mark } from "./timing.js";
 
@@ -80,7 +80,7 @@ async function openResident(): Promise<BrowserDriver> {
   if (!port) throw new Error("no daemon port");
   const client = await ResidentClient.connect(port);
   const { liveness, state } = client.hello;
-  if (liveness !== "live" || !state) {
+  if (!isReachable(liveness) || !state) {
     client.close();
     throw new BrowserNotLive(liveness, state);
   }
@@ -114,7 +114,7 @@ async function openResident(): Promise<BrowserDriver> {
  */
 async function openDirect(opts: OpenDriverOptions): Promise<BrowserDriver> {
   const state = readState();
-  if (!state) throw new BrowserNotLive("dead", state);
+  if (!state) throw new BrowserNotLive("exited", state);
   let conn: CdpConnection;
   try {
     conn = state.wsUrl ? await CdpConnection.connect(state.wsUrl, 5000) : await CdpConnection.fromPort(state.port, 5000);
@@ -122,7 +122,7 @@ async function openDirect(opts: OpenDriverOptions): Promise<BrowserDriver> {
     // Could not connect: classify honestly before telling the agent anything,
     // because the wrong verdict here is what starts restart stampedes.
     const liveness = await probeLiveness(state, opts.patienceMs);
-    if (liveness !== "live") throw new BrowserNotLive(liveness, state);
+    if (!isReachable(liveness)) throw new BrowserNotLive(liveness, state);
     // Alive after all (a stale cached URL, or a transient) — one more try the
     // slow way. Discovery re-learns the URL if the browser was replaced.
     conn = await CdpConnection.fromPort(state.port);
