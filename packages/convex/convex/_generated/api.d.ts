@@ -162,6 +162,7 @@ import type * as rateLimit from "../rateLimit.js";
 import type * as redact from "../redact.js";
 import type * as repoPublicHttp from "../repoPublicHttp.js";
 import type * as repos from "../repos.js";
+import type * as reviewNotes from "../reviewNotes.js";
 import type * as reviews from "../reviews.js";
 import type * as savedViews from "../savedViews.js";
 import type * as searchCore from "../searchCore.js";
@@ -367,6 +368,7 @@ declare const fullApi: ApiFromModules<{
   redact: typeof redact;
   repoPublicHttp: typeof repoPublicHttp;
   repos: typeof repos;
+  reviewNotes: typeof reviewNotes;
   reviews: typeof reviews;
   savedViews: typeof savedViews;
   searchCore: typeof searchCore;

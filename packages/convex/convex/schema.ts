@@ -2152,8 +2152,27 @@ export default defineSchema({
     codecast_origin: v.optional(v.boolean()),
     author_github_username: v.optional(v.string()),
     author_user_id: v.optional(v.id("users")),
+    // ── Review notes written from a worktree (`cast review`, ct-49560) ──
+    // A note is a comment first, so it lives here and the web diff view picks
+    // it up from listForFile like any other. These four fields are what a
+    // batch needs on top of that.
+    // ACCESS, not routing: a note written in a directory mapped to a team is
+    // the team's, one written anywhere else is its author's alone. Set only on
+    // notes; a GitHub-mirrored comment carries none and keeps its old rule.
+    workspace: v.optional(v.string()),
+    // The worktree the batch belongs to. Two worktrees of one repository hold
+    // separate batches, because they hold separate diffs.
+    git_root: v.optional(v.string()),
+    // A stamp of the diff the note was written against. The CLI recomputes it
+    // and flags a note whose file has moved on, so a stale note never reaches
+    // an agent pretending to be current.
+    diff_identity: v.optional(v.string()),
+    // When the note was handed to a session. Editing it clears this: a changed
+    // note has not been sent.
+    sent_at: v.optional(v.number()),
   })
     .index("by_review", ["review_id"])
+    .index("by_author_git_root", ["author_user_id", "git_root"])
     .index("by_review_resolved", ["review_id", "resolved"])
     .index("by_pull_request", ["pull_request_id"])
     .index("by_github_comment_id", ["github_comment_id"])
