@@ -14,7 +14,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 import { applyHideTransition } from "./cleanup";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
-import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser } from "./pendingMessages";
 import { enqueueCloudSpawn } from "./cloud";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { findAgentBoxSessionCreatedBy, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
@@ -893,6 +893,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     return conversationId;
   },
+
+  retryPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
+    retryPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
 
   sendMessage: async (
     ctx,

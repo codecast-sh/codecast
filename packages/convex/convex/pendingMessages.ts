@@ -843,6 +843,36 @@ export const updateMessageStatus = mutation({
   },
 });
 
+export async function retryPendingMessageForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  ref: { messageId?: string; clientId?: string },
+): Promise<string> {
+  if (!ref.messageId && !ref.clientId) throw new Error("Message identity required");
+  const message = ref.messageId
+    ? await ctx.db.get(ref.messageId)
+    : await ctx.db.query("pending_messages")
+      .withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conversationId).eq("client_id", ref.clientId))
+      .first();
+  if (!message) return "not_found";
+  if (message.conversation_id !== conversationId) throw new Error("Message belongs to another conversation");
+  if (!(await senderOrOwnerCanAct(ctx, message, userId))) throw new Error("Unauthorized: can only retry messages you sent or own");
+  if (isTerminalPendingStatus(message.status) || message.status === "injected") return message.status;
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) throw new Error("conversation_deleted");
+  if (isConversationSafetyBlocked(conversation)) throw new Error("Delivery is blocked by the session's safety stop");
+  if (isFencedPendingMessage(message) || !legacyConversationAcceptsDaemonWork(conversation)) {
+    throw new Error("Delivery is managed by the session transfer; retry is not available yet");
+  }
+  if ((message.kill_generation ?? 0) < (conversation.pending_kill_generation ?? 0)) {
+    throw new Error("This message was stopped when the session was killed");
+  }
+  await rependPendingMessage(ctx, message, 0);
+  await ctx.db.patch(conversationId, { has_pending_messages: true });
+  return "pending";
+}
+
 export const retryMessage = mutation({
   args: {
     message_id: v.id("pending_messages"),
@@ -1247,7 +1277,7 @@ export const getConversationPendingMessage = query({
       ?? visible.find((m) => m.status === "undeliverable")
       ?? null;
     if (!msg) return null;
-    return { message_id: msg._id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content };
+    return { message_id: msg._id, client_id: msg.client_id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content };
   },
 });
 

@@ -4441,6 +4441,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   snoozeWalkie: (until: number) => number;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
+  retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
@@ -8099,6 +8100,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // server echoes it back. Fire-and-forget — status is read back from the
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
+  retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
+
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);

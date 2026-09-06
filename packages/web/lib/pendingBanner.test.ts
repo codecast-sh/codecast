@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, pendingRetryClientId, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean }> = {}) => ({
   retryEligible: true,
@@ -11,6 +11,24 @@ const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idl
 });
 
 describe("pending retry identity", () => {
+  test("interruption controls cannot become a new user message through retry", () => {
+    for (const content of [
+      "[Request interrupted by user]",
+      "  [Request interrupted by user for tool use]",
+      "[Request cancelled by user]",
+      "\n<turn_aborted>\nThe user interrupted the previous turn.",
+    ]) expect(pendingMessageCanRetry(content)).toBe(false);
+    expect(pendingMessageCanRetry("Please continue the interrupted work")).toBe(true);
+    expect(pendingMessageCanRetry("make sure things are added in an elegant and beautiful way")).toBe(true);
+  });
+  test("delivery proof belongs to the exact bubble", () => {
+    const row = { message_id: "server-id", client_id: "client-id", status: "injected" };
+    expect(pendingMessageReachedSession("client-id", row)).toBe(true);
+    expect(pendingMessageReachedSession("serverpending_server-id", row)).toBe(true);
+    expect(pendingMessageReachedSession("other-client-id", row)).toBe(false);
+    expect(pendingMessageReachedSession("serverpending_other-id", row)).toBe(false);
+    expect(pendingMessageReachedSession("client-id", { ...row, status: "pending" })).toBe(false);
+  });
   test("replays a local send under its original idempotency key", () => {
     expect(pendingRetryClientId("local-message-123")).toBe("local-message-123");
   });
