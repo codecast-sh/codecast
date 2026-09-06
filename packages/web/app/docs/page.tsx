@@ -26,6 +26,7 @@ import {
   Layers,
   Lightbulb,
 } from "lucide-react";
+import { DocDates } from "../../components/DocDates";
 
 const api = _api as any;
 
@@ -40,18 +41,9 @@ const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: strin
 
 const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff"];
 
-function fmtAge(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
-  if (diff < 7 * 86400000) return `${Math.floor(diff / 86400000)}d`;
-  return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
   const title = (doc as any).display_title || doc.title || "Untitled";
-  const ageStr = fmtAge(doc.updated_at);
 
   return (
     <>
@@ -90,7 +82,7 @@ export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
         </div>
       )}
       <span className="text-[10px] text-gray-500 flex-shrink-0 tabular-nums cq-hide-minimal">{cfg.label}</span>
-      <span className="text-xs text-gray-500 w-8 text-right tabular-nums flex-shrink-0 cq-hide-minimal">{ageStr}</span>
+      <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
     </>
   );
 }

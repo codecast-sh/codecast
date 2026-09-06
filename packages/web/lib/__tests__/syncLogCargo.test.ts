@@ -55,15 +55,15 @@ describe("planCargoApply — sessions adapter", () => {
     expect(p.unset).toEqual([]); // sessions null instead of delete
   });
   test("derived twins recompute from the merged row with the shared helpers", () => {
-    const existing = { updated_at: 100, inbox_dormant_at: null };
+    const existing = { updated_at: 100, inbox_rest: "dormant", inbox_rest_at: null };
     let p = planCargoApply("sessions", { patch: { inbox_pinned_at: 5 } }, existing);
     expect(p.fields.is_pinned).toBe(true);
     p = planCargoApply("sessions", { patch: { inbox_pinned_at: null } }, existing);
     expect(p.fields.is_pinned).toBe(false);
-    p = planCargoApply("sessions", { patch: { inbox_dormant_at: 200 } }, existing);
-    expect(p.fields.is_dormant).toBe(true); // 200 >= updated_at 100
-    p = planCargoApply("sessions", { patch: { inbox_dormant_at: 50 } }, existing);
-    expect(p.fields.is_dormant).toBe(false);
+    p = planCargoApply("sessions", { patch: { inbox_rest_at: 200 } }, existing);
+    expect(p.fields.user_rest).toBe("dormant"); // 200 >= updated_at 100
+    p = planCargoApply("sessions", { patch: { inbox_rest_at: 50 } }, existing);
+    expect(p.fields.user_rest).toBe(null);
     p = planCargoApply("sessions", { patch: { settle_verdict: "done", settle_verdict_at: 150 } }, existing);
     expect(p.fields.settle_verdict).toBe("done");
     p = planCargoApply("sessions", { patch: { settle_verdict: "done", settle_verdict_at: 50 } }, existing);

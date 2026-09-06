@@ -4,13 +4,17 @@
 // the iOS session screen, so it must stay free of DOM and React imports. The
 // session title lookup is injected because each platform has its own store.
 
-import { isCommandMessage, cleanContent, isSystemMessage } from "./conversationProcessor";
+import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
+import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage } from "./conversationProcessor";
 import {
   parseMachineDeliveredMessage,
+  cleanUserMessage,
   isBareNudge,
-  stickyPromptContent,
+  isSpawnedTaskPrompt,
   type MachineDeliveredKind,
 } from "../components/sessionMessage";
+import { NAV_ROW_SNIPPET_CHARS, stripContextTags } from "@codecast/convex/convex/userMessagesFilter";
+import type { PromptImage } from "./messagePreview";
 import { formatShortDate } from "./utils";
 
 // Row kinds hidden behind the "other" chip: machine-delivered messages plus
@@ -21,6 +25,7 @@ export type NavigatorRowKind = "user" | HiddenKind;
 export type NavigatorRow = {
   _id: string;
   display: string;
+  images?: PromptImage[];
   isCmd: boolean;
   timestamp: number;
   commentCount: number;
@@ -29,9 +34,12 @@ export type NavigatorRow = {
   // Human-message ordinal (what the row numbers show); hidden-kind rows carry
   // -1 and render unnumbered.
   originalIndex: number;
+  // The source content reached the server's snippet cap, so `display` may be
+  // a prefix of the real body. The hover card resolves the full body then.
+  clipped: boolean;
 };
 
-export type NavigatorSourceMessage = { _id: string; content?: string; timestamp: number };
+export type NavigatorSourceMessage = { _id: string; content?: string; timestamp: number; images?: PromptImage[] };
 
 export const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
   schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
@@ -117,12 +125,16 @@ export function buildNavigatorRows(
   userMessages: NavigatorSourceMessage[],
   commentCounts?: Map<string, number> | null,
   resolveSessionTitle?: (shortId: string) => string | null,
+  loadedImages?: Readonly<Record<string, PromptImage[] | undefined>>,
 ): NavigatorRow[] {
   let humanOrdinal = 0;
   const rows: NavigatorRow[] = [];
   for (const m of userMessages) {
     const content = m.content ?? "";
+    const images = m.images ?? loadedImages?.[m._id];
+    if (isTurnInterruptionNotice(content)) continue;
     const commentCount = commentCounts?.get(m._id) || 0;
+    const clipped = content.length >= NAV_ROW_SNIPPET_CHARS;
     const machine = parseMachineDeliveredMessage(content);
     if (machine) {
       const sourceText =
@@ -134,18 +146,37 @@ export function buildNavigatorRows(
       // line would only repeat the body; drop it when the body already
       // carries it. Session sources are titles, never the body.
       const source = display.toLowerCase().startsWith(sourceText.toLowerCase()) ? undefined : sourceText;
-      rows.push({ _id: m._id, display, isCmd: false, timestamp: m.timestamp, commentCount, kind: machine.kind, source, originalIndex: -1 });
+      rows.push({ _id: m._id, ...(images?.length ? { images } : {}), display, isCmd: false, timestamp: m.timestamp, commentCount, kind: machine.kind, source, originalIndex: -1, clipped });
       continue;
     }
     const user = processUserMessage(content);
     if (!user.isCmd && isBareNudge(user.display)) {
-      rows.push({ _id: m._id, display: "", isCmd: false, timestamp: m.timestamp, commentCount, kind: "continue", originalIndex: -1 });
+      rows.push({ _id: m._id, display: "", isCmd: false, timestamp: m.timestamp, commentCount, kind: "continue", originalIndex: -1, clipped: false });
       continue;
     }
-    if (stripInvisible(user.display).trim().length === 0) continue;
-    rows.push({ _id: m._id, ...user, timestamp: m.timestamp, commentCount, kind: "user", originalIndex: humanOrdinal++ });
+    if (stripInvisible(user.display).trim().length === 0 && !images?.length) continue;
+    rows.push({ _id: m._id, ...(images?.length ? { images } : {}), ...user, timestamp: m.timestamp, commentCount, kind: "user", originalIndex: humanOrdinal++, clipped });
   }
   return rows;
+}
+
+// The display text a row would carry if it were built from `fullContent`
+// (a raw transcript body: context tags still attached) instead of the server
+// snippet. Same pipeline as the row itself, so a machine row keeps its
+// humanized body and a slash command keeps its label. Falls back to the
+// snippet when the full body would not produce a row.
+export function navigatorRowBody(
+  row: NavigatorRow,
+  fullContent: string | undefined,
+  resolveSessionTitle?: (shortId: string) => string | null,
+): string {
+  if (fullContent === undefined) return row.display;
+  const [rebuilt] = buildNavigatorRows(
+    [{ _id: row._id, content: stripContextTags(fullContent), timestamp: row.timestamp, images: row.images }],
+    undefined,
+    resolveSessionTitle,
+  );
+  return rebuilt?.display || row.display;
 }
 
 // Header numbers both navigator surfaces show: the human prompt count (search
@@ -246,9 +277,33 @@ export type StickySourceMessage = {
   from_user_id?: string;
 };
 
+// A slash command ("/model opus") and `!` bash mode are the human talking to
+// their client, not to the agent. Both are stored as tag soup
+// ("<command-name>/model</command-name>…<command-args>opus</command-args>"),
+// so a surface that only strips tags paints "/model model opus" as if it were
+// a prompt. The thread already renders them as command blocks.
+function isClientCommand(raw: string): boolean {
+  return isCommandMessage(raw)
+    || isStrippedCommand(raw.trim()) !== null
+    || parseBashInput(raw) !== null
+    || parseBashOutput(raw) !== null;
+}
+
+// The text a sticky prompt header may show for a user message, or null when
+// the message is not the human's own ask: anything machinery delivered (a
+// trigger run, a cast send, a teammate broadcast), a spawned run's opening
+// briefing, a bare nudge, or a command aimed at the client. Every sticky
+// source (timeline, cached user list, last-message fallback) must agree, so
+// they all go through here.
+export function stickyPromptContent(raw: string | null | undefined): string | null {
+  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw)) return null;
+  const display = cleanUserMessage(raw);
+  return display && !isBareNudge(display) ? display : null;
+}
+
 // A user message the sticky prompt may show: the human's own ask (not machine
-// delivered, not a spawned briefing, not a bare nudge), with visible text
-// that is not a system message.
+// delivered, not a spawned briefing, not a bare nudge, not a client command),
+// with visible text that is not a system message.
 export function isStickyEligible(content: string): boolean {
   if (stickyPromptContent(content) === null) return false;
   const display = cleanContent(content);

@@ -40,7 +40,7 @@ export default function PrivacyPage() {
       {/* Content */}
       <article className="max-w-3xl mx-auto px-6 py-16">
         <h1 className="text-4xl font-bold text-stone-900 mb-4">Privacy Policy</h1>
-        <p className="text-stone-500 mb-12">Last updated: January 14, 2025</p>
+        <p className="text-stone-500 mb-12">Last updated: September 5, 2026</p>
 
         <div className="prose prose-stone max-w-none">
           <section className="mb-12">
@@ -129,6 +129,23 @@ export default function PrivacyPage() {
               <li>Opt out of optional data collection</li>
               <li>Update your account information</li>
             </ul>
+          </section>
+
+          <section className="mb-12" id="browser-extension">
+            <h2 className="text-2xl font-semibold text-stone-900 mb-4">Browser Extension</h2>
+            <p className="text-stone-600 leading-relaxed mb-4">
+              The Codecast Chrome extension lets agent sessions running on your computer open and drive their own tabs in your Chrome. It has one purpose and collects nothing.
+            </p>
+            <ul className="list-disc pl-6 text-stone-600 space-y-2">
+              <li>It connects only to a bridge on your own computer (127.0.0.1) started by the Codecast CLI. It makes no other network connections and sends nothing to us or to anyone else.</li>
+              <li>It acts only on tabs it opened for a session, grouped under one Cast tab group. It does not read, change, or record the tabs you opened yourself.</li>
+              <li>Page content it reads on a session&apos;s request goes to that local bridge and is not stored by the extension.</li>
+              <li>It stores one thing: the pairing token and port you granted, in Chrome&apos;s extension storage on your computer. Revoke it any time with <code>cast browser extension revoke</code>, or by removing the extension.</li>
+              <li>It uses no analytics, no remote code, and no content scripts.</li>
+            </ul>
+            <p className="text-stone-600 leading-relaxed mt-4">
+              What a session does with a page it drives is governed by the rest of this policy, the same as any other session activity.
+            </p>
           </section>
 
           <section className="mb-12">

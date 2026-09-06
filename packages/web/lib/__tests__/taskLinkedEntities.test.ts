@@ -53,19 +53,26 @@ describe("resolveTaskLinkedConversations", () => {
 });
 
 describe("resolveTaskRelatedDocs", () => {
+  const HOUR = 60 * 60 * 1000;
   const docs = {
     d1: { _id: "d1", conversation_id: ORIGIN, title: "Plan", display_title: "The plan", doc_type: "plan", source: "agent", created_at: 2 },
     d2: { _id: "d2", conversation_id: ORIGIN, title: "Older", doc_type: "note", created_at: 1 },
     d3: { _id: "d3", conversation_id: ORIGIN, title: "Archived", archived_at: 5, created_at: 3 },
     d4: { _id: "d4", conversation_id: ADOPTED, title: "Other session", created_at: 4 },
+    d5: { _id: "d5", conversation_id: ORIGIN, title: "Months earlier", doc_type: "note", created_at: -40 * 24 * HOUR },
   };
 
   test("snapshot wins; else the origin conversation's live docs, oldest first, archived excluded", () => {
     const snapshot = [{ _id: "x", title: "server" }];
     expect(resolveTaskRelatedDocs({ related_docs: snapshot, created_from_conversation: ORIGIN }, docs)).toBe(snapshot);
-    const out = resolveTaskRelatedDocs({ created_from_conversation: ORIGIN }, docs);
+    const out = resolveTaskRelatedDocs({ created_from_conversation: ORIGIN, created_at: 3 }, docs);
     expect(out.map((d) => d._id)).toEqual(["d2", "d1"]);
     expect(out[1]).toMatchObject({ title: "The plan", doc_type: "plan", source: "agent" });
     expect(resolveTaskRelatedDocs({ created_from_conversation: null }, docs)).toEqual([]);
+  });
+
+  test("a long-lived origin session's older journal stays out", () => {
+    const out = resolveTaskRelatedDocs({ created_from_conversation: ORIGIN, created_at: 3 }, docs);
+    expect(out.map((d) => d._id)).not.toContain("d5");
   });
 });

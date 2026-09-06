@@ -3,6 +3,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useCommits, usePullRequests, useSyncCommits, useSyncPullRequests } from "../hooks/useSyncTimeline";
 import Link from "next/link";
+import { commitPageHref } from "../lib/repoView";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { ClaudeIcon } from "./BrandIcons";
 import { EmptyState } from "./EmptyState";
@@ -193,17 +194,13 @@ function CommitCard({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
                 {item.repository ? (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      window.open(`https://github.com/${item.repository}/commit/${item.sha}`, '_blank', 'noopener,noreferrer');
-                    }}
-                    className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20 hover:bg-sol-violet/20 hover:border-sol-violet/40 transition-colors cursor-pointer"
+                  <Link
+                    href={commitPageHref(item.repository, item.sha)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20 hover:bg-sol-violet/20 hover:border-sol-violet/40 transition-colors cursor-pointer no-underline"
                   >
                     {shortSha}
-                  </button>
+                  </Link>
                 ) : (
                   <code className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20">
                     {shortSha}

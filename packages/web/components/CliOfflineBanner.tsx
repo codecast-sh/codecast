@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Terminal } from "lucide-react";
+import { Terminal } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -11,25 +11,20 @@ import {
   type OfflineTier,
 } from "../hooks/useDaemonHealth";
 import { useAppOffline } from "../hooks/useAppOffline";
+import { useStatusNotice, type StatusNotice } from "../hooks/useStatusNotice";
 
 const DISMISS_DURATION_MS = 30 * 60 * 1000;
 
-const TIER_STYLES: Record<OfflineTier, { wrap: string; icon: string }> = {
-  warn: {
-    wrap: "bg-gradient-to-r from-sol-yellow/10 via-sol-yellow/5 to-sol-yellow/10 border-b border-sol-yellow/30",
-    icon: "text-sol-yellow",
-  },
-  alert: {
-    wrap: "bg-gradient-to-r from-sol-orange/10 via-sol-orange/10 to-sol-orange/10 border-b border-sol-orange/30",
-    icon: "text-sol-orange",
-  },
-  severe: {
-    wrap: "bg-gradient-to-r from-sol-orange/10 via-sol-red/10 to-sol-orange/10 border-b border-sol-red/40",
-    icon: "text-sol-red",
-  },
-};
+const TIER_TONE: Record<OfflineTier, StatusNotice["tone"]> = { warn: "yellow", alert: "orange", severe: "red" };
 
 export function CliOfflineBanner() {
+  useStatusNotice("cli-offline", useCliOfflineNotice());
+  return null;
+}
+
+// Every hook runs before the first early return, so the notice can bail out
+// in whatever order reads best.
+function useCliOfflineNotice(): StatusNotice | null {
   const dismissedTs = useInboxStore(s => s.clientState.dismissed?.cli_offline ?? 0);
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
@@ -83,33 +78,22 @@ export function CliOfflineBanner() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const styles = TIER_STYLES[tier];
-
-  return (
-    <div className={styles.wrap}>
-      <div className="px-4 py-2 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <Terminal className={`w-4 h-4 ${styles.icon} flex-shrink-0`} />
-          <span className="text-sm text-sol-text truncate">
-            {message}
-            {" "}{action}
-            <button
-              onClick={handleCopy}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 font-mono text-xs bg-sol-base02 text-sol-base1 rounded cursor-pointer hover:bg-sol-base01 hover:text-sol-base2 transition-colors"
-              title="Click to copy"
-            >
-              {copied ? "copied!" : command}
-            </button>
-          </span>
-        </div>
+  return {
+    tone: TIER_TONE[tier],
+    icon: Terminal,
+    title: message,
+    detail: (
+      <>
+        {action}
         <button
-          onClick={() => updateDismissed("cli_offline", Date.now())}
-          className="p-1 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
-          aria-label="Dismiss"
+          onClick={handleCopy}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 font-mono text-xs bg-sol-base02 text-sol-base1 rounded cursor-pointer hover:bg-sol-base01 hover:text-sol-base2 transition-colors"
+          title="Click to copy"
         >
-          <X className="w-4 h-4" />
+          {copied ? "copied!" : command}
         </button>
-      </div>
-    </div>
-  );
+      </>
+    ),
+    onDismiss: () => updateDismissed("cli_offline", Date.now()),
+  };
 }

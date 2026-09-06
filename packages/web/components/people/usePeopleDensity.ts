@@ -1,6 +1,6 @@
 import { type RefObject } from "react";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
-import { desktopHeaderClass } from "../../lib/desktop";
+import { desktopHeaderClass, isVoiceHost } from "../../lib/desktop";
 import { densityFor, type PeopleDensity } from "./peopleDensity";
 
 /**
@@ -26,5 +26,7 @@ export function usePeopleDensity(ref: RefObject<HTMLElement | null>): PeopleDens
  * never pl-3 beside it.
  */
 export function peopleHeadClass(): string {
+  // The voice host is frameless: a drag region, and nothing to clear.
+  if (isVoiceHost()) return "electron-drag-region pl-3";
   return desktopHeaderClass() || "pl-3";
 }

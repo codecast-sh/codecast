@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -74,6 +74,7 @@ describe("parseCastCommandString", () => {
       subcommand: "jx7a6xc",
       args: '"coordinating on the header"',
       fullCmd: 'cast send jx7a6xc "coordinating on the header"',
+      raw: 'cast send jx7a6xc "coordinating on the header"',
     });
   });
 
@@ -85,22 +86,23 @@ describe("parseCastCommandString", () => {
       subcommand: "jx7a6xc",
       args: '"Coordinating on the header"',
       fullCmd: 'cast send jx7a6xc "Coordinating on the header"',
+      raw,
     });
   });
 
   test("parses through a leading `cd <dir> &&` prefix", () => {
     const r = parseCastCommandString('cd /repo && cast read jx70ntf 12:20');
-    expect(r).toEqual({ category: "read", subcommand: "jx70ntf", args: "12:20", fullCmd: "cast read jx70ntf 12:20" });
+    expect(r).toEqual({ category: "read", subcommand: "jx70ntf", args: "12:20", fullCmd: "cast read jx70ntf 12:20", raw: "cd /repo && cast read jx70ntf 12:20" });
   });
 
   test("parses through a `bash -c` wrapper", () => {
     const r = parseCastCommandString(`bash -c 'cast task done ct-123'`);
-    expect(r).toEqual({ category: "task", subcommand: "done", args: "ct-123", fullCmd: "cast task done ct-123" });
+    expect(r).toEqual({ category: "task", subcommand: "done", args: "ct-123", fullCmd: "cast task done ct-123", raw: `bash -c 'cast task done ct-123'` });
   });
 
   test("parses through a `bash -c` wrapper with an inner cd prefix", () => {
     const r = parseCastCommandString(`bash -c "cd /repo; cast plan show pl-77"`);
-    expect(r).toEqual({ category: "plan", subcommand: "show", args: "pl-77", fullCmd: "cast plan show pl-77" });
+    expect(r).toEqual({ category: "plan", subcommand: "show", args: "pl-77", fullCmd: "cast plan show pl-77", raw: `bash -c "cd /repo; cast plan show pl-77"` });
   });
 
   test("returns null for a non-cast command", () => {
@@ -111,6 +113,111 @@ describe("parseCastCommandString", () => {
 
   test("does not treat `castle` as `cast` (word boundary)", () => {
     expect(parseCastCommandString("castle build")).toBeNull();
+  });
+});
+
+describe("splitShellSegments", () => {
+  test("splits on pipes, semicolons and newlines", () => {
+    expect(splitShellSegments("cast browser shot | tail -1; sleep 2\ncast browser read")).toEqual([
+      "cast browser shot",
+      "tail -1",
+      "sleep 2",
+      "cast browser read",
+    ]);
+  });
+
+  test("drops redirects and their targets, file descriptor included", () => {
+    expect(splitShellSegments('cast browser do "click e13" 2>&1 | tail -1')).toEqual([
+      'cast browser do "click e13"',
+      "tail -1",
+    ]);
+    expect(splitShellSegments("cast read jx7a6xc > /tmp/out.txt")).toEqual(["cast read jx7a6xc"]);
+  });
+
+  test("an operator inside a quoted message body never splits the command", () => {
+    expect(splitShellSegments(`cast send jx7a6xc "ship it; then tell me | ok"`)).toEqual([
+      `cast send jx7a6xc "ship it; then tell me | ok"`,
+    ]);
+  });
+
+  test("keeps a heredoc body with the command that opened it", () => {
+    const raw = "cast send jx7a6xc - <<'EOF'\nfirst | line\nsecond; line\nEOF\necho done";
+    expect(splitShellSegments(raw)).toEqual([
+      "cast send jx7a6xc - <<'EOF'\nfirst | line\nsecond; line\nEOF",
+      "echo done",
+    ]);
+  });
+
+  test("command substitution stays inside its word", () => {
+    expect(splitShellSegments('cast doc create "$(basename /a/b; echo x)"')).toEqual([
+      'cast doc create "$(basename /a/b; echo x)"',
+    ]);
+  });
+});
+
+describe("stripTimeoutPrefix", () => {
+  test("strips the guard and its flags", () => {
+    expect(stripTimeoutPrefix("timeout 90 cast browser shot")).toBe("cast browser shot");
+    expect(stripTimeoutPrefix("gtimeout 2.5s cast browser read")).toBe("cast browser read");
+    expect(stripTimeoutPrefix("timeout -k 5 30 cast browser click #e1")).toBe("cast browser click #e1");
+  });
+
+  test("leaves a command that only mentions a timeout alone", () => {
+    expect(stripTimeoutPrefix("cast browser click --timeout 30")).toBe("cast browser click --timeout 30");
+  });
+});
+
+describe("parseCastCommandString through shell furniture", () => {
+  // The transcript rows that rendered as raw shell instead of browser cards:
+  // every one of them wraps `cast browser` in a timeout guard and a pipe.
+  test("timeout guard plus a trimming pipe still reads as a browser row", () => {
+    expect(parseCastCommandString('timeout 90 cast browser do "click e13" "wait 3000" 2>&1 | tail -1')).toEqual({
+      category: "browser",
+      subcommand: "do",
+      args: '"click e13" "wait 3000"',
+      fullCmd: 'cast browser do "click e13" "wait 3000"',
+      // The expanded row still shows every command the agent actually ran.
+      raw: 'timeout 90 cast browser do "click e13" "wait 3000" 2>&1 | tail -1',
+    });
+  });
+
+  test("a trailing chained command does not hide the cast command", () => {
+    const raw = 'timeout 60 cast browser click "button[aria-label^=Remove]" 2>&1 | tail -1; sleep 2';
+    expect(parseCastCommandString(raw)).toEqual({
+      category: "browser",
+      subcommand: "click",
+      args: '"button[aria-label^=Remove]"',
+      fullCmd: 'cast browser click "button[aria-label^=Remove]"',
+      raw,
+    });
+  });
+
+  test("the first cast command in the line wins", () => {
+    const r = parseCastCommandString("timeout 90 cast browser open example.com\ntimeout 40 cast browser shot");
+    expect(r?.subcommand).toBe("open");
+    expect(r?.args).toBe("example.com");
+  });
+
+  test("a cast command downstream of a pipe is still found", () => {
+    const r = parseCastCommandString("echo hi | cast send jx7a6xc -");
+    expect(r).toEqual({ category: "send", subcommand: "jx7a6xc", args: "-", fullCmd: "cast send jx7a6xc -", raw: "echo hi | cast send jx7a6xc -" });
+  });
+
+  test("a target flag before the verb keeps the verb readable", () => {
+    const r = parseCastCommandString("cast browser --clone do --keep-going -");
+    expect(r?.subcommand).toBe("do");
+    expect(r?.args).toBe("--clone --keep-going -");
+  });
+
+  test("a flag that is itself the command still reads as one", () => {
+    const r = parseCastCommandString('cast state --status done "shipped"');
+    expect(r?.subcommand).toBe("");
+    expect(r?.args).toBe('--status done "shipped"');
+  });
+
+  test("a mention of cast inside another command's argument is not a cast row", () => {
+    expect(parseCastCommandString('grep -n "cast browser open" src/x.ts')).toBeNull();
+    expect(parseCastCommandString("timeout 30 npm run build")).toBeNull();
   });
 });
 
@@ -491,6 +598,20 @@ describe("extractBrowserPageUrl", () => {
     expect(extractBrowserPageUrl("open", "-", "")).toBeNull();
   });
 
+  test("skips open's flags to find the page (the --clone regression)", () => {
+    expect(extractBrowserPageUrl("open", '--clone "https://www.example.com/apply"', "")).toBe(
+      "https://www.example.com/apply",
+    );
+    expect(extractBrowserPageUrl("open", "--new-tab example.com/x", "")).toBe("https://example.com/x");
+  });
+
+  test("a batch reports the page its last open step named", () => {
+    expect(extractBrowserPageUrl("do", '"open example.com/one" "click #e1" "open example.com/two"', "")).toBe(
+      "https://example.com/two",
+    );
+    expect(extractBrowserPageUrl("do", '"click #e13" "wait 3000"', "")).toBeNull();
+  });
+
   test("actions with no URL in output yield null", () => {
     expect(extractBrowserPageUrl("find", '"Sign in"', '  link "Sign in" #e12')).toBeNull();
     expect(extractBrowserPageUrl("shot", "", "  /var/folders/x/shot.png (149K)")).toBeNull();
@@ -703,5 +824,36 @@ describe("extractDecideArgs", () => {
     expect(out.verb).toBe("ask");
     expect(out.question).toBe("Ship");
     expect(out.options.map((o) => o.label)).toEqual(["Yes", "No"]);
+  });
+});
+
+describe("browserTabOf", () => {
+  const bash = (id: string, command: string) => ({ id, name: "Bash", input: JSON.stringify({ command }) });
+  const cast = (command: string) => parseCastCommandString(command);
+
+  test("names the tab a cast browser row printed, with the page it was on", () => {
+    const tool = bash("t1", "cast browser open https://example.com/x");
+    const output = "✓ Example\n  https://example.com/x\n  tab 4A2CDC7E (real Chrome, via the extension)";
+    expect(browserTabOf(tool, cast("cast browser open https://example.com/x"), output, {})).toEqual({ kind: "cast", tabId: "4A2CDC7E", url: "https://example.com/x" });
+  });
+
+  test("inherits the tab and page from the carry-forward map when the row is silent", () => {
+    const tool = bash("t2", "cast browser find 'Sign in'");
+    const carried = { t2: { tabId: "4A2CDC7E", url: "https://example.com/x" } };
+    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", carried)).toEqual({ kind: "cast", tabId: "4A2CDC7E", url: "https://example.com/x" });
+    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", {})).toBeNull();
+  });
+
+  test("ignores cast rows outside the browser, and plain shell", () => {
+    expect(browserTabOf(bash("t3", "cast task ready"), cast("cast task ready"), "tab 4A2CDC7E", {})).toBeNull();
+    expect(browserTabOf(bash("t4", "ls"), null, "tab 4A2CDC7E", {})).toBeNull();
+  });
+
+  test("reads a Claude-in-Chrome tab from the input, else from the result", () => {
+    const byInput = { id: "e1", name: "mcp__claude-in-chrome__navigate", input: JSON.stringify({ tabId: 1234, url: "https://x.y" }) };
+    expect(browserTabOf(byInput, null, undefined, {})).toEqual({ kind: "extension", tabId: "1234" });
+    const byResult = { id: "e2", name: "mcp__claude-in-chrome__computer", input: JSON.stringify({ action: "screenshot" }) };
+    expect(browserTabOf(byResult, null, "Screenshot taken\n\nExecuted on tabId: 987", {})).toEqual({ kind: "extension", tabId: "987" });
+    expect(browserTabOf(byResult, null, "Screenshot taken", {})).toBeNull();
   });
 });

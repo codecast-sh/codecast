@@ -9,7 +9,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from "../lib/conversationProcessor";
 import { stripTeammateFraming } from "./sessionMessage";
-import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
+import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
@@ -336,11 +336,7 @@ function TodoBadge({ todos }: { todos: Array<{ status: string; content: string; 
 
 export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
   if (agentType === "codex" || agentType === "codex_cli") {
-    return (
-      <span className={`${className} rounded bg-[#0f0f0f] flex items-center justify-center shrink-0`}>
-        <OpenAIIcon className="w-2.5 h-2.5 text-white" />
-      </span>
-    );
+    return <CodexIcon className={className} />;
   } else if (agentType === "cursor") {
     return (
       <span className={`${className} rounded bg-[#1a1a2e] flex items-center justify-center shrink-0`}>

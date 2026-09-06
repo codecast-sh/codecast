@@ -13,7 +13,10 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 // A suggested reply, shown as ghost text inside the empty composer — the way
 // a shell autosuggests from history: dim, sitting where the words would go,
 // and Tab makes it yours. Nothing renders outside the input, so an idle
-// session never grows a second strip above the box.
+// session never grows a second strip above the box. A long suggestion (a
+// reusable multi-sentence prompt) wraps the way typed text would and the box
+// grows to fit it: the ghost and the textarea share one grid cell, so the
+// cell takes the taller of the two and the textarea stretches to fill it.
 //
 // Mounted only when the pref is on; it stays mounted while the user types
 // (hidden via the `hidden` prop) so the suggestions subscription doesn't
@@ -158,14 +161,16 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   if (!visible) return null;
   const text = suggestions[Math.min(idx, suggestions.length - 1)];
 
-  // Absolutely over the textarea, in its font and rhythm, so the ghost sits
-  // exactly where typed words would — and inert to the pointer, so a click
-  // into the box focuses it as ever and never inserts text by accident. The
-  // Tab cap is the one live spot: the key it names, for a mouse.
+  // Stacked on the textarea in the same grid cell, in its font and rhythm, so
+  // the ghost sits exactly where typed words would — and inert to the
+  // pointer, so a click into the box focuses it as ever and never inserts
+  // text by accident. The Tab cap is the one live spot: the key it names,
+  // for a mouse; it holds the first line's height so it centres on that line
+  // whether the text wraps or not.
   return (
-    <div data-composer-ghost className="pointer-events-none absolute inset-0 flex items-center gap-2 py-1 min-w-0 text-sm leading-relaxed animate-in fade-in-0 duration-200">
-      <span className="truncate min-w-0 flex-1 text-sol-text-dim" title={text}>{text}</span>
-      <span className="shrink-0 flex items-center gap-1.5 text-[9px] text-sol-text-dim/70 select-none">
+    <div data-composer-ghost className="pointer-events-none [grid-area:1/1] flex items-start gap-2 py-1 min-w-0 text-sm leading-relaxed animate-in fade-in-0 duration-200">
+      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sol-text-dim">{text}</span>
+      <span className="shrink-0 flex items-center gap-1.5 h-[calc(0.875rem*1.625)] text-[9px] text-sol-text-dim/70 select-none">
         {suggestions.length > 1 && <span className="tabular-nums">{idx + 1}/{suggestions.length}</span>}
         <button
           type="button"

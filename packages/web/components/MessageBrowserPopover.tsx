@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
+import { MessagePromptPreview } from "./MessagePromptPreview";
 import { AvatarImg } from "../lib/avatarCache";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -15,6 +17,7 @@ import {
   activeTickIndex,
   navigatorHeaderLabels,
   countCommentsByMessage,
+  navigatorRowBody,
   MACHINE_KIND_LABEL,
   type HiddenKind,
   type NavigatorRow,
@@ -23,6 +26,7 @@ import { resolveSessionTitle } from "../lib/sessionTitle";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 
 const SHORT_ID_RE = /^[a-z0-9]{7}$/;
 
@@ -61,11 +65,50 @@ type CommentEntry = {
   user: { name?: string; github_username?: string; github_avatar_url?: string };
 };
 
-function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: NavigatorRow; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
-  const previewWidth = 420;
+// Hover card for one navigator row. The row carries a server snippet (capped
+// at NAV_ROW_SNIPPET_CHARS); the card resolves the full body on demand — the
+// loaded message page first, then one `messages.webGet` — and truncates by
+// viewport height instead of by character count: collapsed it fills up to
+// 60% of the window with a fade, expanded it takes the whole window height
+// and scrolls. The card shifts up when its anchor would push it off screen.
+function HoverPreview({ message, conversationId, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: NavigatorRow; conversationId: string; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const [top, setTop] = useState(() => Math.max(8, rect.top - 20));
+  const cardRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  const pageContent = useInboxStore((s) =>
+    message.clipped ? s.messages[conversationId]?.find((m) => m._id === message._id)?.content : undefined
+  );
+  const { data: fetched } = useQueryNoThrow(
+    api.messages.webGet,
+    message.clipped && pageContent === undefined && isConvexId(conversationId)
+      ? { id: message._id, ...shareTokenArg(conversationId) }
+      : "skip",
+  );
+  const fullContent = message.clipped ? pageContent ?? fetched?.message?.content : undefined;
+  const loadingBody = message.clipped && fullContent === undefined;
+  const body = useMemo(() => {
+    const text = navigatorRowBody(message, fullContent, resolveSessionTitle);
+    return loadingBody && text === message.display ? `${text}\u2026` : text;
+  }, [message, fullContent, loadingBody]);
+
+  const previewWidth = Math.min(expanded ? 760 : 420, window.innerWidth - 16);
   const bridgePad = 20;
   const left = Math.max(8, rect.left - previewWidth - bridgePad);
-  const top = Math.max(8, rect.top - 20);
+  const maxHeight = expanded ? window.innerHeight - 16 : Math.round(window.innerHeight * 0.6);
+
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    const bodyEl = bodyRef.current;
+    if (!card || !bodyEl) return;
+    setOverflows(bodyEl.scrollHeight > bodyEl.clientHeight + 1);
+    const anchored = Math.max(8, rect.top - 20);
+    setTop(Math.max(8, Math.min(anchored, window.innerHeight - card.offsetHeight - 8)));
+  }, [body, message.images, expanded, previewWidth, rect.top]);
+
+  const showFooter = expanded || overflows || loadingBody;
 
   return createPortal(
     <div
@@ -75,8 +118,9 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
       onMouseLeave={() => { onMouseLeave(); onDropdownLeave(); }}
     >
       <div
+        ref={cardRef}
         className="bg-sol-bg border border-sol-border/40 rounded-lg shadow-2xl flex flex-col"
-        style={{ width: previewWidth, maxHeight: "60vh" }}
+        style={{ width: previewWidth, maxHeight }}
       >
         <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
           {message.kind === "user" ? (
@@ -98,11 +142,28 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
             </span>
           )}
         </div>
-        <div className="px-3 pb-3 overflow-y-auto flex-1 min-h-0">
-          <div className="text-[13px] text-sol-text whitespace-pre-wrap break-words leading-relaxed">
-            {message.display}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+          <div ref={bodyRef} className={`px-3 pb-3 flex-1 min-h-0 ${expanded ? "overflow-y-auto" : "overflow-hidden"}`}>
+            <MessagePromptPreview content={body} images={message.images} variant="preview" textClassName="text-[13px] text-sol-text whitespace-pre-wrap leading-relaxed" />
           </div>
+          {!expanded && overflows && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-sol-bg to-transparent" />
+          )}
         </div>
+        {showFooter && (
+          <div className="flex-shrink-0 border-t border-sol-border/30 px-3 py-1.5 flex items-center justify-between gap-2">
+            <span className="text-[10px] text-sol-text-dim">{loadingBody ? "Loading full message" : `${body.length.toLocaleString()} chars`}</span>
+            {(expanded || overflows) && (
+              <button
+                type="button"
+                className="text-[11px] text-sol-cyan hover:text-sol-text transition-colors"
+                onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+              >
+                {expanded ? "Show less" : "Show more"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>,
     document.body
@@ -215,7 +276,7 @@ function NavDropdown({
     setHoveredId(id);
     if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    if (!msg.display) return; // nothing to preview (machine row whose parsed body is empty)
+    if (!msg.display && !msg.images?.length) return; // nothing to preview (machine row whose parsed body is empty)
     hoverTimerRef.current = setTimeout(() => {
       setHoveredRect(el.getBoundingClientRect());
       setPreviewMsg(msg);
@@ -242,7 +303,7 @@ function NavDropdown({
 
   if (!mounted || typeof document === "undefined") return null;
 
-  const dropdownWidth = 420;
+  const dropdownWidth = Math.min(420, window.innerWidth - 16);
   const margin = 8;
   const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
   // Top-align the panel to the trigger. The nav button itself sits below the
@@ -256,7 +317,7 @@ function NavDropdown({
     <>
       {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
-        className="fixed z-[9999] bg-sol-bg-alt/99 backdrop-blur-md border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+        className="fixed z-[9999] bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
         style={{ top, left, width: dropdownWidth, maxHeight: "min(600px, 75vh)" }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
@@ -409,11 +470,9 @@ function NavDropdown({
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <div className={`text-[12px] leading-snug line-clamp-2 ${
+                      <MessagePromptPreview content={m.display} images={m.images} textClassName={`text-[12px] leading-snug line-clamp-2 ${
                         isActive || isCurrent ? "text-sol-text" : "text-sol-text-secondary"
-                      } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`}>
-                        {m.display}
-                      </div>
+                      } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`} />
                       <div className="flex items-center gap-1.5 mt-1">
                         <span className="text-[10px] text-sol-text-dim/50 tabular-nums">
                           {formatTimeAgo(m.timestamp)}
@@ -482,7 +541,7 @@ function NavDropdown({
         </div>
       </div>
       {previewMsg && hoveredRect && (
-        <HoverPreview message={previewMsg} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} onDropdownEnter={onMouseEnter} onDropdownLeave={onMouseLeave} />
+        <HoverPreview key={previewMsg._id} message={previewMsg} conversationId={conversationId} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} onDropdownEnter={onMouseEnter} onDropdownLeave={onMouseLeave} />
       )}
     </>,
     document.body
@@ -527,6 +586,11 @@ export function MessageNavButton({
       : "skip"
   );
   const messages = cachedUserMessages ?? queryUserMessages;
+  const loadedImages = useInboxStore(useShallow((s) => Object.fromEntries(
+    (s.messages[conversationId] ?? [])
+      .filter(message => message.images !== undefined)
+      .map(message => [message._id, message.images])
+  )));
 
   // Used only to decide whether to render a loading skeleton while the cache
   // is still empty. `message_count` includes assistant + system messages, so
@@ -561,7 +625,7 @@ export function MessageNavButton({
   }
 
   const processed: NavigatorRow[] = messages
-    ? buildNavigatorRows(messages, commentsByMessage, resolveSessionTitle)
+    ? buildNavigatorRows(messages, commentsByMessage, resolveSessionTitle, loadedImages)
     : [];
 
   const total = processed.length;

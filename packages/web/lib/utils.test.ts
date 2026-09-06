@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
+  splitDirQuery,
   matchesProjectQuery,
   resolveCustomPath,
   inferProjectBase,
@@ -176,5 +177,87 @@ describe("buildProjectPathOptions", () => {
     expect(
       buildProjectPathOptions({ query: "~/nope", recentPaths: recents, home: undefined, base: undefined }),
     ).toEqual([]);
+  });
+});
+
+describe("splitDirQuery", () => {
+  const base = "/Users/ashot/src";
+  test("a bare name lists the base and matches the name", () => {
+    expect(splitDirQuery("co", HOME, base)).toEqual({ dir: base, prefix: "co", hidden: false });
+  });
+  test("an explicit path lists its parent", () => {
+    expect(splitDirQuery("~/src/co", HOME, base)).toEqual({ dir: "/Users/ashot/src", prefix: "co", hidden: false });
+    expect(splitDirQuery("/tmp/x", HOME, base)).toEqual({ dir: "/tmp", prefix: "x", hidden: false });
+  });
+  test("a trailing slash browses INTO the directory", () => {
+    expect(splitDirQuery("~/src/", HOME, base)).toEqual({ dir: "/Users/ashot/src", prefix: "", hidden: false });
+    expect(splitDirQuery("~/", HOME, base)).toEqual({ dir: HOME, prefix: "", hidden: false });
+  });
+  test("dot prefixes ask for hidden folders", () => {
+    expect(splitDirQuery("~/.con", HOME, base)?.hidden).toBe(true);
+  });
+  test("with no home yet, a ~ directory is passed through for the daemon to expand", () => {
+    expect(splitDirQuery("~/src/co", undefined, undefined)).toEqual({ dir: "~/src", prefix: "co", hidden: false });
+    expect(splitDirQuery("~/src/", undefined, undefined)).toEqual({ dir: "~/src", prefix: "", hidden: false });
+    expect(splitDirQuery("~/x", undefined, undefined)).toEqual({ dir: "~", prefix: "x", hidden: false });
+  });
+  test("nothing listable → undefined", () => {
+    expect(splitDirQuery("", HOME, base)).toBeUndefined();
+    expect(splitDirQuery("bare", HOME, undefined)).toBeUndefined();
+  });
+});
+
+describe("buildProjectPathOptions with a disk listing", () => {
+  const recents = ["/Users/ashot/src/codecast"];
+  const base = "/Users/ashot/src";
+  const listing = {
+    home: HOME,
+    path: base,
+    exists: true,
+    dirs: [
+      { name: "codecast", path: "/Users/ashot/src/codecast", repo: true },
+      { name: "notes", path: "/Users/ashot/src/notes", repo: false },
+      { name: "cobalt", path: "/Users/ashot/src/cobalt", repo: true },
+      { name: "claude-code", path: "/Users/ashot/src/claude-code", repo: true },
+    ],
+  };
+  const build = (query: string, extra?: Partial<Parameters<typeof buildProjectPathOptions>[0]>) =>
+    buildProjectPathOptions({ query, recentPaths: recents, home: HOME, base, listing, ...extra });
+
+  test("disk folders follow matching recents: prefix matches, then repos, no duplicates", () => {
+    expect(build("co")).toEqual([
+      { path: "/Users/ashot/src/codecast" },
+      { path: "/Users/ashot/src/cobalt", disk: true, repo: true },
+      { path: "/Users/ashot/src/claude-code", disk: true, repo: true },
+    ]);
+    expect(build("~/src/")).toEqual([
+      { path: "/Users/ashot/src/codecast" },
+      { path: "/Users/ashot/src/claude-code", disk: true, repo: true },
+      { path: "/Users/ashot/src/cobalt", disk: true, repo: true },
+      { path: "/Users/ashot/src/notes", disk: true, repo: false },
+      { path: "/Users/ashot/src", custom: true },
+    ]);
+  });
+
+  test("a folder the listing proves absent is offered as create", () => {
+    expect(build("weekend-hack")).toEqual([{ path: "/Users/ashot/src/weekend-hack", custom: true, create: true }]);
+    expect(build("~/src/weekend-hack")).toEqual([{ path: "/Users/ashot/src/weekend-hack", custom: true, create: true }]);
+  });
+
+  test("an explicit path that exists on disk is the disk row, not a custom row", () => {
+    expect(build("~/src/notes")).toEqual([{ path: "/Users/ashot/src/notes", disk: true, repo: false }]);
+  });
+
+  test("a listing for another directory is ignored (stale keystroke)", () => {
+    expect(build("/tmp/x")).toEqual([{ path: "/tmp/x", custom: true }]);
+  });
+
+  test("under a directory that doesn't exist, the row is create", () => {
+    const missing = { home: HOME, path: "/Users/ashot/new", exists: false, dirs: [] };
+    expect(build("~/new/thing", { listing: missing })).toEqual([{ path: "/Users/ashot/new/thing", custom: true, create: true }]);
+  });
+
+  test("the current folder is never re-offered from disk", () => {
+    expect(build("~/src/", { currentPath: "/Users/ashot/src/notes" }).some((o) => o.path.endsWith("/notes"))).toBe(false);
   });
 });

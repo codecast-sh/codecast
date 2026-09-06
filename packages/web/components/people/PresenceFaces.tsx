@@ -26,7 +26,7 @@ import {
 } from "../../lib/desktop";
 import { popOutPeople } from "./popOutPeople";
 import { useCallsAvailable } from "../../lib/teamFeatures";
-import { useFloatingCircles } from "../calls/useFloatingCircles";
+import { useFloatingCircles, type FloatingBridge } from "../calls/useFloatingCircles";
 import { useAvatarFaceCrop } from "../calls/useAvatarFaceCrop";
 import { MemberFace } from "../presence/MemberFace";
 import { memberDisplayName } from "../presence/memberPresence";
@@ -50,15 +50,16 @@ import "../calls/faces.css";
 import "./people.css";
 import "./presenceFaces.css";
 
-// Module-level for the same reason as the call window's: this component only
-// ever runs inside the faces overlay window, and these are its switches.
-const FACES_WINDOW_BRIDGE = {
+// The overlay window's own switches — an older shell's, where the faces were
+// a window of their own. The voice host hands in the call window's instead:
+// there the faces are a shape of the window that holds the call.
+const FACES_WINDOW_BRIDGE: FloatingBridge = {
   setInteractive: setFacesWindowInteractive,
   setContentSize: setFacesWindowContentSize,
   setDragging: setFacesWindowDragging,
 };
 
-export function PresenceFaces() {
+export function PresenceFaces({ bridge = FACES_WINDOW_BRIDGE }: { bridge?: FloatingBridge } = {}) {
   const data = usePeopleRoster();
   const callsEnabled = useCallsAvailable();
   // Whether the offline fold is out. Session-local on purpose: "show me
@@ -94,7 +95,7 @@ export function PresenceFaces() {
     // be cut off by a window shrinking under them.
     sizeFor: (hover) => overlayWindowSize(px, { hovered: hover || !!active, actions: !!active }),
     shapeSig: `${px.join(",")}|${overflow}|${active?.id ?? ""}`,
-    bridge: FACES_WINDOW_BRIDGE,
+    bridge,
   });
 
   // The hovered face's words — the overlay has no room under a face for the

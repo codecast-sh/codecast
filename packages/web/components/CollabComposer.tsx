@@ -152,7 +152,9 @@ export const CollabComposer = memo(function CollabComposer({
     if (!body || busy) return;
     setBusy(true);
     try {
-      const res = await sendToSession({ to: convId, body });
+      // direct: a person typed this, not a session — the agent sees
+      // <user-message from="Name">, never an unknown-session relay.
+      const res = await sendToSession({ to: convId, body, direct: true });
       setMessage("");
       setSentHint(res?.target_live === false
         ? "Sent — their session looks offline, they'll get it when back"

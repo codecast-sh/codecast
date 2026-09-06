@@ -16,6 +16,7 @@ import { cleanContent } from "../../../lib/conversationProcessor";
 import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
 import { TimelineCharts, fmtK, fmtDayLabel, type PunchRow } from "../../../components/ActivityCharts";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { DocDates } from "../../../components/DocDates";
 
 export default function UserProfilePage() {
   return (
@@ -365,7 +366,6 @@ function TaskWorkRow({ task }: { task: any }) {
 }
 
 function DocWorkRow({ doc }: { doc: any }) {
-  const age = fmtAge(doc.updated_at || doc.created_at);
   return (
     <Link href={`/docs/${doc._id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/50 transition-colors group">
       <FileText className="w-3.5 h-3.5 flex-shrink-0 text-sol-cyan/50" />
@@ -377,7 +377,7 @@ function DocWorkRow({ doc }: { doc: any }) {
         const lc = getLabelColor(l);
         return <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />;
       })}
-      <span className="text-[10px] text-sol-base01/25 tabular-nums flex-shrink-0">{age}</span>
+      <DocDates doc={doc} className="text-[10px] text-sol-base01/25 flex-shrink-0" />
     </Link>
   );
 }

@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { rowSigExcluding } from "../store/wakeSig";
 import { shareTokenArg } from "../lib/shareTokenScope";
@@ -354,7 +355,7 @@ export function useConversationMessages(
   // omits the per-flush counters, so a streaming tick no longer re-pushes it.
   // The counters ride the tiny watermark subscription below instead; syncRecord
   // merges per key, so omitted fields keep their prior store values.
-  const remoteMeta = useQuery(
+  const { data: remoteMeta } = useQueryNoThrow(
     api.conversations.getConversationWithMeta,
     canQuery ? { conversation_id: convId, strip_volatile: true, ...shareArg } : "skip"
   );

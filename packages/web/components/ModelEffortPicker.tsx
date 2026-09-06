@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -22,7 +22,7 @@ import {
 } from "./ui/dropdown-menu";
 import { useInboxStore } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
-import { modelOptionKey, effortGlyph, canControlModel } from "../lib/modelSwitch";
+import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel } from "../lib/modelSwitch";
 import { commitModelChange, notifyModelToast as notifyToast } from "../lib/modelSwitchWeb";
 
 // First-class model/effort control for the web. The commit rails live in
@@ -193,16 +193,47 @@ export function ModelEffortMenu({
 }
 
 /**
- * Conversation-header badge, upgraded from a read-only label to the in-place
- * model/effort control for live sessions. Blank sessions are owned by
- * LaunchModelPill (the new-session surface); non-editable views keep the
- * static label.
+ * Live model/effort/agent for one conversation. Conversations win per field
+ * when set; sessions fill gaps. resolveLiveSessionId follows a stub→real rekey
+ * so a pick after create isn't lost. Shared by the header badge and the
+ * new-session launch pill so both surfaces paint from the same row.
+ */
+export function useLiveSessionMeta(conversationId: string | undefined) {
+  return useInboxStore(useShallow((s) => {
+    if (!conversationId) return undefined;
+    const id = s.resolveLiveSessionId(conversationId);
+    const sess = s.sessions[id] as
+      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null }
+      | undefined;
+    const conv = s.conversations[id] as
+      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null }
+      | undefined;
+    if (!sess && !conv) return undefined;
+    return {
+      model: conv?.model !== undefined ? conv.model : sess?.model,
+      effort: conv?.effort !== undefined ? conv.effort : sess?.effort,
+      agentType: conv?.agent_type ?? sess?.agent_type,
+      ownerDeviceId: conv?.owner_device_id ?? sess?.owner_device_id,
+    };
+  }));
+}
+
+function modelStampForPick(agentType: string | undefined, key: string): string | undefined {
+  if (key === "default") return undefined;
+  return modelAgentKey(agentType) === "claude" ? `claude-${key}` : key;
+}
+
+/**
+ * Conversation-header badge. Reads the live store row so an agent or model
+ * switch updates the chip immediately. Leftover models from the previous
+ * agent are hidden. A local pick overlay holds until the transcript rollup
+ * lands the full id (claude-opus → claude-opus-4-8).
  */
 export function HeaderModelControl({
   conversationId,
-  agentType,
-  model,
-  effort,
+  agentType: agentTypeProp,
+  model: modelProp,
+  effort: effortProp,
   messageCount,
   canEdit,
 }: {
@@ -213,10 +244,32 @@ export function HeaderModelControl({
   messageCount: number | undefined;
   canEdit: boolean;
 }) {
+  const live = useLiveSessionMeta(conversationId);
+  const agentType = live?.agentType ?? agentTypeProp;
+  const storeModel = (live ? live.model : modelProp) ?? undefined;
+  const storeEffort = (live ? live.effort : effortProp) ?? undefined;
+  const ownerDeviceId = live?.ownerDeviceId;
+  const [picked, setPicked] = useState<{ model?: string; effort?: string } | null>(null);
+
+  useEffect(() => {
+    if (!picked) return;
+    const modelAck = picked.model === undefined
+      || modelOptionKey(storeModel, agentType) === (picked.model === "default" ? "default" : picked.model);
+    const effortAck = picked.effort === undefined
+      || (picked.effort === "default" ? !storeEffort : storeEffort === picked.effort);
+    if (modelAck && effortAck) setPicked(null);
+  }, [picked, storeModel, storeEffort, agentType]);
+
+  // Agent switch: drop a pick aimed at the previous agent's catalog.
+  useEffect(() => { setPicked(null); }, [agentType]);
+
   const blank = (messageCount ?? 0) === 0;
-  const ownerDeviceId = useInboxStore((s) => conversationId
-    ? (s.conversations[conversationId] ?? s.sessions[conversationId])?.owner_device_id
-    : undefined);
+  const overlayModel = picked?.model !== undefined
+    ? modelStampForPick(agentType, picked.model)
+    : (modelFitsAgent(storeModel, agentType) ? storeModel : undefined);
+  const overlayEffort = picked?.effort !== undefined
+    ? (picked.effort === "default" ? undefined : picked.effort)
+    : storeEffort;
 
   const interactive = !!(
     canEdit &&
@@ -225,15 +278,15 @@ export function HeaderModelControl({
     canControlModel(agentType, blank)
   );
 
-  const glyph = effortGlyph(effort);
+  const glyph = effortGlyph(overlayEffort);
 
   if (!interactive) {
-    if (!model) return null;
+    if (!overlayModel) return null;
     return (
       <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
         <span className="text-sol-text-dim">&middot;</span>
-        <span className="font-mono truncate max-w-none" title={model}>{formatModel(model)}</span>
-        {glyph && <span className="text-sol-text-dim/80" title={`${effort} effort`}>{glyph}</span>}
+        <span className="font-mono truncate max-w-none" title={overlayModel}>{formatModel(overlayModel)}</span>
+        {glyph && <span className="text-sol-text-dim/80" title={`${overlayEffort} effort`}>{glyph}</span>}
       </div>
     );
   }
@@ -245,9 +298,9 @@ export function HeaderModelControl({
         <DropdownMenuTrigger asChild>
           <button
             className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
-            title={`Model: ${model ?? "default"}${effort ? ` · ${effort} effort` : ""} — click to change`}
+            title={`Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} — click to change`}
           >
-            <span className="truncate max-w-none">{model ? formatModel(model) : "model"}</span>
+            <span className="truncate max-w-none">{overlayModel ? formatModel(overlayModel) : "model"}</span>
             {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
             <svg className="w-2.5 h-2.5 opacity-50 group-hover:opacity-80 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -256,15 +309,16 @@ export function HeaderModelControl({
         </DropdownMenuTrigger>
         <ModelEffortMenu
           agentType={agentType}
-          modelKey={modelOptionKey(model, agentType)}
-          effort={effort}
+          modelKey={modelOptionKey(overlayModel, agentType)}
+          effort={overlayEffort}
           ownerDeviceId={ownerDeviceId}
           midSession
           onSelect={(sel) => {
+            setPicked((prev) => ({ ...prev, ...sel }));
             void commitModelChange({
               conversationId: conversationId!,
               agentType,
-              current: { model, effort },
+              current: { model: storeModel, effort: storeEffort },
               sel,
               blank: false,
             });
@@ -281,19 +335,14 @@ export function HeaderModelControl({
  * reconfigureSession (the same idempotent respawn the agent pills use).
  */
 export function LaunchModelPill({ conversationId }: { conversationId: string }) {
-  const live = useInboxStore(useShallow((s) => {
-    const row = (s.conversations[conversationId] ?? s.sessions[conversationId]) as
-      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null }
-      | undefined;
-    return row
-      ? { model: row.model, effort: row.effort, agentType: row.agent_type, ownerDeviceId: row.owner_device_id }
-      : undefined;
-  }));
+  const live = useLiveSessionMeta(conversationId);
   const agentType = live?.agentType ?? "claude_code";
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   if (!cfg) return null;
 
-  const modelKey = modelOptionKey(live?.model, agentType);
+  const modelKey = modelFitsAgent(live?.model, agentType)
+    ? modelOptionKey(live?.model, agentType)
+    : "default";
   const opt = cfg.models.find((m) => m.key === modelKey)
     ?? (isDynamicModelKey(modelKey) ? dynamicModelOption(modelKey) : undefined);
   const glyph = effortGlyph(live?.effort);

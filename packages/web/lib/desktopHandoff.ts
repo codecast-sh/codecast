@@ -120,6 +120,31 @@ export function isForegroundTab(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
+// ---------------------------------------------------------------------------
+// Agent-driven tabs
+//
+// Foreground-ness cannot tell an agent's tab from a person's. A tab the cast
+// browser drives in the human's own Chrome sits in the background (so the gate
+// HELD it — no boot for two minutes — and handed it to the desktop app the
+// moment the human glanced at it), and the managed clone's window is usually
+// behind the human's (same hold). So every driver stamps the tabs it drives,
+// before any page script runs: the extension's per-tab overlay script, the
+// CLI's console recorder, and the engine's init script all write this key
+// and dispatch this event (packages/browser-extension/background.js,
+// packages/cli/src/browser/observe.ts). sessionStorage is the one store a
+// document-start script can write from any world, and it is scoped to the
+// tab — a human's tab never carries it. The event covers the tab's first
+// document, which can be parsing before the driver has attached: the gate
+// hears it while holding and boots at once.
+// ---------------------------------------------------------------------------
+
+export const AGENT_TAB_KEY = "codecast-agent-tab";
+export const AGENT_TAB_EVENT = "cast:driven";
+
+export function isAgentDrivenTab(): boolean {
+  return readSession(AGENT_TAB_KEY) === "1";
+}
+
 // A clicked/typed link reads as "navigate"; reload / back-forward should be
 // left in the browser. Unknown (no entry) is treated as fresh.
 export function isFreshNavigation(): boolean {
@@ -146,6 +171,10 @@ export type HandoffContext = {
   // lasts for the tab). Distinct from `preferBrowser`, which is the permanent
   // per-user opt-out.
   skippedUrl: string | null;
+  // A cast browser session drives this tab (isAgentDrivenTab). Never hands
+  // off: the page is the agent's to look at, and yanking the desktop app onto
+  // it was the "keeps jumping to random sessions" bug.
+  agentDriven: boolean;
 };
 
 // Whether a browser page should auto-redirect into the desktop app. Pure so the
@@ -161,6 +190,7 @@ export type HandoffContext = {
 // once the user looks at it.
 export function shouldAttemptHandoff(c: HandoffContext): boolean {
   if (c.isDesktop) return false;
+  if (c.agentDriven) return false;
   if (!c.initialized) return false;
   if (!c.hasUsedDesktop) return false;
   if (c.preferBrowser) return false;
@@ -282,6 +312,7 @@ export type PreBootHandoffContext = {
   path: string;
   search: string;
   skippedUrl: string | null;
+  agentDriven: boolean;
 };
 
 /**
@@ -303,6 +334,7 @@ export function shouldAttemptPreBootHandoff(c: PreBootHandoffContext): boolean {
     path: c.path,
     search: c.search,
     skippedUrl: c.skippedUrl,
+    agentDriven: c.agentDriven,
   });
 }
 
@@ -347,6 +379,7 @@ function readPreBootContext(): PreBootHandoffContext {
     path: window.location.pathname,
     search: window.location.search,
     skippedUrl: readSkippedUrl(),
+    agentDriven: isAgentDrivenTab(),
   };
 }
 
@@ -509,7 +542,9 @@ export function isStandaloneSharePath(path: string): boolean {
  * a link opened from another app before the window has focus) is held: no
  * preload, no boot, until the user looks at it within the arm window — then it
  * hands off with the app never having run — or the window lapses and it boots
- * as a normal tab.
+ * as a normal tab. A tab an agent drives is never held or handed off: its
+ * driver stamps it (AGENT_TAB_KEY) before the first script, or announces
+ * itself (AGENT_TAB_EVENT) when it attached to a document already parsing.
  */
 export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: string[] = []): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -533,7 +568,13 @@ export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: st
   }
 
   (window as any)[HANDOFF_HOLD_FLAG] = new Promise<boolean>((resolve) => {
-    armForegroundHandoff(
+    const boot = () => {
+      disarm();
+      document.removeEventListener(AGENT_TAB_EVENT, boot);
+      preload();
+      resolve(false);
+    };
+    const disarm = armForegroundHandoff(
       () => {
         let go = false;
         try {
@@ -544,11 +585,12 @@ export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: st
         resolve(true);
         return true;
       },
-      () => {
-        preload();
-        resolve(false);
-      },
+      boot,
     );
+    // A driver that attached after this document started parsing stamps it
+    // late (see AGENT_TAB_EVENT): the tab is an agent's, so boot it now
+    // rather than leaving it dead until the arm window lapses.
+    document.addEventListener(AGENT_TAB_EVENT, boot);
   });
 }
 

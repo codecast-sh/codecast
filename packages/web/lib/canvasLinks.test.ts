@@ -19,8 +19,14 @@ describe("canvasHrefToRoute", () => {
     expect(canvasHrefToRoute("/docs/abc123")).toBe("/docs/abc123");
   });
 
+  test("a GitHub pull request or commit link opens the app's page for it", () => {
+    expect(canvasHrefToRoute("https://github.com/foo/bar/pull/1")).toBe("/pr/foo/bar/1");
+    expect(canvasHrefToRoute("https://github.com/foo/bar/commit/aa57b85ee")).toBe("/commit/foo/bar/aa57b85ee");
+  });
+
   test("external links stay external", () => {
-    expect(canvasHrefToRoute("https://github.com/foo/bar/pull/1")).toBeNull();
+    expect(canvasHrefToRoute("https://github.com/foo/bar")).toBeNull();
+    expect(canvasHrefToRoute("https://example.com/foo/bar/pull/1")).toBeNull();
     expect(canvasHrefToRoute("mailto:hi@example.com")).toBeNull();
     expect(canvasHrefToRoute("#local-anchor")).toBeNull();
     expect(canvasHrefToRoute(null)).toBeNull();

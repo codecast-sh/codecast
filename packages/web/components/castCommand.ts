@@ -26,7 +26,10 @@ export interface ParsedCastCommand {
   category: string;
   subcommand: string;
   args: string;
+  /** The cast command alone, with the shell furniture around it removed. */
   fullCmd: string;
+  /** The whole line the agent ran, exactly as the transcript recorded it. */
+  raw: string;
 }
 
 export interface SendBody {
@@ -541,20 +544,177 @@ export function stripEnvPrefix(cmd: string): string {
   return bare ? rest.slice(bare[0].length) : rest;
 }
 
-// Parse a raw shell command into its cast (category, subcommand, args), tolerating
-// a `bash -c` wrapper, a leading `cd <dir>;`/`&&` prefix, and leading environment
-// words (`FOO=1 …`, `env -u NAME …`). Returns null when the command isn't a
-// `cast ...` invocation.
-export function parseCastCommandString(rawCommand: string): ParsedCastCommand | null {
-  const cmd = stripEnvPrefix(stripCdPrefix(unwrapShellCommand(rawCommand.trim())));
-  const match = cmd.match(/^cast\s+(\w[\w-]*)(?:\s+(\w[\w-]*))?(?:\s+([\s\S]*))?$/);
-  if (!match) return null;
-  return {
-    category: match[1],
-    subcommand: match[2] || "",
-    args: (match[3] || "").trim(),
-    fullCmd: cmd,
+// `timeout 90 cast …` is a watchdog around the same command, not a different
+// one. Strip the guard (GNU `timeout`, homebrew's `gtimeout`, and its flags)
+// so the command underneath is the one the row describes.
+const TIMEOUT_PREFIX = new RegExp(
+  String.raw`^(?:\S*\/)?g?timeout\s+(?:(?:-[sk]\s+\S+|--(?:signal|kill-after)(?:=\S+|\s+\S+)|--preserve-status|--foreground|-[a-z]+)\s+)*\d+(?:\.\d+)?[smhd]?\s+`,
+);
+
+export function stripTimeoutPrefix(cmd: string): string {
+  const m = cmd.match(TIMEOUT_PREFIX);
+  return m ? cmd.slice(m[0].length) : cmd;
+}
+
+// Strip every prefix that leaves the command itself unchanged — a `cd`, an
+// environment assignment, a `timeout` guard — in any order and any number.
+function stripCommandPrefixes(segment: string): string {
+  let cmd = segment;
+  for (let i = 0; i < 4; i += 1) {
+    const next = stripTimeoutPrefix(stripEnvPrefix(stripCdPrefix(cmd))).trim();
+    if (next === cmd) break;
+    cmd = next;
+  }
+  return cmd;
+}
+
+// Scan past a `$(…)` command substitution or a `` `…` `` one, returning the
+// index just after it. The text belongs to the word it sits in, so callers
+// copy it through rather than splitting inside it.
+function skipSubstitution(source: string, start: number): number {
+  if (source[start] === "`") {
+    const end = source.indexOf("`", start + 1);
+    return end === -1 ? source.length : end + 1;
+  }
+  let depth = 0;
+  for (let i = start + 1; i < source.length; i += 1) {
+    if (source[i] === "(") depth += 1;
+    else if (source[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return source.length;
+}
+
+// A heredoc's body is the command's payload, not a following command, so the
+// whole thing — marker, body and terminator — stays with the segment that
+// opened it. Returns null when `<<` is not actually a heredoc redirect.
+function scanHeredoc(source: string, start: number): { text: string; end: number } | null {
+  const m = source.slice(start).match(/^<<-?\s*(?:'([^']*)'|"([^"]*)"|([A-Za-z_][\w.-]*))/);
+  if (!m) return null;
+  const delimiter = m[1] ?? m[2] ?? m[3];
+  const newline = source.indexOf("\n", start + m[0].length);
+  if (newline === -1) return { text: source.slice(start), end: source.length };
+  const lines = source.slice(newline + 1).split("\n");
+  let consumed = newline + 1;
+  for (const line of lines) {
+    consumed += line.length + 1;
+    if (line.trim() === delimiter) break;
+  }
+  const end = Math.min(consumed, source.length);
+  return { text: source.slice(start, end), end };
+}
+
+/**
+ * Split a shell command line into the commands it actually runs. Agents wrap
+ * cast in ordinary shell furniture — `2>&1 | tail -1`, `; sleep 2`, one
+ * command per line — and the row is still about the cast command inside. The
+ * scan respects quotes, command substitution and heredocs, so an operator
+ * written inside a message body never splits the command carrying it, and it
+ * drops redirects (`2>&1`, `> /tmp/out`) because they are plumbing rather than
+ * argv.
+ */
+export function splitShellSegments(source: string): string[] {
+  const segments: string[] = [];
+  let cur = "";
+  const push = () => {
+    const trimmed = cur.trim();
+    if (trimmed) segments.push(trimmed);
+    cur = "";
   };
+
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+
+    if (ch === "'") {
+      const end = source.indexOf("'", i + 1);
+      const stop = end === -1 ? source.length : end + 1;
+      cur += source.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < source.length && source[j] !== '"') j += source[j] === "\\" ? 2 : 1;
+      const stop = Math.min(j + 1, source.length);
+      cur += source.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === "\\") {
+      cur += source.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (ch === "`" || source.startsWith("$(", i)) {
+      const end = skipSubstitution(source, ch === "`" ? i : i + 1);
+      cur += source.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (source.startsWith("<<", i)) {
+      const heredoc = scanHeredoc(source, i);
+      if (heredoc) {
+        // The terminator line ends the command as well as the body, so what
+        // follows it is the next command.
+        cur += heredoc.text;
+        i = heredoc.end;
+        push();
+        continue;
+      }
+    }
+    if (ch === ">" || ch === "<") {
+      // A redirect and its target are plumbing. `2>&1` glues the file
+      // descriptor to the operator, so drop that trailing digit too.
+      cur = cur.replace(/(?:^|\s)\d+$/, "");
+      i += source[i + 1] === ch ? 2 : 1;
+      while (i < source.length && /[\s&]/.test(source[i])) i += 1;
+      while (i < source.length && !/[\s;|&<>()]/.test(source[i])) i += 1;
+      continue;
+    }
+    if (ch === "|" || ch === ";" || ch === "&" || ch === "\n" || ch === "(" || ch === ")") {
+      push();
+      while (i < source.length && /[|;&\n()\s]/.test(source[i])) i += 1;
+      continue;
+    }
+
+    cur += ch;
+    i += 1;
+  }
+  push();
+  return segments;
+}
+
+// Parse a raw shell command into its cast (category, subcommand, args), tolerating
+// a `bash -c` wrapper, a leading `cd <dir>;`/`&&` prefix, leading environment
+// words (`FOO=1 …`, `env -u NAME …`), a `timeout <n>` guard, and the pipes,
+// redirects and extra commands an agent runs alongside it. The first cast
+// command in the line wins — it is the action the row led with. Returns null
+// when the line runs no cast command at all.
+export function parseCastCommandString(rawCommand: string): ParsedCastCommand | null {
+  const raw = rawCommand.trim();
+  const line = unwrapShellCommand(raw);
+  for (const segment of splitShellSegments(line)) {
+    const cmd = stripCommandPrefixes(segment);
+    // A browser target flag can sit between the category and the verb
+    // (`cast browser --clone do …`); it belongs to the args, not the verb.
+    // Only those two, so a flag that IS the command (`cast state --status …`)
+    // still reads as one.
+    const match = cmd.match(/^cast\s+(\w[\w-]*)((?:\s+--(?:real|clone))*)(?:\s+(\w[\w-]*))?(?:\s+([\s\S]*))?$/);
+    if (!match) continue;
+    const leadingFlags = match[2].trim();
+    const rest = (match[4] || "").trim();
+    return {
+      category: match[1],
+      subcommand: match[3] || "",
+      args: [leadingFlags, rest].filter(Boolean).join(" "),
+      fullCmd: cmd,
+      raw,
+    };
+  }
+  return null;
 }
 
 // ── cast browser page URLs ──────────────────────────────────────────────────
@@ -568,16 +728,45 @@ export function parseCastCommandString(rawCommand: string): ParsedCastCommand | 
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
+// Browser flags that swallow the word after them, so a scan for the verb's
+// first real argument doesn't mistake a flag's value for the page.
+const BROWSER_VALUE_FLAGS = new Set(["--tab", "--profile", "--out", "--viewports", "--alt", "--ref", "-s", "--selector"]);
+
+/** The first positional argument of a browser verb, past its flags. */
+function firstBrowserArg(args: string): string | null {
+  const tokens = tokenizeShellArgs(args);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const { value, quoted } = tokens[i];
+    if (!quoted && value.startsWith("-")) {
+      if (BROWSER_VALUE_FLAGS.has(value)) i += 1;
+      continue;
+    }
+    return value || null;
+  }
+  return null;
+}
+
+/** The page an `open` argument names, bare domains included. Null if it names none. */
+function asPageUrl(arg: string | null): string | null {
+  if (!arg || arg === "-" || arg === "back" || arg === "forward") return null;
+  if (/^https?:\/\//i.test(arg)) return arg;
+  if (/^[\w-]+(\.[\w-]+)+(\/|$)/.test(arg)) return `https://${arg}`;
+  return null;
+}
+
 /** URL stated by this row itself, or null. Mirrors the CLI's output shapes. */
 export function extractBrowserPageUrl(subcommand: string, args: string, output: string): string | null {
   const lines = [...output.replace(ANSI_RE, "").matchAll(/^\s*(https?:\/\/\S+)\s*$/gm)];
   if (lines.length > 0) return lines[lines.length - 1][1];
-  if (subcommand === "open") {
-    const m = args.match(/^"([^"]*)"/) || args.match(/^'([^']*)'/) || args.match(/^(\S+)/);
-    const firstArg = m ? m[1] : "";
-    if (firstArg && firstArg !== "-" && firstArg !== "back" && firstArg !== "forward") {
-      if (/^https?:\/\//i.test(firstArg)) return firstArg;
-      if (/^[\w-]+(\.[\w-]+)+(\/|$)/.test(firstArg)) return `https://${firstArg}`;
+  if (subcommand === "open") return asPageUrl(firstBrowserArg(args));
+  // A batch navigates through its steps; the page it ended on is the last one
+  // an `open` step named.
+  if (subcommand === "do") {
+    const steps = extractBrowserDoSteps(args);
+    for (let i = steps.length - 1; i >= 0; i -= 1) {
+      if (steps[i].verb !== "open") continue;
+      const url = asPageUrl(firstBrowserArg(steps[i].args));
+      if (url) return url;
     }
   }
   return null;
@@ -614,6 +803,39 @@ export function buildBrowserRowMap(rows: BrowserRowInput[]): Record<string, Brow
     if (url || tabId) map[row.toolCallId] = { ...(url && { url }), ...(tabId && { tabId }) };
   }
   return map;
+}
+
+/** The driven browser tab behind a tool call, for the "open tab" affordance. */
+export type BrowserTabRef =
+  | { kind: "cast"; tabId: string; url: string | null }
+  | { kind: "extension"; tabId: string };
+
+/**
+ * A `cast browser` row names an 8-char tab in its output, or inherits one from
+ * an earlier row through the carry-forward map (buildBrowserRowMap); a
+ * Claude-in-Chrome call names a numeric tabId in its input or its result. Null
+ * for every other tool, so callers can ask without checking the tool first.
+ * `cast` is the row's parsed command (null when it is not a cast command).
+ */
+export function browserTabOf(
+  tool: { id: string; name: string; input: string },
+  cast: ParsedCastCommand | null,
+  resultContent: string | undefined,
+  carried: Record<string, BrowserRowState>,
+): BrowserTabRef | null {
+  if (tool.name.startsWith("mcp__claude-in-chrome__")) {
+    let tabId: unknown;
+    try { tabId = JSON.parse(tool.input)?.tabId; } catch { tabId = undefined; }
+    if (tabId != null) return { kind: "extension", tabId: String(tabId) };
+    const m = resultContent?.match(/Executed on tabId:\s*(\d+)/);
+    return m ? { kind: "extension", tabId: m[1] } : null;
+  }
+  if (!cast || normalizeCastCategory(cast.category) !== "browser") return null;
+  const output = resultContent ?? "";
+  const tabId = extractBrowserTabId(output) ?? carried[tool.id]?.tabId ?? null;
+  if (!tabId) return null;
+  const url = extractBrowserPageUrl(cast.subcommand, cast.args, output) ?? carried[tool.id]?.url ?? null;
+  return { kind: "cast", tabId, url };
 }
 
 export function sameBrowserRowMap(a: Record<string, BrowserRowState>, b: Record<string, BrowserRowState>): boolean {

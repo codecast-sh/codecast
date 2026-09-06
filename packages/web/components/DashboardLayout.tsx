@@ -33,6 +33,7 @@ import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
+import { StatusNoticeChip } from "./StatusNoticeChip";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
@@ -1040,9 +1041,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ShortcutTooltip>
             {isDesktopApp && (
               <div className="flex items-center gap-0.5">
-                <ShortcutTooltip label="Back">
+                <ShortcutTooltip label="Back" action="nav.back">
                   <button
-                    onClick={() => window.history.back()}
+                    onClick={(e) => { window.history.back(); tipActions.whisper('nav.back', e); }}
                     className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
                     aria-label="Go back"
                   >
@@ -1051,9 +1052,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                     </svg>
                   </button>
                 </ShortcutTooltip>
-                <ShortcutTooltip label="Forward">
+                <ShortcutTooltip label="Forward" action="nav.forward">
                   <button
-                    onClick={() => window.history.forward()}
+                    onClick={(e) => { window.history.forward(); tipActions.whisper('nav.forward', e); }}
                     className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
                     aria-label="Go forward"
                   >
@@ -1109,6 +1110,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
             <ErrorBoundary name="SyncStatusChip" level="inline">
               <SyncStatusChip />
+            </ErrorBoundary>
+            <ErrorBoundary name="StatusNoticeChip" level="inline">
+              <StatusNoticeChip />
             </ErrorBoundary>
             <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
             <ErrorBoundary name="AnchorChip" level="inline">
@@ -1168,6 +1172,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         </div>
       </header>
 
+      {/* Status notices (connection, storage, CLI offline, tmux missing) render
+          nothing here — they publish to the header's StatusNoticeChip, a fixed
+          slot beside the sync chip, so a status that flaps never shifts the
+          layout or covers the page. The onboarding strips still sit in the
+          flow. */}
       <ErrorBoundary name="Banners" level="inline">
         <ConnectionBanner />
         <StorageHealthBanner />

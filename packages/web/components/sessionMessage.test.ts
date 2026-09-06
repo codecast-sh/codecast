@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage, parseChatWakePrompt, isChatWakePrompt } from "./sessionMessage";
-import { formatHuddleSummaryTag } from "@codecast/shared/contracts";
+import { formatHuddleSummaryTag, formatUserMessage } from "@codecast/shared/contracts";
 
 // A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
 // or more <teammate-message> blocks (the second a JSON status event), and the trailing
@@ -414,5 +414,14 @@ describe("huddle digest over the session rail", () => {
     expect(parsed.body).toContain("Ship it.");
     expect(parsed.body).not.toContain("<huddle-summary");
     expect(parsed.body).not.toContain("Read the whole transcript");
+  });
+});
+
+describe("direct user message (a person typing into a session)", () => {
+  test("previews as the person's own words, never a wire tag", () => {
+    const wire = formatUserMessage("Ashot Petrosian", "its me - you can proceed");
+    expect(isMachineDeliveredMessage(wire)).toBe(false);
+    expect(cleanUserMessage(wire)).toBe("its me - you can proceed");
+    expect(parseMachineDeliveredMessage(wire)).toBeNull();
   });
 });

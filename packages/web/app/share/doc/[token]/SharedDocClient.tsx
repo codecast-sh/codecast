@@ -7,6 +7,8 @@ import { AvatarImg } from "../../../../lib/avatarCache";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
 import { AppLoader } from "../../../../components/AppLoader";
 import { readSharePreload } from "@/lib/sharePreload";
+import { DocDates } from "../../../../components/DocDates";
+import { formatDateFull, formatDateSmart } from "@codecast/shared/time";
 
 const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   plan: { label: "Plan", color: "text-sol-blue" },
@@ -16,14 +18,6 @@ const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   handoff: { label: "Handoff", color: "text-sol-orange" },
   note: { label: "Note", color: "text-sol-text-muted" },
 };
-
-function formatDate(ts: number) {
-  return new Date(ts).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 
 function InvalidLink() {
   return (
@@ -79,10 +73,7 @@ export default function SharedDocClient() {
               <AvatarImg src={doc.user.image} alt="" className="w-5 h-5 rounded-full" />
             )}
             {doc.user?.name && <span className="text-sol-text-muted">{doc.user.name}</span>}
-            <span>{formatDate(doc.created_at)}</span>
-            {doc.updated_at !== doc.created_at && (
-              <span>Updated {formatDate(doc.updated_at)}</span>
-            )}
+            <DocDates doc={doc} variant="full" />
           </div>
         </div>
 
@@ -98,7 +89,7 @@ export default function SharedDocClient() {
             <div className="space-y-3">
               {doc.entries.map((e: any, i: number) => (
                 <div key={i} className="flex gap-3 text-sm">
-                  <span className="text-sol-text-dim shrink-0 w-16">{formatDate(e.timestamp)}</span>
+                  <span className="text-sol-text-dim shrink-0 w-20" title={formatDateFull(e.timestamp)}>{formatDateSmart(e.timestamp)}</span>
                   <span className="text-xs text-sol-cyan/70 shrink-0 w-20">{e.type}</span>
                   <span className="text-sol-text-muted">{e.content}</span>
                 </div>

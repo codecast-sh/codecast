@@ -164,6 +164,63 @@ export function latestLoadedTriggerMessage(
   return undefined;
 }
 
+// -- Foreign triggers: the roster's blind spot --
+//
+// agentTasks.webList is indexed by user_id alone, so it carries only triggers
+// the VIEWER armed. An agent on a remote daemon arms its triggers under
+// whatever account that daemon is logged into — often a team bot — while the
+// conversation belongs to a human. Such a trigger showed up in its
+// conversation's header strip (webListForConversation grades access by the
+// conversation, not the owner) and in no roster at all: not the inbox TRIGGERS
+// section, not /triggers, not the palette.
+//
+// The home conversation already carries the denormalized answer:
+// armed_trigger_kind, written by the same lifecycle that arms and cancels the
+// trigger. So the client can name its own blind spot exactly — conversations
+// stamped as armed that its roster cannot explain — and ask the server for
+// just those (agentTasks.webListForConversations).
+const ARMED_TRIGGER_KINDS = new Set(["standing", "once"]);
+
+export function foreignTriggerConvIds(
+  sessions: Record<string, InboxSession>,
+  ownTasks: TaskRow[] | undefined,
+  limit = 64,
+): string[] {
+  const explained = new Set<string>();
+  for (const t of ownTasks ?? []) {
+    if (t.originating_conversation_id && ARMED_STATUSES.has(t.status)) {
+      explained.add(t.originating_conversation_id);
+    }
+  }
+  const ids: string[] = [];
+  for (const id in sessions) {
+    const s = sessions[id];
+    if (!s || !ARMED_TRIGGER_KINDS.has(s.armed_trigger_kind ?? "none")) continue;
+    if (explained.has(s._id)) continue;
+    ids.push(s._id);
+  }
+  // Sorted before the cap: this array IS the subscription key, so an order
+  // that follows store push order would resubscribe on every heartbeat.
+  ids.sort();
+  return ids.length > limit ? ids.slice(0, limit) : ids;
+}
+
+// The roster every trigger surface reads: own rows plus the anchored foreign
+// rows the own roster does not already carry. Own wins a tie — it is the row
+// that carries the management verbs.
+export function mergeTriggerRosters(
+  own: TaskRow[],
+  foreign: TaskRow[],
+  sort?: (a: TaskRow, b: TaskRow) => number,
+): TaskRow[] {
+  if (foreign.length === 0) return own;
+  const seen = new Set(own.map((t) => t._id));
+  const extra = foreign.filter((t) => !seen.has(t._id));
+  if (extra.length === 0) return own;
+  const merged = [...own, ...extra];
+  return sort ? merged.sort(sort) : merged;
+}
+
 export interface TriggerRow {
   task: TaskRow;
   // Conversation this row opens: the home conversation (inject) or the newest

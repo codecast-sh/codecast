@@ -62,6 +62,21 @@ function renderProbe(args: Record<string, unknown> | "skip") {
 }
 
 describe("useQueryNoThrow", () => {
+  test("a metadata timeout leaves cached conversation content renderable", () => {
+    const timeout = new Error("Your request timed out performing too many system operations.");
+    transport = () => ({ value: timeout });
+    const query = makeFunctionReference<"query">("conversations:getConversationWithMeta");
+    function Conversation() {
+      const { data, error } = useQueryNoThrow(query, { conversation_id: "abc" });
+      expect(data).toBeUndefined();
+      expect(error).toBe(timeout);
+      return <article>Cached transcript<textarea aria-label="Reply" /></article>;
+    }
+    const html = renderToStaticMarkup(<Conversation />);
+    expect(html).toContain("Cached transcript");
+    expect(html).toContain('aria-label="Reply"');
+  });
+
   test("a missing backend function renders instead of throwing", () => {
     transport = () => ({ value: missingFunction });
     // The assertion IS that this call returns: convex's useQuery would throw

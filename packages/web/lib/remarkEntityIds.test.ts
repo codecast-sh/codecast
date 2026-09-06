@@ -128,3 +128,29 @@ describe("entityRemarkPlugins trigger references", () => {
     }
   });
 });
+
+describe("entityRemarkPlugins repository objects", () => {
+  // `owner/repo#482` and `owner/repo@sha` are the text forms of a pull request
+  // and a commit; they hoist into references the same way ct-/jx ids do, and
+  // EntityIdPill resolves them (or hands the text back when nothing matches).
+  test("a bare pull request reference is linkified", () => {
+    const html = render("merged codecast-sh/codecast#482 this morning");
+    expect(html).toContain(">codecast-sh/codecast#482</a>");
+  });
+
+  test("a bare commit reference is linkified, lowercased", () => {
+    const html = render("see codecast-sh/codecast@AA57B85EE for the change");
+    expect(html).toContain(">codecast-sh/codecast@aa57b85ee</a>");
+  });
+
+  test("a file path with a line suffix and a version pin stay text", () => {
+    const html = render("edit src/foo.ts:12 and install @scope/pkg@1.2.3");
+    expect(html).not.toContain("#12</a>");
+    expect(html).toContain("@scope/pkg@1.2.3");
+  });
+
+  test("a GitHub pull request link keeps its own text (the renderer decides the pill)", () => {
+    const html = render("https://github.com/codecast-sh/codecast/pull/482");
+    expect(html).toContain('href="https://github.com/codecast-sh/codecast/pull/482"');
+  });
+});

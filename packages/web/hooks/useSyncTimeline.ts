@@ -80,3 +80,36 @@ export function useCommit(sha: string | undefined): any | undefined {
   });
   return rows[0];
 }
+
+// ── One conversation's commits and pull requests ──
+//
+// The transcript shows a commit or a pull request inline when it was made
+// outside the transcript (a push the webhook linked to this session, a PR
+// opened from a terminal on its branch); the ones made by a Bash call in the
+// transcript already render on that call. These feeders bring the linked
+// rows into the same collections the timeline lane uses, and the readers
+// narrow to this conversation.
+
+export function useSyncConversationCommits(conversationId: string | undefined) {
+  return useSyncCollection("commits", api.commits.getCommitsForConversation, conversationId ? { conversation_id: conversationId } : "skip");
+}
+
+export function useSyncConversationPullRequests(conversationId: string | undefined) {
+  return useSyncCollection("pullRequests", api.pull_requests.getPRsForConversation, conversationId ? { conversation_id: conversationId } : "skip");
+}
+
+export function useConversationCommits(conversationId: string | undefined): any[] {
+  return useCollectionRows<any>("commits", {
+    where: (c) => !!conversationId && c.conversation_id === conversationId,
+    sig: commitDetailSig,
+    sort: byTimestampDesc,
+  });
+}
+
+export function useConversationPullRequests(conversationId: string | undefined): any[] {
+  return useCollectionRows<any>("pullRequests", {
+    where: (p) => !!conversationId && Array.isArray(p.linked_session_ids) && p.linked_session_ids.includes(conversationId),
+    sig: prSig,
+    sort: byUpdatedDesc,
+  });
+}

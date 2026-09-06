@@ -3,6 +3,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import {
   armForegroundHandoff,
+  isAgentDrivenTab,
   isDesktop,
   isForegroundTab,
   isFreshNavigation,
@@ -79,6 +80,7 @@ export function OpenInDesktopHandoff() {
       path: window.location.pathname,
       search: window.location.search,
       skippedUrl: readSkippedUrl(),
+      agentDriven: isAgentDrivenTab(),
     });
 
     const tryHandoff = (): boolean => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, groupSessionsByTrigger, isTriggerFailing, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, isTriggerFailing, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, type InboxSession } from "../store/inboxStore";
 import { orderSections } from "../store/__tests__/placeTestHarness";
 
@@ -568,5 +568,94 @@ describe("groupSessionsByTrigger", () => {
     );
     expect(triggerGroups[0].items.map((s) => s._id)).toEqual(["home"]);
     expect(rest).toEqual([]);
+  });
+});
+
+// -- The foreign-trigger blind spot (tr-539 on jx76kw7, Sep 6 2026) --
+//
+// A remote daemon logged in as a team bot armed a once trigger on a session
+// the viewer owns. agentTasks.webList is indexed by user_id, so the viewer's
+// roster never carried it: the conversation header strip showed the trigger
+// and every roster surface — inbox TRIGGERS section, /triggers, palette —
+// showed nothing. The home conversation's armed_trigger_kind stamp is the
+// evidence the client already holds that its roster is incomplete.
+describe("foreignTriggerConvIds", () => {
+  const armedHome = (id: string, kind: "standing" | "once") =>
+    session(id, { armed_trigger_kind: kind } as Partial<InboxSession>);
+
+  it("names a conversation stamped armed that the own roster cannot explain", () => {
+    const sessions = { bot: armedHome("bot", "once") };
+    expect(foreignTriggerConvIds(sessions, [])).toEqual(["bot"]);
+  });
+
+  it("stays silent when the viewer's own roster already explains the stamp", () => {
+    const sessions = { mine: armedHome("mine", "standing") };
+    const own = [task("t1", { originating_conversation_id: "mine" })];
+    expect(foreignTriggerConvIds(sessions, own)).toEqual([]);
+  });
+
+  it("asks again once the own trigger is no longer armed", () => {
+    const sessions = { mine: armedHome("mine", "standing") };
+    const own = [task("t1", { originating_conversation_id: "mine", status: "completed" })];
+    expect(foreignTriggerConvIds(sessions, own)).toEqual(["mine"]);
+  });
+
+  it("ignores conversations with no armed stamp", () => {
+    const sessions = {
+      none: session("none", { armed_trigger_kind: "none" } as Partial<InboxSession>),
+      plain: session("plain"),
+    };
+    expect(foreignTriggerConvIds(sessions, [])).toEqual([]);
+  });
+
+  it("returns a sorted, capped list — the array is the subscription key", () => {
+    const sessions: Record<string, InboxSession> = {};
+    for (const id of ["c", "a", "d", "b"]) sessions[id] = armedHome(id, "once");
+    expect(foreignTriggerConvIds(sessions, [])).toEqual(["a", "b", "c", "d"]);
+    expect(foreignTriggerConvIds(sessions, [], 2)).toEqual(["a", "b"]);
+  });
+});
+
+describe("mergeTriggerRosters", () => {
+  const newestFirst = (a: TaskRow, b: TaskRow) => (b.created_at ?? 0) - (a.created_at ?? 0);
+
+  it("adds a foreign row the own roster is missing", () => {
+    const own = [task("mine", { created_at: 200 })];
+    const foreign = [task("bot", { created_at: 300, is_own: false, owner_name: "Mr Bot" })];
+    expect(mergeTriggerRosters(own, foreign, newestFirst).map((t) => t._id)).toEqual(["bot", "mine"]);
+  });
+
+  it("keeps the own copy of a row both channels carry", () => {
+    const own = [task("same", { status: "paused" })];
+    const foreign = [task("same", { status: "scheduled", is_own: true })];
+    const merged = mergeTriggerRosters(own, foreign, newestFirst);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].status).toBe("paused");
+  });
+
+  it("returns the own array untouched when nothing is missing", () => {
+    const own = [task("mine")];
+    expect(mergeTriggerRosters(own, [])).toBe(own);
+  });
+});
+
+// The end of the chain: once the foreign row reaches the roster, the inbox
+// partition gives it a row like any other armed trigger.
+describe("a merged foreign trigger reaches the inbox partition", () => {
+  it("yields a TRIGGERS row for a bot-owned trigger on the viewer's session", () => {
+    const home = session("home", { armed_trigger_kind: "once" } as Partial<InboxSession>);
+    const foreign = task("botTask", {
+      originating_conversation_id: "home",
+      schedule_type: "once",
+      is_own: false,
+      owner_name: "Mr Bot",
+    });
+
+    const without = partitionTriggerInbox([], { home });
+    expect(without.rows).toHaveLength(0);
+
+    const withMerged = partitionTriggerInbox(mergeTriggerRosters([], [foreign]), { home });
+    expect(withMerged.rows.map((r) => r.task._id)).toEqual(["botTask"]);
+    expect(withMerged.rows[0].openId).toBe("home");
   });
 });

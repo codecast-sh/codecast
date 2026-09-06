@@ -9,7 +9,7 @@
 import {
   INBOX_FACT_FIELDS,
   isSettleVerdictCurrent,
-  isUserDormant,
+  userRestOf,
 } from "@codecast/shared/contracts";
 
 export type CargoCollection = "sessions" | "tasks" | "docs" | "plans" | "projects";
@@ -164,8 +164,8 @@ function planSessions(
   if ("inbox_deferred_at" in fields) {
     fields.is_deferred = !!merged.inbox_deferred_at && merged.inbox_deferred_at >= updatedAt;
   }
-  if ("inbox_dormant_at" in fields) {
-    fields.is_dormant = isUserDormant({ inbox_dormant_at: merged.inbox_dormant_at, updated_at: updatedAt });
+  if ("inbox_rest" in fields || "inbox_rest_at" in fields) {
+    fields.user_rest = userRestOf({ inbox_rest: merged.inbox_rest, inbox_rest_at: merged.inbox_rest_at, updated_at: updatedAt });
   }
   if ("settle_verdict" in fields || "settle_verdict_at" in fields) {
     fields.settle_verdict = isSettleVerdictCurrent({ settle_verdict_at: merged.settle_verdict_at, updated_at: updatedAt })

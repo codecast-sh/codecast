@@ -10,6 +10,10 @@ export function ClaudeIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
+export function CodexIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return <img src="/agents/codex.svg" alt="" aria-hidden="true" className={`${className} shrink-0`} />;
+}
+
 export function OpenAIIcon({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">

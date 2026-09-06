@@ -23,6 +23,9 @@
 // derived/enriched field for an entity that also lives in the store, route it
 // through these helpers.
 
+import { parseRepoObjectId } from "@codecast/shared/entities";
+import { docRelatesToTask } from "@codecast/shared/tasks";
+
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
 type AssigneeInfo = { name: string; image?: string; github_username?: string } | null;
 
@@ -259,12 +262,14 @@ export function resolveTaskLinkedConversations(
 }
 
 /**
- * The docs a task's origin session produced, from the store's doc list when
- * the detail snapshot (`related_docs`) hasn't been cached yet. Same filter as
- * the server: the origin conversation's docs, archived ones excluded.
+ * The docs a task's origin session wrote for it, from the store's doc list
+ * when the detail snapshot (`related_docs`) hasn't been cached yet. Same
+ * filter as the server: the origin conversation's docs, archived ones
+ * excluded, narrowed by docRelatesToTask (store rows carry no body, so only
+ * timing applies until the snapshot lands).
  */
 export function resolveTaskRelatedDocs(
-  task: { related_docs?: any[]; created_from_conversation?: string | null } | null | undefined,
+  task: { related_docs?: any[]; created_from_conversation?: string | null; short_id?: string | null; created_at?: number | null } | null | undefined,
   docs: Record<string, any> | null | undefined,
 ): any[] {
   if (!task) return [];
@@ -274,7 +279,7 @@ export function resolveTaskRelatedDocs(
   const out: any[] = [];
   for (const id in docs) {
     const d = docs[id];
-    if (d && d.conversation_id === origin && !d.archived_at) {
+    if (d && d.conversation_id === origin && !d.archived_at && docRelatesToTask(d, task)) {
       out.push({ _id: d._id, title: d.display_title ?? d.title, doc_type: d.doc_type, source: d.source, created_at: d.created_at });
     }
   }
@@ -391,6 +396,24 @@ export function findEntityInStore(
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.
       return lookup(state.agentTasks, rawId);
+    case "pr": {
+      // Timeline rows the client already holds: by Convex id, else by the
+      // `owner/repo#482` reference.
+      const direct = state.pullRequests?.[rawId];
+      if (direct) return direct;
+      const ref = parseRepoObjectId(rawId);
+      if (ref?.type !== "pr" || !state.pullRequests) return undefined;
+      return Object.values<any>(state.pullRequests).find((row) => row?.number === ref.number && row?.repository === ref.repository);
+    }
+    case "commit": {
+      const direct = state.commits?.[rawId];
+      if (direct) return direct;
+      const ref = parseRepoObjectId(rawId);
+      if (ref?.type !== "commit" || !state.commits) return undefined;
+      return Object.values<any>(state.commits).find(
+        (row) => typeof row?.sha === "string" && row.sha.startsWith(ref.sha) && (!row.repository || row.repository === ref.repository),
+      );
+    }
     case "session": {
       const short = rawId.slice(0, 7).toLowerCase();
       return (

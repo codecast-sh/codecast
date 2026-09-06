@@ -23,6 +23,7 @@ import {
   Tag,
   Trash2,
   User,
+  CheckCircle2,
   CircleDot,
   ArrowUp,
 } from "lucide-react";
@@ -44,7 +45,7 @@ import {
   type DocItem,
 } from "../../store/inboxStore";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableDormantSession } from "../../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableSetSessionRest } from "../../store/undoActions";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
@@ -532,6 +533,16 @@ export function SessionMenuItems({
       >
         Stash and hide — stays out through trigger wakes
       </CtxItem>
+      {!session.inbox_killed_at && (
+        <CtxItem icon={Clock} shortcut="session.snooze" onSelect={() => openPaletteMode([session], "session", "snooze")}>
+          Snooze…
+        </CtxItem>
+      )}
+      {!!session.inbox_snoozed_until && (
+        <CtxItem icon={Clock} onSelect={() => useInboxStore.getState().wakeSnoozedSession(id)}>
+          Move to Needs Input now
+        </CtxItem>
+      )}
       <CtxItem
         icon={Clock}
         shortcut="session.deferAdvance"
@@ -542,9 +553,15 @@ export function SessionMenuItems({
       <CtxItem
         icon={Moon}
         shortcut="session.dormantAdvance"
-        onSelect={() => undoableDormantSession(id)}
+        onSelect={() => undoableSetSessionRest(id, "dormant")}
       >
         Dormant — a machine wakes it
+      </CtxItem>
+      <CtxItem icon={CheckCircle2} onSelect={() => undoableSetSessionRest(id, "done")}>
+        Mark done
+      </CtxItem>
+      <CtxItem icon={CircleDot} onSelect={() => undoableSetSessionRest(id, "needs_input")}>
+        Mark needs input
       </CtxItem>
       {onKill && (
         <CtxItem danger icon={Square} shortcut="session.kill" onSelect={onKill}>

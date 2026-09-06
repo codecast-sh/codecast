@@ -154,7 +154,7 @@ describe("shared-object detection", () => {
     expect(html).toContain("Rich object preview cards in chat");
     expect(html).toContain("Preview-tier rendering for shared object references");
     // And it is a real card, not the inline pill chrome.
-    expect(html).not.toContain("not-prose inline-flex");
+    expect(html).not.toContain('class="not-prose entity-ref');
   });
 
   test("an id inside a sentence becomes a card between intact prose blocks", () => {

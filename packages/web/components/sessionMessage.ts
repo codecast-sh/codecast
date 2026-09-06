@@ -10,6 +10,10 @@
 //   <session-message from="jx7c6zk">
 //   the body
 //   </session-message>
+//
+// A person typing into a session that is not their own arrives as
+// <user-message from="Name"> (formatUserMessage in @codecast/shared/contracts):
+// human-typed, not machine-delivered — it renders as that person's own bubble.
 
 // Greedy body is intentional: message text is exact user/agent content and may
 // itself mention `</session-message>`. The formatter's final close tag is the
@@ -18,6 +22,8 @@ import {
   parseHuddleSummaryTag,
   stripInjectionNoise,
   isSessionMessage,
+  isSessionUpdateBatch,
+  parseSessionUpdateBatch,
   isTeammateMessage,
   stripTeammateFraming,
   isScheduledTaskMessage,
@@ -32,6 +38,11 @@ export {
   parseHuddleSummaryTag,
   stripInjectionNoise,
   isSessionMessage,
+  isSessionUpdateBatch,
+  parseSessionUpdateBatch,
+  isUserMessage,
+  parseUserMessage,
+  formatUserMessage,
   isTeammateMessage,
   stripTeammateFraming,
   isTeammateFramingOnly,
@@ -188,6 +199,14 @@ export function parseMachineDeliveredMessage(
   rawContent: string | null | undefined,
 ): { kind: MachineDeliveredKind; source: string; body: string } | null {
   if (!rawContent) return null;
+  if (isSessionUpdateBatch(rawContent)) {
+    const batch = parseSessionUpdateBatch(rawContent);
+    return {
+      kind: "session",
+      source: batch ? `${batch.members.length} session update${batch.members.length === 1 ? "" : "s"}` : "session updates",
+      body: batch ? batch.members.map(member => `${member.from}: ${member.body}`).join("\n\n") : "Batch preview unavailable",
+    };
+  }
   if (isScheduledTaskMessage(rawContent)) {
     const m = rawContent.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
     const title = (m?.[1] ?? "").replace(/&quot;/g, '"');
@@ -305,7 +324,7 @@ export function parseSpawnedTaskPrompt(rawContent: string | null | undefined): S
 // the Expo bundle imports it and must not drag web UI dependencies into Hermes.
 
 // "[codecast]" is the CLI's injected session-move notice (sessionMoveNotice.ts).
-const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", "[codecast]", 'Background agent "'];
+const NOISE_PREFIXES = ["[Request interrupted", "The user interrupted the previous turn on purpose.", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", "[codecast]", 'Background agent "'];
 
 const NOISE_PATTERNS = [
   /toolu_[A-Za-z0-9_-]+/,
@@ -324,19 +343,9 @@ export function isBareNudge(display: string | null | undefined): boolean {
   return !!display && BARE_NUDGE_RE.test(display.trim());
 }
 
-// The text a sticky prompt header may show for a user message, or null when
-// the message is not the human's own ask: anything machinery delivered (a
-// trigger run, a cast send, a teammate broadcast), a spawned run's opening
-// briefing, or a bare nudge. Every sticky source (timeline, cached user list,
-// last-message fallback) must agree, so they all go through here.
-export function stickyPromptContent(raw: string | null | undefined): string | null {
-  if (!raw || isSpawnedTaskPrompt(raw)) return null;
-  const display = cleanUserMessage(raw);
-  return display && !isBareNudge(display) ? display : null;
-}
-
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
+  if (raw.trimStart().startsWith("<turn_aborted>")) return null;
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
   // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
   if (isMachineDeliveredMessage(raw)) return null;

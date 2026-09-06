@@ -443,8 +443,7 @@ export function useForkTree(conversation: ForkConversationLike, open: boolean) {
   // Dev diagnostic: if the map opened but the server tree didn't resolve, the
   // family falls back to cached branches only — which reads as "missing
   // branches". Surface why (error vs skipped) so it's debuggable from console.
-  // Gated on the dev-only store global (set at the end of inboxStore.ts).
-  const isDev = typeof window !== "undefined" && !!(window as any).__inboxStore;
+  const isDev = import.meta.env.DEV;
   if (isDev && open) {
     if (serverRes && "error" in (serverRes as any)) {
       // eslint-disable-next-line no-console

@@ -60,7 +60,7 @@ export function DocReviewBar({
     async (conversationId: string, sessionTitle: string) => {
       const content = compileContent();
       try {
-        await sendMessage({ conversation_id: conversationId as any, content, client_id: nanoid(10) });
+        await sendMessage({ conversation_id: conversationId as any, content, client_id: nanoid(10), human: true });
         finishReview();
         toast.success(`Sent to ${cleanTitle(sessionTitle || "session")}`);
       } catch (e: any) {

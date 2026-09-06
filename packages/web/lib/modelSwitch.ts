@@ -2,6 +2,7 @@ import {
   AGENT_MODEL_CONFIG,
   findModelOption,
   modelAgentKey,
+  modelFitsAgent,
   modelOptionKey,
 } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
@@ -11,7 +12,7 @@ import { DispatchNotWiredError } from "../store/mutativeMiddleware";
 // in @codecast/shared/contracts now (the store's create path needs it too). Kept
 // re-exported here so existing importers (the pickers, the mobile chip) are
 // unaffected.
-export { modelOptionKey };
+export { modelFitsAgent, modelOptionKey };
 
 export function effortGlyph(effort: string | undefined | null): string {
   switch (effort) {
