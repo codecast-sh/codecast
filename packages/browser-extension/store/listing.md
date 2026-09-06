@@ -8,8 +8,8 @@ permissions change, change the words here in the same commit.
 
 **Name**: Codecast
 
-**Summary** (132 characters max):
-Lets your Codecast agents open and drive their own tabs in this Chrome, in one tab group, over a local token authenticated bridge.
+**Summary** (132 characters max; this is also the manifest `description`, which the store caps at the same length):
+Lets Codecast agents open and drive their own tabs in this Chrome, in one tab group, over a local token authenticated bridge.
 
 **Category**: Developer Tools
 
@@ -93,10 +93,11 @@ unrelated to the single purpose; not used for creditworthiness or lending.
 ## Assets
 
 - Icon 128×128: `icons/icon-128.png`.
-- Screenshots (1280×800, at least one, up to five): the Cast tab group with a
-  driven tab and its frame; the options page connected; the toolbar popup.
-  Capture them from a paired Chrome with `SMOKE_HEADED=1 bun
-  packages/browser-extension/smoke.mjs`, which builds exactly those states.
+- Screenshots (1280×800 JPEG, at least one, up to five) live in
+  `store/screenshots/`: the options page connected, and a driven page wearing
+  the Cast frame. Regenerate them with
+  `SMOKE_STORE_SHOTS=packages/browser-extension/store/screenshots bun packages/browser-extension/smoke.mjs`,
+  which captures them from the states the smoke builds.
 - Small promo tile 440×280: optional for an unlisted item.
 
 ## Visibility
