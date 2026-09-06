@@ -43,6 +43,7 @@ import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
 import { withPortReservations, withWorkspaceOperation } from "./portReservations.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { runSetup } from "./setup.js";
+import { enforceWorkspaceTrust } from "./trust.js";
 import type {
   AcquireOptions,
   ChromeBinding,
@@ -99,6 +100,21 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     const ws = await backend.acquire(repoRoot, name, opts);
     return { workspace: ws, created: true };
   }
+
+  // Why above everything: each path below can execute code the repo carries —
+  // its hook scripts, its manifest commands — and that includes claiming a
+  // warm pool slot, which runs no setup of its own but hands over a worktree
+  // built from those same files. Checking here is what keeps a slot warmed
+  // before a hook changed from being handed out unchecked (ct-49543).
+  enforceWorkspaceTrust({
+    repoRoot,
+    hooksRoot: repoRoot,
+    manifestRoot: inputRoot ?? repoRoot,
+    hooks: !opts.skipHooks,
+    commands: !opts.skipSetup,
+    grant: opts.trust,
+    agentDriven: opts.agentDriven,
+  });
 
   const branch = opts.branch ?? `${BRANCH_PREFIX}${name}`;
 
@@ -320,6 +336,14 @@ async function healWorkspaceUnlocked(repoRoot: string, name: string): Promise<Wo
   if (!state) {
     throw new Error(`workspace '${name}' not found; nothing to heal`);
   }
+  // Heal re-runs the manifest's setup commands, so it needs the same approval
+  // acquire needed (ct-49543).
+  enforceWorkspaceTrust({
+    repoRoot,
+    hooksRoot: repoRoot,
+    manifestRoot: state.env.CODECAST_WORKSPACE_INPUT_ROOT ?? repoRoot,
+    hooks: false,
+  });
   setState(repoRoot, name, "creating");
   // Re-copy gitignored files (idempotent) then re-run setup.
   copyWorkspaceFiles(state.manifest, repoRoot, state.path, state.env.CODECAST_WORKSPACE_INPUT_ROOT);

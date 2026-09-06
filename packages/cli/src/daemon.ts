@@ -6525,7 +6525,11 @@ async function createWorktree(
   if (fs.existsSync(manifestPath)) {
     try {
       const ws = await import("./workspace/index.js");
-      const result = await ws.acquireWorkspace(repoRoot, name);
+      // agentDriven: nobody is at the keyboard here, so this acquire never
+      // approves a hook script or a setup command on the human's behalf. An
+      // unapproved repo refuses and falls through to the legacy path below,
+      // which runs none of that code (ct-49543).
+      const result = await ws.acquireWorkspace(repoRoot, name, { agentDriven: true });
       log(
         `[WORKTREE] new-path: ${name} state=${result.workspace.state} detected=${result.workspace.manifest.detected ?? "none"}`,
       );

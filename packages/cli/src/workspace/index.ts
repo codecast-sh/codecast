@@ -71,6 +71,19 @@ export {
   type FileContent,
   type BackendRegistry,
 } from "./backends/types.js";
+export {
+  collectTrustTargets,
+  enforceWorkspaceTrust,
+  isAgentContext,
+  readRepoTrust,
+  recordTrust,
+  clearRepoTrust,
+  reviewTrust,
+  WorkspaceTrustError,
+  type TrustTarget,
+  type TrustFinding,
+  type RepoTrust,
+} from "./trust.js";
 export { LocalBackend } from "./backends/local.js";
 export { defaultRegistry, getBackend } from "./backends/registry.js";
 

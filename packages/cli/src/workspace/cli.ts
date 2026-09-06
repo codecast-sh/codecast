@@ -1,7 +1,7 @@
 /**
  * `cast workspace` CLI subcommand wiring.
  *
- * Seven subcommands: init, acquire, path, status, heal, destroy, ls.
+ * Eight subcommands: init, acquire, path, status, heal, trust, destroy, ls.
  * Registered via registerWorkspaceCommand(program) called from index.ts.
  */
 
@@ -19,6 +19,13 @@ import {
 import { detectProject } from "./detect.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
 import { readState } from "./contract.js";
+import {
+  clearRepoTrust,
+  collectTrustTargets,
+  readRepoTrust,
+  recordTrust,
+  reviewTrust,
+} from "./trust.js";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
 
@@ -73,6 +80,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--skip-setup", "Skip install/generate/migrate commands")
     .option("--skip-hooks", "Skip before-create/after-create hooks")
     .option("--skip-pool", "Bypass warm pool — force fresh setup")
+    .option("--trust", "Approve this repo's hook scripts and setup commands as they are now")
     .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
     .action(
       async (
@@ -84,6 +92,7 @@ export function registerWorkspaceCommand(program: Command): void {
           skipSetup?: boolean;
           skipHooks?: boolean;
           skipPool?: boolean;
+          trust?: boolean;
           json?: boolean;
         },
       ) => {
@@ -102,6 +111,7 @@ export function registerWorkspaceCommand(program: Command): void {
             skipSetup: opts.skipSetup,
             skipHooks: opts.skipHooks,
             skipPool: opts.skipPool,
+            trust: opts.trust,
           });
           const ws = r.workspace;
           const tag = r.created ? "created" : "attached";
@@ -214,6 +224,44 @@ export function registerWorkspaceCommand(program: Command): void {
       const repoRoot = findRepoRoot();
       await releaseWorkspace(repoRoot, name);
       console.log(`destroyed: ${name}`);
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace trust [target...]
+  // -----------------------------------------------------------------------
+  ws.command("trust [target...]")
+    .description("Approve the hook scripts and setup commands acquire runs (no target = all)")
+    .option("--list", "Show what is approved and what changed, approving nothing")
+    .option("--revoke", "Forget every approval for this repo")
+    .action((targets: string[], opts: { list?: boolean; revoke?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      const all = collectTrustTargets({ hooksRoot: repoRoot });
+      if (opts.revoke) {
+        clearRepoTrust(repoRoot);
+        console.log(`revoked every approval for ${repoRoot}`);
+        return;
+      }
+      if (all.length === 0) {
+        console.log("Nothing to approve: this repo has no hook scripts and no manifest commands.");
+        return;
+      }
+      const findings = reviewTrust(readRepoTrust(repoRoot), all);
+      if (opts.list) {
+        for (const target of all) {
+          const finding = findings.find((f) => f.target.id === target.id);
+          const mark = !finding ? "✓ approved" : finding.verdict === "new" ? "· not approved" : "✗ changed";
+          console.log(`${mark}  ${target.id}`);
+        }
+        if (findings.length > 0) process.exit(2);
+        return;
+      }
+      const picked = targets.length === 0 ? all : all.filter((t) => targets.some((q) => t.id.includes(q)));
+      if (picked.length === 0) {
+        console.error(`no hook or manifest command matches [${targets.join(", ")}]. Try: cast ws trust --list`);
+        process.exit(1);
+      }
+      recordTrust(repoRoot, picked, all);
+      for (const target of picked) console.log(`approved: ${target.id}`);
     });
 
   // -----------------------------------------------------------------------

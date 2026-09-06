@@ -203,6 +203,17 @@ export interface AcquireOptions {
    * want to force fresh setup for whatever reason.
    */
   skipPool?: boolean;
+  /**
+   * Approve the repo's hook scripts and manifest commands as they are on disk
+   * right now (`cast ws acquire --trust`). Without it, an acquire refuses
+   * whenever either changed since a human last approved it.
+   */
+  trust?: boolean;
+  /**
+   * Force the agent classification instead of sniffing the env. The daemon
+   * passes true for the acquires it drives, which never trust implicitly.
+   */
+  agentDriven?: boolean;
 }
 
 /**
