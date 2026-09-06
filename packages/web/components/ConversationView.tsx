@@ -250,7 +250,7 @@ import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
-import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { pendingBannerState, pendingRetryClientId, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 
@@ -8020,6 +8020,13 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // while the bar is mounted — delivery removes the optimistic row and the
   // whole bar (and its subscription) with it.
   const [retryClickedAt, setRetryClickedAt] = useState<number | null>(null);
+  const [retryStartsSession, setRetryStartsSession] = useState(false);
+  const retrying = retryState !== "idle";
+  useWatchEffect(() => {
+    if (retryState !== "sent") return;
+    const timer = setTimeout(() => setRetryState("idle"), 30_000);
+    return () => clearTimeout(timer);
+  }, [retryState]);
   useWatchEffect(() => {
     if (!isPending || !conversationId || !isConvexId(conversationId)) { setRetryVisible(false); return; }
     const remaining = PENDING_RETRY_AFTER_MS - (Date.now() - timestamp);
@@ -8078,7 +8085,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const messageReachedSession = conversationPending?.status === "injected" || conversationPending?.status === "delivered";
   const bannerState = pendingBannerState(agentStatus, {
     retryEligible: retryVisible,
-    restartInFlight: !!retryClickedAt,
+    restartInFlight: retrying,
     idleGraceElapsed,
     bootGraceElapsed,
     messageReachedSession,
@@ -8090,7 +8097,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // very mutation the click awaits).
   const retryProgressRaw = useQuery(
     api.conversations.getRestartProgress,
-    retryClickedAt && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip",
+    retrying && retryStartsSession && retryClickedAt && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip",
   );
   const retryProgress = useMemo(
     () => (retryClickedAt ? retryProgressRaw?.filter((c: RestartProgressRow) => c.created_at >= retryClickedAt - 10_000) : undefined),
@@ -8098,14 +8105,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   );
   const [retryWaitingLong, setRetryWaitingLong] = useState(false);
   useWatchEffect(() => {
-    if (!retryClickedAt) { setRetryWaitingLong(false); return; }
+    if (!retrying || !retryStartsSession) { setRetryWaitingLong(false); return; }
     if (retryProgress?.some((c: RestartProgressRow) => c.executed_at)) { setRetryWaitingLong(false); return; }
     const t = setTimeout(() => setRetryWaitingLong(true), 20_000);
     return () => clearTimeout(t);
-  }, [retryClickedAt, retryProgress]);
+  }, [retrying, retryStartsSession, retryClickedAt, retryProgress]);
   const retryStage = useMemo(
-    () => deriveRestartStage(retryProgress, retryWaitingLong),
-    [retryProgress, retryWaitingLong],
+    () => retrying && retryStartsSession
+      ? deriveRestartStage(retryProgress, retryWaitingLong, !!agentStatus && agentStatus !== "starting" && agentStatus !== "resuming")
+      : null,
+    [retrying, retryStartsSession, retryProgress, retryWaitingLong, agentStatus],
   );
   // A failed restart re-arms the button so the user can try again.
   useWatchEffect(() => {
@@ -8114,6 +8123,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const handleRetryRestart = async () => {
     if (!conversationId || retryState === "inflight") return;
     setRetryState("inflight");
+    setRetryStartsSession(!isPending || !agentStatus);
     setRetryClickedAt(Date.now());
     setRetryWaitingLong(false);
     try {
@@ -8122,7 +8132,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       // stalled). Re-issue the send first — it's idempotent on client_id
       // (messageId IS the optimistic clientId), so it creates the missing
       // pending row or no-ops against an existing one.
-      if (isPending && isConvexId(conversationId) && content.trim()) {
+      const retryClientId = pendingRetryClientId(messageId);
+      if (isPending && retryClientId && isConvexId(conversationId) && content.trim()) {
         // Replay the row's own send args (dispatched bytes + image ids): the
         // server fingerprints this client id's args, and a rebuilt payload is
         // refused as COMMAND_ID_REUSED instead of deduping. While an image is
@@ -8132,7 +8143,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           .find((m) => m._clientId === messageId || m._id === messageId);
         const send = pendingRow ? pendingRowSendArgs(pendingRow) : { content, imageIds: undefined, uploading: false };
         if (!send.uploading) {
-          useInboxStore.getState().sendMessage(conversationId, send.content || content, send.imageIds, messageId);
+          useInboxStore.getState().sendMessage(conversationId, send.content || content, send.imageIds, retryClientId);
         }
       }
       // If the session is alive (any heartbeating agent_status — idle, working,
@@ -8144,7 +8155,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       if (isPending && !!agentStatus) {
         setRetryState("sent");
         toast.success("Resending your message…");
-        setTimeout(() => setRetryState("idle"), 30_000);
         return;
       }
       const res = await useInboxStore.getState().convCommand(conversationId, "restartSession", ghostRestartContextFor(conversationId));
@@ -8152,9 +8162,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         toast.success("Restarting session — this message will be retried");
       }
       setRetryState("sent");
-      // Re-arm after a while so a restart that goes nowhere can be retried;
-      // the progress label keeps reporting the actual daemon status either way.
-      setTimeout(() => setRetryState("idle"), 30_000);
     } catch (err) {
       setRetryState("idle");
       toast.error(`Restart failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -8391,7 +8398,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           While the agent is actively processing we show nothing — the message is already
           sitting in its native input queue (see pendingBannerState). */}
       {isPending && bannerState !== "none" && (
-      <PendingDeliveryNote state={bannerState} restartInFlight={!!retryClickedAt} conversationId={conversationId}>
+      <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId}>
       {bannerState === "queued" && (
         <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
@@ -8408,7 +8415,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <span className="text-xs text-sol-orange/90">
               {retryState === "idle"
                 ? "Message hasn't reached the agent"
-                : agentStatus ? "Resending…" : "Restart requested…"}
+                : agentStatus ? "Waiting for message delivery…" : "Restart requested…"}
             </span>
           )}
           {retryStage && (

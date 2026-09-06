@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, pendingRetryClientId, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean }> = {}) => ({
   retryEligible: true,
@@ -8,6 +8,16 @@ const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idl
   bootGraceElapsed: true,
   messageReachedSession: false,
   ...o,
+});
+
+describe("pending retry identity", () => {
+  test("replays a local send under its original idempotency key", () => {
+    expect(pendingRetryClientId("local-message-123")).toBe("local-message-123");
+  });
+
+  test("never submits an existing server message under a synthetic display id", () => {
+    expect(pendingRetryClientId("serverpending_conversation-123")).toBeUndefined();
+  });
 });
 
 describe("isActiveAgentStatus", () => {
@@ -51,6 +61,11 @@ describe("isAliveIdleStatus", () => {
 });
 
 describe("pendingBannerState", () => {
+  test("delivery proof clears a retry banner even before the retry timer settles", () => {
+    for (const status of [undefined, "idle", "connected", "thinking"] as const) {
+      expect(pendingBannerState(status, opts({ restartInFlight: true, messageReachedSession: true }))).toBe("none");
+    }
+  });
   test("agent busy (long turn) → 'none': message is already in the agent's native queue, so no nag and no kill & restart", () => {
     // The daemon pastes a mid-turn message straight into Claude Code's type-ahead box
     // (ensureTmuxReady busy path); it submits when the turn ends. Nothing to show, and

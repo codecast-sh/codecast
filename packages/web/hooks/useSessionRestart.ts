@@ -56,6 +56,7 @@ export type RestartStage = { label: string; tone: "active" | "warn" | "error" };
 export function deriveRestartStage(
   restartProgress: RestartProgressRow[] | null | undefined,
   waitingLong: boolean,
+  sessionReady = false,
 ): RestartStage | null {
   if (!restartProgress?.length) return null;
   const last = [...restartProgress].reverse();
@@ -65,6 +66,9 @@ export function deriveRestartStage(
     if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" };
     try {
       const r = resume.result ? JSON.parse(resume.result) : null;
+      if (sessionReady && (r?.resumed || r?.reconstituted || r?.started_fresh)) {
+        return { label: "Session is ready — waiting for message delivery…", tone: "active" };
+      }
       if (r?.reconstituted) return { label: "Rebuilt session from history — reconnecting…", tone: "active" };
       if (r?.started_fresh) return { label: "Couldn't resume the old session — started a fresh one", tone: "active" };
       if (r?.resumed) return { label: "Session resumed — reconnecting…", tone: "active" };
