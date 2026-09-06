@@ -102,13 +102,21 @@ if not status:
     sys.exit(0)
 ts = int(time.time())
 pm = str(d.get('permission_mode') or '')
+# Which LAUNCH this process is: the daemon stamps it into the pane env at every
+# spawn and resume and drops posts that carry a superseded one, so an orphan
+# left behind by a kill or a resume stops speaking for the pane (ct-49532).
+lt = str(os.environ.get('CODECAST_LAUNCH_TOKEN') or '')
 q = {'session_id': sid, 'status': status, 'ts': str(ts)}
 if pm:
     q['permission_mode'] = pm
+if lt:
+    q['launch_token'] = lt
 q.update(extra)
 fb = {'status': status, 'ts': ts}
 if pm:
     fb['permission_mode'] = pm
+if lt:
+    fb['launch_token'] = lt
 fb.update(extra)
 print(sid + '\\t' + status + '\\t' + urllib.parse.urlencode(q) + '\\t' + json.dumps(fb))
 " 2>/dev/null)

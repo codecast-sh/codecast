@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { atomicWriteFile } from "./atomicWrite.js";
@@ -40,6 +41,31 @@ export const AGENT_ENV_SCRUB =
 
 // Same scrub as a POSIX sh line, for generated shell scripts.
 export const AGENT_ENV_UNSET_SH = `unset ${AGENT_SCRUBBED_ENV_VARS.join(" ")}`;
+
+// ─── Per-launch identity ─────────────────────────────────────────────────────
+// Every spawn and every resume mints a token and stamps it here, so a hook post
+// names the PROCESS that produced it and not merely the pane it came from. The
+// daemon keeps the current token per pane (launchToken.ts) and drops posts that
+// carry an older one — an orphan left in a pane by a kill or a resume used to
+// keep reporting status for the session that replaced it (ct-49532).
+export const LAUNCH_TOKEN_VAR = "CODECAST_LAUNCH_TOKEN";
+
+const LAUNCH_TOKEN_RE = /^[a-f0-9]{24}$/;
+
+export function mintLaunchToken(): string {
+  return crypto.randomBytes(12).toString("hex");
+}
+
+export function isLaunchToken(value: unknown): value is string {
+  return typeof value === "string" && LAUNCH_TOKEN_RE.test(value);
+}
+
+// The token as an assignment for a pane launch line, or "" when there is none.
+// Goes AFTER the `env -u …` head, which every launch line keeps first for
+// findLaunchLine. Hex by construction, so it stays inert in `send-keys -l` text.
+export function launchTokenEnv(token: string | null | undefined): string {
+  return isLaunchToken(token) ? ` ${LAUNCH_TOKEN_VAR}=${token}` : "";
+}
 
 // Drop the markers from an env object in place and return it.
 export function scrubAgentEnv<T extends Record<string, string | undefined>>(env: T): T {

@@ -130,7 +130,8 @@ import { parseSessionFile, parseTranscriptFor, claudeBannerText, extractSlug, ex
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
+import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
@@ -687,6 +688,10 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
     }
   } catch {}
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  // The pane's surface is gone. Anything still alive in its process tree that
+  // survived the reap above speaks for nothing now, so its hook posts are
+  // dropped until a new launch re-fences the name (ct-49532).
+  launchTokenLedger().retirePane(tmuxSession);
 }
 
 // A gap shorter than this is neither a suspend nor a freeze worth recovering
@@ -1180,7 +1185,10 @@ const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 // a CLI-first status addition throw on every heartbeatBatch validation and mark
 // live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
-type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
+type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string;
+  // Which LAUNCH posted this (ct-49532). Forwarded by codecast-status.sh from
+  // the pane env; absent from a hook script installed before it shipped.
+  launch_token?: string };
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
 const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
@@ -1242,6 +1250,22 @@ const hookStatusGate = new HookStatusGate<HookStatusData>((sessionId, data) => {
 export function setHookStatusSink(sink: (sessionId: string, data: HookStatusData) => void): void {
   hookStatusGate.setSink(sink);
 }
+// Is this hook post from the process that owns its pane? The ledger holds the
+// current launch token per pane and retires a pane on kill, close and relocate;
+// an orphan left behind by a kill or a resume carries a superseded token and is
+// dropped here rather than reported as the session's status (ct-49532). A post
+// with no token is a hook script from before this shipped — accepted for one
+// release, logged once per pane.
+function admitHookPost(sessionId: string, data: HookStatusData): boolean {
+  // "thinking" is UserPromptSubmit and nothing else, so it is the turn start a
+  // retired pane can come back on.
+  const verdict = launchTokenLedger().admit({ sessionId, token: data.launch_token, newTurn: data.status === "thinking" });
+  if (verdict.notable) {
+    log(`[IDENTITY] hook post ${verdict.decision === "drop" ? "dropped" : "accepted"} for session ${shortId(sessionId)} status=${data.status} (${verdict.reason})`);
+  }
+  return verdict.decision === "accept";
+}
+
 // Where codecast-status.sh drops a pending AskUserQuestion's full tool_input, keyed by
 // session id. The buffered turn isn't in the JSONL yet, so this sidecar is the only
 // full-fidelity source for the question while it waits to be answered.
@@ -1686,6 +1710,7 @@ function startHookServer(): http.Server {
       const permissionMode = url.searchParams.get("permission_mode") as PermissionMode | undefined;
       const message = url.searchParams.get("message") || undefined;
       const transcriptPath = url.searchParams.get("transcript_path") || undefined;
+      const launchToken = url.searchParams.get("launch_token") || undefined;
 
       if (!sessionId || !status || !ts) {
         res.writeHead(400);
@@ -1710,6 +1735,7 @@ function startHookServer(): http.Server {
         ...(permissionMode && { permission_mode: permissionMode }),
         ...(message && { message }),
         ...(transcriptPath && { transcript_path: transcriptPath }),
+        ...(launchToken && { launch_token: launchToken }),
       };
 
       if (hookStatusGate.deliver(sessionId, data) === "delivered") {
@@ -4573,9 +4599,13 @@ async function executeRemoteCommand(
         // index. Same shell-safe token rule as the stable env above.
         const wtEnvRaw = worktreeEnvPrefix(cwd);
         const wtEnv = wtEnvRaw ? ` ${wtEnvRaw}` : "";
+        // Which launch this pane is running (ct-49532): recorded before the
+        // command is built, so a hook post from the process that occupied this
+        // pane before now carries a superseded token and is dropped.
+        const launchTokenEnvPart = launchTokenEnv(launchTokenLedger().issue(tmuxSession, assignedClaudeSessionId || undefined));
         const envPrefix = worktreeResult
-          ? `${AGENT_ENV_SCRUB} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
-          : `${AGENT_ENV_SCRUB}${wtEnv}${stableEnv}`;
+          ? `${AGENT_ENV_SCRUB}${launchTokenEnvPart} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
+          : `${AGENT_ENV_SCRUB}${launchTokenEnvPart}${wtEnv}${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -5675,7 +5705,7 @@ async function executeRemoteCommand(
             // `claude` that fell into the project's dontAsk default — the agent
             // came back stranded with every tool denied.
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
-            const blankCmdText = `${AGENT_ENV_SCRUB} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -10456,7 +10486,9 @@ async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]> {
             const reg = JSON.parse(await fs.promises.readFile(full, "utf-8"));
             if (!isHookRegistration(reg) || typeof reg.pid !== "number" || typeof reg.ts !== "number") continue;
             const list = next.get(reg.pid) ?? [];
-            list.push({ sessionId: file.slice(0, -5), ts: reg.ts });
+            // launch_token: which launch wrote the claim (session-register.sh).
+            // Absent from an older hook script, which reads as unfenced.
+            list.push({ sessionId: file.slice(0, -5), ts: reg.ts, ...(typeof reg.launch_token === "string" && reg.launch_token ? { launchToken: reg.launch_token } : {}) });
             next.set(reg.pid, list);
           } catch {}
         }
@@ -10493,11 +10525,23 @@ async function processDeclaredSession(pid: number): Promise<string | null> {
   return processDeclaredSessionId(await describeProcessIdentity(pid));
 }
 
-/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`. */
+/**
+ * True (and logged) when `pid` demonstrably runs a session other than
+ * `sessionId`, or runs the right session under a launch the pane has already
+ * replaced — an orphan of a previous launch is not this session's process even
+ * though it claims the same id (ct-49532).
+ */
 async function rejectsForeignProcess(sessionId: string, pid: number, via: string): Promise<boolean> {
-  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...(await describeProcessIdentity(pid)) });
+  const ledger = launchTokenLedger();
+  const { verdict, declared, reason } = judgeProcessIdentity({
+    sessionId,
+    ...(await describeProcessIdentity(pid)),
+    staleLaunchToken: (token) => ledger.isStaleToken(token),
+  });
   if (verdict !== "foreign") return false;
-  log(`[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
+  log(reason === "stale-token"
+    ? `[IDENTITY] pid=${pid} (${via}) is a superseded launch of ${shortId(sessionId)} — not using it`
+    : `[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
   return true;
 }
 
@@ -17314,6 +17358,7 @@ export async function conversationForbidsResurrection(
 
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  launchTokenLedger().retirePane(tmuxSession);
   resumeSessionCache.delete(sessionId);
   stopCodexPermissionPoller(sessionId);
   stopManagedSessionHeartbeat(sessionId);
@@ -18043,9 +18088,14 @@ export function resumeReuseCandidates(
 // but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
-export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
-  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
-    : AGENT_ENV_SCRUB;
+// launchToken names the launch this resume IS (ct-49532). A resume leaves the
+// previous process alive often enough that it is the main way an orphan ends up
+// posting for a pane it no longer owns; the new token is what the daemon fences
+// those posts out with.
+export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToken?: string): string {
+  const token = launchTokenEnv(launchToken);
+  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+    : `${AGENT_ENV_SCRUB}${token}`;
   const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
   return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;}
 
@@ -18360,6 +18410,10 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
     }
     try { await tmuxExec(["kill-session", "-t", home]); } catch {}
     await tmuxExec(["rename-session", "-t", tmuxSession, home]);
+    // The occupant's launch moves with it: its token now fences `home`, and the
+    // name it left is retired, so an orphan still posting under the old name is
+    // dropped instead of speaking for the session that takes the name next.
+    launchTokenLedger().relocatePane(tmuxSession, home);
     await setTmuxSessionOption(home, "@codecast_session_id", occupant);
     resumeSessionCache.set(occupant, home);
     sessionProcessCache.delete(occupant);
@@ -18706,7 +18760,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd, launchTokenLedger().issue(tmuxSession, sessionId));
+    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
     // disclaimPrefix: resumed agents carry their own TCC identity, same as a
@@ -19319,7 +19374,7 @@ async function startFreshSessionForDelivery(
   // default (which silently denies every tool until the user manually opens
   // permissions). This is the path that strands "started without bypass" threads.
   const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
-  const blankCmdText = `${AGENT_ENV_SCRUB} ${["claude", ...safeBlankArgs].join(" ")}`;
+  const blankCmdText = `${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
@@ -22925,6 +22980,12 @@ async function main(): Promise<void> {
   function handleStatusData(sessionId: string, data: HookStatusData, filePath?: string, opts?: { primed?: boolean; tail?: string | null }): boolean | undefined {
     try {
       if (!data.status || !data.ts) return;
+
+      // Which launch is speaking (ct-49532). Both transports land here — the
+      // live push and the replayed status file — so this is the one place the
+      // fence has to hold. The re-entry from the idle hop below carries the
+      // same record, and re-admitting it is free: the verdict is a lookup.
+      if (!admitHookPost(sessionId, data)) return;
 
       const convId = conversationCache[sessionId];
       if (!convId) return;

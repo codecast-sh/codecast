@@ -950,7 +950,11 @@ TTY=$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')
 
 REGISTRY_DIR="$HOME/.codecast/session-registry"
 mkdir -p "$REGISTRY_DIR"
-echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
+# launch_token: which LAUNCH wrote this claim. The daemon stamps it into the
+# pane env at every spawn and resume, so a claim carrying a superseded token
+# names a process the pane has already replaced (ct-49532). Empty for a session
+# codecast did not launch, which stays as unfenced as it was before.
+echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\",\\"launch_token\\":\\"$\{CODECAST_LAUNCH_TOKEN:-}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
 exit 0
 `;
 
