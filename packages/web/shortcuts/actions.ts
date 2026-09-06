@@ -1,5 +1,6 @@
 "use client";
 
+import { isForeignSession } from "../lib/liveEntities";
 import { resolvePaletteTarget } from "../lib/paletteTarget";
 
 import { useCallback } from "react";
@@ -163,6 +164,16 @@ export function useGlobalShortcutActions() {
     if (currentId) triage.park(currentId, "dormant", "key");
   }, [focusedId, triage]));
 
+  useShortcutAction('session.snooze', useCallback(() => {
+    const state = useInboxStore.getState();
+    const target = resolvePaletteTarget(state, pathname);
+    const id = focusedId();
+    const session = target?.targetType === 'session' ? target.targets[0] : id ? state.sessions[id] ?? state.conversations[id] : null;
+    if (session && !session.inbox_killed_at && state.currentUser && !isForeignSession(session, session, state.currentUser._id.toString())) {
+      state.openPalette({ targets: [session], targetType: 'session', mode: 'snooze' });
+    }
+  }, [focusedId, pathname]));
+
   useShortcutAction('session.rename', useCallback(() => {
     const store = useInboxStore.getState();
     const currentId = focusedActionSessionId(store, isOnInboxPage);
@@ -210,6 +221,9 @@ export function useGlobalShortcutActions() {
   useShortcutAction('nav.inbox', useCallback(() => {
     router.push("/inbox");
   }, [router]));
+
+  useShortcutAction('nav.back', useCallback(() => { window.history.back(); }, []));
+  useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));
 
   useShortcutAction('compose.focus', useCallback(() => { focusComposer(); }, []));
 

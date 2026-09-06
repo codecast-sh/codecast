@@ -17,7 +17,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
 import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
-import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
@@ -46,7 +46,7 @@ import { popOutPeople } from "./people/popOutPeople";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
-import { paletteActions, paletteObjectPath, paletteDigitIndex, type PaletteTargetType } from "../lib/paletteActions";
+import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, type PaletteTargetType } from "../lib/paletteActions";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { captureException } from "@sentry/react";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -55,7 +55,7 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableDormantSession } from "../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableSetSessionRest } from "../store/undoActions";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
@@ -129,7 +129,9 @@ import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
 
-type ActionMode = "rename" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
+
+type ActionMode = "snooze" | "rename" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -428,7 +430,7 @@ export function ActionSubmenu({
     // the view badges here can never disagree with the panel's chip row.
     const placed = placeInboxRows(st, { focusedId: st.currentSessionId ?? null });
     const bucketByConv = convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>);
-    const counts = computeChipCounts([...placed.sorted, ...placed.stashed, ...placed.dismissed], bucketByConv);
+    const counts = computeChipCounts([...placed.sorted, ...placed.snoozed, ...placed.stashed, ...placed.dismissed], bucketByConv);
     // Label counts come from the assignments themselves, not from cached
     // sessions: bucket_assignments sync completely (buckets.webList collects the
     // whole per-user table), while the session cache is windowed and boot-pruned
@@ -468,6 +470,7 @@ export function ActionSubmenu({
 
   const items = useMemo(() => {
     const q = search.toLowerCase();
+    if (mode === "snooze") return SESSION_SNOOZE_CHOICES.filter((item) => item.label.includes(q)).map((item) => ({ ...item, icon: Clock }));
 
     if (isLayoutMode(mode)) {
       const trimmed = search.trim();
@@ -574,8 +577,11 @@ export function ActionSubmenu({
     }
     if (mode === "agent_run" || mode === "agent_switch" || mode === "agent_fork") {
       const currentAgentType = (target as InboxSession | undefined)?.agent_type;
+      const messageCount = (target as InboxSession | undefined)?.message_count;
       return AGENT_OPTIONS
         .filter((o) => mode !== "agent_switch" || o.agentType !== (currentAgentType || "claude_code"))
+        // A session with history can only become an agent that can rebuild it.
+        .filter((o) => mode === "agent_run" || canSessionBecomeAgent(o.agentType, messageCount))
         .filter((o) => o.label.toLowerCase().includes(q))
         .map((a) => ({ ...a, type: "agent" as const, image: undefined }));
     }
@@ -681,6 +687,13 @@ export function ActionSubmenu({
   const selectItem = useCallback((index: number) => {
     const item = items[index] as any;
     if (!item) return;
+    if (mode === "snooze") {
+      const until = sessionSnoozeUntil(item.key as SessionSnoozeKey);
+      for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
+      toast.success(`Snoozed for ${item.label}`);
+      onClose();
+      return;
+    }
 
     // Layout CRUD is global too — the workspace arrangement, not a row. Same
     // gestures the rail's Layouts section offers, for when the rail is closed.
@@ -949,6 +962,10 @@ export function ActionSubmenu({
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
+    if (mode === "snooze" && search === "" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const index = items.findIndex((item) => item.key === e.key.toLowerCase());
+      if (index >= 0) { e.preventDefault(); selectItem(index); return; }
+    }
     // Esc from a deep view escapes to GLOBAL (closes the palette), never just
     // one level — climbing back up is ↑ past the top / Backspace-on-empty,
     // and only exists when the user came down from the root palette.
@@ -989,7 +1006,7 @@ export function ActionSubmenu({
     const quickPick = paletteDigitIndex(e.nativeEvent, items.length);
     if (quickPick >= 0) { e.preventDefault(); selectItem(quickPick); return; }
 
-  }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search, renameId]);
+  }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search, renameId, mode]);
 
   useWatchEffect(() => {
     const el = listRef.current;
@@ -999,6 +1016,7 @@ export function ActionSubmenu({
   }, [highlightIndex]);
 
   const modeLabel =
+    mode === "snooze" ? "Snooze session for…" :
     mode === "rename" ? "Enter a new name…" :
     mode === "deadline" ? "Target date (YYYY-MM-DD)…" :
     mode === "project" ? "Move to project…" :
@@ -1169,7 +1187,7 @@ export function ActionSubmenu({
                 <span className="text-[10px] tabular-nums text-sol-text-dim/70 flex-shrink-0">{item.count}</span>
               )}
               {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
-              {i < 9 && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">{i + 1}</KeyCap></span>}
+              {mode === "snooze" ? <KeyCap size="xs">{item.key.toUpperCase()}</KeyCap> : i < 9 && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">{i + 1}</KeyCap></span>}
               {item.type === "agent" && mode === "agent_run" && (
                 <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
               )}
@@ -1830,7 +1848,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
+    if (["snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
@@ -1932,11 +1950,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       } else if (actionKey === "session_stash_hide") {
         undoableHideSession(session._id, "stash", { hidden: true });
         closePalette();
+      } else if (actionKey === "session_unsnooze") {
+        useInboxStore.getState().wakeSnoozedSession(session._id);
+        closePalette();
       } else if (actionKey === "session_defer") {
         undoableDeferSession(session._id);
         closePalette();
       } else if (actionKey === "session_dormant") {
-        undoableDormantSession(session._id);
+        undoableSetSessionRest(session._id, "dormant");
+      } else if (actionKey === "session_done") {
+        undoableSetSessionRest(session._id, "done");
+      } else if (actionKey === "session_needs_input") {
+        undoableSetSessionRest(session._id, "needs_input");
         closePalette();
 
       }
@@ -1971,7 +1996,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       : action.key === "plan_status" ? PLAN_STATUS_OPTIONS
       : action.key === "model" ? AGENT_MODEL_CONFIG[modelAgentKey(target?.agent_type)]?.models ?? []
       : [];
-    return options.filter(option => action.key !== "agent_switch" || option.key !== `agent:${target?.agent_type || "claude_code"}`).filter(option => `${action.label} ${option.label}`.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().split(/\s+/).every(word => `${action.label} ${option.label}`.toLowerCase().includes(word))).map(option => ({ action, option }));
+    return options.filter(option => action.key !== "agent_switch" || option.key !== `agent:${target?.agent_type || "claude_code"}`).filter((option: any) => (action.key !== "agent_switch" && action.key !== "agent_fork") || canSessionBecomeAgent(option.agentType, target?.message_count)).filter(option => `${action.label} ${option.label}`.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().split(/\s+/).every(word => `${action.label} ${option.label}`.toLowerCase().includes(word))).map(option => ({ action, option }));
   }).slice(0, 8);
 
   const showFavorites = favorites && favorites.length > 0;
@@ -2142,6 +2167,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const paletteContent = (
     <CommandPrimitive
       ref={paletteRef}
+      onKeyDown={(e) => {
+        if (picking) return;
+        const action = paletteActionForKey(e.nativeEvent, actions);
+        if (action) { e.preventDefault(); e.stopPropagation(); handleRootAction(action.key); }
+      }}
       className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
@@ -2173,12 +2203,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             const rows = Array.from(paletteRef.current?.querySelectorAll<HTMLElement>('[cmdk-item]:not([aria-disabled="true"])') ?? []).filter(row => row.offsetParent !== null);
             const index = paletteDigitIndex(e.nativeEvent, rows.length);
             if (index >= 0) { e.preventDefault(); rows[index].click(); return; }
-            if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && !picking) {
-              const key = e.code.replace("Key", "").toLowerCase();
-              const action = actions.find(action => action.hotkey === key);
-              if (action) { e.preventDefault(); handleRootAction(action.key); return; }
-            }
-            if ((e.key === "Backspace" || e.key === "ArrowLeft") && !query && drilled) { e.preventDefault(); setQuery(drilled.query); setDrilled(null); return; }
+            if ((e.key === "Backspace" || e.key === "ArrowLeft") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !query && drilled) { e.preventDefault(); setQuery(drilled.query); setDrilled(null); return; }
             if ((e.key === "ArrowRight" || e.key === "Tab") && !e.shiftKey && !picking) {
               const selected = rows.find(row => row.getAttribute("aria-selected") === "true");
               const type = selected?.dataset.paletteType as PaletteTargetType | undefined;
@@ -2261,7 +2286,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 >
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate flex-1">{action.label}</span>
-                  {action.hotkey && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap><KeyCap size="xs">{action.hotkey.toUpperCase()}</KeyCap></span>}
+                  {action.shortcutAction ? <MenuKeyCaps action={action.shortcutAction} /> : action.hotkey && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap><KeyCap size="xs">{action.hotkey.toUpperCase()}</KeyCap></span>}
                 </CommandPrimitive.Item>
               );
             })}
