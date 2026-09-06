@@ -150,6 +150,14 @@ interface VaultState {
    *  per vault; the default follows the vault's kind (see readShowAllFiles). */
   showAllFiles: boolean;
   setShowAllFiles: (value: boolean) => void;
+  /** List what the repo rules hide — build output, .gitignore names, tool
+   *  dot-directories — dimmed and read-only. Persisted per vault, off by
+   *  default. Only offered for a repo root (see `isRepo`): a notes folder
+   *  hides nothing this could lift. */
+  showIgnoredFiles: boolean;
+  setShowIgnoredFiles: (value: boolean) => void;
+  /** Whether the active vault's root is a git checkout, per the last scan. */
+  isRepo: boolean;
   /** Pull a non-markdown file's text on demand. Markdown bodies all arrive with
    *  the scan; code is fetched only when someone opens it. */
   loadTextBody: (path: string) => Promise<void>;
@@ -280,7 +288,10 @@ function schedulePersist() {
     if (active && s.scannedAt) {
       const info = s.vaults.find((v) => v.id === active);
       if (info) {
-        void saveVaultMeta({ id: active, info, files: Object.values(s.files), scannedAt: s.scannedAt });
+        // The cache holds the default scope only: ignored rows are a snapshot
+        // the next scan re-derives, and a cached boot with the toggle off must
+        // not paint them for a frame.
+        void saveVaultMeta({ id: active, info, files: Object.values(withoutIgnored(s.files)), scannedAt: s.scannedAt });
       }
     }
     for (const [vaultId, rows] of pendingBodyRows) {
@@ -410,19 +421,30 @@ function readRightPanelOpen(): boolean {
   }
 }
 
-function readShowAllFiles(vaultId: string, vaults: VaultInfo[]): boolean {
+const SHOW_IGNORED_KEY = "cast_vault_show_ignored";
+
+/** A per-vault boolean the user set explicitly, or null when they never did. */
+function readVaultFlag(key: string, vaultId: string): boolean | null {
   try {
-    const stored = localStorage.getItem(`${SHOW_ALL_KEY}:${vaultId}`);
+    const stored = localStorage.getItem(`${key}:${vaultId}`);
     if (stored === "1") return true;
     if (stored === "0") return false;
   } catch {}
-  return vaults.find((v) => v.id === vaultId)?.kind === "project";
+  return null;
 }
 
-function writeShowAllFiles(vaultId: string, value: boolean): void {
+function writeVaultFlag(key: string, vaultId: string, value: boolean): void {
   try {
-    localStorage.setItem(`${SHOW_ALL_KEY}:${vaultId}`, value ? "1" : "0");
+    localStorage.setItem(`${key}:${vaultId}`, value ? "1" : "0");
   } catch {}
+}
+
+function readShowAllFiles(vaultId: string, vaults: VaultInfo[]): boolean {
+  return readVaultFlag(SHOW_ALL_KEY, vaultId) ?? vaults.find((v) => v.id === vaultId)?.kind === "project";
+}
+
+function readShowIgnoredFiles(vaultId: string): boolean {
+  return readVaultFlag(SHOW_IGNORED_KEY, vaultId) ?? false;
 }
 
 /** Fetch a set of file bodies with bounded concurrency, patching the store as
@@ -660,21 +682,33 @@ function applyWsEvent(ev: VaultWsEvent) {
   }
 }
 
+/** The file table without the rows a scan flagged ignored. */
+function withoutIgnored(files: Record<string, VaultFileEntry>): Record<string, VaultFileEntry> {
+  if (!Object.values(files).some((f) => f.ignored)) return files;
+  const out: Record<string, VaultFileEntry> = {};
+  for (const [p, f] of Object.entries(files)) if (!f.ignored) out[p] = f;
+  return out;
+}
+
 async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void> {
   lastScanStartedAt = Date.now();
-  const scan = await scanVault(ep, vaultId);
+  const scan = await scanVault(ep, vaultId, { ignored: useVaultStore.getState().showIgnoredFiles });
   const s = useVaultStore.getState();
   if (s.activeVaultId !== vaultId) return;
 
   const files: Record<string, VaultFileEntry> = {};
-  for (const f of scan.files) files[f.path] = f;
+  // The toggle may have gone off while the scan was in flight; honor the
+  // current value rather than the one the request was built from.
+  for (const f of scan.files) if (!f.ignored || s.showIgnoredFiles) files[f.path] = f;
 
   // Diff against what we have (from IDB or a previous scan): fetch new/changed
-  // markdown, drop entries that no longer exist.
+  // markdown, drop entries that no longer exist. Ignored markdown is never
+  // prefetched: a worktree's copy of the docs or a generated bundle would
+  // otherwise land in the search index and the graph as a note.
   const prevBodies = s.bodies;
   const toFetch: string[] = [];
   for (const f of scan.files) {
-    if (f.dir || !isVaultMarkdownPath(f.path)) continue;
+    if (f.dir || f.ignored || !isVaultMarkdownPath(f.path)) continue;
     const known = prevBodies[f.path];
     if (!known || known.mtime !== f.mtime) toFetch.push(f.path);
   }
@@ -690,6 +724,7 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
     files,
     bodies: nextBodies,
     scannedAt: scan.scanned_at,
+    isRepo: scan.repo,
     connection: "connected",
     loadingPaths: loading,
   });
@@ -717,6 +752,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   recentPaths: [],
   sortMode: "name-asc" as const,
   showAllFiles: false,
+  showIgnoredFiles: false,
+  isRepo: false,
   renameTarget: null,
   quickSwitchOpen: false,
   leftPaneTab: "files" as const,
@@ -802,8 +839,21 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   setShowAllFiles: (value) => {
     const vaultId = get().activeVaultId;
-    if (vaultId) writeShowAllFiles(vaultId, value);
+    if (vaultId) writeVaultFlag(SHOW_ALL_KEY, vaultId, value);
     set({ showAllFiles: value });
+  },
+
+  setShowIgnoredFiles: (value) => {
+    const vaultId = get().activeVaultId;
+    if (vaultId) writeVaultFlag(SHOW_IGNORED_KEY, vaultId, value);
+    if (value) {
+      // The ignored entries live only on the daemon: a rescan brings them.
+      set({ showIgnoredFiles: true });
+      void get().refresh();
+      return;
+    }
+    // Off is local: drop the flagged rows now rather than after a round trip.
+    set((s) => ({ showIgnoredFiles: false, files: withoutIgnored(s.files) }));
   },
 
   loadTextBody: async (path) => {
@@ -961,13 +1011,14 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // boot sets activeVaultId straight from the IDB cache, so by the time
     // selectVault runs for the remembered vault `prev` already equals it — and
     // a project vault would have opened with the toggle off.
-    set({ showAllFiles: readShowAllFiles(vaultId, get().vaults) });
+    set({ showAllFiles: readShowAllFiles(vaultId, get().vaults), showIgnoredFiles: readShowIgnoredFiles(vaultId) });
     if (prev !== vaultId) {
       set({
         activeVaultId: vaultId,
         files: {},
         bodies: {},
         scannedAt: null,
+        isRepo: false,
         conflicts: {},
         loadingPaths: {},
         renameTarget: null,
@@ -1052,6 +1103,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       // narrows what it pushes), so there is no "everything else" to show and
       // the toggle would promise a file set that does not exist.
       showAllFiles: false,
+      showIgnoredFiles: false,
+      isRepo: false,
       files: {},
       bodies: {},
       conflicts: {},

@@ -96,8 +96,13 @@ export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
   return body.vaults ?? [];
 }
 
-export async function scanVault(ep: VaultEndpoint, vaultId: string): Promise<VaultScanResponse> {
-  const res = await vaultFetch(ep, `/vault/scan?vault=${encodeURIComponent(vaultId)}`, {
+export async function scanVault(
+  ep: VaultEndpoint,
+  vaultId: string,
+  opts: { ignored?: boolean } = {},
+): Promise<VaultScanResponse> {
+  const query = `vault=${encodeURIComponent(vaultId)}${opts.ignored ? "&ignored=1" : ""}`;
+  const res = await vaultFetch(ep, `/vault/scan?${query}`, {
     // A big vault walk can exceed the default budget.
     signal: AbortSignal.timeout(60_000),
   });

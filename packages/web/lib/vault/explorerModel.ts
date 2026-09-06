@@ -27,6 +27,9 @@ export interface TreeNode {
   noteCount: number;
   /** Newest mtime in the subtree — what the "Modified" sort orders folders by. */
   mtime: number;
+  /** Listed only because "show ignored files" is on: dimmed, read-only, and
+   *  not a note even when it ends in .md. */
+  ignored?: boolean;
 }
 
 const byName = (a: TreeNode, b: TreeNode) =>
@@ -83,6 +86,7 @@ export function buildVaultTree(
       children: [],
       noteCount: 0,
       mtime: files[path]?.mtime ?? 0,
+      ignored: files[path]?.ignored,
     };
     parent.children.push(node);
     dirNodes.set(path, node);
@@ -103,6 +107,7 @@ export function buildVaultTree(
       children: [],
       noteCount: 0,
       mtime: f.mtime,
+      ignored: f.ignored,
     });
   }
 
@@ -110,7 +115,7 @@ export function buildVaultTree(
   const finalize = (node: TreeNode): TreeNode => {
     for (const child of node.children) {
       if (child.dir) finalize(child);
-      node.noteCount += child.dir ? child.noteCount : isVaultMarkdownPath(child.path) ? 1 : 0;
+      node.noteCount += child.dir ? child.noteCount : isVaultMarkdownPath(child.path) && !child.ignored ? 1 : 0;
       node.mtime = Math.max(node.mtime, child.mtime);
     }
     node.children.sort(cmp);
