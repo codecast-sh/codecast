@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { ReadSnapshot } from "../workers/snapshot.js";
+import { daemonWorkersEnabled } from "../workers/bridge.js";
 import type http from "http";
 import type { Duplex } from "stream";
 import { WebSocketServer, WebSocket } from "ws";
@@ -83,6 +85,14 @@ export async function listTerminalSessions(): Promise<TerminalSessionInfo[]> {
   return parseTerminalSessionRows(r.stdout);
 }
 
+export const terminalSessionSnapshot = new ReadSnapshot(async () => {
+  const r = await tmuxRunAsync(["list-sessions", "-F", SESSION_LIST_FORMAT]);
+  if (r.status === 0) return { sessions: parseTerminalSessionRows(r.stdout), tmux: true };
+  if (r.code === "ENOENT") return { sessions: [], tmux: false };
+  if (r.status === 1 && /no server running|error connecting to .*No such file/.test(r.stderr)) return { sessions: [], tmux: true };
+  throw new Error("terminal sessions temporarily unavailable");
+});
+
 export async function killTerminalSession(name: string): Promise<boolean> {
   if (!name.startsWith(TERM_SESSION_PREFIX)) return false;
   try {
@@ -90,7 +100,9 @@ export async function killTerminalSession(name: string): Promise<boolean> {
   } catch {
     return false;
   }
-  return (await tmuxRunAsync(["kill-session", "-t", name])).status === 0;
+  const ok = (await tmuxRunAsync(["kill-session", "-t", name])).status === 0;
+  terminalSessionSnapshot.invalidate();
+  return ok;
 }
 
 // Panel terminals outlive their tabs by design (close = detach), so without a
@@ -250,6 +262,12 @@ export function handleTerminalHttp(
   };
 
   if (req.method === "GET" && url.startsWith("/term/sessions")) {
+    if (daemonWorkersEnabled()) {
+      const snapshot = terminalSessionSnapshot.get();
+      res.writeHead(snapshot ? 200 : 503, headers);
+      res.end(JSON.stringify(snapshot ? { ...snapshot.data, sampled_at: snapshot.at } : { error: "terminal sessions temporarily unavailable", unavailable: true }));
+      return true;
+    }
     dispatch(async () => {
       const sessions = await listTerminalSessions();
       res.writeHead(200, headers);
@@ -416,6 +434,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
     client
       .start(cols, rows, hello.colors)
       .then(({ cols: c, rows: r, seed, sessionName }) => {
+        if (hello.mode === "create") terminalSessionSnapshot.invalidate();
         if (ws.readyState !== WebSocket.OPEN) return cleanup();
         sendJson({
           type: "ready",

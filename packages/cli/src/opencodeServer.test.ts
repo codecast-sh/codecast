@@ -188,6 +188,12 @@ function makeFetch(opts: { eventFrames?: string; forkId?: string; sessions?: unk
         json: async () => ({ id: opts.forkId ?? "ses_forked", title: "x (fork #1)" }),
       } as Response;
     }
+    if (url.includes("/message")) {
+      return { ok: true, status: 200, json: async () => ({ info: { id: "msg_imported" }, parts: [] }) } as Response;
+    }
+    if (url.includes("/session") && init?.method === "POST") {
+      return { ok: true, status: 200, json: async () => ({ id: "ses_created", title: "t" }) } as Response;
+    }
     if (url.endsWith("/session")) {
       return { ok: true, status: 200, json: async () => opts.sessions ?? [] } as Response;
     }
@@ -432,5 +438,26 @@ describe("OpencodeServer sidecar lifetime hardening", () => {
     server.stop();
     expect(server.running).toBe(false);
     expect(child.exitCode).not.toBeNull();
+  });
+});
+
+// The rebuild path: a session created in the conversation's directory, then the
+// history appended as ONE `noReply` user message (no model turn). Both must
+// carry `?directory=` so the sidecar scopes them to the right project.
+describe("OpencodeServer rebuild calls", () => {
+  test("createSession and appendUserMessage scope to the directory and never start a turn", async () => {
+    const { fetchImpl, calls } = makeFetch();
+    const server = new OpencodeServer({ log: () => {}, fetchImpl, spawnFn: (() => { throw new Error("no spawn"); }) as any });
+    (server as any).resolvedPort = 4096;
+    const created = await server.createSession({ title: "Rebuilt" }, { directory: "/tmp/my project" });
+    expect(created.id).toBe("ses_created");
+    const appended = await server.appendUserMessage("ses_created", "[Codecast import] …", { directory: "/tmp/my project" });
+    expect(appended.info.id).toBe("msg_imported");
+    const create = calls.find((c) => c.url.includes("/session?"))!;
+    expect(create.url).toContain("/session?directory=%2Ftmp%2Fmy%20project");
+    expect(JSON.parse(String(create.init?.body))).toEqual({ title: "Rebuilt" });
+    const msg = calls.find((c) => c.url.includes("/message"))!;
+    expect(msg.url).toContain("/session/ses_created/message?directory=%2Ftmp%2Fmy%20project");
+    expect(JSON.parse(String(msg.init?.body))).toEqual({ noReply: true, parts: [{ type: "text", text: "[Codecast import] …" }] });
   });
 });
