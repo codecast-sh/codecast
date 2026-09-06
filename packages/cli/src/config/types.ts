@@ -86,6 +86,14 @@ export interface Config {
   // config.json carries device-specific fields that must not travel between
   // machines, whereas the key store is a per-user secret that syncs device→device.
 
+  // --- Codex reset credits (ct-49529) ---
+  // May the unattended auto-switch loop spend one of the active Codex account's
+  // rate-limit reset credits instead of moving the machine to another account?
+  // Default OFF: a credit is a finite thing the human earned, and redeeming one
+  // is not reversible, so nothing spends it on their behalf until they opt in.
+  // `cast accounts codex reset-credit` (a person typing a command) is unaffected.
+  codex_reset_credit_auto?: boolean;
+
   // --- Update behavior ---
   // index.ts wrote `auto_update`; daemon.ts wrote `desktop_auto_update` (opt out of
   // the daemon updating the desktop app out-of-band, default: on). Both are real

@@ -14,6 +14,7 @@ import {
   readProfileIndex,
   readUsageCache,
   profileDir,
+  resolveCodexAccount,
   CodexAccountError,
 } from "./codexAccounts";
 
@@ -211,6 +212,38 @@ describe("codexAccounts", () => {
 
     it("returns null when the machine has no codex state", () => {
       expect(getCodexAccountsHeartbeatPayload()).toBeNull();
+    });
+  });
+
+  describe("resolveCodexAccount", () => {
+    it("reads the ACTIVE account through the real codex home, never a snapshot", async () => {
+      writeActiveAuth(authJson());
+      saveCodexProfile("ashot");
+      await refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => rpcResult(80, "pro") });
+      for (const target of [resolveCodexAccount(), resolveCodexAccount("ashot")]) {
+        expect(target.name).toBe("ashot");
+        expect(target.account).toBe("acct-1");
+        expect(target.active).toBe(true);
+        // The live grant rotates; a copy of it goes stale. Both spellings of
+        // "the account I am signed into" must read ~/.codex.
+        expect(target.home).toBe(process.env.CODECAST_CODEX_HOME!);
+        expect(target.usage?.reset_credits).toEqual({ available: 1 });
+      }
+    });
+
+    it("reads a DORMANT profile through its own snapshot dir", () => {
+      writeActiveAuth(authJson());
+      saveCodexProfile("ashot");
+      writeActiveAuth(authJson({ email: "other@x.com", accountId: "acct-2" }));
+      saveCodexProfile("other");
+      const target = resolveCodexAccount("ashot");
+      expect(target.active).toBe(false);
+      expect(target.home).toBe(profileDir("ashot"));
+    });
+
+    it("names what is missing rather than guessing", () => {
+      expect(() => resolveCodexAccount("nope")).toThrow(CodexAccountError);
+      expect(() => resolveCodexAccount()).toThrow(/No Codex account is signed in/);
     });
   });
 });

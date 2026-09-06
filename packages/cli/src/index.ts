@@ -74,6 +74,8 @@ import {
   type Workspace,
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { resolveCodexAccount, CodexAccountError } from "./codexAccounts.js";
+import { fetchCodexResetCredits, offerRevision, redeemCodexResetCredit } from "./codexResetCredit.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -4619,6 +4621,121 @@ accountsCmd
   .description("Alias of `cast usage`")
   .option("--json", "machine-readable report")
   .action(runUsageCommand);
+
+const codexAccountsCmd = accountsCmd
+  .command("codex")
+  .description("Codex (ChatGPT) account actions");
+
+function creditExpiryNote(at: number | null): string {
+  if (!at) return "";
+  const days = Math.round((at - Date.now()) / 86_400_000);
+  return ` ${c.dim}· expires ${new Date(at).toISOString().slice(0, 10)}${days > 0 ? ` (${days}d)` : ""}${c.reset}`;
+}
+
+codexAccountsCmd
+  .command("reset-credit")
+  .description(
+    "Spend one of a Codex account's rate-limit reset credits\n\n" +
+    "A redeemed credit clears that account's usage windows at once — the way out\n" +
+    "of a limit park without moving the machine to another account. Credits are\n" +
+    "finite and a redeem cannot be undone, so this asks first.\n\n" +
+    "Defaults to the account you are signed into; --account picks a saved profile\n" +
+    "(a credit is only useful on the account your sessions actually run)."
+  )
+  .option("--account <name>", "saved Codex profile to spend from (default: the active login)")
+  .option("--yes", "skip the confirmation")
+  .action(async (options: any) => {
+    let target;
+    try {
+      target = resolveCodexAccount(options.account);
+    } catch (err) {
+      console.error(err instanceof CodexAccountError ? err.message : String(err));
+      process.exit(1);
+      return;
+    }
+    const label = target.name ?? target.email ?? target.account;
+    // Re-read from the usage cache each time rather than closing over one
+    // reading: a window the daemon's probe refreshed between the prompt and the
+    // enter key must move the revision, or the staleness check proves nothing.
+    const readWindows = () => {
+      const usage = resolveCodexAccount(options.account).usage;
+      return { session: usage?.session, weekly: usage?.weekly };
+    };
+    const windows = readWindows();
+
+    let offer;
+    try {
+      offer = await fetchCodexResetCredits(target.home);
+    } catch (err) {
+      console.error(`Could not read ${label}'s reset credits: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+      return;
+    }
+    if (!offer) {
+      console.error(`${label} has no usable Codex login on this machine (run \`codex login\`)`);
+      process.exit(1);
+      return;
+    }
+    if (offer.available <= 0) {
+      console.log(`${c.dim}${label} has no reset credit to spend.${c.reset}`);
+      if (offer.credits.length > 0) {
+        console.log(`${c.dim}  ${offer.credits.length} credit(s) on record, none available${c.reset}`);
+      }
+      return;
+    }
+
+    const pct = (w?: { percent: number }) => (w ? `${Math.round(w.percent)}%` : "—");
+    console.log(`${c.cyan}${label}${c.reset} has ${c.green}${offer.available}${c.reset} reset credit(s)${creditExpiryNote(offer.next_expires_at)}`);
+    console.log(`${c.dim}  windows now: session ${pct(windows.session)} · weekly ${pct(windows.weekly)} — a redeem clears both${c.reset}`);
+
+    if (!options.yes) {
+      const rl = await import("readline");
+      const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => {
+        iface.question(`Spend one credit on ${label}? [y/N] `, resolve);
+      });
+      iface.close();
+      if (!/^y(es)?$/i.test(answer.trim())) {
+        console.log("Aborted");
+        return;
+      }
+    }
+
+    // The offer the human just agreed to is the authorization. Handing its
+    // revision back makes the redeem re-read the account and refuse if the
+    // credits or the windows moved while they were deciding — spending a credit
+    // on a window that already rolled buys nothing.
+    let outcome;
+    try {
+      outcome = await redeemCodexResetCredit({
+        account: target.account,
+        codexHomeDir: target.home,
+        readWindows,
+        expectedRevision: offerRevision(offer, windows),
+      });
+    } catch (err) {
+      console.error(`Redeem failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`${c.dim}  the attempt is recorded; re-running replays the same request id, so no second credit is spent${c.reset}`);
+      process.exit(1);
+      return;
+    }
+
+    if (outcome.status === "refused") {
+      console.error(`${c.yellow}!${c.reset} nothing spent — ${outcome.message}`);
+      process.exit(1);
+      return;
+    }
+    const said: Record<string, string> = {
+      reset: `${c.green}✓${c.reset} redeemed — ${label}'s rate-limit windows are clear`,
+      nothing_to_reset: `${c.dim}nothing to reset — ${label}'s windows were already clear, no credit spent${c.reset}`,
+      no_credit: `${c.yellow}!${c.reset} the account had no credit left by the time the redeem landed`,
+      already_redeemed: `${c.dim}already redeemed — this request had been answered before, no second credit spent${c.reset}`,
+    };
+    console.log(said[outcome.outcome]);
+    if (outcome.outcome === "reset") {
+      console.log(`${c.dim}  restart limit-parked sessions with:${c.reset} cast accounts continue`);
+    }
+  });
 
 program
   .command("start")

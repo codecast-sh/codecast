@@ -25,6 +25,7 @@ import {
   splitAuthParks,
   AUTO_SWITCH_CONTINUE_KEY,
   AUTO_SWITCH_PROBE_RETRY_MS,
+  resetCreditAttemptKey,
   authRestartAttemptKey,
   AUTO_CONTINUE_WINDOW_MS,
   isAutoContinueEnabled,
@@ -927,6 +928,43 @@ const AUTO_SWITCH_COOLDOWN_MS = 3 * 60 * 1000;
 const AUTO_SWITCH_DEBOUNCE_MS = 45 * 1000;
 const MAX_ATTEMPT_HISTORY = 64;
 
+/**
+ * The Codex reset credit this device may spend instead of switching accounts,
+ * or null when there is nothing to offer. Three conditions, all required.
+ *
+ * A Codex session is among the parked ones. A reset credit clears a CODEX
+ * account's windows, so redeeming one because a Claude session parked would
+ * spend something finite on nothing AND delay the switch that would have
+ * helped. Today this is what keeps the branch quiet: `isBlockedConversation`
+ * admits codex rows only for a "safety" banner, so no codex LIMIT park reaches
+ * this loop yet — the check is the seam that lights up when codex limit-park
+ * detection lands (ct-49676), not a formality.
+ *
+ * The human turned redemption on for this machine (`codex_reset_credit_auto` in
+ * its config, reported through the heartbeat's device settings). A credit is
+ * something they earned, so it is never spent for them by default.
+ *
+ * And the ACTIVE Codex login — the one the parked sessions are running — holds
+ * at least one. A dormant profile's credit would need a switch to reach, which
+ * is the thing this exists to avoid.
+ *
+ * The daemon re-checks its own config before spending, so a stale device row
+ * can only ever propose.
+ */
+export function codexResetCreditOffer(
+  device: Pick<Doc<"devices">, "settings" | "codex_accounts">,
+  parked: Array<{ agent_type?: string }>,
+): { profile: string; available: number } | null {
+  if (!parked.some((c) => c.agent_type === "codex")) return null;
+  if (device.settings?.codex_reset_credit_auto !== true) return null;
+  const accounts = device.codex_accounts;
+  const activeEmail = accounts?.active_email;
+  if (!accounts || !activeEmail) return null;
+  const active = accounts.profiles.find((p) => p.email === activeEmail);
+  const available = active?.usage?.reset_credits?.available ?? 0;
+  return active && available > 0 ? { profile: active.name, available } : null;
+}
+
 /** Schedule an auto-switch check for this user. Called from the message paths
  * that stamp a limit-kind banner — the event that makes a check worth running.
  * The check is idempotent and self-gating (no-ops without the device flag), so
@@ -1371,6 +1409,7 @@ export const autoSwitchCheck = internalMutation({
     );
     const decision = decideAutoSwitch({
       now,
+      resetCredit: codexResetCreditOffer(primary, targets),
       parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
       activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.updated_at ?? 0)) : null,
       activeEmail: primary.cc_accounts?.active_email,
@@ -1419,6 +1458,41 @@ export const autoSwitchCheck = internalMutation({
         conversations: limitBlocked.length,
         restarted: res.restarted,
       };
+    }
+
+    if (decision.action === "redeem_reset_credit") {
+      // Spend the credit on the machine that holds the login, then revive the
+      // parked sessions on the SAME account — no switch, no other account's
+      // week spent. The daemon owns both halves of that (it re-checks its own
+      // config before spending and skips the revive when the redeem refused),
+      // so this is one command rather than a redeem here and a revive later.
+      const commandId = await ctx.db.insert("daemon_commands", {
+        user_id: args.user_id,
+        command: "switch_account" as const,
+        args: JSON.stringify({
+          codex_reset_credit: { profile: decision.profile },
+          conversation_ids: targets.map((c) => c._id),
+          session_ids: Object.fromEntries(targets.map((c) => [c._id, c.session_id])),
+          continue_blocked: true,
+        }),
+        created_at: now,
+        target_device_id: primary.device_id,
+      });
+      const retryAt = now + AUTO_SWITCH_COOLDOWN_MS + 5_000;
+      await recordAction(
+        `redeem_reset_credit:${decision.profile}`,
+        [resetCreditAttemptKey(decision.profile)],
+        retryAt,
+      );
+      // A redeem that buys nothing must not strand the sessions: look again
+      // after the cooldown, when the switch branch becomes reachable.
+      await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
+        user_id: args.user_id,
+      });
+      console.log(
+        `autoSwitchCheck: redeeming a Codex reset credit on "${decision.profile}" for ${targets.length} parked conversation(s)`,
+      );
+      return { acted: "redeem_reset_credit", profile: decision.profile, conversations: targets.length, commandId };
     }
 
     if (decision.action === "switch") {
