@@ -24,6 +24,7 @@ const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor re
 const DECIDE_VERSION = "2"; // v2: age + messages-since on ls, stale-ask sweeping guidance
 const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
 const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
+const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
 
 export function getMemoryVersion(): string {
@@ -84,4 +85,8 @@ export function getCallsVersion(): string {
 
 export function getLimitsVersion(): string {
   return LIMITS_VERSION;
+}
+
+export function getComputerVersion(): string {
+  return COMPUTER_VERSION;
 }
