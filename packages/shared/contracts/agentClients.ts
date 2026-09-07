@@ -374,6 +374,16 @@ export interface AgentClientDescriptor {
    *  model / effort flags the daemon appends. Empty for every current client. */
   launchArgs: string[];
   /**
+   * This client's composer must be TYPED, never pasted, and this is the tmux
+   * key that puts a literal newline in it.
+   *
+   * A bracketed paste is a paste GESTURE to the program receiving it, not just
+   * text, and a client is free to answer it by reading the machine's own
+   * clipboard. That is behaviour a managed pane must not have: the pane is
+   * driven by injection, so whatever the human last copied rides along.
+   */
+  typedComposerInput?: { newlineKey: string };
+  /**
    * How this client runs non-interactively (print / exec / run). Required: a
    * new client must say how `cast exec` invokes it. `flag` is `-p` on the main
    * binary; `subcommand` is `codex exec` / `opencode run`. `promptAsValue` is
@@ -731,6 +741,15 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // (ps comm basename "grok", verified live on v1.0.5).
     binary: "grok",
     launchArgs: [],
+    // Why: a bracketed paste makes grok read the machine's clipboard and attach
+    // any image it holds, so every injected message on a machine with a
+    // screenshot copied carried that image to xAI and the transcript recorded
+    // an attachment nobody sent (ct-49607, measured on 1.0.13). No env gate
+    // stops it: grok's three clipboard variables are two copy routes and one
+    // read gate, and the read gate leaves the paste-time attach in place. Typed
+    // input is clean, and grok's composer takes Ctrl+J as a literal newline, so
+    // typing keeps a multi-line message whole.
+    typedComposerInput: { newlineKey: "C-j" },
     printMode: { kind: "flag", token: "-p", promptAsValue: true },
     // Always resume by UUID: a non-UUID argument matches session TITLES for the
     // cwd case-insensitively and ERRORS on duplicates (ambiguity by design), so
