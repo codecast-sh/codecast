@@ -29,16 +29,21 @@ export async function readCompleteMetadataHead(
   let incomplete = false;
   let exhausted = false;
   let lastComplete = -1;
+  let firstNativeByte = -1;
   const result = await readCompleteLines(fd, 0, available, {
     step: initialBytes,
     checkpoint,
     boundary: (buffer, length, atEof, from = 0) => {
       checkpoint();
       const bytes = buffer.subarray(0, length);
+      if (firstNativeByte < 0) {
+        const native = buffer.subarray(from,length).findIndex(byte => byte !== 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d);
+        if (native >= 0) firstNativeByte = from + native;
+      }
       const last = buffer.subarray(from,length).lastIndexOf(0x0a);
       if (last >= 0) lastComplete = from + last;
-      const cut = bytes.indexOf(0x0a, Math.max(from, target - 1));
-      if (cut >= 0) return cut;
+      const cut = bytes.indexOf(0x0a, Math.max(from, target - 1, firstNativeByte));
+      if (cut >= 0 && firstNativeByte >= 0) return cut;
       if (!atEof) return -1;
       exhausted = available < size;
       incomplete = !exhausted && length > 0 && bytes[length - 1] !== 0x0a;
