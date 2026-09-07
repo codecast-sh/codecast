@@ -576,7 +576,10 @@ export const CLIENT_SYNC_REGISTRY = {
   // messages, keyed by message id. The newest page rides a live subscription
   // and older pages arrive as one-shot fetches; every page overlays (delta),
   // like feedConversations. Paging cursors live in feedCursors/feedHasMore
-  // under "msg:<filter>". A "my" view is the rows with is_own.
+  // under "msg:<filter>". A "my" view is the rows with is_own; from_agent marks
+  // the prompts an agent wrote (server-derived), which the People/Mine views
+  // drop. A row cached before from_agent existed reads as human until the live
+  // page or a refetch replaces it.
   messageFeed: {
     persistence: { kind: "collection", key: "messageFeed" },
     hydration: { phase: "deferred" },
