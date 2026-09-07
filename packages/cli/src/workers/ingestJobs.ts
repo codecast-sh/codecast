@@ -227,8 +227,8 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
     }
     if (job.client === 'codex') {
       meta.appServerHead = await readPart(job.file,4096);
-      meta.cwd = extractCodexCwd(await readPart(job.file,16384));
       const head = await readCodexSessionMetaHeadAsync(job.file);
+      meta.cwd = extractCodexCwd(head);
       meta.codex = extractCodexSessionMetadata(head); meta.forkRoot = extractCodexForkRoot(head);
       if (meta.codex?.originator === 'codex_exec' && content.includes('"task_complete"')) {
         const full = await optional(() => whole(job.file),meta.warnings,'review metadata') ?? content;

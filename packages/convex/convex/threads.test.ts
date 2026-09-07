@@ -252,6 +252,22 @@ describe("touch per kind", () => {
     expect(view.entries[0].last_reply).toMatchObject({ author_kind: "agent", author_name: "Alice", preview: "from a session" });
   });
 
+  test("task payloads retain a private Codex author only for viewers who can read the session", async () => {
+    const ctx = await context(ALICE, {
+      conversations: [conversation(PERSONAL_CONVERSATION, { is_private: true, session_id: "codex-thread", title: "Cast browser routing", agent_type: "codex" })],
+    });
+    await call(cliAddTaskComment, ctx, {
+      api_token: TOKEN, short_id: "ct-1", text: "recovered pairing", author: "Claude", conversation_id: "codex-thread",
+    });
+    const ownerComment = (await inbox(ctx)).payload.tasks[0].comments[0];
+    expect(ownerComment.session_info).toMatchObject({ _id: PERSONAL_CONVERSATION, title: "Cast browser routing", agent_type: "codex" });
+    const memberComment = (await inbox(as(ctx, BOB))).payload.tasks[0].comments[0];
+    expect(memberComment.text).toBe("recovered pairing");
+    expect(memberComment.session_info).toBeNull();
+    expect(memberComment.conversation_id).toBeUndefined();
+    expect(ctx._emitted.find((entry: any) => entry.args.event_type === "task_commented")?.args.conversation_id).toBeUndefined();
+  });
+
   test("marks move forward only", async () => {
     const ctx = await context(ALICE);
     const base = { kind: "task" as const, rootKey: String(TASK), teamId: TEAM, refs: { task_id: TASK }, participants: [ALICE, BOB] };

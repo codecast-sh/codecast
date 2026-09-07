@@ -1,4 +1,5 @@
 import { Id } from "../_generated/dataModel";
+import { canAccessConversation } from "./access";
 
 // A comment posted from inside a session carries a conversation_id back-link;
 // the web renders the session's title as the comment author (an agent's
@@ -16,7 +17,7 @@ export type CommentSessionInfo = {
 
 export async function attachCommentSessionInfo<
   T extends { conversation_id?: Id<"conversations"> | null },
->(ctx: { db: any }, comments: T[]): Promise<(T & { session_info: CommentSessionInfo | null })[]> {
+>(ctx: { db: any }, comments: T[], userId: Id<"users">): Promise<(T & { session_info: CommentSessionInfo | null })[]> {
   const cache = new Map<string, CommentSessionInfo | null>();
   return await Promise.all(comments.map(async (c) => {
     let session_info: CommentSessionInfo | null = null;
@@ -26,7 +27,7 @@ export async function attachCommentSessionInfo<
         session_info = cache.get(key)!;
       } else {
         const conv = await ctx.db.get(c.conversation_id);
-        if (conv) {
+        if (conv && await canAccessConversation(ctx, userId, conv)) {
           session_info = {
             _id: conv._id,
             session_id: conv.session_id,
@@ -37,6 +38,6 @@ export async function attachCommentSessionInfo<
         cache.set(key, session_info);
       }
     }
-    return { ...c, session_info };
+    return { ...c, conversation_id: session_info ? c.conversation_id : undefined, session_info };
   }));
 }

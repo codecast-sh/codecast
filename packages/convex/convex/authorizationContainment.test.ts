@@ -312,7 +312,7 @@ describe("Phase 0 task boundary", () => {
     expect(result.plan).toBeNull();
   });
 
-  test("dependencies stay contained while cross-workspace comments drop the relationship", async () => {
+  test("dependencies stay contained while cross-workspace comments retain their author", async () => {
     const token = "task-relation-token";
     const tables = baseTables({
       api_tokens: [{ _id: "token_task_relation", user_id: MEMBER, token_hash: await hashToken(token) }],
@@ -329,8 +329,6 @@ describe("Phase 0 task boundary", () => {
       short_id: "ct-personal",
       blocks: "ct-team",
     })).rejects.toThrow("Forbidden");
-    // A cross-workspace comment still lands (an agent in workspace A reporting
-    // on a task in workspace B) — only the conversation back-link is dropped.
     await (addTaskComment as any)._handler(testCtx, {
       api_token: token,
       short_id: "ct-personal",
@@ -338,7 +336,8 @@ describe("Phase 0 task boundary", () => {
       conversation_id: "team-session",
     });
     expect(tables.task_comments).toHaveLength(1);
-    expect(tables.task_comments[0].conversation_id).toBeUndefined();
+    expect(tables.task_comments[0].conversation_id).toBe("conv_team");
+    expect(tables.tasks[0].conversation_ids).toBeUndefined();
   });
 
   test("cross-workspace task start succeeds without binding the conversation", async () => {

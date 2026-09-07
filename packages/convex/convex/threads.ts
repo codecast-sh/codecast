@@ -34,6 +34,7 @@ import {
 import { commentsForAnchor, isInCommentThread } from "./comments";
 import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
+import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import {
   THREAD_BADGE_SCAN,
   dropThreadRead,
@@ -402,10 +403,10 @@ const taskKind: ThreadKindResolver = {
   async newestAt(ctx, row, cache) {
     return (await taskCommentsFor(ctx, row, cache))[0]?.created_at ?? 0;
   },
-  async load(ctx, _userId, row, cache, payload) {
+  async load(ctx, userId, row, cache, payload) {
     const task = await taskFor(ctx, row, cache);
     if (!task) return;
-    const comments = [...(await taskCommentsFor(ctx, row, cache))].reverse();
+    const comments = await attachCommentSessionInfo(ctx, [...(await taskCommentsFor(ctx, row, cache))].reverse(), userId);
     payload.tasks.push({ ...task, comments });
   },
   async preview(ctx, row, cache) {
