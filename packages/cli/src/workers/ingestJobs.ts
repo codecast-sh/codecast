@@ -11,6 +11,8 @@ import { isCursorRoleHeaderLine, parseTranscriptFor, parseCodexSessionFile, pars
 import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail } from './ingestMetadata.js';
 import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
+import { MetadataWindowExhausted, readCompleteMetadataHead, readCompleteMetadataTail } from './ingestMetadataWindow.js';
+const METADATA_MAX_BYTES = 64 * 1024;
 export function ingestIdentity(s: fs.Stats): IngestIdentity {
   return {dev:s.dev,ino:s.ino,birthtimeMs:s.birthtimeMs,ctimeMs:s.ctimeMs,mtimeMs:s.mtimeMs,size:s.size};
 }
@@ -35,6 +37,60 @@ async function readPart(file: string, length: number, tail = false): Promise<str
     const {bytesRead} = await fd.read(buf,0,buf.length,tail ? Math.max(0,size-length) : 0);
     return buf.toString('utf8',0,bytesRead);
   } finally { await fd.close(); }
+}
+async function withMetadataSource<T>(job: IngestJob, before: IngestIdentity, checkpoint: () => void, read: (fd: fs.promises.FileHandle) => Promise<T>, cleanupFailed?: () => void): Promise<T> {
+  const checkIdentity = (identity: IngestIdentity) => {
+    if (!sameIngestFile(before,identity) || identity.size < before.size || identity.size === before.size && !sameIngestSnapshot(before,identity)) throw new Error('ingest metadata handle changed');
+  };
+  checkpoint();
+  const fd = await fs.promises.open(job.file,'r');
+  let result!: T;
+  let failed = false;
+  let failure: unknown;
+  try {
+    checkpoint();
+    const opened = await fd.stat();
+    checkpoint();
+    checkIdentity(ingestIdentity(opened));
+    result = await read(fd);
+    checkpoint();
+    const after = await fd.stat();
+    checkpoint();
+    checkIdentity(ingestIdentity(after));
+  } catch (error) { failed = true; failure = error; }
+  try { await fd.close(); }
+  catch (error) {
+    cleanupFailed?.();
+    if (!failed) throw error;
+    try { process.stderr.write(`ingest metadata cleanup: ${String(error).slice(0,256)}; primary: ${String(failure).slice(0,256)}\n`); }
+    finally { throw failure; }
+  }
+  if (failed) throw failure;
+  checkpoint();
+  return result;
+}
+async function readMetadataTitle(job: IngestJob, before: IngestIdentity, checkpoint: () => void, warnings: string[]): Promise<string | undefined> {
+  let checkpointFailed = false;
+  let cleanupFailed = false;
+  const check = () => {
+    checkpointFailed = true;
+    checkpoint();
+    checkpointFailed = false;
+  };
+  return optional(() => withMetadataSource(job,before,check,async fd => {
+    try {
+      for await (const records of readCompleteMetadataTail(fd,before.size,4096,METADATA_MAX_BYTES,check,() => warnings.push('title: incomplete final record'))) {
+        check();
+        const title = extractSummaryTitle(records);
+        check();
+        if (title) return title;
+      }
+    } catch (error) {
+      if (checkpointFailed || !(error instanceof MetadataWindowExhausted)) throw error;
+      warnings.push(`title: ${error.message}`);
+    }
+    return undefined;
+  },() => { cleanupFailed = true; }),warnings,'title',() => checkpointFailed || cleanupFailed);
 }
 async function whole(file: string): Promise<string> {
   const fd = await fs.promises.open(file,'r');
@@ -76,9 +132,10 @@ async function windowFor(job: IngestJob, before: IngestIdentity) {
     return result;
   } finally { await fd.close(); }
 }
-async function optional<T>(read: () => Promise<T>, warnings: string[], label: string): Promise<T | undefined> {
+async function optional<T>(read: () => Promise<T>, warnings: string[], label: string, requiredFailure?: () => boolean): Promise<T | undefined> {
   try { return await read(); }
   catch (error) {
+    if (requiredFailure?.()) throw error;
     const code = (error as NodeJS.ErrnoException).code;
     if (!['ENOENT','EACCES','EPERM','EIO'].includes(code ?? '')) throw error;
     warnings.push(`${label}: ${code}`);
@@ -132,13 +189,16 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
         result.messages = recoverImagesFromBackup(result.messages,job.file+'.bak',message => meta.warnings.push(message));
         meta.backupAttempted = true;
       }
-      const rawHead = await optional(() => readPart(job.file,16384),meta.warnings,'head');
-      const head = rawHead?.slice(0,rawHead.lastIndexOf('\n')+1);
-      if (head !== undefined) {
-        meta.slug = extractSlug(head); meta.parentUuid = extractParentUuid(head); meta.cwd = extractCwd(head);
-        meta.headMessages = parseSessionFile(head).filter(m => m.role === 'user').slice(0,3);
-      }
-      meta.cliFlags = detectCliFlags((head ?? '')+'\n'+content);
+      const headWindow = await withMetadataSource(job,before,checkpoint,fd => readCompleteMetadataHead(fd,before.size,16384,METADATA_MAX_BYTES,checkpoint));
+      const head = headWindow.content;
+      if (before.size > 0 && !head.trim()) throw new Error(headWindow.exhausted ? 'ingest head resource limit: no complete native prefix' : 'ingest head incomplete: no complete native prefix');
+      if (headWindow.exhausted) meta.warnings.push(`head: metadata read allowance exhausted (${METADATA_MAX_BYTES} bytes)`);
+      if (headWindow.incomplete) meta.warnings.push('head: incomplete final record');
+      checkpoint();
+      meta.slug = extractSlug(head); meta.parentUuid = extractParentUuid(head); meta.cwd = extractCwd(head);
+      meta.headMessages = parseSessionFile(head).filter(m => m.role === 'user').slice(0,3);
+      checkpoint();
+      meta.cliFlags = detectCliFlags(head+'\n'+content);
       meta.teamInfo = extractTeamInfo(content);
       meta.planTools = [];
       for (const [lineIndex,line] of content.split('\n').entries()) {
@@ -171,8 +231,10 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       }
     }
     if (job.client === 'claude' || job.client === 'codex') {
-      const tail = await optional(() => readPart(job.file,4096,true),meta.warnings,'title');
-      meta.summaryTitle = extractSummaryTitle(content+'\n'+(tail ?? ''));
+      checkpoint();
+      meta.summaryTitle = extractSummaryTitle(content);
+      checkpoint();
+      if (!meta.summaryTitle) meta.summaryTitle = await readMetadataTitle(job,before,checkpoint,meta.warnings);
     }
     if (job.client === 'pi') { meta.cwd = extractPiCwd(content); meta.turn = classifyPiTranscriptTail(content); }
     if (job.client === 'grok') {

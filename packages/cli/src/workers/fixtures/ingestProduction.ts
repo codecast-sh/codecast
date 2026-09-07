@@ -118,6 +118,29 @@ const codex = (p:string,id:string) => d.processCodexSession(p,id,sync,'user',und
 const cursor = (p:string,id:string) => d.processCursorTranscriptFile(p,id,sync,'user',undefined,cache,queue,pending,()=>{});
 const normalize = (ms:any[]) => JSON.parse(JSON.stringify(ms.map(m=>({...m,timestamp:0}))));
 try {
+  if (process.argv[3] === 'cursor-recovery') {
+    const sources = [
+      {id:'cursor-recovery-claude',content:claudeLine('recovered-first','first')+claudeLine('recovered-second','second'),run:claude},
+      {id:'cursor-recovery-codex',content:JSON.stringify({type:'session_meta',payload:{id:'cursor-recovery-codex',cwd:home}})+'\n'+JSON.stringify({type:'response_item',timestamp:'2026-09-05T12:00:00Z',payload:{type:'message',role:'user',content:[{type:'input_text',text:'codex cursor recovery'}]}})+'\n',run:codex},
+      {id:'cursor-recovery-cursor',content:'user:\ncursor recovery question\nassistant:\ncursor recovery answer\n',run:cursor},
+    ];
+    for (const source of sources) {
+      const p=file(source.id,source.content);
+      setPosition(p,Math.floor(Buffer.byteLength(source.content)/2));
+      assert.notEqual(Buffer.from(source.content)[getPosition(p)-1],10);
+      const before=sends.length;
+      await source.run(p,source.id);
+      assert.equal(getPosition(p),fs.statSync(p).size);
+      assert.ok(sends.length>before);
+      const after=sends.length;
+      await source.run(p,source.id);
+      assert.equal(sends.length,after);
+    }
+    assert.ok(rows.has('recovered-first'));
+    assert.ok(rows.has('recovered-second'));
+    console.log(JSON.stringify({recovered:sources.length,enabled,parentParses,workerPid:ingestWorkerHost()?.state.pid}));
+    await closeFixtureWorkers();process.exit(0);
+  }
   if (process.argv[3] === 'emission-review') {
     const {emissionReview}=await import('./ingestEmission.js');
     const review=await emissionReview({d,home,getPosition,setPosition});
