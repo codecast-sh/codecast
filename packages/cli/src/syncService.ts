@@ -485,6 +485,27 @@ export class SyncService {
   }
 
   /**
+   * Report local git activity read off a checkout's reflog
+   * (gitActivity.recordLocal): commits, checkouts, merges, pulls, resets,
+   * pushes. The server decides the team from the checkout path; `private`
+   * means the path shares nothing and the daemon should stop reporting it.
+   */
+  async recordGitActivity(payload: {
+    root: string;
+    repository: string;
+    remote_url?: string;
+    branch?: string;
+    events: Array<Record<string, unknown>>;
+  }): Promise<{ published: boolean; reason?: string; recorded?: number } | undefined> {
+    try {
+      return await this.mutate("gitActivity:recordLocal", { api_token: this.apiToken, ...payload });
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      return undefined;
+    }
+  }
+
+  /**
    * Answer one on-demand repository read (repos.answerLocalRead): the cache
    * row, a commit's diff, or the reason it could not be answered. Undefined
    * means the call itself failed and the request stays open for a retry.

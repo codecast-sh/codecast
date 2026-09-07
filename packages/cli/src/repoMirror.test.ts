@@ -111,6 +111,29 @@ describe("buildRepoMirror", () => {
     expect(mirror!.commits[1]).toMatchObject({ files_changed: 2, insertions: 4, deletions: 0, author_email: "t@t", branch: "main" });
   });
 
+  test("every commit ahead of upstream is published, past the first page of history", async () => {
+    const repo = makeRepo();
+    const remote = path.join(dir, "remote.git");
+    git(repo, "checkout", "-q", "main");
+    execFileSync("git", ["init", "-q", "--bare", remote]);
+    git(repo, "remote", "set-url", "origin", remote);
+    git(repo, "push", "-q", "-u", "origin", "main");
+    const pushed = git(repo, "rev-parse", "HEAD");
+    for (let i = 0; i < 33; i++) {
+      fs.writeFileSync(path.join(repo, "n.txt"), `${i}\n`);
+      git(repo, "add", "n.txt");
+      git(repo, "commit", "-q", "-m", `local ${i}`);
+    }
+    const mirror = await buildRepoMirror(repo);
+    const local = mirror!.commits.filter((c) => c.message.startsWith("local "));
+    expect(local).toHaveLength(33);
+    expect(local.every((c) => c.branch === "main")).toBe(true);
+    // One set: the first page (30) and the unpushed walk (33) overlap, and the
+    // pushed tip sits past both, so the row list is exactly the local commits.
+    expect(mirror!.commits).toHaveLength(33);
+    expect(mirror!.commits.some((c) => c.sha === pushed)).toBe(false);
+  }, 30_000);
+
   test("a repository with no readme says so, and the fingerprint moves with the refs", async () => {
     const repo = makeRepo();
     git(repo, "checkout", "-q", "main");

@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
+import { linkLocalCommitToConversation } from "./gitActivity";
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -641,6 +642,9 @@ export async function materializeFileChanges(
         .first();
       if (row && row.change_type === "commit" && !row.commit_hash) {
         await ctx.db.patch(row._id, { commit_hash: hash });
+        // The reflog may have reported this commit before this line synced;
+        // the commit row and its activity event learn the session now.
+        await linkLocalCommitToConversation(ctx, conversationId, hash);
       }
     }
   }
