@@ -45,6 +45,60 @@ describe("daemonBuildUnchanged", () => {
 describe("daemon restart gating", () => {
   const index = src("index.ts");
 
+  test.each(["headers", "body"])("command polling bounds stalled %s, coalesces ticks, then recovers", async (stall) => {
+    let healthy = false;
+    let requests = 0;
+    let failures = 0;
+    let successes = 0;
+    let delivered = 0;
+    let finishCommand: (() => void) | undefined;
+    let holdCommand = false;
+    const timeouts: number[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests++;
+        if (healthy) return Response.json({ commands: [{ id: "recovered", command: "test" }] });
+        if (stall === "headers") return new Promise<Response>(() => {});
+        return new Response(new ReadableStream({ start: (stream) => stream.enqueue(new TextEncoder().encode('{"commands":')) }));
+      },
+    });
+    const deps = {
+      readConfig: () => ({ auth_token: "test", convex_url: `http://127.0.0.1:${server.port}` }),
+      fetch, AbortSignal: { timeout: (ms: number) => { timeouts.push(ms); return AbortSignal.timeout(healthy ? 5_000 : 300); } },
+      daemonVersion: "test", platform: "test", process: { pid: 1 },
+      isAutostartEnabled: () => false, hasTmux: () => false, deviceId: () => "test", deviceLabel: () => "test",
+      BOOT_ID: "test", syncHealthFields: () => ({}),
+      backendOutage: { markFailure: () => { failures++; }, markSuccess: () => { successes++; return 0; } },
+      log: () => {}, executeCommandBatch: async () => { delivered++; if (holdCommand) await new Promise<void>((resolve) => { finishCommand = resolve; }); },
+    };
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`let daemonCommandPollInFlight = false; async function poll() ${functionBody(src("daemon.ts"), "pollDaemonCommands")}`);
+    const poll = new Function(...Object.keys(deps), `${code}\nreturn poll;`)(...Object.values(deps));
+    try {
+      const first = poll();
+      const overlapping = [poll(), poll()];
+      expect(await Promise.race([Promise.all([first, ...overlapping]).then(() => true), Bun.sleep(3_000).then(() => false)])).toBe(true);
+      expect({ requests, failures, successes, delivered }).toEqual({ requests: 1, failures: 1, successes: 0, delivered: 0 });
+      healthy = true;
+      await poll();
+      expect({ requests, failures, successes, delivered }).toEqual({ requests: 2, failures: 1, successes: 1, delivered: 1 });
+      expect(timeouts).toEqual([15_000, 15_000]);
+      holdCommand = true;
+      const slowCommand = poll();
+      for (let i = 0; i < 100 && !finishCommand; i++) await Bun.sleep(10);
+      expect(finishCommand).toBeDefined();
+      holdCommand = false;
+      await poll();
+      expect(requests).toBe(4);
+      expect(delivered).toBe(3);
+      finishCommand?.();
+      await slowCommand;
+    } finally {
+      finishCommand?.();
+      server.stop(true);
+    }
+  });
+
   test.each([
     { version: "1.1.125", build: "def456def456", restarts: 1 },
     { version: "1.1.124", build: "def456def456", restarts: 0 },

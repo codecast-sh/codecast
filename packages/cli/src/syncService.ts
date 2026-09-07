@@ -1,4 +1,5 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
@@ -526,7 +527,7 @@ export class SyncService {
 
   getSubscriptionClient(): ConvexClient {
     if (!this.subscriptionClient) {
-      this.subscriptionClient = new ConvexClient(this.convexUrl);
+      this.subscriptionClient = new ConvexClient(this.convexUrl, { webSocketConstructor: recoveringWebSocket({ completeMissingClose: true }) });
     }
     return this.subscriptionClient;
   }

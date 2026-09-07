@@ -2488,14 +2488,20 @@ async function executeCommandBatch(
 }
 
 
+let daemonCommandPollInFlight = false;
+
 async function pollDaemonCommands(): Promise<void> {
+  if (daemonCommandPollInFlight) return;
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) return;
+  daemonCommandPollInFlight = true;
+  let data: { commands?: Parameters<typeof executeCommandBatch>[0] };
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const response = await fetch(`${siteUrl}/cli/heartbeat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
         api_token: config.auth_token,
         version: daemonVersion || "unknown",
@@ -2517,30 +2523,33 @@ async function pollDaemonCommands(): Promise<void> {
       backendOutage.markFailure();
       return;
     }
-    const downFor = backendOutage.markSuccess();
-    if (downFor > 0) {
-      if (downFor > STUCK_CONNECTION_THRESHOLD_MS) {
-        const state = readDaemonState();
-        const lastHeal = state.lastSelfHealRestart || 0;
-        if (Date.now() - lastHeal > SELF_HEAL_COOLDOWN_MS) {
-          const downSec = Math.round(downFor / 1000);
-          logLifecycle("self_heal_restart", `Backend recovered after ${downSec}s down, restarting`);
-          sendLogImmediate("warn", `[LIFECYCLE] self_heal_restart: backend recovered after ${downSec}s down`, { error_code: "self_heal_restart" });
-          saveDaemonState({ lastSelfHealRestart: Date.now() });
-          flushRemoteLogs()
-            .then(() => restartDaemonProcess("backend recovered after outage"))
-            .catch(() => restartDaemonProcess("backend recovered after outage"));
-          return;
-        }
-      }
-    }
-    const data = await response.json();
-    if (data.commands && data.commands.length > 0) {
-      log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c: any) => c.command).join(", ")}`);
-      await executeCommandBatch(data.commands, config, "POLL");
-    }
+    data = await response.json();
   } catch {
     backendOutage.markFailure();
+    return;
+  } finally {
+    daemonCommandPollInFlight = false;
+  }
+  const downFor = backendOutage.markSuccess();
+  if (downFor > 0) {
+    if (downFor > STUCK_CONNECTION_THRESHOLD_MS) {
+      const state = readDaemonState();
+      const lastHeal = state.lastSelfHealRestart || 0;
+      if (Date.now() - lastHeal > SELF_HEAL_COOLDOWN_MS) {
+        const downSec = Math.round(downFor / 1000);
+        logLifecycle("self_heal_restart", `Backend recovered after ${downSec}s down, restarting`);
+        sendLogImmediate("warn", `[LIFECYCLE] self_heal_restart: backend recovered after ${downSec}s down`, { error_code: "self_heal_restart" });
+        saveDaemonState({ lastSelfHealRestart: Date.now() });
+        flushRemoteLogs()
+          .then(() => restartDaemonProcess("backend recovered after outage"))
+          .catch(() => restartDaemonProcess("backend recovered after outage"));
+        return;
+      }
+    }
+  }
+  if (data.commands && data.commands.length > 0) {
+    log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c: any) => c.command).join(", ")}`);
+    await executeCommandBatch(data.commands, config, "POLL");
   }
 }
 
