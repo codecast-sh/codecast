@@ -6,6 +6,7 @@ import {findUnsyncedFilesAsync} from '../syncLedger.js';
 import {isTranscriptFileInSyncScope,performReconciliation} from '../reconciliation.js';
 import {watchDirFilter} from '../syncScope.js';
 import {setSlowSyncFsThresholdForTests,setSlowSyncSink} from '../slowSync.js';
+import {defaultCursorPath} from '../cursorWatcher.js';
 const originalHome=process.env.HOME;const dirs:string[]=[];
 const temp=()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'f2-index-'));dirs.push(d);return d;};
 const write=(home:string,rel:string,text='{}\n')=>{const p=path.join(home,rel);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,text);return p;};
@@ -74,7 +75,7 @@ test('capability heartbeat discards delayed old-HOME and reset results',async()=
 });
 
 test('Cursor workspace stale observations run in worker and preserve position comparison',async()=>{
- const {Database}=await import('bun:sqlite');const {findStaleCursorSessions}=await import('../daemon.js');const home=temp();process.env.HOME=home;const dir=process.platform==='darwin'?path.join(home,'Library/Application Support/Cursor/User/workspaceStorage/hash'):path.join(home,'.cursor/User/workspaceStorage/hash');fs.mkdirSync(dir,{recursive:true});const file=path.join(dir,'state.vscdb');const db=new Database(file);db.run('CREATE TABLE ItemTable(key TEXT,value TEXT)');db.run("INSERT INTO ItemTable VALUES('workbench.panel.aichat.view.aichat.chatdata','{}')");db.close();fs.writeFileSync(path.join(dir,'workspace.json'),JSON.stringify({folder:'file:///tmp/f2-project'}));start(true);const rows=await findStaleCursorSessions();expect(rows).toHaveLength(1);expect(rows[0].workspacePath).toBe('/tmp/f2-project');expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);expect((await findStaleCursorSessions())[0].dbPath).toBe(file);
+ const {Database}=await import('bun:sqlite');const {findStaleCursorSessions}=await import('../daemon.js');const home=temp();process.env.HOME=home;const dir=path.join(defaultCursorPath(),'User/workspaceStorage/hash');fs.mkdirSync(dir,{recursive:true});const file=path.join(dir,'state.vscdb');const db=new Database(file);db.run('CREATE TABLE ItemTable(key TEXT,value TEXT)');db.run("INSERT INTO ItemTable VALUES('workbench.panel.aichat.view.aichat.chatdata','{}')");db.close();fs.writeFileSync(path.join(dir,'workspace.json'),JSON.stringify({folder:'file:///tmp/f2-project'}));start(true);const rows=await findStaleCursorSessions();expect(rows).toHaveLength(1);expect(rows[0].workspacePath).toBe('/tmp/f2-project');expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);expect((await findStaleCursorSessions())[0].dbPath).toBe(file);
 });
 
 test('hibernation retains the E1 refusal for old indexed Codex rollouts before any process probe',async()=>{

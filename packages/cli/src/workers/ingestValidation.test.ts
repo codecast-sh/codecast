@@ -57,7 +57,8 @@ test('Cursor raw ordinals use snapshot bubble extent across filtering and count 
     messages:[result().messages[0],result().messages[0]],signatures:['a'.repeat(64),'a'.repeat(64)],
     receiptSignatures:['b'.repeat(64),'b'.repeat(64)],receiptOccurrences:[10_000,10_001],messageTitles:[null,null],handoffParents:[null,null]};
   await expect(validateIngestResult(cursor,cursorJob)).resolves.toEqual(cursor);
-  for(const rawBubbleCount of [undefined,-1,3,10_000,1.5,128*1024*1024+1,Infinity,'10002']){
+  await expect(validateIngestResult({...cursor,rawBubbleCount:Infinity},cursorJob)).rejects.toThrow('invalid ingest value');
+  for(const rawBubbleCount of [undefined,-1,3,10_000,1.5,128*1024*1024+1,'10002']){
     await expect(validateIngestResult({...cursor,rawBubbleCount},cursorJob)).rejects.toThrow('schema');
   }
   for(const receiptOccurrences of [[10_000,10_000],[10_001,10_000],[-1,10_000],[10_000,10_002],[10_000,1.5]]){
