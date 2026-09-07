@@ -1102,6 +1102,12 @@ function kickstartManagedDaemon(): boolean {
   return result.status === 0;
 }
 
+function ownsDaemonInstallation(): boolean {
+  if (!getMacLaunchdDaemonStatus()?.configured) return true;
+  const { executablePath, args } = getExecutableInfo();
+  return daemonLauncherMatchesCommand(fs.readFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, "utf-8"), executablePath, args);
+}
+
 function ensureDaemonRunning(): void {
   const config = readConfig();
   if (!config?.auth_token) return;
@@ -1123,12 +1129,7 @@ function ensureDaemonRunning(): void {
           // that could START a restart would let a worktree bounce the main
           // daemon into its own tree on every edit.
           if (daemonBuildUnchanged(readRunningBuildId(), DAEMON_BUILD_ID)) return;
-          const supervised = getMacLaunchdDaemonStatus();
-          if (supervised?.configured) {
-            const { executablePath, args } = getExecutableInfo();
-            const launcher = fs.readFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, "utf-8");
-            if (!daemonLauncherMatchesCommand(launcher, executablePath, args)) return;
-          }
+          if (!ownsDaemonInstallation()) return;
           const pid = getDaemonPid();
           if (pid) {
             try { process.kill(pid, "SIGTERM"); } catch { return; }
@@ -1638,7 +1639,10 @@ function bounceDaemonIfBuildChanged(daemonWasRunning: boolean): boolean {
   const runningBuild = readRunningBuildId();
 
   let installedBuild: string | null = null;
+  let ownsInstallation = false;
   try {
+    ownsInstallation = ownsDaemonInstallation();
+    if (!ownsInstallation) return false;
     const { executablePath, args } = getExecutableInfo("_build-id");
     const r = spawnSync(executablePath, args, {
       encoding: "utf-8",
@@ -1649,6 +1653,7 @@ function bounceDaemonIfBuildChanged(daemonWasRunning: boolean): boolean {
     if (BUILD_ID_VALUE_RE.test(out)) installedBuild = out;
   } catch {}
 
+  if (!ownsInstallation) return false;
   if (daemonBuildUnchanged(runningBuild, installedBuild)) return false;
 
   stopDaemon();
