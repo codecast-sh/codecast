@@ -183,7 +183,7 @@ test("real fixture custody refuses changed PID, registry and foreign handle with
     process.kill(first.pid!, "SIGKILL");
     const stoppedBy = Date.now() + 5000;
     for (;;) {
-      const live = await childProcess("ps", ["-p", String(first.pid), "-o", "pid="]).then(() => true, () => false);
+      const live = await childProcess("ps", ["-p", String(first.pid), "-o", "stat="]).then(state => !state.trim().startsWith("Z"), () => false);
       if (!live) break;
       if (Date.now() >= stoppedBy) throw new Error("owned crashed stub did not exit");
       await new Promise(resolve => setTimeout(resolve, 25));
