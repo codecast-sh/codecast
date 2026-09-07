@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fs from "fs";
+import os from "node:os";
 import path from "path";
 import { daemonBuildUnchanged } from "./daemonBuildGate.js";
 
@@ -43,6 +44,36 @@ describe("daemonBuildUnchanged", () => {
 
 describe("daemon restart gating", () => {
   const index = src("index.ts");
+
+  test.each([
+    { version: "1.1.125", build: "def456def456", restarts: 1 },
+    { version: "1.1.124", build: "def456def456", restarts: 0 },
+    { version: "1.1.125", build: "abc123abc123", restarts: 0 },
+    { version: "invalid", build: null, restarts: 0 },
+  ])("disk update poll uses the installed package version: %j", async ({ version, build, restarts }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cast-disk-version-"));
+    const moduleDir = path.join(root, "src");
+    const restarted: string[] = [];
+    try {
+      fs.mkdirSync(moduleDir);
+      fs.writeFileSync(path.join(moduleDir, "update.ts"), src("update.ts"));
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "@codecast/cli", version }));
+      const deps = {
+        fs, path, fixtureModuleDir: moduleDir, daemonVersion: "1.1.124",
+        daemonBuildUnchanged, DAEMON_BUILD_ID: "abc123abc123",
+        readDiskBuildId: async () => build, vetoedDiskVersion: null,
+        log: () => {}, logLifecycle: () => {}, flushRemoteLogs: async () => {},
+        restartDaemonProcess: (reason: string) => restarted.push(reason),
+      };
+      const code = new Bun.Transpiler({ loader: "ts", define: { __dirname: "fixtureModuleDir" } }).transformSync(`async function diskPoll() ${functionBody(src("daemon.ts"), "checkDiskVersionMismatch")}`);
+      const poll = new Function(...Object.keys(deps), `${code}\nreturn diskPoll();`);
+      await poll(...Object.values(deps));
+      expect(restarted).toHaveLength(restarts);
+      if (restarts) expect(restarted).toEqual(["disk version mismatch"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test("ensureDaemonRunning consults the build id only where the CLI is newer", () => {
     const body = functionBody(index, "ensureDaemonRunning");

@@ -22825,13 +22825,6 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
   }
 }
 
-// The build id of the daemon code sitting on disk next to this module. Same
-// two-name dance, and the same reach, as the version read below: both look for
-// a sibling module of __dirname, so both see a SOURCE install and nothing else.
-// A compiled binary has neither file on disk and a bundled dist has only
-// daemon.js, so checkDiskVersionMismatch returns early there before it ever
-// asks for a build id. The veto covers exactly the install shape the check
-// itself covers, which is the one that runs on developer machines.
 async function readDiskBuildId(): Promise<string | null> {
   for (const name of ["daemonBuildId.ts", "daemonBuildId.js"]) {
     try {
@@ -22849,18 +22842,9 @@ let vetoedDiskVersion: string | null = null;
 
 async function checkDiskVersionMismatch(): Promise<void> {
   try {
-    let content: string | null = null;
-    for (const name of ["update.ts", "update.js"]) {
-      try {
-        content = await fs.promises.readFile(path.join(__dirname, name), "utf-8");
-        break;
-      } catch {}
-    }
-    if (content === null) return;
-    const match = content.match(/const VERSION\s*=\s*["']([^"']+)["']/);
-    if (!match) return;
-
-    const diskVersion = match[1];
+    const pkg = JSON.parse(await fs.promises.readFile(path.join(__dirname, "../package.json"), "utf-8"));
+    if (pkg.name !== "@codecast/cli" || typeof pkg.version !== "string" || !/^\d+\.\d+\.\d+$/.test(pkg.version)) return;
+    const diskVersion = pkg.version;
     if (diskVersion !== daemonVersion) {
       // A version bump that did not touch daemon code is not worth a restart:
       // this daemon may hold hundreds of live panes. Read the build id stamped
