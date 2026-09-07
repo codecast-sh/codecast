@@ -2,67 +2,28 @@ import { describe, it, expect } from 'bun:test';
 import { useDiffViewerStore, clearDiffCache, type FileChange } from '../../store/diffViewerStore';
 
 describe('Diff Cache Performance', () => {
-  it('should demonstrate cache performance improvement', () => {
-    const changes: FileChange[] = Array.from({ length: 100 }, (_, i) => ({
-      id: `${i + 1}`,
-      sequenceIndex: i,
-      messageId: `msg${i}`,
-      filePath: `file${i % 10}.ts`,
-      changeType: 'edit' as const,
-      oldContent: `const x = ${i};`,
-      newContent: `const x = ${i + 1};`,
-      timestamp: 1000 + i,
-    }));
-
+  it('reuses the computed range until the cache is cleared', () => {
+    let contentReads = 0;
+    const changes: FileChange[] = [{
+      id: 'cached-change', sequenceIndex: 0, messageId: 'msg', filePath: 'test.ts',
+      changeType: 'edit', oldContent: 'before', timestamp: 1000,
+      get newContent() { contentReads++; return 'after'; },
+    }];
     clearDiffCache();
     useDiffViewerStore.setState({
-      changes,
-      selectedChangeIndex: 50,
-      diffMode: 'cumulative',
-      rangeStart: null,
-      rangeEnd: null,
-      selectedFile: null,
+      changes, selectedChangeIndex: 0, diffMode: 'cumulative',
+      rangeStart: null, rangeEnd: null, selectedFile: null,
     });
-
-    const warmupRuns = 3;
-    for (let i = 0; i < warmupRuns; i++) {
-      useDiffViewerStore.getState().getCurrentDiffContent();
-    }
-
-    const start1 = performance.now();
+    const result = useDiffViewerStore.getState().getCurrentDiffContent();
+    const firstReads = contentReads;
+    expect(firstReads).toBeGreaterThan(0);
     for (let i = 0; i < 100; i++) {
-      useDiffViewerStore.setState({ selectedChangeIndex: i });
-      useDiffViewerStore.getState().getCurrentDiffContent();
+      expect(useDiffViewerStore.getState().getCurrentDiffContent()).toEqual(result);
     }
-    const end1 = performance.now();
-    const timeWithoutCache = end1 - start1;
-
+    expect(contentReads).toBe(firstReads);
     clearDiffCache();
-
-    const start2 = performance.now();
-    for (let i = 0; i < 100; i++) {
-      useDiffViewerStore.setState({ selectedChangeIndex: i });
-      useDiffViewerStore.getState().getCurrentDiffContent();
-    }
-    const end2 = performance.now();
-    const timeWithCache = end2 - start2;
-
-    clearDiffCache();
-
-    const start3 = performance.now();
-    for (let i = 0; i < 100; i++) {
-      useDiffViewerStore.setState({ selectedChangeIndex: i });
-      useDiffViewerStore.getState().getCurrentDiffContent();
-    }
-    const end3 = performance.now();
-    const timeWithCacheSecondRun = end3 - start3;
-
-    console.log(`Without cache (first run): ${timeWithoutCache.toFixed(2)}ms`);
-    console.log(`With cache (first run): ${timeWithCache.toFixed(2)}ms`);
-    console.log(`With cache (second run): ${timeWithCacheSecondRun.toFixed(2)}ms`);
-    console.log(`Improvement: ${((timeWithoutCache - timeWithCacheSecondRun) / timeWithoutCache * 100).toFixed(1)}%`);
-
-    expect(timeWithCacheSecondRun).toBeLessThan(timeWithoutCache);
+    expect(useDiffViewerStore.getState().getCurrentDiffContent()).toEqual(result);
+    expect(contentReads).toBeGreaterThan(firstReads);
   });
 
   it('should respect max cache size of 50', () => {

@@ -41,9 +41,10 @@ const realHook = real.useInboxStore;
  * state reader, for a test that needs it directly.
  */
 export function mockInboxStore(overrides: (real: State) => State, extra: State = {}) {
+  let active = true;
   const getState = () => {
     const base = realHook.getState();
-    return { ...base, ...overrides(base) };
+    return active ? { ...base, ...overrides(base) } : base;
   };
   const install = () => mock.module("../../store/inboxStore", () => ({
     ...real,
@@ -55,7 +56,7 @@ export function mockInboxStore(overrides: (real: State) => State, extra: State =
     ...extra,
   }));
   install();
-  beforeAll(install);
-  afterAll(() => mock.module("../../store/inboxStore", () => real));
+  beforeAll(() => { active = true; install(); });
+  afterAll(() => { active = false; mock.module("../../store/inboxStore", () => real); });
   return getState;
 }

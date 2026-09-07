@@ -33,6 +33,7 @@ export default [
       "node_modules/**",
       "dist/**",
       "dist-ssr/**",
+      "dist-perf/**",
       ".next/**",
       "build/**",
       "out/**",
