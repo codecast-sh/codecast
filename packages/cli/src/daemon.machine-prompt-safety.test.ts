@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { formatSessionUpdateBatch } from "../../shared/contracts/sessionUpdates";
-import { PendingDeliveryHeldError, requirePendingDeliveryAdmission } from "./pendingDeliveryAdmission";
+import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { clientAcceptsBracketedPaste, pasteAndSubmitText, pasteTextIntoPane as pasteTextIntoPaneWith, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 
@@ -129,7 +129,7 @@ function fixture(transport = "tmux", cached = true) {
   };
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
-    isMachineDeliveredMessage, AGENT_CLIENTS, PendingDeliveryHeldError, requirePendingDeliveryAdmission,
+    isMachineDeliveredMessage, AGENT_CLIENTS, PendingDeliveryHeldError, createDeliveryAdmission,
     clientAcceptsBracketedPaste, pasteAndSubmitText, pasteTextIntoPaneWith, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {

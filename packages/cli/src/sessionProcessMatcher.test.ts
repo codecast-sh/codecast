@@ -18,6 +18,7 @@ import {
   parsePsEtimeSeconds,
   processDeclaredSessionId,
   judgeProcessIdentity,
+  registrationPredatesProcess,
   agentBinaryFromPsRow,
 } from "./sessionProcessMatcher.js";
 
@@ -587,5 +588,33 @@ describe("registrySupersedesCachedPid", () => {
     expect(registrySupersedesCachedPid(undefined, 16959, fillMs)).toBe(false);
     expect(registrySupersedesCachedPid({ pid: "96988", ts: later, term: "tmux" }, 16959, fillMs)).toBe(false);
     expect(registrySupersedesCachedPid({ pid: 96988, ts: "later", term: "tmux" }, 16959, fillMs)).toBe(false);
+  });
+});
+
+describe("registrationPredatesProcess", () => {
+  // Fixture from 2026-09-07: the daemon registered session 469fd3c9 to pid 44685
+  // at 01:58:32Z; that agent died and a leaked `bun fakeHelper.ts` took the pid
+  // at 02:03:34Z. The fixture declared no session, so judgeProcessIdentity could
+  // only say "unknown" and the registry lookup handed the fixture to delivery
+  // for fourteen hours.
+  const registeredAt = 1788746312; // 01:58:32Z
+  const fixtureStart = 1788746614; // 02:03:34Z
+
+  test("a process that started after the registration is a reused pid", () => {
+    expect(registrationPredatesProcess(registeredAt, fixtureStart)).toBe(true);
+  });
+
+  test("a process that started before the registration is the one registered", () => {
+    expect(registrationPredatesProcess(registeredAt, registeredAt - 120)).toBe(false);
+  });
+
+  test("clock rounding between the write and ps is not a reuse", () => {
+    expect(registrationPredatesProcess(registeredAt, registeredAt + 3)).toBe(false);
+  });
+
+  test("an unknown start time or a stampless binding proves nothing", () => {
+    expect(registrationPredatesProcess(registeredAt, null)).toBe(false);
+    expect(registrationPredatesProcess(undefined, fixtureStart)).toBe(false);
+    expect(registrationPredatesProcess("1788746312", fixtureStart)).toBe(false);
   });
 });

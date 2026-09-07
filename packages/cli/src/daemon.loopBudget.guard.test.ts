@@ -84,7 +84,7 @@ const ROWS: Row[] = [
   { file: D, name: "runHeartbeatFlush", kind: "function", minLines: 20, mustContain: "heartbeatManagedSessionsBatch" },
   { file: D, name: "runHibernationPass", kind: "function", minLines: 15, mustContain: "selectHibernationCandidates" },
   { file: D, name: "collectHibernationCandidates", kind: "function", minLines: 20, mustContain: "resumeSessionCache" },
-  { file: D, name: "hibernationRefusalReason", kind: "function", minLines: 3, mustContain: "parking-safety-unavailable" },
+  { file: D, name: "hibernationRefusalReason", kind: "function", minLines: 20, mustContain: "hibernationBlockReason" },
   // The pass itself only calls io methods, so without this row the guard would
   // watch a body that cannot hold a sync call. Every real filesystem, tmux and
   // Convex call of the pass lives in this object. Its two sync callees

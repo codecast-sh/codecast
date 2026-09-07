@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { VersionedObservationSet } from "./versionedObservationSet.js";
-import { PendingDeliveryHeldError, requirePendingDeliveryAdmission } from "./pendingDeliveryAdmission.js";
+import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { isCodexSafetyError, isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
@@ -143,6 +143,7 @@ import {
   judgeProcessIdentity,
   processDeclaredSessionId,
   registrySupersedesCachedPid,
+  registrationPredatesProcess,
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
@@ -5639,7 +5640,7 @@ async function executeRemoteCommand(
               result = JSON.stringify({ forked: false, reason: "no_local_checkout" });
               break;
             }
-            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId, cwd });
+            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId: randomUUID(), cwd });
             const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
             const importBytes = fs.statSync(importPath).size;
             setPosition(importPath, importBytes);
@@ -11037,9 +11038,28 @@ async function processDeclaredSession(pid: number): Promise<string | null> {
   return processDeclaredSessionId(await describeProcessIdentity(pid));
 }
 
-/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`. */
-async function rejectsForeignProcess(sessionId: string, pid: number, via: string): Promise<boolean> {
-  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...(await describeProcessIdentity(pid)) });
+/** The controlling tty of a pid as "/dev/ttysNNN", or "" when it has none. */
+async function ttyOfPid(pid: number): Promise<string> {
+  try {
+    const { stdout } = await execAsync(`ps -o tty= -p ${pid} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+    const tty = stdout.trim();
+    return !tty || tty === "?" || tty === "??" ? "" : normalizeTty(tty);
+  } catch {
+    return "";
+  }
+}
+
+/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`,
+ *  or started after `registeredAtSec` (epoch seconds) bound it to the session — a
+ *  reused pid, which no identity claim can convict when the new process names no
+ *  session of its own (registrationPredatesProcess). */
+async function rejectsForeignProcess(sessionId: string, pid: number, via: string, registeredAtSec?: number): Promise<boolean> {
+  const identity = await describeProcessIdentity(pid);
+  if (registrationPredatesProcess(registeredAtSec, identity.processStartSec)) {
+    log(`[IDENTITY] pid=${pid} (${via}) started after session ${shortId(sessionId)} was bound to it — reused pid, not using it`);
+    return true;
+  }
+  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...identity });
   if (verdict !== "foreign") return false;
   log(`[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
   return true;
@@ -11070,7 +11090,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (checkPs.trim()) {
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${shortId(sessionId)} (pid=${pid})`);
-          } else if (await rejectsForeignProcess(sessionId, pid, "registry")) {
+          } else if (await rejectsForeignProcess(sessionId, pid, "registry", typeof reg.ts === "number" ? reg.ts : undefined)) {
             // The pid lives on but runs another session now (a reused pid, or an
             // in-process switch): this registration is stale, not this session's.
             try { fs.unlinkSync(registryFile); } catch {}
@@ -13819,17 +13839,17 @@ async function reapOrphanedAgent(sessionId: string, pid: number, pane: string, s
     const sameIdentity = async () => JSON.stringify(await orphanReaperIo.identity(pid, sessionId)) === JSON.stringify(initial) && current();
     if (!await sameIdentity()) return;
     const observedAt = performance.now();
-    const claims = await orphanReaperIo.claims(pid);
+    const [claims, procs, { stdout }] = await Promise.all([
+      orphanReaperIo.claims(pid),
+      orphanReaperIo.processes(),
+      orphanReaperIo.panes(),
+    ]);
     if (!claims || !current()) return;
     if (judgeProcessIdentity({ sessionId, argvId: sessionId, claims, processStartSec: initial.startSec }).verdict !== "owned") return;
     const newest = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
     if (claims.some(claim => claim.ts >= initial.startSec - 5 && claim.ts === newest && claim.sessionId !== sessionId)) return;
-    const procs = await orphanReaperIo.processes();
-    if (!current()) return;
     const root = procs.find(proc => proc.pid === pid);
     if (!root || root.ppid !== 1 || root.uid !== initial.uid || root.command !== initial.command || descendantPids(procs, pid).length) return;
-    const { stdout } = await orphanReaperIo.panes();
-    if (!current()) return;
     const panes = stdout.trim().split("\n");
     if (panes.some(value => !/^\d+$/.test(value) || Number(value) <= 1 || Number(value) === pid)) return;
     if (!await sameIdentity() || performance.now() - observedAt > 1000 || !current()) return;
@@ -19179,7 +19199,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
     // Alive, an agent, and still THIS session's agent — a cached pid outlives an
     // in-process /clear or /resume switch as easily as it outlives the process.
-    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache")) {
+    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache", Math.floor(cached.filledAt / 1000))) {
       sessionProcessCache.delete(sessionId);
       return null;
     }
@@ -19191,7 +19211,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
 async function validateProcessCache(): Promise<void> {
   for (const [sessionId, cached] of sessionProcessCache) {
     if (dropSupersededProcessCacheEntry(sessionId)) continue;
-    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid))) {
+    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache sweep", Math.floor(cached.filledAt / 1000))) {
       sessionProcessCache.delete(sessionId);
     }
   }
@@ -19366,16 +19386,30 @@ async function reconcileSessionLiveness(): Promise<void> {
     const batch = pending.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async (row) => {
       let agentPid: number | null = null;
+      let tty = "";
       const panePid = row.tmux_session ? paneByTmux.get(row.tmux_session) : undefined;
       if (panePid !== undefined) {
-        agentPid = await findAgentPidInTree(panePid);
+        // The row's tmux name is where the session was PUT; the pane says what
+        // runs there now. One long-lived resume tmux carried six sessions' rows
+        // on 2026-09-07 and this sweep seeded all six with its one agent pid.
+        const found = await findAgentPidInTree(panePid);
+        if (found !== null && !(await rejectsForeignProcess(row.session_id, found, `liveness tmux ${row.tmux_session}`))) agentPid = found;
       } else if (row.agent_pid && isProcessRunning(row.agent_pid) && (await isAgentProcess(row.agent_pid))) {
-        agentPid = row.agent_pid;
+        // A bare pid off the server row carries no stamp, so a reused pid can't
+        // be told from the real one by age, and "agent-shaped" admits any bun or
+        // node process (a leaked test fixture took one on 2026-09-07). Only a
+        // process that says it runs this session — argv or hook claim — is
+        // taken; an unknown one is left to on-demand discovery.
+        const identity = await describeProcessIdentity(row.agent_pid);
+        if (judgeProcessIdentity({ sessionId: row.session_id, ...identity }).verdict === "owned") {
+          agentPid = row.agent_pid;
+          tty = await ttyOfPid(row.agent_pid);
+        }
       }
       if (agentPid !== null) {
         cacheSessionProcess(
           row.session_id,
-          { pid: agentPid, tty: "", sessionId: row.session_id },
+          { pid: agentPid, tty, sessionId: row.session_id },
           row.tmux_session,
         );
         seeded++;
@@ -21055,7 +21089,8 @@ async function deliverMessage(
   titleCache: TitleCache
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
-  await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
+  const admit = createDeliveryAdmission(syncService, messageId, conversationId);
+  await admit();
   touchHostActivity();
 
   if (pendingAgentSwitches.has(conversationId)) {
@@ -21107,7 +21142,7 @@ async function deliverMessage(
     if (appServerThreadId) {
       try {
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
-        await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
+        await admit();
         await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
         // Delivered input = a new turn: spend any declared settle verdict from
         // before it (codex settles key turnStartedAt by thread id — see
@@ -21258,7 +21293,7 @@ async function deliverMessage(
         // "delivered". If we marked after and the ack won the race it would find no row and the
         // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
-        await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
+        await admit();
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
         await injectViaTmux(startedTmuxTarget, content, entry.agentType);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
@@ -21388,7 +21423,7 @@ async function deliverMessage(
       // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
-      await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
+      await admit();
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
       await injectViaTmux(injectTarget, content, detectedType);
       // A process-discovered pane can go stale between scan and inject — verify the agent
@@ -21436,21 +21471,30 @@ async function deliverMessage(
   // Kitty/WezTerm). Skipped when the agent was just detected dead — that goes to auto-resume.
   if (live.proc && !agentDetectedDead) {
     const termLabel = getTerminalLabel(live.proc.termProgram);
-    logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
-    try {
-      // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
-      // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
-      await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
-      markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
-        agentType: detectedType,
-      });
-      logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
-      return true;
-    } catch (err) {
-      if (err instanceof PendingDeliveryHeldError) throw err;
-      if (err instanceof MachineInputBlockedError) throw err;
-      logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+    if (!live.proc.tty) {
+      // No terminal to address. The injectors below can only fail inside their
+      // capture, and for a machine message that failure reads as a held terminal
+      // (MachineInputBlockedError), not an unreachable process — which is how
+      // every wake to one session retried into an empty osascript for hours on
+      // 2026-09-07. Fall through to the resume paths instead.
+      logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
+    } else {
+      logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
+      try {
+        // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
+        // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
+        await admit();
+        markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+        await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
+          agentType: detectedType,
+        });
+        logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
+        return true;
+      } catch (err) {
+        if (err instanceof PendingDeliveryHeldError) throw err;
+        if (err instanceof MachineInputBlockedError) throw err;
+        logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     if (detectedType === "codex") {
       // A live Codex TUI holds the rollout's writer lock, so `codex resume` of
@@ -21494,7 +21538,7 @@ async function deliverMessage(
   // to "delivered" when Claude echoes the message to JSONL, so this status write is not
   // load-bearing. Keeping it non-blocking ensures a slow/stalled Convex mark can't wedge the
   // resume+inject — the same failure mode fixed on the live-tmux path above.
-  await requirePendingDeliveryAdmission(syncService, messageId, conversationId);
+  await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {

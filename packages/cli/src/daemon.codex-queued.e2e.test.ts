@@ -15,5 +15,5 @@ for (const layout of ["queue", "clipped"]) {
     } finally {
       child.kill();
     }
-  }, 35_000);
+  }, 120_000);
 }

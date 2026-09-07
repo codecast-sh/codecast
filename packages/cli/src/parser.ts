@@ -331,6 +331,19 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
 
     if (role === "assistant" && entry.isApiErrorMessage) textContent = claudeBannerText(entry, textContent);
 
+    // A user row that carries tool results is the harness answering the agent's
+    // tool calls; nothing a person typed ever shares that row (typed input lands
+    // as its own user entry, queued or not). Text riding alongside — "Tool
+    // loaded." after a ToolSearch, the <fork-boilerplate> directive after an
+    // Agent fork — is the harness's postscript to the result, so fold it into the
+    // result it follows. Emitted as user content it would render as a "You"
+    // bubble, seed titles, and count as a prompt on every surface.
+    if (role === "user" && toolResults.length > 0 && textContent.trim()) {
+      const last = toolResults[toolResults.length - 1];
+      last.content = last.content ? `${last.content}\n\n${textContent}` : textContent;
+      textContent = "";
+    }
+
     const isImportNotice = role === "user" && isCodecastImportNotice(textContent);
 
     if (!isImportNotice && (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0)) {
