@@ -42,7 +42,7 @@ if (!enabled) {
   fs.promises.open = (async (...args: Parameters<typeof open>) => {
     const fd = await open(...args), read = fd.read.bind(fd);
     fd.read = (async (...values:any[]) => {
-      if (String(args[0]).endsWith('metadata.jsonl') && values[2] === 4096 && values[3] > 0) throw Object.assign(new Error('fixture metadata failure'),{code:'EACCES'});
+      if (String(args[0]).endsWith('metadata.jsonl') && values[3] > 0) throw Object.assign(new Error('fixture metadata failure'),{code:'EACCES'});
       return (read as any)(...values);
     }) as typeof fd.read;
     return fd;
@@ -247,8 +247,7 @@ try {
   const dbFile=path.join(home,'cursor.db'),db=new Database(dbFile);db.run('PRAGMA journal_mode=WAL');db.run('CREATE TABLE ItemTable(key TEXT,value TEXT)');
   const chat=(text:string)=>JSON.stringify({tabs:[{tabId:'tab',bubbles:[{type:'user',id:'cu1',initText:text,contextCacheTimestamp:1000},{type:'ai',id:'cu2',rawText:'SQLite reply'}]}]});
   db.run('INSERT INTO ItemTable VALUES(?,?)',['workbench.panel.aichat.view.aichat.chatdata',chat('SQLite hello')]);cache.sqlite='conv-sqlite';
-  const {extractMessagesFromCursorDb}=await import('../../cursorProcessor.js');
-  const sqliteResult=await readTranscriptIngest({client:'cursorDb',file:dbFile,sessionId:'sqlite',offset:0});assert.deepEqual(normalize(sqliteResult.messages),normalize(extractMessagesFromCursorDb(dbFile).messages));
+  const sqliteResult=await readTranscriptIngest({client:'cursorDb',file:dbFile,sessionId:'sqlite',offset:0});assert.deepEqual(normalize(sqliteResult.messages),normalize(parseCursorChatData(chat('SQLite hello'))));
   await d.processCursorSession(dbFile,'sqlite',home,sync,'user',undefined,cache,queue,pending,()=>{});assert.equal(getPosition(dbFile),2);
   db.run('UPDATE ItemTable SET value = ?',[JSON.stringify({tabs:[{tabId:'tab',bubbles:[{type:'user',id:'cu1',initText:'SQLite hello',contextCacheTimestamp:1000},{type:'ai',id:'cu2',rawText:'SQLite reply'},{type:'user',id:'cu3',initText:'WAL append',contextCacheTimestamp:2000}]}]})]);
   await d.processCursorSession(dbFile,'sqlite',home,sync,'user',undefined,cache,queue,pending,()=>{});assert.equal(getPosition(dbFile),3);assert.ok(rows.has('cu3'));

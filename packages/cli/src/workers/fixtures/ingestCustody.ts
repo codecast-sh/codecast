@@ -32,8 +32,10 @@ export async function custody(f:any) {
   const entered=deferred(),release=deferred(),old=sync.addMessages;
   sync.addMessages=async(p:any)=>{entered.resolve();await release.promise;return old(p);};
   const flushing=d.flushPendingTranscript(pending,'custody-snapshot',cache['custody-snapshot'],cache,sync,queue);await entered.promise;
-  const replacement={...pending['custody-snapshot'][0],content:'replacement during await'},appended={...replacement,uuid:'appended-during-flush'};
-  pending['custody-snapshot']=[replacement,appended];release.resolve();assert.equal(await flushing,false);assert.deepEqual(pending['custody-snapshot'],[replacement,appended]);sync.addMessages=old;
+  fs.writeFileSync(snapshotFile,claudeLine('snapshot-old','replacement during await')+claudeLine('appended-during-flush','appended during await'));
+  const updated=await readTranscriptIngest({client:'claude',file:snapshotFile,sessionId:'custody-snapshot',offset:0});
+  await d.retainPendingTranscript(pending,'custody-snapshot',updated.messages,snapshotFile,fs.statSync(snapshotFile).size);
+  const [replacement,appended]=pending['custody-snapshot'];release.resolve();assert.equal(await flushing,false);assert.deepEqual(pending['custody-snapshot'],[replacement,appended]);sync.addMessages=old;
   const newerEntered=deferred(),newerRelease=deferred();sync.addMessages=async()=>{newerEntered.resolve();await newerRelease.promise;throw new Error('Conversation not found');};
   const superseded=d.flushPendingTranscript(pending,'custody-snapshot','snapshot-conversation',cache,sync,queue);await newerEntered.promise;cache['custody-snapshot']='newer-conversation';newerRelease.resolve();assert.equal(await superseded,false);assert.equal(cache['custody-snapshot'],'newer-conversation');assert.equal(pending['custody-snapshot'].length,2);sync.addMessages=old;
   const raceFile=write('custody-race',claudeLine('custody-race-row','one callback and direct pass'));
