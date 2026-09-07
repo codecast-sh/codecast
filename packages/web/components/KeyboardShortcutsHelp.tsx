@@ -36,6 +36,8 @@ export function KeyboardShortcutsPanel() {
     s => s.clientState.ui?.inbox_shortcuts_hidden,
   ]);
   const triageBarHidden = isTriageBarCompact(s.clientState.ui);
+  const everOpened = useRef(false);
+  if (s.shortcutsPanelOpen) everOpened.current = true;
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (s.shortcutsPanelOpen && e.key === "Escape") {
@@ -92,7 +94,7 @@ export function KeyboardShortcutsPanel() {
       className="h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
       style={{ width: s.shortcutsPanelOpen ? 320 : 0 }}
     >
-      <div className="h-full w-[320px] bg-sol-bg border-l border-sol-border/60 flex flex-col">
+      {everOpened.current && <div className="h-full w-[320px] bg-sol-bg border-l border-sol-border/60 flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border/40">
           <div className="flex items-center gap-2">
             <Keyboard className="w-4 h-4 text-sol-cyan" />
@@ -157,7 +159,7 @@ export function KeyboardShortcutsPanel() {
             </button>
           </span>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
