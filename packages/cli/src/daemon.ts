@@ -18166,7 +18166,10 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
     killed = true;
     expected.phase = "parked";
     delete expected.replayStop;
-    const remaining = await boundary.terminal(["list-panes", "-a", "-F", "#{pane_id}"]);
+    const remaining = await boundary.terminal(["list-panes", "-a", "-F", "#{pane_id}"]).catch(error => {
+      if (/no server running on|no sessions|error connecting to .*\(No such file or directory\)/i.test(String(error))) return { stdout: "" };
+      throw error;
+    });
     if (remaining.stdout.trim().split("\n").includes(target.pane)) return false;
     if (!boundary.unchanged()) return false;
   } finally {

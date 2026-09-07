@@ -146,6 +146,18 @@ for (const mode of ["pass", "manual"] as const) describe.skipIf(!hasTmux())(`${m
 
   test("a genuine leaf with cold empty evidence still parks", async () => { await parked(await fixture()); }, 15000);
 
+  test("parking the last pane tolerates the tmux server exiting", async () => {
+    const f = await fixture();
+    let killed = false;
+    f.io.terminal = async args => {
+      if (killed && args[0] === "list-panes" && args[1] === "-a") throw new Error("no server running on /tmp/tmux-test/default");
+      const result = await terminal(args);
+      if (args[0] === "if-shell" && result.stdout.trim() === "parked") killed = true;
+      return result;
+    };
+    await parked(f);
+  }, 15000);
+
   for (const phase of ["committing", "delayed"] as const) test(`expected SessionEnd/stopped ${phase} does not cancel park or complete`, async () => {
     const f = await fixture();
     let dispatched = false;
