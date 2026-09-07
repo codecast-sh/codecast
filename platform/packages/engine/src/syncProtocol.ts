@@ -319,7 +319,7 @@ export function applySyncPatch(
   pending: Record<string, PendingEntry>,
   optionalClearFields?: ReadonlySet<string>,
 ): { fields: Record<string, any>; unset: string[]; pending: Record<string, PendingEntry> } {
-  const newPending = { ...pending };
+  let newPending = pending;
   const excludeKey = `${tableName}:${id}`;
   if (newPending[excludeKey]?.type === "exclude") {
     return { fields: patch, unset: [...unset], pending: newPending };
@@ -332,6 +332,7 @@ export function applySyncPatch(
     const entry = newPending[key];
     if (!entry || entry.type !== "field") return true;
     if (fieldEchoesPending(field, incoming, entry.value, optionalClearFields)) {
+      if (newPending === pending) newPending = { ...pending };
       delete newPending[key];
       return true;
     }

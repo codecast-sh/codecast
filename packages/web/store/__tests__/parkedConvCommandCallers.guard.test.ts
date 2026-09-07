@@ -46,16 +46,12 @@ describe("parked convCommand caller policy", () => {
     for (const command of [
       "sendKeysToSession",
       "rewindSession",
+      "sendEscapeToSession",
     ]) {
       expect(conversationView).toMatch(
         new RegExp(`convCommand\\([^\\n]+, "${command}"[^\\n]*\\)\\.catch\\(\\(err\\)`),
       );
     }
-    // Escape reports "sent" only after an acknowledgement. A parked command is
-    // still durable, but must be described honestly as queued.
-    expect(conversationView).toMatch(
-      /convCommand\([^\n]+, "sendEscapeToSession"\)\.then\(/,
-    );
     expect(conversationView).toContain(
       "Escape queued — it will send when the connection recovers",
     );

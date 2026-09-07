@@ -358,3 +358,82 @@ describe("repository case", () => {
     expect(rows.map((r: any) => r._id)).toEqual(["rc_1"]);
   });
 });
+
+describe("codeComments.create fan-out", () => {
+  const { buildCodeCommentPrompt } = require("./codeComments");
+  const { sessionRefsIn } = require("./lib/mentionResolve");
+
+  function mentionContext() {
+    const ctx = context(USER, {
+      users: [{ _id: USER, name: "Ashot", github_username: "ashot" }, { _id: OTHER, name: "Sam", github_username: "sam" }],
+      commits: [{ _id: "c1", sha: HEAD, repository: "codecast-sh/codecast", message: "fix", timestamp: 1, conversation_id: CONV }],
+      thread_reads: [],
+      pending_messages: [],
+    });
+    const emitted: any[] = [];
+    ctx.runMutation = async (_ref: any, args: any) => { emitted.push(args); return { notified: 1 }; };
+    return { ctx, emitted };
+  }
+
+  test("a named teammate is notified on the commit and the thread files for everyone in it", async () => {
+    const { ctx, emitted } = mentionContext();
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      ref: HEAD,
+      file_path: "src/foo.ts",
+      line_number: 42,
+      content: "@sam does this leak?",
+      mirror: false,
+    });
+    const mention = emitted.find((e) => e.event_type === "mention");
+    expect(mention).toMatchObject({
+      entity_type: "code",
+      entity_id: `codecast-sh/codecast@${HEAD}`,
+      direct_recipient_id: OTHER,
+      message: "Ashot mentioned you on foo.ts:42",
+    });
+    // The commit's own session belongs to the actor, so no second notice.
+    expect(emitted.filter((e) => e.direct_recipient_id === USER)).toHaveLength(0);
+
+    const rows = ctx.db._tables.thread_reads;
+    const keys = rows.map((r: any) => `${r.user_id}:${r.kind}:${r.root_key}`).sort();
+    expect(keys).toEqual([
+      `${USER}:code:codecast-sh/codecast@${HEAD}#file:src/foo.ts:42`,
+      `${OTHER}:code:codecast-sh/codecast@${HEAD}#file:src/foo.ts:42`,
+    ]);
+    const mine = rows.find((r: any) => r.user_id === USER);
+    const theirs = rows.find((r: any) => r.user_id === OTHER);
+    expect(mine.last_read_at).toBe(mine.last_activity_at);
+    expect(theirs.last_read_at).toBe(0);
+    expect(theirs).toMatchObject({ repository: "codecast-sh/codecast", ref: HEAD, file_path: "src/foo.ts", line_number: 42, team_id: TEAM });
+  });
+
+  test("a reply reaches the comment it answers", async () => {
+    const { ctx, emitted } = mentionContext();
+    const other = context(OTHER, {
+      users: ctx.db._tables.users, review_comments: ctx.db._tables.review_comments,
+      thread_reads: ctx.db._tables.thread_reads, commits: ctx.db._tables.commits,
+    });
+    other.runMutation = ctx.runMutation;
+    const root = await (create as any)._handler(other, {
+      repository: "codecast-sh/codecast", ref: HEAD, content: "ship it?", mirror: false,
+    });
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast", ref: HEAD, content: "yes", parent_id: root.comment_id, mirror: false,
+    });
+    const reply = emitted.find((e) => e.event_type === "comment_reply");
+    expect(reply).toMatchObject({ direct_recipient_id: OTHER, entity_id: `codecast-sh/codecast@${HEAD}` });
+  });
+
+  test("a session mention is found in the ref grammar and briefed with the place and the words", () => {
+    expect(sessionRefsIn("ask @[Git backend jx7c6zk] and @[Roadmap ct-4102] plus @sam")).toEqual(["jx7c6zk"]);
+    const prompt = buildCodeCommentPrompt({
+      actorName: "Ashot", repository: "codecast-sh/codecast", ref: HEAD,
+      filePath: "src/foo.ts", lineNumber: 42, lineEnd: 44, content: "does this leak?\nsee the catch",
+      url: "https://codecast.sh/commit/codecast-sh/codecast/" + HEAD, isReply: false,
+    });
+    expect(prompt).toContain("Ashot mentioned you in a code comment on codecast-sh/codecast@abcdef1, at src/foo.ts:42-44.");
+    expect(prompt).toContain("> does this leak?\n> see the catch");
+    expect(prompt).toContain("The thread: https://codecast.sh/commit/");
+  });
+});

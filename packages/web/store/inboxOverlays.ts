@@ -35,6 +35,10 @@ export const DECLARED_INBOX_OVERLAYS = [
 
 export type DeclaredInboxOverlay = (typeof DECLARED_INBOX_OVERLAYS)[number];
 
+export function isInterruptControlMessage(raw: string | null | undefined): boolean {
+  return /^(?:\[Request (?:interrupted|cancelled)|<turn_aborted>)/.test(raw?.trimStart() ?? "");
+}
+
 // How long a blocked-banner revive request keeps its sessions rendered as
 // WORKING before the (still-set) server blocked flag is allowed to resurface.
 // A switch revive is kill + account swap + restart + resume + first output
@@ -63,8 +67,8 @@ export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIEL
 // echoes it back (which prunes it) or it fails. This is the durable,
 // persisted, local-first signal that we've sent something and are waiting to
 // confirm delivery — independent of whether ConversationView is mounted.
-export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean }>): boolean {
-  return !!pending?.some((m) => !m._isFailed);
+export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean; content?: string }>): boolean {
+  return !!pending?.some((m) => !m._isFailed && !isInterruptControlMessage(m.content));
 }
 
 // Conversation ids that currently have an unconfirmed outbound message.

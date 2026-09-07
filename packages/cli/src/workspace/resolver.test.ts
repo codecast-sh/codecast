@@ -242,3 +242,126 @@ describe("resolveManifest", () => {
     expect(m.services.redis?.url).toBe("redis://localhost:6379");
   });
 });
+
+// ---------------------------------------------------------------------------
+// withAgentConfigCopies — project-level untracked agent config at FILE granularity
+// ---------------------------------------------------------------------------
+
+import { execFileSync } from "node:child_process";
+import { AGENT_CONFIG_COPY_CANDIDATES, withAgentConfigCopies } from "./resolver.js";
+
+describe("withAgentConfigCopies", () => {
+  let repo: string;
+  const warnings: string[] = [];
+  const warn = (m: string) => { warnings.push(m); };
+
+  function git(...args: string[]): string {
+    return execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8", stdio: "pipe" }).trim();
+  }
+  function write(rel: string, content = "x\n") {
+    const p = path.join(repo, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content);
+  }
+  function commit(rel: string, content = "tracked\n") {
+    write(rel, content);
+    git("add", rel);
+    git("-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
+  }
+  function copyOf(m: WorkspaceManifest) {
+    return m.setup.copy;
+  }
+
+  beforeEach(() => {
+    warnings.length = 0;
+    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ws-agent-copy-")));
+    git("init", "-q", "-b", "main");
+  });
+  afterEach(() => {
+    if (!process.env.CLOUD_CONTEXT_TRACE) fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  test("tracked files stay out; untracked and gitignored ones ride along, one file each, beside a tracked sibling", () => {
+    commit("CLAUDE.md");
+    commit(".gitignore", "CLAUDE.local.md\n.env\n");
+    commit(".claude/skills/a/SKILL.md");
+    write("CLAUDE.local.md", "personal\n");
+    write(".claude/settings.local.json", "{}");
+    write(".claude/skills/b/SKILL.md", "untracked skill\n");
+    write(".claude/skills/b/helper.py");
+    write(".env", "SECRET\n");
+    write("AGENTS.md", "untracked agents\n");
+    write(".mcp.json", "{}");
+    const m = resolveManifest(repo);
+    expect(copyOf(m)).toEqual([".env", ".claude/settings.local.json", ".claude/skills/b/SKILL.md", ".claude/skills/b/helper.py", ".mcp.json", "AGENTS.md", "CLAUDE.local.md"]);
+    expect(copyOf(m)).not.toContain("CLAUDE.md");
+    expect(copyOf(m)).not.toContain(".claude/skills/a/SKILL.md");
+    expect(copyOf(m)).toContain(".mcp.json");
+  });
+
+  test("a file under a symlinked component is skipped with a warning; the rest still ships", () => {
+    commit("README.md");
+    const shared = fs.mkdtempSync(path.join(os.tmpdir(), "ws-shared-"));
+    fs.writeFileSync(path.join(shared, "SKILL.md"), "shared\n");
+    fs.mkdirSync(path.join(repo, ".claude/skills"), { recursive: true });
+    fs.symlinkSync(shared, path.join(repo, ".claude/skills/linked"));
+    write(".claude/skills/local/SKILL.md");
+    try {
+      const m = withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false, warn });
+      expect(copyOf(m)).toEqual([".claude/skills/local/SKILL.md"]);
+      expect(warnings.some((w) => w.includes(".claude/skills/linked") && w.includes("symlink"))).toBe(true);
+    } finally {
+      fs.rmSync(shared, { recursive: true, force: true });
+    }
+  });
+
+  test("more than 200 context files are retained instead of silently dropping the directory", () => {
+    commit("README.md");
+    for (let i = 0; i < 210; i++) write(`.claude/skills/big/f${i}.md`);
+    write(".claude/commands/c.md");
+    const m = withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false, warn });
+    expect(copyOf(m)).toHaveLength(211);
+    expect(copyOf(m)).toContain(".claude/commands/c.md");
+    expect(warnings).toEqual([]);
+  });
+
+  test("explicit setup.copy in workspace.toml is appended to, not replaced; a covering entry is not duplicated", () => {
+    commit("README.md");
+    write(".codecast/workspace.toml", '[setup]\ncopy = ["secrets", ".claude/skills"]\n');
+    write("secrets/key");
+    write(".claude/skills/x/SKILL.md");
+    write("CLAUDE.local.md");
+    const m = resolveManifest(repo);
+    expect(copyOf(m)).toEqual(["secrets", ".claude/skills", "CLAUDE.local.md"]);
+  });
+
+  test("an input root lists every present candidate file without git; a non-repo root does the same", () => {
+    const inputs = path.join(repo, ".codecast/workspaces/cloud-1/inputs");
+    fs.mkdirSync(inputs, { recursive: true });
+    fs.writeFileSync(path.join(inputs, "CLAUDE.local.md"), "staged\n");
+    fs.mkdirSync(path.join(inputs, ".claude/skills/s"), { recursive: true });
+    fs.writeFileSync(path.join(inputs, ".claude/skills/s/SKILL.md"), "staged\n");
+    fs.writeFileSync(path.join(inputs, ".mcp.json"), "{}");
+    commit("CLAUDE.md");
+    const m = resolveManifest(repo, inputs);
+    expect(copyOf(m)).toEqual([".claude/skills/s/SKILL.md", ".mcp.json", "CLAUDE.local.md"]);
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), "ws-plain-"));
+    try {
+      fs.writeFileSync(path.join(plain, "AGENTS.md"), "a\n");
+      expect(copyOf(withAgentConfigCopies(emptyManifest(), plain, { isInputRoot: false }))).toEqual(["AGENTS.md"]);
+    } finally {
+      fs.rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
+  test("noise under a candidate never ships; existing .env detection is unchanged", () => {
+    commit("README.md");
+    write(".claude/skills/x/node_modules/dep/index.js");
+    write(".claude/skills/x/.DS_Store");
+    write(".claude/skills/x/SKILL.md");
+    write(".env");
+    const m = resolveManifest(repo);
+    expect(copyOf(m)).toEqual([".env", ".claude/skills/x/SKILL.md"]);
+    expect(AGENT_CONFIG_COPY_CANDIDATES).toContain(".mcp.json");
+  });
+});

@@ -1196,7 +1196,7 @@ export const processStatusEvent = internalMutation({
  * exactly one session is sitting on is good enough evidence; two sessions on the
  * same branch is not, so the commit stays unattributed.
  */
-async function conversationForCommit(
+export async function conversationForCommit(
   ctx: { db: any },
   sha: string,
   branch: string | undefined,
