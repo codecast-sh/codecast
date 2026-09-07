@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import { repoBlobHref } from "./repoView";
 
-export type ExternalEventSource = "github" | "linear" | "codecast";
+export type ExternalEventSource = "github" | "linear" | "codecast" | "git";
 
 /** Accent names map to the app's solarized tokens (see accentVar). */
 export type ExternalEventAccent =
@@ -112,6 +112,16 @@ export const DEFAULT_EXTERNAL_EVENT_STYLE: ExternalEventStyle = {
 export const EXTERNAL_EVENT_STYLE: Record<string, ExternalEventStyle> = {
   commit: { icon: GitCommit, accent: "blue", verb: "committed" },
   push: { icon: GitBranch, accent: "blue", verb: "pushed" },
+  // Local git activity (the daemon's reflog tail): the same blue as a push,
+  // since it is the same ordinary movement of code, seen earlier.
+  amend: { icon: GitCommit, accent: "blue", verb: "amended" },
+  checkout: { icon: GitBranch, accent: "muted", verb: "switched" },
+  merge: { icon: GitMerge, accent: "blue", verb: "merged" },
+  pull: { icon: GitBranch, accent: "blue", verb: "pulled" },
+  rebase: { icon: GitBranch, accent: "blue", verb: "rebased" },
+  reset: { icon: RotateCcw, accent: "orange", verb: "reset" },
+  cherry_pick: { icon: GitCommit, accent: "blue", verb: "cherry-picked" },
+  revert: { icon: RotateCcw, accent: "orange", verb: "reverted" },
   pr_opened: { icon: GitPullRequest, accent: "green", verb: "opened" },
   pr_synchronize: { icon: GitCommit, accent: "blue", verb: "updated" },
   pr_review: { icon: UserCheck, accent: "violet", verb: "reviewed" },
@@ -282,7 +292,7 @@ export function externalEventRowToExternalEvent(row: ExternalEventRecord): Exter
   }
   return {
     id: row._id,
-    source: row.source === "linear" ? "linear" : row.source === "codecast" ? "codecast" : "github",
+    source: row.source === "linear" ? "linear" : row.source === "codecast" ? "codecast" : row.source === "git" ? "git" : "github",
     kind: row.kind ?? "commit",
     title: row.title ?? "",
     summary: row.summary,

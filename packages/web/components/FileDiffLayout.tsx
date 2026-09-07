@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef } from "react";
+import Link from "next/link";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -20,6 +21,7 @@ import {
   PanelLeft,
   LayoutList,
   SplitSquareVertical,
+  PanelRightOpen,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { DiffView } from "./DiffView";
@@ -69,6 +71,13 @@ export interface FileDiffLayoutProps {
   // External "open this file" request (raw pre-strip path, e.g. from a comment
   // rail jump). Honored whenever the value changes to a file in the list.
   focusFile?: string | null;
+  // Where a file's own page is, when the surface has one (a commit at its sha,
+  // a pull request at its head). The name in each file header becomes a link
+  // there. Called with the file's ORIGINAL path.
+  fileHref?: (filename: string) => string | undefined;
+  // Open the file beside the diff, in the surface's own viewer, without
+  // leaving the page. Adds a button to each file header. ORIGINAL path.
+  onOpenFile?: (filename: string) => void;
 }
 
 type Layout = { [key: string]: number };
@@ -495,6 +504,62 @@ function FileSidebar({
   );
 }
 
+// The name in a file header: a link to the file's own page when the surface
+// has one, plain text otherwise, and beside it the way to open the file next
+// to the diff. Both diff layouts share it so a file is one click from its
+// source wherever it is shown.
+function FileHeaderName({
+  file,
+  fileHref,
+  onOpenFile,
+  className,
+}: {
+  file: DiffFile;
+  fileHref?: FileDiffLayoutProps["fileHref"];
+  onOpenFile?: FileDiffLayoutProps["onOpenFile"];
+  className?: string;
+}) {
+  const path = file.originalFilename ?? file.filename;
+  const href = fileHref?.(path);
+  const dir = getFileDirectory(file.filename);
+  const name = getFileName(file.filename);
+  const label = (
+    <>
+      {dir && <span className="text-sol-text-dim">{dir}/</span>}
+      <span className="text-sol-text">{name}</span>
+    </>
+  );
+  return (
+    <>
+      {href ? (
+        <Link
+          href={href}
+          className={cn("font-mono text-xs truncate hover:underline decoration-sol-border underline-offset-2", className)}
+          title={`Open ${path} at this revision`}
+        >
+          {label}
+        </Link>
+      ) : (
+        <span className={cn("font-mono text-xs truncate", className)}>{label}</span>
+      )}
+      <CopyButton text={path} />
+      {onOpenFile && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenFile(path);
+          }}
+          className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors"
+          title="View the whole file beside the diff"
+        >
+          <PanelRightOpen className="w-3 h-3" />
+        </button>
+      )}
+    </>
+  );
+}
+
 function FileDiffContent({
   file,
   onComment,
@@ -505,6 +570,8 @@ function FileDiffContent({
   sidebarOpen,
   commentContextFor,
   lineThreads,
+  fileHref,
+  onOpenFile,
 }: {
   file: DiffFile | null;
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -515,6 +582,8 @@ function FileDiffContent({
   sidebarOpen?: boolean;
   commentContextFor?: FileDiffLayoutProps["commentContextFor"];
   lineThreads?: FileLineThreads;
+  fileHref?: FileDiffLayoutProps["fileHref"];
+  onOpenFile?: FileDiffLayoutProps["onOpenFile"];
 }) {
   if (!file) {
     return (
@@ -559,10 +628,7 @@ function FileDiffContent({
               >
                 {status.label}
               </span>
-              <h3 className="font-mono text-sm font-medium text-sol-text truncate">
-                {file.filename}
-              </h3>
-              <CopyButton text={file.filename} />
+              <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} className="text-sm font-medium" />
             </div>
             {showNav && (
               <div className="text-xs text-sol-text-dim shrink-0 ml-2">
@@ -614,10 +680,7 @@ function FileDiffContent({
           <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
             {status.label}
           </span>
-          <span className="font-mono text-xs text-sol-text-muted truncate">
-            {file.filename}
-          </span>
-          <CopyButton text={file.filename} />
+          <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-[11px] text-sol-text-dim">
@@ -670,31 +733,35 @@ function UnifiedDiffView({
   renderExtra,
   commentContextFor,
   lineThreads,
+  fileHref,
+  onOpenFile,
 }: {
   files: DiffFile[];
   onComment?: (filename: string, lineNumber?: number) => void;
   renderExtra?: (file: DiffFile) => React.ReactNode;
   commentContextFor?: FileDiffLayoutProps["commentContextFor"];
   lineThreads?: FileLineThreads;
+  fileHref?: FileDiffLayoutProps["fileHref"];
+  onOpenFile?: FileDiffLayoutProps["onOpenFile"];
 }) {
+  // Files sit a little apart, so the eye finds where one ends and the next
+  // begins without reading the headers; each header stays pinned while its
+  // own diff scrolls under it.
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden">
+    <div className="h-full overflow-y-auto overflow-x-hidden pb-8">
       {files.map((file, index) => {
         const status = getFileStatus(file.status);
         const language = getFileExtension(file.filename);
         const patchData = file.patch ? parsePatch(file.patch) : null;
 
         return (
-          <div key={file.filename} className="overflow-hidden" id={`file-${index}`}>
-            <div className="sticky top-0 z-10 bg-sol-bg-alt px-3 py-1 flex items-center justify-between border-b border-sol-border/30">
+          <div key={file.filename} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`}>
+            <div className="sticky top-0 z-10 bg-sol-bg-alt px-3 py-1.5 flex items-center justify-between border-y border-sol-border/30">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
                   {status.label}
                 </span>
-                <span className="font-mono text-xs text-sol-text-muted truncate">
-                  {file.filename}
-                </span>
-                <CopyButton text={file.filename} />
+                <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} />
               </div>
               <span className="text-[11px] text-sol-text-dim shrink-0">
                 <span className="text-sol-green">+{file.additions}</span>
@@ -743,6 +810,8 @@ export function FileDiffLayout({
   commentContextFor,
   lineThreads,
   focusFile,
+  fileHref,
+  onOpenFile,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
   const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
@@ -897,6 +966,8 @@ export function FileDiffLayout({
     sidebarOpen,
     commentContextFor,
     lineThreads,
+    fileHref,
+    onOpenFile,
   };
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
@@ -971,6 +1042,8 @@ export function FileDiffLayout({
             renderExtra={renderFileExtra}
             commentContextFor={commentContextFor}
             lineThreads={lineThreads}
+            fileHref={fileHref}
+            onOpenFile={onOpenFile}
           />
         </div>
       </div>
