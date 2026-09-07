@@ -25,11 +25,54 @@ export interface CodexTurnError {
   codex_error_info?: string | Record<string, unknown>;
 }
 
+// The prose codex shows when a turn is blocked for safety and carries no code.
+const CODEX_SAFETY_MESSAGE = "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+
+// Codex reports a failed turn with a STRUCTURED code — `codex_error_info`, the
+// CodexErrorInfo enum in the codex binary (usage_limit_exceeded,
+// rate_limit_exceeded, unauthorized, misalignment_policy_violation, …) — next
+// to its prose. The code is what we classify on. Provider wording drifts
+// release to release and a wording-matched park chain fails SILENTLY when it
+// does: on 2026-09-03 an apostrophe in one Claude banner disabled the stamp,
+// the switch loop and the pin rewrite at once. Codex's code is part of its wire
+// protocol, so it cannot drift the same way. (It is also why the codex limit
+// park was invisible: "You've hit your usage limit." — with the trailing period
+// — does not match LIMIT_BANNER_RE, and never would have.)
+//
+// Only the codes whose cure codecast implements are mapped. Everything else
+// falls through to the marked client-error path, which reads the prose and
+// stays kind "auth" or "error" exactly as before.
+const CODEX_ERROR_KIND: Readonly<Record<string, ApiErrorBannerKind>> = {
+  // The plan window is spent. Retrying burns requests until it rolls, so this
+  // is the park the recovery loop, the reset credit and the wait exist for.
+  usage_limit_exceeded: "limit",
+  // The per-minute cap, NOT the plan window — the same split Claude draws
+  // between a quota park and a burst 429. Rotating accounts on this reproduces
+  // the burst on the fresh account, so it must never be read as "limit".
+  rate_limit_exceeded: "throttle",
+  [CODEX_SAFETY_ERROR_CODE]: "safety",
+};
+
+// codex spells the enum snake_case on the wire; some transports carry the Rust
+// variant name instead. One normalization so the map has one key per code.
+function normalizeCodexErrorCode(raw: string): string {
+  return raw.trim().replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+/** The banner kind a codex turn error means, or null when codex reported
+ *  something we have no cure for (the caller then falls back to the marked
+ *  client-error banner, which classifies off the provider text). */
+export function codexErrorKind(error: CodexTurnError | null | undefined): ApiErrorBannerKind | null {
+  if (!error) return null;
+  const raw = error.codexErrorInfo ?? error.codex_error_info ?? error.code;
+  // A carried code is the whole answer. Never fall back to prose when codex
+  // said what happened — not even for a code we do not map.
+  if (raw != null) return typeof raw === "string" ? CODEX_ERROR_KIND[normalizeCodexErrorCode(raw)] ?? null : null;
+  return error.message?.trim() === CODEX_SAFETY_MESSAGE ? "safety" : null;
+}
+
 export function isCodexSafetyError(error: CodexTurnError | null | undefined): boolean {
-  if (!error) return false;
-  const code = error.codexErrorInfo ?? error.codex_error_info ?? error.code;
-  if (code != null) return code === CODEX_SAFETY_ERROR_CODE || code === "misalignmentPolicyViolation";
-  return error.message?.trim() === "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+  return codexErrorKind(error) === "safety";
 }
 
 export function withSafetyBlock<T extends { session_error?: string | null; pending_api_error?: boolean | null; pending_api_error_kind?: string | null }>(session: T): T {
@@ -54,6 +97,32 @@ export const BLOCKED_BANNER_KINDS: ReadonlySet<string> = new Set([
 // account switch — continuing a signed-out session just re-fails). Default
 // selection for continueAllBlocked and the web's continue-all button.
 export const CONTINUE_BANNER_KINDS: readonly string[] = ["limit", "throttle", "connection", "fatal"];
+
+// Which park kinds each agent's recovery chain can actually act on. One rule
+// rather than a per-agent branch: a row counts as blocked only when something
+// downstream knows how to un-park it, so the badge, the fleet banner and the
+// revive actions never name a session nothing will come back for.
+//
+// claude_code earns every blocked kind — the switch loop, the paced throttle
+// continue and the revive actions are all built on its account inventory.
+//
+// codex earns the kinds whose cure needs no Claude credential. "limit" is the
+// plan window: a plain continue once it rolls, or a reset credit redeemed on
+// the same account (codex account SWITCHING does not exist yet, so the
+// recovery loop runs the codex decision with switching off). "throttle" is the
+// per-minute cap, healed by the same paced continue. "safety" is a park with
+// no cure at all — it earns the badge and the hint, and every revive filters
+// it out. Auth is deliberately absent: a codex login is not fixed by the
+// Claude credential the auth branch swaps.
+const BLOCKED_KINDS_BY_AGENT: Readonly<Record<string, ReadonlySet<string>>> = {
+  claude_code: BLOCKED_BANNER_KINDS,
+  codex: new Set(["limit", "throttle", "safety"]),
+};
+const NO_BLOCKED_KINDS: ReadonlySet<string> = new Set();
+
+export function blockedKindsForAgent(agentType: string | null | undefined): ReadonlySet<string> {
+  return BLOCKED_KINDS_BY_AGENT[agentType ?? ""] ?? NO_BLOCKED_KINDS;
+}
 
 // Burst throttle. Claude Code renders a transient 429 — the provider's "This
 // request would exceed your account's rate limit. Please try again later."
@@ -89,9 +158,24 @@ export function isTransientRateLimit429(
 /** The marked banner the parser stores for a burst throttle. One line, under
  * the prose cap, keeps the CLI's own words as the tail so the card can still
  * say what the pane showed. */
-export function throttleBannerContent(shownAs: string | null | undefined): string {
+export function throttleBannerContent(shownAs: string | null | undefined, shownBy = "Claude Code"): string {
   const shown = (shownAs ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
-  return `${THROTTLE_BANNER_PREFIX} the request burst exceeded the account's per-minute rate limit · retried automatically${shown ? ` · Claude Code showed: ${shown}` : ""}`;
+  return `${THROTTLE_BANNER_PREFIX} the request burst exceeded the account's per-minute rate limit · retried automatically${shown ? ` · ${shownBy} showed: ${shown}` : ""}`;
+}
+
+// The canonical limit-park banner. A provider that reports its quota park as a
+// CODE rather than in codecast's banner words (codex: usage_limit_exceeded)
+// gets rewritten into this form by the parser that saw the code, exactly as a
+// burst 429 is rewritten into the throttle form above. Downstream — the server
+// stamp, the recovery loop, the web card — then reads one shape for "the plan
+// window is spent", whoever the provider was. The text is ours, so the regex
+// that matches it (LIMIT_BANNER_RE) is matching a contract we control rather
+// than prose that can drift.
+export const LIMIT_BANNER_PREFIX = "You've hit your usage limit";
+
+export function limitBannerContent(shownAs: string | null | undefined): string {
+  const shown = (shownAs ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return shown ? `${LIMIT_BANNER_PREFIX} · ${shown}` : LIMIT_BANNER_PREFIX;
 }
 
 // Auth subset — the user can act by re-running /login. "Login expired" covers
