@@ -23,7 +23,7 @@ import { settle, type PageSession } from "./instance.js";
 import { writeShotFile } from "./shotFile.js";
 import { uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
 
 /** A parsed viewport argument: the profile plus the name to label output with. */
 export interface NamedViewport {
