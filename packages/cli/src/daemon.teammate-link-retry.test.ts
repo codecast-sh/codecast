@@ -86,6 +86,7 @@ describe("teammate lead link survives a create that fell to the retry queue", ()
       get: (_t, prop) => {
         if (prop === "add") return () => "op-id";
         if (prop === "hasPendingConversation") return () => false;
+        if (prop === "getPendingOperations") return () => [];
         return () => undefined;
       },
     }) as unknown as RetryQueue;
@@ -95,8 +96,8 @@ describe("teammate lead link survives a create that fell to the retry queue", ()
     // Pass 1: the direct create throws → queued for retry. No conversation
     // exists yet, so no link may be attempted (an attempt here would burn one
     // of the bounded tries against a row that does not exist).
-    await processSessionFile(filePath, TEAMMATE_SESSION, projDir, syncService, "user123", undefined,
-      conversationCache, retryQueue, pendingMessages as any, {}, () => {});
+    await expect(processSessionFile(filePath, TEAMMATE_SESSION, projDir, syncService, "user123", undefined,
+      conversationCache, retryQueue, pendingMessages as any, {}, () => {})).rejects.toThrow("retains unread data");
     expect(createCalls).toBe(1);
     expect(links).toEqual([]);
 
