@@ -2536,7 +2536,14 @@ describe("unionHydrate — cache as the floor (jx799py repro)", () => {
 
   it("returns the live set when there is no cache", () => {
     const live = { a: { _id: "a" } };
-    expect(unionHydrate(undefined, live)).toEqual(live);
+    expect(unionHydrate(undefined, live)).toBe(live);
+  });
+
+  it("keeps the populated collection identity when the cache adds no rows", () => {
+    const cached = { a: { _id: "a", title: "cached" } };
+    const live = { a: { _id: "a", title: "live" }, b: { _id: "b", title: "new" } };
+    expect(unionHydrate(cached, live)).toBe(live);
+    expect(unionHydrate({ a: undefined }, { a: undefined })).toEqual({ a: undefined });
   });
 });
 

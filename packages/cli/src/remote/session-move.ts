@@ -812,6 +812,16 @@ export async function performMoveToRemote(host: RemoteHost, sessionId: string): 
   const move = await pushSession(sessionId, host);
   ensureRemoteClaudeReady(host, move.remoteCwd);
   refreshRemoteCredential(host);
+  // The host-home steps (cloud/prepare.ts readyHostHome): the home mirror,
+  // stamp-gated and honouring cloud_mirror_enabled, plus whatever the other
+  // host-home features hook in there. Each is non-fatal — a moved session
+  // must not be lost to a config push.
+  try {
+    const { readyHostHome } = await import("../cloud/prepare.js");
+    await readyHostHome(host, { onProgress: (m) => console.error(`  ${m}`) });
+  } catch (err) {
+    console.error(`WARNING: host home steps failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   return move;
 }
 

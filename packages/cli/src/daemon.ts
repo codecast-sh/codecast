@@ -53,7 +53,8 @@ import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
-import { answerLocalRead, buildRepoMirror, refsFingerprint, type LocalReadRequest } from "./repoMirror.js";
+import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, type LocalReadRequest } from "./repoMirror.js";
+import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
   useProfile,
@@ -253,7 +254,7 @@ import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPre
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
-import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
   FENCED_TMUX_TAG_NAMES,
@@ -2798,6 +2799,33 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
     log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     remoteKeysPushInFlight = false;
+  }
+}
+
+// Home mirror fan-out (cloud/mirror): this laptop's instruction files and
+// agent config to every reachable host, on the credential loop's cadence.
+// Hash-gated on the fast tick, stamp-verified on the periodic one, and a
+// host whose push failed is left alone until the local hash changes or the
+// periodic tick — a push that retried every minute would keep a broken box
+// awake (its idle watchdog counts inbound ssh as activity).
+let remoteMirrorPushInFlight = false;
+
+async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean; verifyRemote?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice() || remoteMirrorPushInFlight) return;
+  const config = readConfig();
+  if (!config || !isCloudMirrorEnabled(config)) return;
+  remoteMirrorPushInFlight = true;
+  try {
+    const { runMirrorTick } = await import("./cloud/mirror/push.js");
+    await runMirrorTick({ reason, onlyIfChanged: opts.onlyIfChanged, verifyRemote: opts.verifyRemote }, {
+      listHosts: reachableTransferHosts,
+      readConfig: () => config,
+      log: (m) => log(`[MIRROR] ${m}`),
+    });
+  } catch (err) {
+    log(`[MIRROR] mirror push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteMirrorPushInFlight = false;
   }
 }
 
@@ -16929,6 +16957,10 @@ async function runHeartbeatMaintenance(): Promise<void> {
   if (tick % GIT_PLANE_EVERY_N_FLUSHES === 0) {
     await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
   }
+
+  // Reflog tail fallback: the watchers report within a second; this catches
+  // anything they missed at the flush cadence. See pollGitActivity.
+  await pollGitActivity().catch((e) => log(`[GITACTIVITY] poll error: ${(e as Error)?.message ?? e}`));
 }
 
 // ─── Working-tree snapshots ────────────────────────────────────────────────
@@ -17179,7 +17211,102 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
   }
 
   await reportGitStates(targets, states).catch((e) => log(`[GITPLANE] state report error: ${(e as Error)?.message ?? e}`));
+  await syncGitActivityTailers(byRoot).catch((e) => log(`[GITACTIVITY] tailer sync error: ${(e as Error)?.message ?? e}`));
   await publishLocalRepos([...byRoot.keys()], byRoot).catch((e) => log(`[REPOMIRROR] pass error: ${(e as Error)?.message ?? e}`));
+}
+
+// ─── Local git activity ───────────────────────────────────────────────────────
+// Every live checkout's reflog is tailed (gitActivity.ts): a commit, checkout,
+// merge, pull, rebase, reset, cherry-pick, revert or push appends a line the
+// moment it happens, whoever ran it, and that line becomes a team activity
+// event (convex gitActivity.recordLocal) with the session attached when one
+// live session owns the checkout. A filesystem watcher on the log files gives
+// the seconds-level reaction; the per-flush poll below is the fallback for a
+// watcher that missed. Because the refs moved, the mirror publish runs right
+// away instead of waiting for the next sweep.
+
+const gitActivityTailers = new Map<string, GitActivityTailer>();
+const gitActivityWatchers = new Map<string, { close: () => Promise<void> | void }>();
+const gitActivityPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** root -> live conversation ids, from the last git plane sweep. */
+let liveRootSessions = new Map<string, string[]>();
+/** Roots the server declined as private: not tailed again this lifetime. */
+const gitActivityPrivate = new Set<string>();
+
+async function syncGitActivityTailers(byRoot: Map<string, { conversationIds: string[] }>): Promise<void> {
+  liveRootSessions = new Map([...byRoot].map(([root, group]) => [root, group.conversationIds]));
+  for (const root of byRoot.keys()) {
+    if (gitActivityTailers.has(root) || gitActivityPrivate.has(root)) continue;
+    const tailer = new GitActivityTailer(root);
+    if (!(await tailer.init().catch(() => false))) continue;
+    gitActivityTailers.set(root, tailer);
+    try {
+      const watcher = chokidarWatch(tailer.watchPaths(), { ignoreInitial: true, depth: 3, persistent: true });
+      watcher.on("all", () => scheduleGitActivityPoll(root));
+      gitActivityWatchers.set(root, watcher);
+    } catch (e) {
+      log(`[GITACTIVITY] no watcher for ${root}, polling only: ${(e as Error)?.message ?? e}`);
+    }
+  }
+  for (const root of [...gitActivityTailers.keys()]) {
+    if (byRoot.has(root)) continue;
+    dropGitActivityTailer(root);
+  }
+}
+
+function dropGitActivityTailer(root: string): void {
+  gitActivityTailers.delete(root);
+  const watcher = gitActivityWatchers.get(root);
+  gitActivityWatchers.delete(root);
+  if (watcher) void Promise.resolve(watcher.close()).catch(() => {});
+}
+
+function scheduleGitActivityPoll(root: string): void {
+  const pending = gitActivityPollTimers.get(root);
+  if (pending) clearTimeout(pending);
+  gitActivityPollTimers.set(root, setTimeout(() => {
+    gitActivityPollTimers.delete(root);
+    void pollGitActivity(root).catch((e) => log(`[GITACTIVITY] poll error for ${root}: ${(e as Error)?.message ?? e}`));
+  }, 750));
+}
+
+async function pollGitActivity(onlyRoot?: string): Promise<void> {
+  if (!syncServiceRef) return;
+  for (const root of onlyRoot ? [onlyRoot] : [...gitActivityTailers.keys()]) {
+    const tailer = gitActivityTailers.get(root);
+    if (!tailer) continue;
+    const events = await tailer.poll().catch(() => []);
+    if (!events.length) continue;
+    const sessions = liveRootSessions.get(root) ?? [];
+    const conversationId = sessions.length === 1 ? sessions[0] : undefined;
+    const [origin, branch] = await Promise.all([gitOut(root, ["remote", "get-url", "origin"]), gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"])]);
+    const payload = [];
+    for (const event of events) {
+      let commits_count: number | undefined;
+      if (event.kind === "push" && !/^0+$/.test(event.old_sha)) {
+        const count = await gitOut(root, ["rev-list", "--count", `${event.old_sha}..${event.new_sha}`]);
+        if (count) commits_count = Number(count);
+      }
+      payload.push({ ...event, conversation_id: conversationId, commits_count });
+    }
+    const result = await syncServiceRef.recordGitActivity({
+      root,
+      repository: repositoryKeyFor(root, origin),
+      remote_url: origin,
+      branch: branch && branch !== "HEAD" ? branch : undefined,
+      events: payload,
+    });
+    if (!result) continue;
+    if (result.reason === "private") {
+      gitActivityPrivate.add(root);
+      dropGitActivityTailer(root);
+      continue;
+    }
+    log(`[GITACTIVITY] ${path.basename(root)}: ${events.map((e) => e.kind).join(", ")}`);
+    if (events.some((e) => e.kind !== "checkout")) {
+      await publishLocalRepos([root], new Map([[root, { conversationIds: sessions }]])).catch((e) => log(`[REPOMIRROR] publish after activity failed: ${(e as Error)?.message ?? e}`));
+    }
+  }
 }
 
 // ─── The session header's prompt line ─────────────────────────────────────────
@@ -23771,6 +23898,13 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  // Home mirror (cloud/mirror) on the same cadence: verify each host's stamp
+  // at start and every 30 minutes (a re-provisioned host has no stamp), and a
+  // hash-gated fast tick that ships an edited skill or CLAUDE.md within ~a
+  // minute. Failed hosts back off until the hash changes or the periodic tick.
+  setTimeout(() => { pushMirrorToRemoteHosts("daemon start", { verifyRemote: true }).catch(() => {}); }, 64_000);
+  setInterval(() => { pushMirrorToRemoteHosts("mirror_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  setInterval(() => { pushMirrorToRemoteHosts("periodic", { verifyRemote: true }).catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   // Near-instant sync: when the local store file changes (a `cast keys set/rm`, or a
   // web edit the daemon applied), push immediately. fs.watch can double-fire, so the
   // in-flight lock + hash gate keep it to one real push.

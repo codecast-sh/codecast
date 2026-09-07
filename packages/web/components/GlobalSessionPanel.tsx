@@ -3876,12 +3876,13 @@ function SessionListPanelImpl({
     // resets once the agent resumes; if that never happens the stamp expires
     // and the session re-enters here (coarseNow keeps the TTL live).
     const reviving = freshReviveRequestIds(s.blockedReviveRequestedAt, now);
-    return (Object.values(s.sessions) as InboxSession[]).map(withSafetyBlock).filter(
+    return (Object.values(s.sessions) as InboxSession[]).filter(
       (sess) =>
-        isBlockedConversation({ ...sess, agent_type: sess.agent_type ?? "claude_code" }) &&
         !isSessionHidden(sess) &&
         !reviving.has(sess._id) &&
         (sess.updated_at ?? 0) > since,
+    ).map(withSafetyBlock).filter(
+      (sess) => isBlockedConversation(sess.agent_type != null ? sess : { ...sess, agent_type: "claude_code" }),
     );
   }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
   // A fleet of nothing but blocked subagent workers doesn't earn the amber
