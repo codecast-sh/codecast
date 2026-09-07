@@ -8,7 +8,18 @@ import {
 // In-memory message store keyed by conversation. Each entry is a user message
 // with a timestamp; `content` defaults to real prose so it survives the filter.
 type StoreMsg = { _id: string; timestamp: number; content?: string };
-type Store = Record<string, { updated_at: number; isOwn?: boolean; author?: string; msgs: StoreMsg[] }>;
+type Store = Record<
+  string,
+  {
+    updated_at: number;
+    isOwn?: boolean;
+    author?: string;
+    isSubagent?: boolean;
+    machineSeeded?: boolean;
+    agentSource?: string;
+    msgs: StoreMsg[];
+  }
+>;
 
 function buildCandidates(store: Store): FeedCandidate[] {
   return Object.entries(store).map(([convId, c]) => ({
@@ -18,7 +29,22 @@ function buildCandidates(store: Store): FeedCandidate[] {
     session_id: `${convId}-sess`,
     isOwn: c.isOwn ?? true,
     authorName: c.author ?? "me",
+    isSubagent: c.isSubagent,
+    machineSeeded: c.machineSeeded,
+    agentSource: c.agentSource,
   }));
+}
+
+// The real query resolves this from the by_conversation_role_timestamp index in
+// ascending order; here it is just the oldest message the store holds.
+function makeSeedFetcher(store: Store) {
+  let calls = 0;
+  const fetchSeedMessageId = async (convId: string): Promise<string | null> => {
+    calls++;
+    const msgs = [...(store[convId]?.msgs ?? [])].sort((a, b) => a.timestamp - b.timestamp);
+    return msgs[0]?._id ?? null;
+  };
+  return { fetchSeedMessageId, calls: () => calls };
 }
 
 // Returns the real fetcher plus a call counter so tests can assert the
@@ -180,6 +206,94 @@ describe("mergeUserMessageFeed", () => {
     expect(m1.conversation_session_id).toBe("mine-sess");
     expect(t1.is_own).toBe(false);
     expect(t1.author_name).toBe("sam");
+  });
+
+  test("marks every message of a subagent conversation as agent-written", async () => {
+    // A subagent's whole user-role stream is its parent's prompts. Nobody typed
+    // any of it, even though the rows belong to the viewer's account.
+    const store: Store = {
+      sub: {
+        updated_at: 300,
+        isSubagent: true,
+        agentSource: "jx79rjr",
+        msgs: [
+          { _id: "s1", timestamp: 300, content: "Implement task ct-49524 in this worktree" },
+          { _id: "s2", timestamp: 200, content: "Now run the contract tests and report" },
+        ],
+      },
+      mine: {
+        updated_at: 250,
+        msgs: [{ _id: "h1", timestamp: 250, content: "why is the release failing?" }],
+      },
+    };
+    const { fetchUserMessages } = makeFetcher(store);
+    const { fetchSeedMessageId, calls } = makeSeedFetcher(store);
+    const res = await mergeUserMessageFeed({
+      candidates: buildCandidates(store),
+      cursor: undefined,
+      limit: 10,
+      fetchUserMessages,
+      fetchSeedMessageId,
+    });
+    const byId = new Map(res.messages.map((m) => [m._id, m]));
+    expect(byId.get("s1")!.from_agent).toBe(true);
+    expect(byId.get("s2")!.from_agent).toBe(true);
+    expect(byId.get("s1")!.agent_source).toBe("jx79rjr");
+    expect(byId.get("h1")!.from_agent).toBe(false);
+    // A subagent needs no seed lookup — the whole conversation is agent-written.
+    expect(calls()).toBe(0);
+  });
+
+  test("marks only the seed prompt of a machine-started conversation", async () => {
+    // `cast spawn` from another session writes the first prompt; everything the
+    // person types into that session afterwards is theirs.
+    const store: Store = {
+      spawned: {
+        updated_at: 300,
+        machineSeeded: true,
+        agentSource: "jx7abcd",
+        msgs: [
+          { _id: "later", timestamp: 300, content: "actually, skip the codesign step" },
+          { _id: "seed", timestamp: 100, content: "Implement task ct-49524. Run cast task start." },
+        ],
+      },
+    };
+    const { fetchUserMessages } = makeFetcher(store);
+    const { fetchSeedMessageId, calls } = makeSeedFetcher(store);
+    const res = await mergeUserMessageFeed({
+      candidates: buildCandidates(store),
+      cursor: undefined,
+      limit: 10,
+      fetchUserMessages,
+      fetchSeedMessageId,
+    });
+    const byId = new Map(res.messages.map((m) => [m._id, m]));
+    expect(byId.get("seed")!.from_agent).toBe(true);
+    expect(byId.get("seed")!.agent_source).toBe("jx7abcd");
+    expect(byId.get("later")!.from_agent).toBe(false);
+    expect(byId.get("later")!.agent_source).toBeUndefined();
+    // Resolved once for the conversation, not once per message.
+    expect(calls()).toBe(1);
+  });
+
+  test("ordinary conversations pay no seed lookup and stay human", async () => {
+    const store: Store = {
+      a: {
+        updated_at: 300,
+        msgs: [{ _id: "a1", timestamp: 300, content: "a genuine question here" }],
+      },
+    };
+    const { fetchUserMessages } = makeFetcher(store);
+    const { fetchSeedMessageId, calls } = makeSeedFetcher(store);
+    const res = await mergeUserMessageFeed({
+      candidates: buildCandidates(store),
+      cursor: undefined,
+      limit: 10,
+      fetchUserMessages,
+      fetchSeedMessageId,
+    });
+    expect(res.messages[0].from_agent).toBe(false);
+    expect(calls()).toBe(0);
   });
 
   test("empty candidate set returns an empty page", async () => {
