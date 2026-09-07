@@ -1,37 +1,24 @@
 // The one control that moves a repository page between its two forms.
 //
-// In the app it pops the page out into a window of its own, which is the
-// standalone form of the same URL. In that window it offers the way back in.
+// In the app it opens the page in the person's browser, as the standalone
+// form of the same URL: a plain page that can be bookmarked or handed to
+// someone. In that form it offers the way back in.
 import Link from "next/link";
-import { PictureInPicture2, PanelsTopLeft } from "lucide-react";
+import { ExternalLink, PanelsTopLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useLocalAuth } from "../../lib/localAuth";
-import { popOutWindow } from "../../lib/popOut";
+import { openInBrowser } from "../../lib/popOut";
 import { toAppHref, toStandaloneHref } from "../../lib/repoView";
 import { useRepoLocation } from "./useRepoFamily";
 
 const CONTROL =
   "flex items-center gap-1.5 h-7 rounded-md border border-sol-border/60 px-2 text-[12px] text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors";
 
-async function popOutRepo(here: string): Promise<void> {
-  const outcome = await popOutWindow(toStandaloneHref(here), undefined, {
-    name: "codecast-repo",
-    width: 1240,
-    height: 860,
-  });
-  if (outcome === "needs-update") {
+function openAsPage(here: string): void {
+  const url = new URL(toStandaloneHref(here), window.location.origin).toString();
+  if (openInBrowser(url) === "needs-update") {
     toast.error("The desktop app needs an update for this", {
-      description: "This build cannot break a page out into a window. Update Codecast and it opens on its own.",
-    });
-    return;
-  }
-  if (outcome === "blocked") {
-    toast.error("Your browser blocked the window", {
-      description: "Allow popups for this site, or open it as a tab instead.",
-      action: {
-        label: "Open as a tab",
-        onClick: () => window.open(toStandaloneHref(here), "codecast-repo"),
-      },
+      description: "This build cannot hand a page to your browser. Update Codecast and it opens on its own.",
     });
   }
 }
@@ -55,8 +42,8 @@ export function RepoWindowControl() {
   }
 
   return (
-    <button type="button" onClick={() => void popOutRepo(here)} className={CONTROL} title="Open in its own window">
-      <PictureInPicture2 className="w-3 h-3" />
+    <button type="button" onClick={() => openAsPage(here)} className={CONTROL} title="Open as a page in your browser">
+      <ExternalLink className="w-3 h-3" />
     </button>
   );
 }

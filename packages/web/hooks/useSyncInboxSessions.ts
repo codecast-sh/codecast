@@ -1,4 +1,5 @@
 import { useRef, useCallback, useEffect, useState } from "react";
+import { captureException } from "@sentry/react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession, classifySession, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
@@ -329,7 +330,7 @@ export function useSyncInboxSessions() {
     // and the timer that queues its first message. Pending bubbles are persisted
     // with client ids, so boot redelivery is safe and server-idempotent.
     const store = useInboxStore.getState();
-    store.redrivePendingMessages();
+    void store.redrivePendingMessages().catch(captureException);
     store.resumePostCreateSessionIntents();
   }, [hydrated]);
   // THE COMPLETENESS FLOOR — once per cold or resynced cache, never on a

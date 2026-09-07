@@ -14,7 +14,11 @@ export const ENTITY_TYPE = v.union(
   v.literal("chat_channel"),
   // A machine, for the daemon loop freeze alert. Nothing subscribes to a device:
   // the alert goes to its owner through direct_recipient_id.
-  v.literal("device")
+  v.literal("device"),
+  // A place in a repository (`owner/repo@sha` or `owner/repo#12`), for a code
+  // comment that names someone. Direct recipients only, like a device: nobody
+  // subscribes to a commit.
+  v.literal("code")
 );
 
 export const NOTIFICATION_TYPE = v.union(

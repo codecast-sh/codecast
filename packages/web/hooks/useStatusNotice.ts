@@ -4,10 +4,10 @@ import type { LucideIcon } from "lucide-react";
 
 /**
  * Transient status notices — offline, storage degraded, CLI offline, tmux
- * missing — get one dedicated surface: StatusNoticeChip, a fixed slot in the
- * header beside the sync chip, so a status that comes and goes never pushes
- * the layout down or covers the page. Owners describe the notice; the chip
- * owns the look.
+ * missing — get one dedicated surface: StatusNoticeStack, a card stack fixed
+ * to the bottom-left corner, so a status that comes and goes never pushes
+ * the layout down or covers the working area. Owners describe the notice;
+ * the stack owns the look.
  */
 export type StatusNotice = {
   tone: "yellow" | "orange" | "red";
