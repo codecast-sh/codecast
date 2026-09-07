@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage, parseChatWakePrompt, isChatWakePrompt } from "./sessionMessage";
+import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage, parseChatWakePrompt, isChatWakePrompt } from "./sessionMessage";
 import { formatHuddleSummaryTag, formatUserMessage } from "@codecast/shared/contracts";
 
 // A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
@@ -228,11 +228,12 @@ describe("parseMachineDeliveredMessage", () => {
     expect(parseMachineDeliveredMessage(undefined)).toBeNull();
   });
 
-  test("agrees with isMachineDeliveredMessage on all three kinds", () => {
+  test("agrees with isMachineDeliveredMessage on every kind", () => {
     for (const raw of [
       formatSessionMessage("jx7c6zk", "hi"),
       '<scheduled-task title="T">x</scheduled-task>',
       TEAMMATE_BROADCAST,
+      AGENT_REPORT,
       "plain human prompt",
     ]) {
       expect(parseMachineDeliveredMessage(raw) !== null).toBe(isMachineDeliveredMessage(raw));
@@ -423,5 +424,73 @@ describe("direct user message (a person typing into a session)", () => {
     expect(isMachineDeliveredMessage(wire)).toBe(false);
     expect(cleanUserMessage(wire)).toBe("its me - you can proceed");
     expect(parseMachineDeliveredMessage(wire)).toBeNull();
+  });
+});
+
+// A subagent reporting back to the agent that launched it. The Claude Code
+// harness delivers it as a user-role turn, so without this envelope the feed
+// and the message navigator both read it as something the human typed.
+const AGENT_REPORT =
+  '<agent-message from="review-ct-49528">\nReview complete, verdict PASS. I could not run Bash myself.\n</agent-message>';
+
+describe("agent-message (subagent report)", () => {
+  test("is machine-delivered, never a human prompt", () => {
+    expect(isAgentMessage(AGENT_REPORT)).toBe(true);
+    expect(isMachineDeliveredMessage(AGENT_REPORT)).toBe(true);
+    expect(isAgentMessage("I reviewed ct-49528 and it passes")).toBe(false);
+  });
+
+  test("parses to the sender and the unwrapped body", () => {
+    expect(parseAgentAuthoredMessage(AGENT_REPORT)).toEqual({
+      from: "review-ct-49528",
+      body: "Review complete, verdict PASS. I could not run Bash myself.",
+      label: "report from",
+    });
+  });
+
+  test("a cast send still parses as a session message, not a report", () => {
+    expect(parseAgentAuthoredMessage(formatSessionMessage("jx7c6zk", "hi"))).toEqual({
+      from: "jx7c6zk",
+      body: "hi",
+      label: "message from",
+    });
+    expect(parseAgentAuthoredMessage("a prompt the human typed")).toBeNull();
+  });
+
+  test("a preview sliced before the close tag keeps the sender and what is left", () => {
+    for (const [tag, label] of [["agent-message", "report from"], ["session-message", "message from"]]) {
+      const truncated = `<${tag} from="a4fb730">\nTried your fix exactly and it still`;
+      expect(parseAgentAuthoredMessage(truncated)).toEqual({
+        from: "a4fb730",
+        body: "Tried your fix exactly and it still",
+        label,
+      });
+    }
+  });
+
+  test("a stray keystroke in front of the tag does not turn it into a human prompt", () => {
+    // Observed on a tmux-injected `cast send`: the input-clearing keys leaked an
+    // "h" ahead of the wire tag.
+    const leaked = 'h<session-message from="jx77cgn">\nNo conflicting work from me.\n</session-message>';
+    expect(isMachineDeliveredMessage(leaked)).toBe(true);
+    expect(parseAgentAuthoredMessage(leaked)).toEqual({
+      from: "jx77cgn",
+      body: "No conflicting work from me.",
+      label: "message from",
+    });
+    // Real prose that happens to quote the tag is still the person's message.
+    expect(isMachineDeliveredMessage('look at this: <session-message from="x">')).toBe(false);
+  });
+
+  test("a codex goal restatement is machine context, not a prompt", () => {
+    expect(isMachineDeliveredMessage('<codex_internal_context source="goal">\nContinue.\n')).toBe(true);
+  });
+
+  test("rides the teammate rail in the message navigator", () => {
+    expect(parseMachineDeliveredMessage(AGENT_REPORT)).toEqual({
+      kind: "teammate",
+      source: "review-ct-49528",
+      body: "Review complete, verdict PASS. I could not run Bash myself.",
+    });
   });
 });

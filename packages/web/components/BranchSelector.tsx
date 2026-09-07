@@ -1,26 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Split } from "lucide-react";
-import { useInboxStore } from "../store/inboxStore";
-
-type ForkChild = {
-  _id: string;
-  title: string;
-  short_id?: string;
-  started_at?: number;
-  username?: string;
-  parent_message_uuid?: string;
-  message_count?: number;
-  agent_type?: string;
-  updated_at?: number;
-  last_message_preview?: string;
-  last_message_role?: string;
-  last_user_message_at?: number;
-  status?: string;
-  git_branch?: string;
-  fork_copied?: number;
-  first_divergent_preview?: string;
-};
+import { useInboxStore, type ForkChild } from "../store/inboxStore";
+import { branchSizeOf, originSizeSinceFork } from "../lib/branchCounts";
 
 // Sentinel loadingBranchId for the origin-line chip, which has no fork id.
 const MAIN_BRANCH = "main";
@@ -35,15 +17,6 @@ export function relativeTime(ts: number): string {
   const days = Math.floor(hrs / 24);
   if (days < 30) return `${days}d ago`;
   return `${Math.floor(days / 30)}mo ago`;
-}
-
-// This branch's own size: total messages minus the history it inherited from the
-// parent up to the fork point (fork_copied). Falls back to the raw count for
-// legacy forks missing the cursor.
-function branchSizeOf(fork: ForkChild): number {
-  const total = fork.message_count ?? 0;
-  if (typeof fork.fork_copied !== "number") return total;
-  return Math.max(0, total - fork.fork_copied);
 }
 
 // Messages that arrived since you last left this branch. Baseline is your seen
@@ -75,7 +48,6 @@ export function BranchSelector({
   activeBranchId,
   onSwitchBranch,
   loadingBranchId,
-  mainMessageCount,
   mainDivergentPreview,
   onFork,
 }: {
@@ -83,7 +55,6 @@ export function BranchSelector({
   activeBranchId: string | null;
   onSwitchBranch: (convId: string | null) => void;
   loadingBranchId?: string | null;
-  mainMessageCount?: number;
   mainDivergentPreview?: string;
   onFork?: () => void;
 }) {
@@ -91,6 +62,16 @@ export function BranchSelector({
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const seenMessageCount = useInboxStore((s) => s._seenMessageCount);
+  // The origin line's live total, read here (a scalar subscription on the one
+  // small component that shows it) rather than threaded through the
+  // conversation view, which would re-render the whole thread on every message
+  // the origin receives. The inbox row is live for every cached session; the
+  // conversation record covers an origin the inbox window no longer holds.
+  const originId = forkChildren.find((f) => f.origin_id)?.origin_id;
+  const originMessageCount = useInboxStore((s) =>
+    originId ? s.sessions[originId]?.message_count ?? s.conversations[originId]?.message_count : undefined,
+  );
+  const mainSize = originSizeSinceFork(forkChildren, originMessageCount) ?? 0;
 
   useEffect(() => {
     if (!hoveredId || hoveredId === MAIN_BRANCH) {
@@ -120,7 +101,7 @@ export function BranchSelector({
       key: MAIN_BRANCH,
       id: null as string | null,
       label: mainDivergentPreview || "main",
-      size: mainMessageCount ?? 0,
+      size: mainSize,
       unread: 0,
       isActive: !activeBranchId,
       isLoading: loadingBranchId === MAIN_BRANCH,

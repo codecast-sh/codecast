@@ -48,7 +48,7 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
@@ -557,6 +557,9 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         status: fork.status,
         git_branch: fork.git_branch,
         fork_copied: fork.fork_copied,
+        // A copy still in flight reports a partial fork_copied; the client
+        // treats such a row as unable to vouch for the inherited prefix.
+        fork_status: fork.fork_status,
         // Triage/visibility state, free off the same row. The client preloads
         // every returned branch into its sessions cache (preloadForkSessions);
         // omitting these seeded a stashed/dismissed branch as an ACTIVE row,
@@ -579,6 +582,28 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
 // list would both leak teammates' private forks into the inbox AND surface chips
 // that deny on click (the "branch spins forever" bug). Owner forks short-circuit
 // the access check, so the common all-mine case stays cheap.
+// The conversation that spawned this one, for the "Spawned from parent" link
+// and the initial-prompt attribution. Stored on subagent rows; older subagents
+// only know the spawning message's uuid, so it resolves through that. A FORK
+// also carries parent_message_uuid (its fork point), but it was not spawned
+// by anything — its origin is forked_from, surfaced through
+// forked_from_details — so the uuid lookup must not run for it: resolving it
+// dressed every fork as a subagent (a "Spawned from parent session" banner and,
+// when the fork point was the first loaded message, the fork point itself
+// rendered as a message FROM the parent, which hid the branch chips).
+export async function resolveSpawnParentId(
+  ctx: { db: { query: QueryCtx["db"]["query"] } },
+  conversation: { parent_conversation_id?: Id<"conversations"> | null; parent_message_uuid?: string | null; forked_from?: Id<"conversations"> | null },
+): Promise<string | null> {
+  if (conversation.parent_conversation_id) return conversation.parent_conversation_id;
+  if (conversation.forked_from || !conversation.parent_message_uuid) return null;
+  const parentMsg = await ctx.db
+    .query("messages")
+    .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid!))
+    .first();
+  return parentMsg ? parentMsg.conversation_id : null;
+}
+
 async function getAccessibleForkChildren(
   ctx: QueryCtx,
   authUserId: Id<"users"> | null,
@@ -1556,34 +1581,13 @@ export const getAllMessages = query({
 
     const compactionCount = messages.filter(m => m.subtype === "compact_boundary").length;
 
-    let parentConversationId: string | null = conversation.parent_conversation_id || null;
-    if (!parentConversationId && conversation.parent_message_uuid) {
-      const parentMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
-        .first();
-      if (parentMsg) {
-        parentConversationId = parentMsg.conversation_id;
-      }
-    }
+    const parentConversationId = await resolveSpawnParentId(ctx, conversation);
 
     const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
       forkSiblings = await getAccessibleForkChildren(ctx, authUserId, conversation.forked_from);
-    }
-
-    const mainMsgCountsByFork: Record<string, number> = {};
-    const forkPointUuids = new Set(forkChildrenDetails.map(f => f.parent_message_uuid).filter(Boolean));
-    if (forkPointUuids.size > 0) {
-      for (const uuid of forkPointUuids) {
-        const forkPointMsg = messages.find(m => m.message_uuid === uuid);
-        if (forkPointMsg) {
-          const afterCount = messages.filter(m => m.timestamp > forkPointMsg.timestamp).length;
-          mainMsgCountsByFork[uuid!] = afterCount;
-        }
-      }
     }
 
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
@@ -1606,7 +1610,6 @@ export const getAllMessages = query({
       fork_children: forkChildrenDetails,
       fork_siblings: forkSiblings.length > 0 ? forkSiblings : undefined,
       parent_conversation_id: parentConversationId,
-      main_message_counts_by_fork: mainMsgCountsByFork,
     });
   },
 });
@@ -1753,16 +1756,7 @@ export const getMessagesAroundTimestamp = query({
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
     const newestTimestamp = messages.length > 0 ? messages[messages.length - 1].timestamp : null;
 
-    let parentConversationId: string | null = conversation.parent_conversation_id || null;
-    if (!parentConversationId && conversation.parent_message_uuid) {
-      const parentMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
-        .first();
-      if (parentMsg) {
-        parentConversationId = parentMsg.conversation_id;
-      }
-    }
+    const parentConversationId = await resolveSpawnParentId(ctx, conversation);
 
     const { children: childConversations, map: childConversationMap, agentNameEntries } =
       messages.length > 0
@@ -2069,16 +2063,7 @@ export const getConversationWithMeta = query({
       }
     }
 
-    let parentConversationId: string | null = conversation.parent_conversation_id || null;
-    if (!parentConversationId && conversation.parent_message_uuid) {
-      const parentMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
-        .first();
-      if (parentMsg) {
-        parentConversationId = parentMsg.conversation_id;
-      }
-    }
+    const parentConversationId = await resolveSpawnParentId(ctx, conversation);
 
     const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
@@ -2176,6 +2161,36 @@ export const getConversationGitDiff = query({
   },
 });
 
+// Hard cap on assistant rows this query may read. Assistant documents carry
+// full tool_calls (Write/Edit payloads), so a 1000-row newest-first walk
+// blows Convex's system-operation budget ("too many system operations") on
+// long live sessions — and this query used to stay subscribed for the whole
+// visit, re-running on every stream tick. Newest TodoWrite is almost always
+// in the first few rows; TaskCreate past this window drops off. Removing the
+// cap or raising it back toward four digits re-introduces the timeout.
+export const TOOL_STATS_SCAN_LIMIT = 32;
+
+export async function collectConversationToolStats(
+  db: { query: (table: "messages") => any },
+  conversationId: Id<"conversations">,
+) {
+  const rows: Array<{ role?: string; timestamp?: number; tool_calls?: Array<{ name: string; input: string }> | null }> = [];
+  let scanned = 0;
+  for await (const msg of db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "assistant"),
+    )
+    .order("desc")) {
+    if (++scanned > TOOL_STATS_SCAN_LIMIT) break;
+    rows.push(msg);
+    // Newest-first: the first TodoWrite is the panel. Stop so a session of
+    // huge Write rows behind it is never read.
+    if (msg.tool_calls?.some((tc: { name: string }) => isTodoStatTool(tc.name))) break;
+  }
+  return { taskStats: computeConversationTaskStats(rows) };
+}
+
 export const getConversationToolStats = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -2188,76 +2203,7 @@ export const getConversationToolStats = query({
 
     if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return null;
 
-    let latestTodos: any[] | null = null;
-    // Collect creates and updates separately since we iterate newest-first
-    const taskCreates: { subject: string }[] = [];
-    const taskStatusMap = new Map<string, string>(); // taskId -> latest status (first seen = newest)
-
-    // Bounded scan: this query stays subscribed for the whole visit and
-    // re-runs on every new assistant message, so its cost must not grow with
-    // session length. The newest TodoWrite (the common case) is found within
-    // a few rows; only the rare TaskCreate/TaskUpdate bookkeeping can reach
-    // deep history, and for a 1000+ assistant-message session losing the
-    // oldest task rows from the panel is an acceptable bound.
-    let scanned = 0;
-    for await (const msg of ctx.db
-      .query("messages")
-      .withIndex("by_conversation_role_timestamp", (q: any) =>
-        q.eq("conversation_id", args.conversation_id).eq("role", "assistant")
-      )
-      .order("desc")) {
-      if (++scanned > 1000) break;
-      if (!msg.tool_calls) continue;
-      for (const tc of msg.tool_calls) {
-        if (tc.name === "TodoWrite" && !latestTodos) {
-          try {
-            const input = JSON.parse(tc.input);
-            if (input.todos) latestTodos = input.todos;
-          } catch {}
-        }
-        if (tc.name === "TaskCreate") {
-          try {
-            const inp = JSON.parse(tc.input);
-            taskCreates.push({ subject: inp.subject || inp.title || inp.description || "" });
-          } catch {}
-        }
-        if (tc.name === "TaskUpdate") {
-          try {
-            const inp = JSON.parse(tc.input);
-            if (inp.taskId && inp.status && !taskStatusMap.has(inp.taskId)) {
-              taskStatusMap.set(inp.taskId, inp.status);
-            }
-          } catch {}
-        }
-      }
-    }
-
-    // Reverse creates to get chronological order (IDs are assigned 1, 2, 3, ...)
-    taskCreates.reverse();
-    const normalizeStatus = (s: string) => s === "completed" ? "done" : s === "in_progress" ? "in_progress" : "open";
-    const taskItems = taskCreates
-      .map((tc, i) => {
-        const id = String(i + 1);
-        const rawStatus = taskStatusMap.get(id) ?? "pending";
-        return { id, content: tc.subject, status: normalizeStatus(rawStatus) };
-      })
-      .filter(t => taskStatusMap.get(t.id) !== "deleted");
-
-    // Normalize todo items and merge with task items
-    const todoItems = (latestTodos ?? []).map((t: any, i: number) => ({
-      id: t.id || `todo-${i}`,
-      content: t.content || t.task || t.title || "",
-      status: normalizeStatus(t.status ?? "pending"),
-    }));
-    const items = [...todoItems, ...taskItems];
-    const total = items.length;
-    const done = items.filter(i => i.status === "done").length;
-    const in_progress = items.filter(i => i.status === "in_progress").length;
-    const open = total - done - in_progress;
-
-    return {
-      taskStats: total > 0 ? { total, done, in_progress, open, items } : null,
-    };
+    return collectConversationToolStats(ctx.db, args.conversation_id);
   },
 });
 
@@ -3230,16 +3176,7 @@ export const getConversationPublic = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    let parentConversationId: string | null = conversation.parent_conversation_id || null;
-    if (!parentConversationId && conversation.parent_message_uuid) {
-      const parentMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
-        .first();
-      if (parentMsg) {
-        parentConversationId = parentMsg.conversation_id;
-      }
-    }
+    const parentConversationId = await resolveSpawnParentId(ctx, conversation);
 
     return sanitizeConvexObjectKeys({
       access_level: accessLevel,
@@ -6412,15 +6349,25 @@ export const getMessageFeed = query({
     // — never touching the large assistant/tool docs the old query paid to read
     // and throw away. The merge + early-exit lives in messageFeed.ts so it can be
     // unit-tested; here we just supply the candidates and an index-backed fetcher.
+    // Provenance travels with the candidate so the merge can mark prompts an
+    // agent wrote. A subagent row is agent-written end to end; a row another
+    // session started with `cast spawn`, or a scheduled run, is agent-written
+    // only in its seed. Short ids are the first 7 chars of the conversation id.
     const feedCandidates: FeedCandidate[] = [...candidates.values()].map(
-      ({ conv, isOwn, authorName }) => ({
-        conversation_id: conv._id,
-        updated_at: conv.updated_at,
-        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
-        session_id: conv.session_id,
-        isOwn,
-        authorName,
-      })
+      ({ conv, isOwn, authorName }) => {
+        const agentSource = conv.parent_conversation_id ?? conv.spawned_by_conversation_id;
+        return {
+          conversation_id: conv._id,
+          updated_at: conv.updated_at,
+          title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
+          session_id: conv.session_id,
+          isOwn,
+          authorName,
+          isSubagent: conv.is_subagent === true,
+          machineSeeded: !!(conv.spawned_by_conversation_id || conv.agent_task_id),
+          agentSource: agentSource ? agentSource.toString().slice(0, 7) : undefined,
+        };
+      }
     );
 
     return await mergeUserMessageFeed({
@@ -6438,6 +6385,18 @@ export const getMessageFeed = query({
           })
           .order("desc")
           .take(take),
+      fetchSeedMessageId: async (conversationId) => {
+        const first = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_role_timestamp", (q) =>
+            q
+              .eq("conversation_id", conversationId as Id<"conversations">)
+              .eq("role", "user")
+          )
+          .order("asc")
+          .take(1);
+        return first[0]?._id ?? null;
+      },
     });
   },
 });

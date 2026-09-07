@@ -22,6 +22,7 @@ import {
   parseHuddleSummaryTag,
   stripInjectionNoise,
   isSessionMessage,
+  isAgentMessage,
   isSessionUpdateBatch,
   parseSessionUpdateBatch,
   isTeammateMessage,
@@ -38,6 +39,7 @@ export {
   parseHuddleSummaryTag,
   stripInjectionNoise,
   isSessionMessage,
+  isAgentMessage,
   isSessionUpdateBatch,
   parseSessionUpdateBatch,
   isUserMessage,
@@ -49,6 +51,7 @@ export {
   isScheduledTaskMessage,
   isChatWakePrompt,
   isMachineDeliveredMessage,
+  isToolResultCarrier,
 } from "@codecast/shared/contracts";
 
 const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
@@ -94,6 +97,39 @@ export function parseInboundSessionMessage(
 // (and for round-trip tests).
 export function formatSessionMessage(fromShortId: string, body: string): string {
   return `<session-message from="${fromShortId}">\n${body}\n</session-message>`;
+}
+
+// The two envelopes an agent's words arrive in: `cast send` between sessions
+// (<session-message>) and a subagent reporting to its parent (<agent-message>).
+// Both name their sender and carry a plain body, so surfaces that only need
+// "who wrote it and what did they say" take this instead of branching on the
+// tag. `label` is the chrome to render above the sender.
+//
+// The sender comes off the OPENING tag and the body runs to the LAST closing
+// tag, so a preview sliced mid-message still names its sender and shows what
+// survived, and a body that itself mentions the closing tag stays whole.
+const AGENT_AUTHORED_ENVELOPES = [
+  { tag: "session-message", label: "message from" },
+  { tag: "agent-message", label: "report from" },
+] as const;
+
+export function parseAgentAuthoredMessage(
+  rawContent: string | null | undefined,
+): { from: string; body: string; label: string } | null {
+  if (!rawContent) return null;
+  const cleaned = stripInjectionNoise(rawContent);
+  for (const { tag, label } of AGENT_AUTHORED_ENVELOPES) {
+    const open = cleaned.match(new RegExp(`^<${tag}\\s+from="([^"]*)"[^>]*>`));
+    if (!open) continue;
+    const rest = cleaned.slice(open[0].length);
+    const close = rest.lastIndexOf(`</${tag}>`);
+    return {
+      from: open[1].trim(),
+      body: (close === -1 ? rest : rest.slice(0, close)).trim(),
+      label,
+    };
+  }
+  return null;
 }
 
 // --- Team-chat anchor wake ------------------------------------------------------------
@@ -192,7 +228,7 @@ export type MachineDeliveredKind = "schedule" | "session" | "teammate" | "chat";
 
 // Parse a machine-delivered message into a compact entry: which machinery sent it
 // (kind), who/what from (source — schedule title, sender session id/name, teammate
-// id), and the unwrapped body. Mirrors isMachineDeliveredMessage's three branches.
+// or subagent id), and the unwrapped body. Mirrors isMachineDeliveredMessage.
 // Callers may hand in previews/server rows sliced mid-message (getUserMessages cuts
 // content at 500 chars), so every branch tolerates a missing closing tag.
 export function parseMachineDeliveredMessage(
@@ -226,6 +262,12 @@ export function parseMachineDeliveredMessage(
       (open?.[3] ?? "").replace(/<\/session-message>[\s\S]*$/, ""),
     );
     return { kind: "session", source: open?.[2] || open?.[1] || "session", body };
+  }
+  // A subagent's report to its parent is another agent's words, like a teammate
+  // broadcast — same kind, so labels and icons need no new variant.
+  if (isAgentMessage(rawContent)) {
+    const agent = parseAgentAuthoredMessage(rawContent);
+    return { kind: "teammate", source: agent?.from || "subagent", body: agent?.body ?? "" };
   }
   if (isTeammateMessage(rawContent)) {
     const from = rawContent.match(/<teammate-message[^>]*\steammate_id="([^"]*)"/)?.[1];
