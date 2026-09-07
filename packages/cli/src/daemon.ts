@@ -14305,11 +14305,26 @@ export function tmuxComposerText(pane: string): string | null {
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
+//
+// `onlyWhenDrafted` withholds the keys when the composer visibly holds nothing.
+// Why: a pane that has painted its composer but is not yet reading stdin
+// records the clearing bytes as message text, and no screen check can see them
+// — claude 2.1.263 draws C-a/C-k as nothing, so the pane reads clean while the
+// buffer in front of the payload still holds them and the message arrives as
+// "\v\x01\v\x01\v<payload>" (ct-49610, cold_boot_clearing_keys_land_as_text).
+// A composer with no draft has nothing to clear, so the keys there are pure
+// risk. An unreadable pane is never called empty: null is "not proven", not
+// "nothing there", so glyphless clients keep the blind drain.
 export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
-): Promise<void> {
+  opts: { onlyWhenDrafted?: boolean } = {},
+): Promise<boolean> {
+  if (opts.onlyWhenDrafted && (await tmuxComposerDraft(target, exec)) === "") {
+    log(`Composer in ${target} is empty, skipping the clearing keys`);
+    return false;
+  }
   const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   for (let cycle = 1; cycle <= DRAIN_MAX_CYCLES; cycle++) {
     for (const key of ["C-a", "C-k", "BSpace"]) {
@@ -14327,6 +14342,26 @@ export async function drainTmuxComposer(
     if (text === null || !text.trim()) break;
   }
   await pause(50);
+  return true;
+}
+
+// What the composer holds right now, read off the pane: the trimmed text after
+// the last ❯/›, or null when no composer is visible at all (a glyphless
+// client, a redraw, a capture that failed). Null is deliberately NOT "empty":
+// nothing was proven, so callers that act on emptiness must keep their
+// unconditional behaviour.
+export async function tmuxComposerDraft(
+  target: string,
+  exec: typeof tmuxExec = tmuxExec,
+): Promise<string | null> {
+  let pane: string;
+  try {
+    ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+  } catch {
+    return null;
+  }
+  const text = tmuxComposerText(pane);
+  return text === null ? null : text.trim();
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -14343,15 +14378,27 @@ export async function drainTmuxComposer(
 // the payload is visible, everything written before it has been consumed too.
 //
 // awaitTmuxComposerPayload is that check. After the paste, poll the composer
-// until the text at the prompt IS the payload (prefix match, whitespace
-// ignored, since the TUI soft-wraps the box at arbitrary points) with nothing
-// before it. Foreign text at the prompt — a stale draft the blind drain
+// until the text at the prompt IS the payload (prefix match, whitespace and
+// frame glyphs ignored, since the TUI soft-wraps the box at arbitrary points
+// and may draw a border between the wrapped lines) with nothing before it. Foreign text at the prompt — a stale draft the blind drain
 // missed, a mishandled control byte — fails the match and triggers a drain +
 // re-paste; Enter is only ever sent by the caller over a composer that
-// visibly holds the message and nothing else. Every re-paste is preceded by
-// C-a/C-k clearing bytes in the same pty stream, so in-order processing wipes
-// any late flush of the earlier paste before the fresh one lands — a doubled
-// message is impossible by construction.
+// visibly holds the message and nothing else.
+//
+// A re-paste risks doubling the message, and the defence against that is read,
+// not written: the gate matches only when the payload appears at the prompt
+// ONCE. Byte order is what makes that sound — a composer showing the newest
+// copy has already consumed every earlier one — so two copies on screen is the
+// whole doubling signature. The older claim, that C-a/C-k ahead of each
+// re-paste made a doubled message impossible by construction, failed both ways.
+// A pane that has painted its composer but is not reading stdin records those
+// keys as message text, where no screen check can see them (ct-49750); and
+// claude holding the composer in history-recall mode does not act on them at
+// all, so the re-paste landed on top of the first copy and the message was
+// recorded twice (ct-49753). With the count carrying the defence, the drain
+// below runs `onlyWhenDrafted`: the keys go only into a composer that visibly
+// holds text, which is a composer whose TUI is acting on keys rather than
+// storing them.
 //
 // Scope: only panes showing a ❯/› composer glyph (Claude/cursor style) and a
 // payload the composer can be watched for (non-blank, free of prompt glyphs
@@ -14360,13 +14407,19 @@ export async function drainTmuxComposer(
 // when the composer never converges within the budget — the delivery layer's
 // retry/backoff redelivers later instead of submitting into a deaf or dirty
 // pane.
-const stripComposerWs = (s: string) => s.replace(/\s+/g, "");
+// Whitespace AND the composer's own frame. A TUI that draws a box around the
+// prompt puts a border glyph between one wrapped line and the next (grok:
+// `│ ❯ first line …│` / `│   second line …│`), so a multi-line payload the
+// composer holds as real text only matches once the frame is out of the way
+// (ct-49607). Both sides go through this, so a payload containing box glyphs
+// still compares against itself.
+const stripComposerChrome = (s: string) => s.replace(/[\s\u2500-\u257f]+/g, "");
 
 // The first 40 non-whitespace chars the composer must show at the prompt, or
 // null when the payload cannot be watched for.
 export function tmuxWatchablePrefix(payload: string): string | null {
   if (/[❯›]/.test(payload)) return null;
-  return stripComposerWs(payload).slice(0, 40) || null;
+  return stripComposerChrome(payload).slice(0, 40) || null;
 }
 
 export async function awaitTmuxComposerPayload(
@@ -14383,6 +14436,10 @@ export async function awaitTmuxComposerPayload(
   const exec = opts.exec ?? tmuxExec;
   const prefix = tmuxWatchablePrefix(payload);
   if (prefix === null) return "unwatchable";
+  // A payload whose own first 40 non-blank characters occur again inside it
+  // reads exactly like two copies of itself, so it opts out of the count and
+  // keeps the plain prefix match rather than failing every delivery.
+  const countable = stripComposerChrome(payload).indexOf(prefix, prefix.length) === -1;
   const deadline = Date.now() + (opts.budgetMs ?? 20_000);
   const tick = () => new Promise(resolve => setTimeout(resolve, 150));
 
@@ -14395,7 +14452,9 @@ export async function awaitTmuxComposerPayload(
     rePastes++;
     liveEmptyTicks = 0;
     foreignTicks = 0;
-    await drainTmuxComposer(target, exec);
+    // Why: clearing keys sent into a composer showing nothing are stored and
+    // submitted as message text (ct-49750). The count above stops the double.
+    await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
     await opts.rePaste();
   };
 
@@ -14420,10 +14479,16 @@ export async function awaitTmuxComposerPayload(
     // A multi-line bracketed paste can render as a collapsed chip
     // ("[Pasted text #1 +13 lines]") with none of the text visible: the chip
     // at the prompt with nothing before it IS the payload.
-    const chip = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/i) : null;
-    const matched = chip
-      ? !glyphLine.slice(0, chip.index).trim()
-      : stripComposerWs(afterGlyph).startsWith(prefix);
+    const chips = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
+    const stripped = stripComposerChrome(afterGlyph);
+    // One copy of the payload at the prompt, and nothing before it. A second
+    // copy — a whole second chip, or the watched prefix showing up again
+    // behind the first — is a re-paste that landed on a composer which had
+    // already taken the first, and submitting it sends the message twice
+    // (ct-49753).
+    const matched = chips?.length
+      ? chips.length === 1 && !glyphLine.slice(0, glyphLine.indexOf(chips[0])).trim()
+      : stripped.startsWith(prefix) && (!countable || stripped.indexOf(prefix, prefix.length) === -1);
     if (matched) return "matched";
 
     if (!glyphLine.trim()) {
@@ -14563,8 +14628,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter —
-  // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
-  // the Enter gate below refuses to submit over anything it missed.
+  // see drainTmuxComposer for why C-a/C-k cycles, and why an empty composer
+  // gets no keys at all. The drain is best-effort: the Enter gate below
+  // refuses to submit over anything it missed.
   //
   // Escape is the one key here that doubles as "interrupt the current turn", so
   // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
@@ -14574,7 +14640,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await exec(["send-keys", "-t", target, "Escape"]);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  await drainTmuxComposer(target, exec);
+  await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";

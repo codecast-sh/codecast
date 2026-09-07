@@ -186,7 +186,7 @@ function fixture(transport = "tmux", cached = true) {
   };
   const names = [
     "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "classifyTmuxLiveState", "isResumeCwdPicker",
-    "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText",
+    "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
     "tmuxWatchablePrefix", "awaitTmuxComposerPayload", "normalizePromptText", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "verifyTmuxSubmitAfterPaste",
     "pasteTextIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
     "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
@@ -194,7 +194,7 @@ function fixture(transport = "tmux", cached = true) {
     "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
     "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
   ];
-  const constants = ["RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerWs", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE"].map(name => {
+  const constants = ["RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE"].map(name => {
     const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
     if (!line) throw new Error(`Missing constant ${name}`);
     return line.replace("export ", "");
