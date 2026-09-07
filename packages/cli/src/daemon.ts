@@ -1195,6 +1195,15 @@ export function markTurnStarted(sessionId: string, ts: number): void {
   if (ts > (turnStartedAt.get(sessionId) ?? 0)) turnStartedAt.set(sessionId, ts);
 }
 
+// When this session's newest turn started, or null if none is on record. The
+// /hook/status route feeds this mark (publishHookStatus → sendAgentStatus →
+// statusFlipStartsTurn), as does the transcript sync, so it already IS "the
+// hook reported a new working turn" — verifyTmuxSubmitAfterPaste reads it
+// rather than keeping a second copy of the same fact (ct-49539).
+export function turnStartedAtFor(sessionId: string): number | null {
+  return turnStartedAt.get(sessionId) ?? null;
+}
+
 // The newest turn-starting message in a synced batch: a user turn that is not a
 // tool_result reply (those ride INSIDE a turn — a permissioned tool finishing,
 // an AskUserQuestion answer). Meta/system entries never reach ParsedMessage.
@@ -14127,14 +14136,110 @@ export type TmuxSubmitVerifyIO = {
   rePaste: () => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   log: (msg: string) => void;
+  // When this pane's session last started a turn (turnStartedAtFor). The
+  // /hook/status route feeds that mark, so a value later than the paste is the
+  // status hook saying our prompt started a turn — evidence that survives a
+  // TUI whose pane says nothing at all. Absent when the pane carries no
+  // @codecast_session_id: then it is no evidence, never negative evidence.
+  hookTurnStartedAt?: () => Promise<number | null>;
+  // tmux #{pane_title}. Codex prefixes its title with "_ " for exactly the
+  // length of a turn; other clients spin a glyph there. Only ever read as a
+  // change from what the title said before the paste.
+  paneTitle?: () => Promise<string | null>;
+};
+
+// Which source proved the submit. Ordered by how directly it speaks for the
+// agent: the daemon's own turn record, then the client's title, then the pane
+// scrape, then our text leaving the composer.
+export type TmuxSubmitEvidence = "hook_working_turn" | "pane_title" | "pane_activity" | "payload_gone";
+
+// delivered            — the prompt provably started (or joined) a turn.
+// agent_prompt_blocked — a permission or trust dialog took the keyboard.
+// agent_prompt_stalled — the window closed with no evidence either way.
+// exited               — the pane is a bare shell; the agent is gone.
+export type TmuxSubmitOutcome = "delivered" | "agent_prompt_blocked" | "agent_prompt_stalled" | "exited";
+
+export type TmuxSubmitVerifyResult = {
+  outcome: TmuxSubmitOutcome;
+  /** Set only on "delivered": which of the four sources answered. */
+  evidence: TmuxSubmitEvidence | null;
+  rePasted: boolean;
+  payloadSeen: boolean;
+  payloadCheckable: boolean;
+};
+
+// A title that says a turn is running. Measured, not guessed: codex 0.5x adds
+// a literal "_ " prefix for the turn's duration and drops it on settle, while
+// claude 2.1.263 writes "_ Claude Code" from boot and never moves it. The
+// baseline check below is what makes one regex safe for both — a marker the
+// title already carried before the paste proves nothing.
+const PANE_TITLE_WORKING = /^_\s|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|\b(?:working|thinking|running)\b/i;
+
+// A permission or trust dialog owns the keyboard, so the prompt is parked
+// behind it rather than running. The patterns are the ones the pane classifier
+// and the codex permission scraper already carry, so "a modal is up" has one
+// definition. Only the tail is scanned: a transcript quoting these words
+// higher up the pane must not read as a dialog.
+function tmuxPaneShowsBlockingPrompt(pane: string): boolean {
+  const tail = pane.split("\n").slice(-20).join("\n");
+  return TRUST_PROMPT_RE.test(tail) || CODEX_PERMISSION_PATTERNS.some((p) => p.test(tail));
+}
+
+// The verdict for a session's last injection, written here and consumed once by
+// the delivery loop's presumed-status report (ct-49539). Without it the daemon
+// reported "thinking" after every paste that did not throw, and the server
+// terminalized the pending row on that report — a swallowed Enter looked
+// delivered and the stale-injected healer had nothing left to revive.
+export type TmuxSubmitVerdict = { outcome: TmuxSubmitOutcome; evidence: TmuxSubmitEvidence | null; at: number };
+const submitVerdicts = new Map<string, TmuxSubmitVerdict>();
+const SUBMIT_VERDICT_TTL_MS = 2 * 60_000;
+
+export function takeTmuxSubmitVerdict(sessionId: string): TmuxSubmitVerdict | null {
+  const verdict = submitVerdicts.get(sessionId);
+  if (!verdict) return null;
+  submitVerdicts.delete(sessionId);
+  return Date.now() - verdict.at > SUBMIT_VERDICT_TTL_MS ? null : verdict;
+}
+
+function recordTmuxSubmitVerdict(sessionId: string, verdict: TmuxSubmitVerdict): void {
+  // A delivery that throws never reaches the reader, so sweep what nobody came
+  // for instead of keeping one entry per session for the daemon's lifetime.
+  for (const [id, held] of submitVerdicts) {
+    if (verdict.at - held.at > SUBMIT_VERDICT_TTL_MS) submitVerdicts.delete(id);
+  }
+  submitVerdicts.set(sessionId, verdict);
+}
+
+export type TmuxSubmitVerifyOpts = {
+  prePaste: string;
+  pasteConfirmed: boolean;
+  contentPrefix: string;
+  multiline?: boolean;
+  deadlineMs?: number;
+  /** When the paste went in. A turn mark older than this belongs to someone else. */
+  pasteAt?: number;
+  /** The pane's agent session id, when it carries one: the verdict's key. */
+  sessionId?: string;
 };
 
 export async function verifyTmuxSubmitAfterPaste(
   io: TmuxSubmitVerifyIO,
-  opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; multiline?: boolean; deadlineMs?: number },
-): Promise<{ outcome: "submitted" | "timeout" | "exited"; rePasted: boolean; payloadSeen: boolean; payloadCheckable: boolean }> {
+  opts: TmuxSubmitVerifyOpts,
+): Promise<TmuxSubmitVerifyResult> {
+  const result = await runTmuxSubmitVerify(io, opts);
+  if (opts.sessionId) {
+    recordTmuxSubmitVerdict(opts.sessionId, { outcome: result.outcome, evidence: result.evidence, at: Date.now() });
+  }
+  return result;
+}
+
+async function runTmuxSubmitVerify(
+  io: TmuxSubmitVerifyIO,
+  opts: TmuxSubmitVerifyOpts,
+): Promise<TmuxSubmitVerifyResult> {
   const TICK = 400;
   const deadlineMs = opts.deadlineMs ?? 15_000;
+  const pasteAt = opts.pasteAt ?? Date.now();
   const normalizedPrefix = opts.contentPrefix.replace(/\s+/g, " ").trim();
   const prefixWasVisibleBefore =
     !!normalizedPrefix && opts.prePaste.replace(/\s+/g, " ").includes(normalizedPrefix);
@@ -14143,18 +14248,27 @@ export async function verifyTmuxSubmitAfterPaste(
   // text still in the transcript), absence of the prefix proves nothing. In
   // those ambiguous cases the loop keeps its legacy activity-based exits.
   const payloadCheckable = !!normalizedPrefix && !prefixWasVisibleBefore;
+  // A dialog that was already up before the paste is the caller's problem, not
+  // this submit's: only one that APPEARS during the window blocks our prompt.
+  const blockedBeforePaste = tmuxPaneShowsBlockingPrompt(opts.prePaste);
+  // Likewise for the title: a marker the pane already carried (claude writes
+  // "_ Claude Code" from boot) can never be news about our paste.
+  const baselineTitle = io.paneTitle ? await io.paneTitle().catch(() => null) : null;
+  const titleWorkingBefore = !!baselineTitle && PANE_TITLE_WORKING.test(baselineTitle);
   let rePasted = false;
   let pasteSeen = false; // we watched our text sit in the input box
   let payloadSeen = false; // any trace of our text: in the box, or as transcript
   let idleEnters = 0;
   let liveNoTextTicks = 0;
+  const settle = (outcome: TmuxSubmitOutcome, evidence: TmuxSubmitEvidence | null = null): TmuxSubmitVerifyResult =>
+    ({ outcome, evidence, rePasted, payloadSeen, payloadCheckable });
   for (let elapsed = 0; elapsed < deadlineMs; elapsed += TICK) {
     await io.sleep(TICK);
     let pane: string;
     try {
       pane = await io.capture();
     } catch {
-      return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
+      return settle("agent_prompt_stalled");
     }
     const lastLines = pane.split("\n").slice(-15).join("\n");
     const hasPrompt = /[❯›]/.test(lastLines);
@@ -14168,20 +14282,34 @@ export async function verifyTmuxSubmitAfterPaste(
     // looks exactly like success (ct-40212). So when the paste was unconfirmed
     // AND our payload is checkable but has never been seen, activity is not
     // accepted as evidence — fall through to the content-based checks instead.
+    // The hook and title sources answer the same question about the same pane,
+    // so they sit behind the same guard.
     const foreignTurnPossible = !opts.pasteConfirmed && payloadCheckable && !pasteSeen && !payloadSeen;
 
     if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(lastLines) ||
         /Resume this session with:/i.test(pane)) {
-      return { outcome: "exited", rePasted, payloadSeen, payloadCheckable };
+      return settle("exited");
     }
 
-    // One frame is thin evidence for "submitted": a TUI mid-redraw captures as
+    // A permission or trust dialog that came up after the paste: the prompt is
+    // parked behind it, and pressing Enter at a modal is how a blind un-wedge
+    // once walked a Fable credits chooser to "Pay $45.00 now" (ct-38494). Stop
+    // here and say so — the caller leaves the row unacked for the healer rather
+    // than painting a turn nobody is running.
+    if (!blockedBeforePaste && tmuxPaneShowsBlockingPrompt(pane)) {
+      io.log("a permission or trust prompt is up after the paste, leaving the message unsubmitted");
+      return settle("agent_prompt_blocked");
+    }
+
+    // One frame is thin evidence for "delivered": a TUI mid-redraw captures as
     // a promptless pane, and a transcript word can pass as activity, while our
     // text still sits in the box. One such frame acked a resume's "continue"
     // that never left the composer (2026-09-03) — and the daemon's follow-up
     // "thinking" report then terminalized the row, so nothing ever retried.
     // Before trusting the frame, look once more: text still at the prompt
     // means the submit did not take — press a discrete Enter and keep going.
+    // Every evidence source goes through this, the hook and the title
+    // included: a turn the pane contradicts is not our turn.
     const confirmedGone = async (): Promise<boolean> => {
       await io.sleep(TICK);
       elapsed += TICK;
@@ -14201,8 +14329,21 @@ export async function verifyTmuxSubmitAfterPaste(
       return false;
     };
 
-    if (hasActivity && !foreignTurnPossible) {
-      if (await confirmedGone()) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
+    // Cheapest source first. The pane scrape is already in hand; the turn mark
+    // is a map read; the pane title costs a tmux call, so nothing asks for it
+    // until the other two have come up empty.
+    let evidence: TmuxSubmitEvidence | null = hasActivity ? "pane_activity" : null;
+    if (!evidence && io.hookTurnStartedAt) {
+      const turnAt = await io.hookTurnStartedAt().catch(() => null);
+      if (turnAt !== null && turnAt > pasteAt) evidence = "hook_working_turn";
+    }
+    if (!evidence && io.paneTitle && !titleWorkingBefore) {
+      const now = await io.paneTitle().catch(() => null);
+      if (now && PANE_TITLE_WORKING.test(now)) evidence = "pane_title";
+    }
+
+    if (evidence && !foreignTurnPossible) {
+      if (await confirmedGone()) return settle("delivered", evidence);
       continue;
     }
 
@@ -14226,14 +14367,15 @@ export async function verifyTmuxSubmitAfterPaste(
     if (!hasPrompt) {
       // No prompt + text not in input = processing — unless a foreign turn
       // (garbage submit) could explain it; then keep watching for content.
-      if (!foreignTurnPossible && (await confirmedGone())) return { outcome: "submitted", rePasted, payloadSeen, payloadCheckable };
+      if (!foreignTurnPossible && (await confirmedGone())) return settle("delivered", "pane_activity");
       continue;
     }
 
     if (pasteSeen || payloadSeen) {
       // Our text left the input box (we watched it go after an Enter, or it
       // now shows above the box as transcript) — submitted.
-      return { outcome: "submitted", rePasted, payloadSeen: true, payloadCheckable };
+      payloadSeen = true;
+      return settle("delivered", "payload_gone");
     }
 
     if (opts.pasteConfirmed) {
@@ -14241,7 +14383,7 @@ export async function verifyTmuxSubmitAfterPaste(
       // (unrecognized prompt glyph, or TUI wrapping broke the 40-char match).
       // Enter is safe — the box holds nothing but our message — but bounded
       // so an idle false-positive can't spin until the deadline.
-      if (++idleEnters > 5) return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
+      if (++idleEnters > 5) return settle("agent_prompt_stalled");
       io.log("paste confirmed but not visible at prompt, pressing Enter");
       await io.sendEnter();
       continue;
@@ -14256,14 +14398,14 @@ export async function verifyTmuxSubmitAfterPaste(
       const promptLine = lastLines.split("\n").find((l) => /[❯›]/.test(l));
       const m = promptLine?.match(/[❯›]/);
       const afterPrompt = promptLine && m ? promptLine.slice(m.index! + 1).trim() : "";
-      if (afterPrompt) return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable }; // someone else's text at the prompt — don't stomp it
+      if (afterPrompt) return settle("agent_prompt_stalled"); // someone else's text at the prompt — don't stomp it
       io.log("paste likely dropped (live empty prompt), re-pasting once");
       await io.rePaste();
       rePasted = true;
       liveNoTextTicks = 0;
     }
   }
-  return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
+  return settle("agent_prompt_stalled");
 }
 
 // Text the composer shows after its last ❯/› glyph: the prompt line plus the
@@ -14557,7 +14699,12 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // native queue rather than waiting for the turn to finish.
   const { busy } = await ensureTmuxReady(target, agentType, beforeInput ? assertMachinePromptAbsent : undefined, beforeInput ? captureLines : undefined);
 
-  const contentPrefix = sanitized.slice(0, 40);
+  // First LINE, not first 40 characters: the submit verifier looks for this
+  // text at the prompt, and a composer that holds the message as real text
+  // (rather than a collapsed paste chip) wraps it inside its own frame, so a
+  // prefix that crosses a newline can never match what is on screen — and
+  // "text not found" reads as "submitted" (ct-49607).
+  const contentPrefix = sanitized.split("\n", 1)[0].slice(0, 40);
 
   const doPaste = () => pasteTextIntoPaneWith(exec, target, sanitized, bracketed);
 
@@ -14629,6 +14776,20 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // never-acked row once the session is idle), but that takes minutes — this
   // loop recovers the common cases (dropped Enter, cold-boot pty buffering)
   // in seconds.
+  const pasteAt = Date.now();
+  // The pane's stamped agent session id: what the hook evidence correlates on,
+  // and the key the verdict is filed under for the delivery loop's status
+  // report. Read once — a pane keeps its stamp for life — and null when the
+  // pane carries none, which simply removes the hook source.
+  let paneSessionId: string | null | undefined;
+  const resolvePaneSessionId = async (): Promise<string | null> => {
+    if (paneSessionId !== undefined) return paneSessionId;
+    try {
+      const { stdout } = await exec(["display-message", "-p", "-t", target, "#{@codecast_session_id}"]);
+      paneSessionId = stdout.trim() || null;
+    } catch { paneSessionId = null; }
+    return paneSessionId;
+  };
   const verify = await verifyTmuxSubmitAfterPaste(
     {
       capture: async () =>
@@ -14645,15 +14806,31 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       },
       sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
       log: (msg) => log(`${msg} (${target})`),
+      hookTurnStartedAt: async () => {
+        const sessionId = await resolvePaneSessionId();
+        return sessionId ? turnStartedAtFor(sessionId) : null;
+      },
+      paneTitle: async () => {
+        try {
+          return (await exec(["display-message", "-p", "-t", target, "#{pane_title}"])).stdout.trim();
+        } catch { return null; }
+      },
     },
-    { prePaste, pasteConfirmed, contentPrefix, multiline: sanitized.includes("\n") },
+    {
+      prePaste,
+      pasteConfirmed,
+      contentPrefix,
+      multiline: sanitized.includes("\n"),
+      pasteAt,
+      sessionId: (await resolvePaneSessionId()) ?? undefined,
+    },
   );
   if (verify.outcome === "exited") {
     // Propagates to deliverMessage's transient-failure backoff (the old
     // in-loop throw was swallowed by its own catch and never reached anyone).
     throw new Error("SESSION_EXITED: message was pasted into a bare shell");
   }
-  if (verify.outcome === "timeout" && !pasteConfirmed && verify.payloadCheckable && !verify.payloadSeen) {
+  if (verify.outcome === "agent_prompt_stalled" && !pasteConfirmed && verify.payloadCheckable && !verify.payloadSeen) {
     // The full verify window produced zero trace of the payload: the paste
     // never rendered, never sat in the box, never appeared as transcript.
     // Returning normally here would ack a message the agent never saw — the
@@ -14663,7 +14840,8 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     throw new Error("INJECT_UNVERIFIED: paste unconfirmed and payload never appeared, leaving message pending for retry");
   }
 
-  log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${verify.rePasted ? " (re-pasted)" : ""}${verify.outcome === "timeout" ? " (submit unverified)" : ""}`)
+  const verdict = verify.outcome === "delivered" ? verify.evidence : verify.outcome;
+  log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${verify.rePasted ? " (re-pasted)" : ""} (${verdict})`)
 }
 
 export function buildAppleScript(
@@ -26085,8 +26263,18 @@ async function main(): Promise<void> {
             // proof the paste landed (activeStatusAcksInjected) — the pending
             // row stays "injected" until the JSONL echo or a hook-reported
             // turn acks it, so a paste whose Enter never took is re-pended.
+            //
+            // The report is owed to a DELIVERED submit only. verifyTmuxSubmitAfterPaste
+            // files its verdict under the pane's session id; a stalled window or a
+            // permission/trust dialog leaves the prompt unsubmitted, and painting that
+            // as a running turn is the 2026-09-03 lie the presumed flag was added to
+            // stop — the row read as delivered and the stale-injected healer, which
+            // only revives a live+idle session, had nothing to work with (ct-49539).
             const injectedSessionId = buildReverseConversationCache(conversationCache)[msg.conversation_id];
-            if (injectedSessionId) {
+            const submit = injectedSessionId ? takeTmuxSubmitVerdict(injectedSessionId) : null;
+            if (submit && submit.outcome !== "delivered") {
+              logDelivery(`msg=${msg._id.slice(0, 8)} submit ${submit.outcome}, not reporting a turn`);
+            } else if (injectedSessionId) {
               sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking", undefined, undefined, true);
             } else {
               syncService.updateSessionAgentStatus(msg.conversation_id, "thinking", undefined, undefined, undefined, true).catch(logConvexFailure);
