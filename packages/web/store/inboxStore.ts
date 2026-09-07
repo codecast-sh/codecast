@@ -619,6 +619,10 @@ export type InboxSession = {
   // there (cloud_spawn). Cleared by cloud.placeConversation, so its absence is
   // the honest "this session is placed and running".
   cloud_placement?: "pending" | null;
+  // A bulk migration (Settings → Migration) is moving this session between
+  // machines: the row is fenced (messages queue) until the destination owns
+  // it. The batch id links the card to its progress row.
+  migration_batch_id?: string | null;
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
@@ -2400,6 +2404,7 @@ export function sessionStructuralSig(s: InboxSession): string {
     s.worktree_branch || "",
     s.owner_device_id || "",
     s.cloud_placement || "",
+    s.migration_batch_id || "",
     rowLastTurnAllowsPark(s) ? 1 : 0,
     // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
     // lands in the session — never on heartbeats — so folding it in is cheap

@@ -633,8 +633,16 @@ export interface MoveResult {
   verification?: SyncVerification;
 }
 
-/** Push a local session to the remote Mac. Returns the remote placement. */
-export async function pushSession(sessionId: string, host: RemoteHost): Promise<MoveResult> {
+/**
+ * Push a local session to the remote Mac. Returns the remote placement.
+ *
+ * `skipTree`: the working tree at this session's cwd was already pushed to
+ * the same host moments ago (a bulk migration moving several sessions that
+ * share one worktree) — only the transcript and credential go this time. The
+ * tree push is idempotent for git worktrees, but a plain directory rsyncs
+ * with --delete, and two sessions in one directory must not race that.
+ */
+export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean } = {}): Promise<MoveResult> {
   const s = resolveLocalSession(sessionId);
   const name = path.basename(s.cwd);
   const remoteCwd = path.posix.join(host.remoteBaseDir, name);
@@ -652,7 +660,10 @@ export async function pushSession(sessionId: string, host: RemoteHost): Promise<
   }
   // 2. working tree — git-over-SSH for repos (full git on the remote), else rsync
   let verification: SyncVerification | undefined;
-  if (isWorktree(s.cwd)) {
+  if (opts.skipTree) {
+    // Nothing to push; prove the tree is still there and at the pushed tip.
+    if (isWorktree(s.cwd)) verification = verifyRemoteSync(host, s.cwd, remoteCwd);
+  } else if (isWorktree(s.cwd)) {
     const { head } = await gitPushWorktree(host, s.cwd, remoteCwd);
     copyGitignoredFiles(host, s.cwd, remoteCwd); // .env etc, not carried by git
     // Verify against what we PUSHED (the snapshot), not local HEAD — the

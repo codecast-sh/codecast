@@ -30,7 +30,7 @@ test("both compact worktree rows and full cards render the same location chip", 
   const source = readFileSync(new URL("./GlobalSessionPanel.tsx", import.meta.url), "utf8");
   const compact = source.indexOf("if (isSubagent) {");
   expect(compact).toBeGreaterThan(0);
-  expect(source.slice(0, compact)).toContain('const worktreeChip = (session.worktree_name || session.cloud_placement === "pending")');
+  expect(source.slice(0, compact)).toContain('const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.migration_batch_id)');
   expect(source.slice(compact).match(/\{worktreeChip\}/g)).toHaveLength(2);
   expect(source.slice(compact)).toContain('<div className="flex min-w-0 pl-[18px] mt-0.5">{worktreeChip}</div>');
   expect(source.slice(compact).indexOf("{worktreeChip}")).toBeGreaterThan(source.slice(compact).indexOf("{showBlockedBadge"));

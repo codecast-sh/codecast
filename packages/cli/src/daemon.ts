@@ -3741,6 +3741,45 @@ async function reconcileGatedSnippets(avail: Record<string, boolean>): Promise<v
   }
 }
 
+// One detached `cast migrate run` per batch on this machine; a second
+// migrate_sessions for the same batch (a retry that re-woke us while the
+// first runner is still going) must not start a competing runner — the two
+// would race the same rows. Dead pids drop out on the next check.
+const migrationRunners = new Map<string, number>();
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+export function startMigrationRunner(batchId: string): { started: boolean; pid?: number; reason?: string; log?: string } {
+  const running = migrationRunners.get(batchId);
+  if (running && pidAlive(running)) return { started: false, pid: running, reason: "already running on this machine" };
+  const logDir = path.join(CONFIG_DIR, "migrations");
+  let logFd: number | undefined;
+  let logPath: string | undefined;
+  try {
+    fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    logPath = path.join(logDir, `${batchId}.log`);
+    logFd = fs.openSync(logPath, "a", 0o600);
+  } catch { /* stdio falls back to ignore */ }
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  try {
+    const child = spawn(cmd, [...prefixArgs, "migrate", "run", batchId], {
+      env: { ...process.env, PATH: agentSpawnPath() },
+      stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+      detached: true,
+    });
+    child.unref();
+    if (logFd !== undefined) { try { fs.closeSync(logFd); } catch { /* parent's copy only */ } }
+    if (!child.pid) return { started: false, reason: "spawn returned no pid" };
+    migrationRunners.set(batchId, child.pid);
+    return { started: true, pid: child.pid, log: logPath };
+  } catch (err) {
+    if (logFd !== undefined) { try { fs.closeSync(logFd); } catch { /* */ } }
+    return { started: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 function runCastCommand(
   args: string[],
   opts: { timeoutMs?: number } = {},
@@ -6264,6 +6303,53 @@ async function executeRemoteCommand(
           log(`[CLOUD] FAILED ${conversationId.slice(0, 12)}: ${error}`, "warn");
           syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
         }
+        break;
+      }
+      case "migrate_sessions": {
+        // A bulk migration batch names THIS machine as an executor. The work
+        // is a chain of SSH transfers that can run for an hour, so it lives in
+        // a DETACHED `cast migrate run` child: the command answers at once and
+        // the runner reports every row's progress to Convex itself. Detached
+        // (and unref'd) so a daemon restart mid-batch does not kill it — the
+        // fence on each row is cleared by the runner or, if the runner dies,
+        // by the server's stale-migration reaper.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const batchId: string | undefined = typeof parsed.batch_id === "string" ? parsed.batch_id : undefined;
+        if (!batchId || !/^mg-[a-z0-9]{4,32}$/.test(batchId)) {
+          error = "migrate_sessions: missing or invalid batch_id";
+          break;
+        }
+        const started = startMigrationRunner(batchId);
+        result = JSON.stringify(started);
+        log(`[MIGRATE] ${started.started ? `started runner for ${batchId} (pid ${started.pid})` : `runner for ${batchId} not started: ${started.reason}`}`);
+        break;
+      }
+      case "quiesce_session": {
+        // A migration is about to transfer this session's transcript, so the
+        // agent here must stop first — otherwise the copy is a snapshot of a
+        // turn still being written. Targeted at the CURRENT owner (us);
+        // ownership is untouched, the flip is a later mutation. "idle" refuses
+        // while a turn is in progress so the runner can keep waiting; "force"
+        // interrupts it (the runner's idle wait ran out, or the human said so).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = typeof parsed.conversation_id === "string" ? parsed.conversation_id : undefined;
+        const sessionId: string | undefined = typeof parsed.session_id === "string" ? parsed.session_id : undefined;
+        const mode: "idle" | "force" = parsed.mode === "force" ? "force" : "idle";
+        if (!conversationId || !sessionId) {
+          error = "quiesce_session: missing conversation_id/session_id";
+          break;
+        }
+        const status = lastSentAgentStatus.get(sessionId) ?? lastHookStatus.get(sessionId)?.status;
+        if (mode === "idle" && MID_TURN_AGENT_STATUSES.has(status ?? "")) {
+          result = JSON.stringify({ quiesced: false, reason: `status-${status}` });
+          log(`[MIGRATE] quiesce ${sessionId.slice(0, 8)} refused — turn in progress (${status})`);
+          break;
+        }
+        const hadPane = resumeSessionCache.has(sessionId) || startedSessionTmux.has(conversationId);
+        log(`[MIGRATE] quiescing ${sessionId.slice(0, 8)} (${mode}${status ? `, status ${status}` : ""})`);
+        await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
+        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "quiesce_session").catch(() => {});
+        result = JSON.stringify({ quiesced: true, mode, had_pane: hadPane, status: status ?? null });
         break;
       }
       case "release_session": {
