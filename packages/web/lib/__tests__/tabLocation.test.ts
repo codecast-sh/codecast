@@ -41,7 +41,7 @@ test("pop-out and return preserve the same file and line range", () => {
   expect(toAppHref(standalone)).toBe(href);
   const control = readFileSync(new URL("../../components/repo/RepoWindowControl.tsx", import.meta.url), "utf8");
   expect(control).toContain("pathname + search + hash");
-  const blob = readFileSync(new URL("../../app/repo/[owner]/[name]/blob/[ref]/page.tsx", import.meta.url), "utf8");
+  const blob = readFileSync(new URL("../../components/repo/BlobContent.tsx", import.meta.url), "utf8");
   expect(blob).toContain("router.replace(`${pathname}${search}${formatLineHash(next)}`");
   expect(blob).not.toContain("window.history.replaceState(");
 });

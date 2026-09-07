@@ -10,6 +10,9 @@
 import { useCallback, useMemo, useState, type RefCallback } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
+import { Group, Panel, Separator } from "react-resizable-panels";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { codeThreadRootKey } from "@codecast/shared/comments";
 import {
   Check,
   ChevronLeft,
@@ -18,8 +21,11 @@ import {
   ExternalLink,
   GitBranch,
   GitCommitHorizontal,
+  MessageSquare,
 } from "lucide-react";
 import { CommentAvatar } from "../../../../../components/comments/CommentAvatar";
+import { BlobContent } from "../../../../../components/repo/BlobContent";
+import { CommitRail } from "../../../../../components/repo/CommitRail";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
 import { RepoWindowControl } from "../../../../../components/repo/RepoWindowControl";
 import { useRepoFamily } from "../../../../../components/repo/useRepoFamily";
@@ -31,7 +37,9 @@ import { Button } from "../../../../../components/ui/button";
 import { useCodeComments, useSyncRefCodeComments } from "../../../../../hooks/useSyncCodeComments";
 import { useAttributedSession, useLineComments } from "../../../../../hooks/useLineComments";
 import { useCoarseNow } from "../../../../../hooks/useCoarseNow";
+import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { useEnsureCommitFiles } from "../../../../../hooks/useRepoBrowse";
+import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import {
   useCommit,
   useCommits,
@@ -45,13 +53,26 @@ import { serverCommentId, threadSide, type CodeCommentRow } from "../../../../..
 import {
   commitBalanceAccent,
   commitPageHref,
+  repoBlobHref,
   repoCommitsHref,
   repoHomeHref,
   repoTreeHref,
   splitCommitMessage,
 } from "../../../../../lib/repoView";
-import { copyToClipboard, relTimeShort } from "../../../../../lib/utils";
+import { cn, copyToClipboard, relTimeShort } from "../../../../../lib/utils";
 import "../../../../../components/repo/repo.css";
+
+// `api` is a proxy, so naming a function prod has not deployed yet still
+// produces a reference; useQueryNoThrow then reports the miss as an error
+// and the arrows fall back to what the store knows.
+const api = _api as any;
+
+/** One commit beside this one: enough to link it and name it on hover. */
+type Neighbour = { sha: string; message?: string };
+type Neighbours = { older?: Neighbour; newer?: Neighbour };
+
+/** How wide the page must be before the discussion rail opens on its own. */
+const RAIL_AUTO_OPEN_WIDTH = 1180;
 
 function ShaCopy({ sha }: { sha: string }) {
   const [copied, setCopied] = useState(false);
@@ -85,16 +106,50 @@ function BalanceBar({ additions, deletions }: { additions: number; deletions: nu
   );
 }
 
+function NeighbourArrow({
+  repository,
+  neighbour,
+  direction,
+}: {
+  repository: string;
+  neighbour: Neighbour | undefined;
+  direction: "newer" | "older";
+}) {
+  const family = useRepoFamily();
+  const Icon = direction === "newer" ? ChevronLeft : ChevronRight;
+  const label = direction === "newer" ? "Newer commit" : "Older commit";
+  const title = neighbour
+    ? `${label}: ${splitCommitMessage(neighbour.message).subject || neighbour.sha.slice(0, 7)}`
+    : `No ${direction} commit known`;
+  const button = (
+    <Button variant="ghost" size="sm" className="h-7 px-1.5" disabled={!neighbour} aria-label={label}>
+      <Icon className="w-4 h-4" />
+    </Button>
+  );
+  if (!neighbour) return <span title={title}>{button}</span>;
+  return (
+    <Link href={commitPageHref(repository, neighbour.sha, family)} title={title}>
+      {button}
+    </Link>
+  );
+}
+
 function CommitHeader({
   commit,
   repository,
   neighbours,
   headRef,
+  threadCount,
+  railOpen,
+  onToggleRail,
 }: {
   commit: any;
   repository: string;
-  neighbours: { older?: string; newer?: string };
+  neighbours: Neighbours;
   headRef?: RefCallback<HTMLElement>;
+  threadCount: number;
+  railOpen: boolean;
+  onToggleRail: () => void;
 }) {
   const now = useCoarseNow(60_000);
   const family = useRepoFamily();
@@ -176,20 +231,26 @@ function CommitHeader({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          {neighbours.newer && (
-            <Link href={commitPageHref(repository, neighbours.newer, family)} title="Newer commit">
-              <Button variant="ghost" size="sm" className="h-7 px-1.5">
-                <ChevronLeft className="w-4 h-4" />
-              </Button>
-            </Link>
-          )}
-          {neighbours.older && (
-            <Link href={commitPageHref(repository, neighbours.older, family)} title="Older commit">
-              <Button variant="ghost" size="sm" className="h-7 px-1.5">
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </Link>
-          )}
+          {/* Both arrows, always: a disabled one says the history ends here,
+              where a missing one only said the page had not looked. */}
+          <NeighbourArrow repository={repository} neighbour={neighbours.newer} direction="newer" />
+          <NeighbourArrow repository={repository} neighbour={neighbours.older} direction="older" />
+          <button
+            type="button"
+            onClick={onToggleRail}
+            aria-pressed={railOpen}
+            className={cn(
+              "flex items-center gap-1.5 h-7 rounded-md border px-2 text-[12px] transition-colors",
+              railOpen
+                ? "border-transparent text-sol-bg"
+                : "border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:border-sol-border",
+            )}
+            style={railOpen ? { background: "var(--repo-accent)" } : undefined}
+            title={railOpen ? "Hide the discussion" : "Show the discussion"}
+          >
+            <MessageSquare className="w-3 h-3" />
+            {threadCount > 0 && <span className="tabular-nums">{threadCount}</span>}
+          </button>
           <Link href={repoTreeHref(repository, commit.sha, undefined, family)}>
             <Button variant="outline" size="sm" className="h-7">
               Browse tree
@@ -265,11 +326,12 @@ function CommitWithoutFiles({ repository, sha }: { repository: string; sha: stri
   return (
     <div className="h-full flex flex-col items-center justify-center px-6 text-center text-sol-text-muted">
       {fetchFiles.pending ? (
-        <p className="text-[13px]">Reading this commit's diff from GitHub.</p>
+        <p className="text-[13px]">Reading this commit's diff.</p>
       ) : fetchFiles.reason === "requested" ? (
-        // No GitHub App covers this repository: a teammate's checkout was
-        // asked, and the commit row updates itself when the answer lands.
-        <p className="text-[13px]">Reading this commit's diff from a teammate's checkout. It arrives as soon as their machine answers.</p>
+        // A checkout that publishes this repository was asked, and the commit
+        // row updates itself when the answer lands. GitHub answers instead if
+        // no checkout can.
+        <p className="text-[13px]">Reading this commit's diff from a checkout of this repository. It arrives as soon as that machine answers.</p>
       ) : (
         <>
           <p className="text-[13px] mb-1">
@@ -308,20 +370,24 @@ function CommitContent({
   const feed = useSyncCommit(sha);
   const commit = useCommit(sha);
 
-  // Neighbours come from whatever this repository's commits the store already
-  // holds, and no feeder fills it here: the timeline query takes the newest
-  // commits across EVERY repository before filtering, patches and all, which is
-  // far too much to fetch for two arrows. So the arrows appear once the
-  // timeline or the history page has filled the lane, and stay away otherwise.
+  // Neighbours: the server answers with the nearest commits by time on the
+  // same branch (commits.neighbours), which is cheap and complete. Until it
+  // does, or when this build's backend is older than the page, the arrows
+  // fall back to whatever of this repository's commits the store holds.
+  const family = useRepoFamily();
+  const neighbourQuery = useQueryNoThrow(api.commits.neighbours, { repository, sha });
   const repoCommits = useCommits(useCallback((c: any) => c.repository === repository, [repository]));
-  const neighbours = useMemo(() => {
+  const neighbours: Neighbours = useMemo(() => {
+    const served = neighbourQuery.data as Neighbours | null | undefined;
+    if (served && (served.older || served.newer)) return served;
     const index = repoCommits.findIndex((c: any) => c.sha === sha);
     if (index === -1) return {};
+    const pick = (c: any) => (c ? { sha: c.sha, message: c.message } : undefined);
     return {
-      newer: index > 0 ? repoCommits[index - 1].sha : undefined,
-      older: index < repoCommits.length - 1 ? repoCommits[index + 1].sha : undefined,
+      newer: index > 0 ? pick(repoCommits[index - 1]) : undefined,
+      older: index < repoCommits.length - 1 ? pick(repoCommits[index + 1]) : undefined,
     };
-  }, [repoCommits, sha]);
+  }, [neighbourQuery.data, repoCommits, sha]);
 
   // The pull request this commit belongs to, when it has one. A comment then
   // names it directly (`pull_request_id`), which is the one thing the server
@@ -331,6 +397,20 @@ function CommitContent({
 
   const searchParams = useSearchParams();
   const conversationId = useAttributedSession(searchParams.get("session"));
+
+  // The discussion rail opens on its own on a wide page and folds away on a
+  // narrow one; the button in the header overrides either. A link that names
+  // a file (`?file=`, from a Threads card) also opens the diff on that file.
+  const [railOpen, setRailOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= RAIL_AUTO_OPEN_WIDTH,
+  );
+  const [focusFile, setFocusFile] = useState<string | null>(() => searchParams.get("file"));
+  useWatchEffect(() => {
+    const file = searchParams.get("file");
+    if (file) setFocusFile(file);
+  }, [searchParams]);
+  // The file open beside the diff, whole, at this commit.
+  const [openFile, setOpenFile] = useState<{ path: string; line?: number } | null>(null);
 
   useSyncRefCodeComments(repository, sha);
   const comments = useCodeComments(
@@ -353,12 +433,19 @@ function CommitContent({
       threadsFor: (filename) => lineComments.threadsByFile.get(filename),
       render: (filename, anchor, items) => (
         <PRLineThread
+          repository={repository}
+          threadKey={codeThreadRootKey(repository, sha, { file_path: filename, line_number: anchor.lineNumber })}
           comments={items as CodeCommentRow[]}
           authed={lineComments.authed}
+          lineNumber={anchor.lineNumber}
+          lineEnd={anchor.lineEnd}
           onReply={(content) =>
             lineComments.post({
               file_path: filename,
+              // The anchor is the first line either way; line_end is set only
+              // when the comment covers a run, which is what GitHub expects.
               line_number: anchor.lineNumber,
+              line_end: anchor.lineEnd,
               // A reply belongs on the side of the thread it answers; a new
               // thread on the side the reader clicked.
               side: items.length ? threadSide(items as CodeCommentRow[]) : anchor.side,
@@ -375,8 +462,28 @@ function CommitContent({
         if (anchor) lineComments.openComposer(filename, anchor);
       },
     }),
-    [lineComments, pr],
+    [lineComments, pr, repository, sha],
   );
+
+  // Every thread, on the commit or on a line, for the header's count.
+  const threadCount = useMemo(() => {
+    let n = comments.filter((c) => !c.file_path && !c.parent_id).length;
+    for (const byLine of lineComments.threadsByFile.values()) {
+      for (const thread of byLine.values()) if (thread.length) n += 1;
+    }
+    return n;
+  }, [comments, lineComments.threadsByFile]);
+
+  const fileHref = useCallback(
+    (path: string) => repoBlobHref(repository, sha, path, family),
+    [repository, sha, family],
+  );
+  const openWholeFile = useCallback((path: string) => setOpenFile({ path }), []);
+  const jumpToThread = useCallback((path: string) => {
+    // A fresh value each time, so the same file can be jumped to twice.
+    setFocusFile(null);
+    requestAnimationFrame(() => setFocusFile(path));
+  }, []);
 
   if (!commit) {
     if (!feed.ready && !feed.error) return <LoadingSkeleton />;
@@ -407,12 +514,62 @@ function CommitContent({
         repository={repository}
         neighbours={neighbours}
         headRef={headRef}
+        threadCount={threadCount}
+        railOpen={railOpen}
+        onToggleRail={() => setRailOpen((v) => !v)}
       />
-      <div className="flex-1 min-h-0">
-        {files.length === 0 ? (
-          <CommitWithoutFiles repository={repository} sha={commit.sha} />
-        ) : (
-          <FileDiffLayout files={files} lineThreads={lineThreads} />
+      <div className="flex-1 min-h-0 flex">
+        <div className="flex-1 min-w-0 min-h-0">
+          {files.length === 0 ? (
+            <CommitWithoutFiles repository={repository} sha={commit.sha} />
+          ) : (
+            <Group
+              // Re-keyed when the file panel comes or goes, so the group lays
+              // the two panels out afresh instead of squeezing the newcomer.
+              key={openFile ? "with-file" : "diff-only"}
+              orientation="horizontal"
+              className="h-full"
+              defaultLayout={openFile ? { "commit-diff": 54, "commit-file": 46 } : { "commit-diff": 100 }}
+            >
+              <Panel id="commit-diff" minSize={30}>
+                <FileDiffLayout
+                  files={files}
+                  lineThreads={lineThreads}
+                  focusFile={focusFile}
+                  fileHref={fileHref}
+                  onOpenFile={openWholeFile}
+                />
+              </Panel>
+              {openFile && (
+                <>
+                  <Separator className="cc-split" />
+                  <Panel id="commit-file" minSize={25}>
+                    <div className="h-full flex flex-col bg-sol-bg border-l border-sol-border/40">
+                      <BlobContent
+                        key={openFile.path}
+                        repository={repository}
+                        refName={commit.sha}
+                        path={openFile.path}
+                        panel={{ onClose: () => setOpenFile(null), line: openFile.line }}
+                      />
+                    </div>
+                  </Panel>
+                </>
+              )}
+            </Group>
+          )}
+        </div>
+        {railOpen && (
+          <aside className="commit-rail w-[340px] shrink-0 border-l border-sol-border/50 bg-sol-bg-alt/20 min-h-0">
+            <CommitRail
+              repository={repository}
+              sha={commit.sha}
+              comments={comments}
+              lineComments={lineComments}
+              pullRequestId={pr?.state === "open" ? pr._id : undefined}
+              onJump={jumpToThread}
+            />
+          </aside>
         )}
       </div>
     </div>

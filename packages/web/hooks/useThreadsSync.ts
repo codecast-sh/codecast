@@ -119,6 +119,7 @@ export function useThreadsInboxSync(): {
         );
       }
       if (data.payload?.comments?.length) syncTable("comments", data.payload.comments);
+      if (data.payload?.codeComments?.length) syncTable("codeComments", data.payload.codeComments);
       for (const task of data.payload?.tasks ?? []) ingestTaskDetail(task, { partialComments: true });
       if (data.payload?.pages?.length) {
         // Carry local optimistic reply stubs forward: a push racing the

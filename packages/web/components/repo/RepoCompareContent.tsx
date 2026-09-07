@@ -26,7 +26,8 @@ export function RepoCompareContent({ repository, base, head, family }: {
       <button className="text-sol-blue">Compare</button>
     </form>
     {comparison.error && <p className="p-4 text-xs text-sol-red">{serverErrorText(comparison.error)}</p>}
-    {!comparison.ready && !comparison.error && <LoadingSkeleton />}
+    {comparison.pending && <p className="p-4 text-xs text-sol-text-muted">Reading this comparison from a checkout of this repository. It arrives as soon as that machine answers.</p>}
+    {!comparison.ready && !comparison.error && !comparison.pending && <LoadingSkeleton />}
     {data && <>
       <div className="px-4 py-3 border-b border-sol-border/40 text-xs flex flex-wrap gap-4">
         <span>{data.total_commits} commits</span><span>{files.length} files returned</span><span>{data.ahead_by} ahead</span><span>{data.behind_by} behind</span>

@@ -4,6 +4,7 @@ import { CommentAvatar } from "../comments/CommentAvatar";
 import { CommentMarkdown } from "../comments/CommentMarkdown";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { PRCommentCard, PRComposer } from "./PRThread";
+import { codeThreadRootKey } from "@codecast/shared/comments";
 import { accentSoft, accentVar, externalEventRowToExternalEvent, type ExternalEventRecord } from "../../lib/externalEvents";
 import { relTimeShort } from "../../lib/utils";
 import {
@@ -148,8 +149,9 @@ export function PRTimeline({
       {authed && (
         <div className="border-t border-sol-border/50 px-5 py-3 shrink-0">
           <PRComposer
+            repository={pr.repository}
+            threadKey={codeThreadRootKey(pr.repository, pr.head_sha ?? "", {})}
             placeholder="Comment on this pull request. It is mirrored to GitHub."
-            submitLabel="Comment"
             onSubmit={onPostComment}
           />
         </div>

@@ -93,3 +93,22 @@ export async function popOutWindow(
     },
   });
 }
+
+/**
+ * The same page as a plain browser tab, outside every shell.
+ *
+ * Inside the desktop app the bridge hands the URL to the operating system,
+ * which is the one way out of Electron that lands in the person's own browser.
+ * A build too old for that verb reports it rather than opening a Chrome window
+ * dressed as the app. In a browser it is a new tab.
+ */
+export function openInBrowser(url: string): "opened" | "needs-update" {
+  if (isDesktopShell()) {
+    const openExternal = bridge("openExternal");
+    if (!openExternal) return "needs-update";
+    void openExternal(url);
+    return "opened";
+  }
+  window.open(url, "_blank", "noopener");
+  return "opened";
+}

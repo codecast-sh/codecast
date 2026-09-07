@@ -154,5 +154,14 @@ export function notificationRoute(
   // A device has no page of its own; the roster with its health is the place a
   // reader can act on the alert.
   if (entityType === "device") return "/settings/devices";
+  // A place in a repository: `owner/repo#12` is a pull request, `owner/repo@sha`
+  // a commit — the two pages a code comment is read on.
+  if (entityType === "code") {
+    const pr = entityId.match(/^([^#@]+)#(\d+)$/);
+    if (pr) return `/pr/${pr[1]}/${pr[2]}`;
+    const commit = entityId.match(/^([^#@]+)@([0-9a-f]+)$/i);
+    if (commit) return `/commit/${commit[1]}/${commit[2]}`;
+    return null;
+  }
   return null;
 }

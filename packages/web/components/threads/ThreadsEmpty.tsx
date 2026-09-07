@@ -31,6 +31,7 @@ export function ThreadsEmpty({
     : chip === "chat" ? "No channel threads yet"
     : chip === "dm" ? "No direct messages yet"
     : chip === "comment" ? "No comment threads yet"
+    : chip === "code" ? "No code threads yet"
     : chip === "page" ? "No page discussions yet"
     : chip === "question" ? "No open questions"
     : "No task threads yet";

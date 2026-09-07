@@ -62,8 +62,8 @@ describe("chipFromSearch", () => {
   });
 
   it("hides the Chat and DMs chips when chat is off", () => {
-    expect(visibleChips(true).map((c) => c.key)).toEqual(["all", "chat", "dm", "comment", "task", "page", "question"]);
-    expect(visibleChips(false).map((c) => c.key)).toEqual(["all", "comment", "task", "page", "question"]);
+    expect(visibleChips(true).map((c) => c.key)).toEqual(["all", "chat", "dm", "comment", "code", "task", "page", "question"]);
+    expect(visibleChips(false).map((c) => c.key)).toEqual(["all", "comment", "code", "task", "page", "question"]);
   });
 
   it("maps the page and question chips regardless of chat", () => {
@@ -166,7 +166,7 @@ describe("chip filtering and counts", () => {
   });
 
   it("counts unread cards per chip and never counts sessions", () => {
-    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, task: 1, page: 0, question: 0 });
+    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, code: 0, task: 1, page: 0, question: 0 });
   });
 });
 

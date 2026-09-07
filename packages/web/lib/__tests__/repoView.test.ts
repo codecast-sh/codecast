@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { extendLineRange, isLineSelected } from "../patchParser";
 import {
+  SESSION_BLAME_HUES,
+  foldSessionBlame,
+  nextBlameMode,
+  sessionBlameColors,
+  sessionBlameHref,
+  summarizeSessionBlame,
   breadcrumbTrail,
   commitBalanceAccent,
   entryName,
@@ -355,5 +361,104 @@ describe("between the two families", () => {
       expect(toStandaloneHref(path)).toBe(path);
       expect(toAppHref(path)).toBe(path);
     }
+  });
+});
+
+describe("session blame", () => {
+  const git = [
+    { start_line: 1, end_line: 3, sha: "aaaa111", message: "first\nbody", author_name: "Ada", committed_at: 1000 },
+    { start_line: 4, end_line: 6, sha: "bbbb222", message: "second", author_name: "Bob", committed_at: 2000 },
+    { start_line: 7, end_line: 8, sha: "cccc333", message: "third", author_name: "Cy", committed_at: 3000 },
+  ];
+  const lines = ["const one = 1;", "const two = 2;", "}", "const four = 4;", "const five = 5;", "const six = 6;", "const seven = 7;", "const eight = 8;"];
+  const s1 = { conversation_id: "c1", title: "Session one", author_name: "Ada Lovelace", via: "hash" as const };
+  const s2 = { conversation_id: "c2", title: "Session two", via: "edit" as const };
+
+  it("folds lines into runs by session, merging across git ranges and splitting unattributed runs on them", () => {
+    const ranges = foldSessionBlame(git, lines, {
+      by_sha: { aaaa111: s1 },
+      line_matches: [{ ...s2, line: "const four = 4;" }, { ...s2, line: "const five = 5;" }],
+    });
+    // Line 6 has no match of its own and inherits the commit's dominant writer.
+    expect(ranges.map((r) => [r.start_line, r.end_line, r.session?.conversation_id ?? null])).toEqual([
+      [1, 3, "c1"],
+      [4, 6, "c2"],
+      [7, 8, null],
+    ]);
+    // The line's author beats the commit's session, and the run keeps the git range under its first line.
+    expect(ranges[1].session?.via).toBe("edit");
+    expect(ranges[1].git?.sha).toBe("bbbb222");
+  });
+
+  it("hands a commit's unmatched lines to the session that wrote most of its matched ones", () => {
+    // Line 3 is `}`: too short to match. Lines 1 and 2 matched session two.
+    const ranges = foldSessionBlame(git, lines, {
+      by_sha: {},
+      line_matches: [{ ...s2, line: "const one = 1;" }, { ...s2, line: "const two = 2;" }],
+    });
+    expect(ranges[0]).toMatchObject({ start_line: 1, end_line: 3, session: { conversation_id: "c2", via: "edit" } });
+    // Lines 4 to 6 had no match at all, so nothing is inferred there.
+    expect(ranges[1]).toMatchObject({ start_line: 4, end_line: 6, session: null });
+  });
+
+  it("infers from matched lines before falling back to the committing session", () => {
+    const ranges = foldSessionBlame(git, lines, {
+      by_sha: { aaaa111: s1 },
+      line_matches: [{ ...s2, line: "const one = 1;" }, { ...s2, line: "const two = 2;" }],
+    });
+    expect(ranges[0]).toMatchObject({ start_line: 1, end_line: 3, session: { conversation_id: "c2" } });
+  });
+
+  it("does not infer when no single session wrote half of a commit's matched lines", () => {
+    const s3 = { conversation_id: "c3", title: "Session three", via: "edit" as const };
+    const wide = [{ start_line: 1, end_line: 8, sha: "dddd444", committed_at: 5 }];
+    const ranges = foldSessionBlame(wide, lines, {
+      by_sha: {},
+      line_matches: [
+        { ...s1, line: "const one = 1;", via: "edit" }, { ...s2, line: "const two = 2;" }, { ...s3, line: "const four = 4;" },
+      ],
+    });
+    expect(ranges.find((r) => r.start_line === 5)?.session).toBeNull();
+  });
+
+  it("merges one session's lines across commits into one run", () => {
+    const ranges = foldSessionBlame(git, lines, { by_sha: { aaaa111: s1, bbbb222: { ...s1, via: "commit" } }, line_matches: [] });
+    expect(ranges.map((r) => [r.start_line, r.end_line])).toEqual([[1, 6], [7, 8]]);
+  });
+
+  it("answers no sessions when the server has not answered", () => {
+    const ranges = foldSessionBlame(git, lines, undefined);
+    expect(ranges.every((r) => r.session === null)).toBe(true);
+    expect(ranges.map((r) => r.git?.sha)).toEqual(["aaaa111", "bbbb222", "cccc333"]);
+  });
+
+  it("summarizes most lines first and colours in that order", () => {
+    const ranges = foldSessionBlame(git, lines, {
+      by_sha: { aaaa111: s1, cccc333: s2 },
+      line_matches: [{ ...s2, line: "const six = 6;" }],
+    });
+    const summary = summarizeSessionBlame(ranges);
+    expect(summary.total).toBe(8);
+    // Lines 4 and 5 inherit session two from line 6, the commit's only matched line.
+    expect(summary.attributed).toBe(8);
+    expect(summary.entries.map((e) => [e.session.conversation_id, e.lines, e.ranges, e.first_line])).toEqual([
+      ["c2", 5, 1, 4],
+      ["c1", 3, 1, 1],
+    ]);
+    expect(summary.entries[0].newest_at).toBe(3000);
+    const colors = sessionBlameColors(summary);
+    expect(colors.get("c2")).toBe(SESSION_BLAME_HUES[0]);
+    expect(colors.get("c1")).toBe(SESSION_BLAME_HUES[1]);
+  });
+
+  it("links a session at its message when one is known", () => {
+    expect(sessionBlameHref({ ...s1, message_id: "m9" })).toBe("/conversation/c1#msg-m9");
+    expect(sessionBlameHref(s1)).toBe("/conversation/c1");
+  });
+
+  it("cycles blame modes", () => {
+    expect(nextBlameMode("off")).toBe("git");
+    expect(nextBlameMode("git")).toBe("session");
+    expect(nextBlameMode("session")).toBe("off");
   });
 });
