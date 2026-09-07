@@ -8344,7 +8344,21 @@ async function ingestStat(filePath: string, lastPosition: number, client: string
       setPosition(filePath,0);
       codexModelPositions.delete(filePath);
     }
-
+    if (lastPosition > 0 && size >= lastPosition && ["claude", "codex", "cursor"].includes(client)) {
+      const fd = await fs.promises.open(filePath, "r");
+      try {
+        const byte = Buffer.alloc(1);
+        const { bytesRead } = await fd.read(byte, 0, 1, lastPosition - 1);
+        if (bytesRead !== 1 || byte[0] !== 0x0a) {
+          log(`Transcript cursor no longer starts a complete record for ${sessionId}: position=${lastPosition}. Replaying from start.`);
+          lastPosition = 0;
+          setPosition(filePath, 0);
+          codexModelPositions.delete(filePath);
+        }
+      } finally {
+        await fd.close();
+      }
+    }
   } catch (err: any) {
     if (err.code === "EACCES" || err.code === "EPERM") {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
