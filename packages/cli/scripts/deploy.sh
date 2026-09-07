@@ -74,11 +74,10 @@ BINARIES_DIR="../web/binaries"
 ARTIFACTS=(codecast-darwin-arm64 codecast-darwin-x64 codecast-linux-arm64 codecast-linux-x64 codecast-windows-x64.exe)
 
 # Version bump (package.json is the single source of truth — update.ts imports it)
+OLD_VERSION=$(jq -r '.version' package.json)
 if [[ "$NO_BUMP" == "true" ]]; then
-  VERSION=$(jq -r '.version' package.json)
-  echo "Redeploying v$VERSION (no bump)"
+  VERSION="$OLD_VERSION"
 else
-  OLD_VERSION=$(jq -r '.version' package.json)
   IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
   case "$BUMP_TYPE" in
     major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
@@ -86,16 +85,45 @@ else
     patch) PATCH=$((PATCH + 1)) ;;
   esac
   VERSION="$MAJOR.$MINOR.$PATCH"
+fi
+
+# The bump is arithmetic on a local file, so a checkout behind main computes a
+# version that is already live and this script would then overwrite it with
+# older bytes. Compare against the published manifest before writing anything.
+# R2 is the authoritative copy; dl.codecast.sh serves it. (ct-49566)
+REPO_ROOT="$(cd ../.. && pwd)"
+# Two commands, not a pipe: `set -e` ignores a failing left-hand side, and a
+# download that quietly produced nothing would compare against an empty string.
+aws s3 cp "s3://$R2_BUCKET/latest.json" /tmp/codecast-published-latest.json \
+  --endpoint-url "$R2_ENDPOINT"
+PUBLISHED_VERSION=$(jq -r '.version' /tmp/codecast-published-latest.json)
+GATE_ARGS=(--channel "CLI" --published "$PUBLISHED_VERSION" --next "$VERSION")
+# --no-bump exists to republish the current version after a partial failure.
+if [[ "$NO_BUMP" == "true" ]]; then
+  GATE_ARGS+=(--allow-equal)
+fi
+bun "$REPO_ROOT/scripts/ci/release-version-gate.ts" "${GATE_ARGS[@]}"
+
+if [[ "$NO_BUMP" == "true" ]]; then
+  echo "Redeploying v$VERSION (no bump)"
+else
   jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
   echo "Version: $OLD_VERSION -> $VERSION"
 fi
 
 echo "Deploying codecast CLI v$VERSION"
 
-# Build binaries
+# Build binaries. build-binaries.sh builds and signs the cast computer helper
+# once, embeds it in the two darwin binaries and verifies it there, so the
+# laptop path and CI ship the same helper by the same steps. Naming it here
+# keeps the deploy log as answerable as the CI manifest about which helper went
+# out. (ct-49524)
 echo ""
 echo "Building binaries..."
 ./scripts/build-binaries.sh
+if [[ -f "$BINARIES_DIR/computer-helper.json" ]]; then
+  jq -r '"cast computer helper \(.version): sha256 \(.sha256), \(.authority)"' "$BINARIES_DIR/computer-helper.json"
+fi
 
 # Upload binaries
 echo ""
