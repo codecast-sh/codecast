@@ -105,6 +105,13 @@ export interface InstanceState {
    * command still reports the sign-in is pending, it just leaves focus alone.
    */
   loginRaisedAt?: number;
+  /**
+   * When `cast computer --restore-window` last raised a window.
+   *
+   * Same role as `loginRaisedAt`: a short-lived CLI process telling the
+   * daemon's focus sentinel that this front-switch was asked for.
+   */
+  computerRaisedAt?: number;
   /** Fallback for callers with no session (a human at a terminal). */
   activeTargetId: string | null;
 }
