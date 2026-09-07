@@ -69,3 +69,71 @@ describe("no code path raises a browser window over the human", () => {
     expect(Object.keys(ALLOWED).filter((rel) => !seenAllowed.has(rel))).toEqual([]);
   });
 });
+
+// A new tab is the fourth way to take the screen, and the quietest.
+//
+// `Target.createTarget` opens the tab in FRONT unless it is told otherwise:
+// over the bridge the host maps the param onto `tabs.create {active: false}`
+// (bridge/protocol.ts), and in the managed Chrome the same flag is what keeps a
+// pinned tab from raising the window. There is no raise call to grep for, so
+// the omission reads as ordinary code — `cast browser open` in real mode
+// created its tab with a bare `{ url }` and pulled the human's own Chrome
+// forward on every open (found in review of ct-49625).
+//
+// Two mechanical rules: every create asks for the background, and the params
+// objects trusted to carry the flag really carry it.
+
+/** Params objects that are background by construction, and where they are built. */
+const BACKGROUND_PARAMS = [
+  { expr: "NEW_TAB", file: "browser/cli.ts", decl: "NEW_TAB" },
+  { expr: "browser.create", file: "browser/pinnedTab.ts", decl: "create" },
+];
+
+/**
+ * Does this create open a tab in front of the human? The params can wrap onto
+ * the next lines, so the check reads a small window rather than one line.
+ */
+function createsInForeground(window: string): boolean {
+  if (!window.includes('"Target.createTarget"')) return false;
+  // The bridge host SERVES the method to its clients; a case label is not a call.
+  if (/case\s+"Target\.createTarget"/.test(window)) return false;
+  if (/background:\s*true/.test(window)) return false;
+  return !BACKGROUND_PARAMS.some((p) => window.includes(`"Target.createTarget", ${p.expr}`));
+}
+
+describe("every tab an agent opens comes up behind the human", () => {
+  const offenders: string[] = [];
+  for (const file of walk(SRC)) {
+    const rel = path.relative(SRC, file);
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    for (const { line, n } of codeLines(fs.readFileSync(file, "utf8"))) {
+      if (!line.includes('"Target.createTarget"')) continue;
+      if (createsInForeground(lines.slice(n - 1, n + 2).join("\n"))) {
+        offenders.push(`${rel}:${n} creates a tab in the foreground; pass background: true`);
+      }
+    }
+  }
+
+  test("no create opens a tab in front", () => {
+    expect(offenders).toEqual([]);
+  });
+
+  test("the params objects trusted as background really are", () => {
+    for (const { file, decl } of BACKGROUND_PARAMS) {
+      const text = fs.readFileSync(path.join(SRC, file), "utf8");
+      const built = [...text.matchAll(new RegExp(`${decl}\\s*[:=]\\s*\\{[^}]*\\}`, "g"))].map((m) => m[0]);
+      expect(built.length).toBeGreaterThan(0);
+      expect(built.filter((b) => !/background:\s*true/.test(b))).toEqual([]);
+    }
+  });
+
+  // The scan above only proves the tree is clean today. This proves the rule
+  // would catch the regression it was written for.
+  test("a create without the flag is caught, one with it is not", () => {
+    const bare = 'conn.send<{ targetId: string }>("Target.createTarget", { url })';
+    expect(createsInForeground(bare)).toBe(true);
+    expect(createsInForeground(bare.replace("{ url }", "{ url, background: true }"))).toBe(false);
+    expect(createsInForeground('conn.send("Target.createTarget", NEW_TAB)')).toBe(false);
+    expect(createsInForeground('case "Target.createTarget": {')).toBe(false);
+  });
+});
