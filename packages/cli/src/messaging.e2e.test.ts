@@ -21,6 +21,10 @@
 // All scenarios run real tmux and a real shim binary. CI must have `tmux`
 // and `bash` installed (true on every Ubuntu/macOS GH runner).
 
+// FIRST import: it moves this process onto a private tmux server, and daemon.js
+// snapshots the environment at module load — imported after it, the daemon's tmux
+// calls keep talking to the machine's shared server (ct-49770).
+import "./test-helpers/isolatedTmuxServer.js";
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import { injectViaTmux } from "./daemon.js";

@@ -19,21 +19,19 @@
 // vanilla `bun test` runs without the integration dependency.
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { injectViaTmux, TEST_SCRATCH_DIRNAME } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
+import { hasBinary } from "./test-helpers/binaryProbe.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
 
-function hasBin(name: string): boolean {
-  const r = spawnSync("which", [name], { encoding: "utf8" });
-  return r.status === 0 && !!r.stdout.trim();
-}
-
-const CAN_RUN = hasBin("tmux") && hasBin("claude");
+// hasBinary, not a bare `which`: a probe that fails to spawn under load says
+// nothing about whether claude is installed, and reading it as "absent" skipped
+// this whole real-TUI suite silently — 0 pass, 2 skip, 0 fail (ct-49770).
+const CAN_RUN = hasBinary("tmux") && hasBinary("claude");
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
