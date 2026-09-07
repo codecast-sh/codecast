@@ -10,6 +10,8 @@
 import { query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { resolveConversationRef } from "./conversations";
+import { checkConversationAccess } from "./privacy";
 
 // Mirror of packages/web/components/sessionMessage.ts — kept tiny and dependency
 // free so it runs on the Convex side. Pulls the sender short_id and the human body
@@ -220,5 +222,137 @@ export const listSessionThreads = query({
     }
 
     return { links, nodes: [...nodes.values()], generatedAt: Date.now() };
+  },
+});
+
+// ── Where a received message was written ───────────────────────────────────
+// A message that arrives from another session was composed at one point in
+// THAT session's transcript: the assistant turn that ran the send. Landing a
+// reader on the sender's session alone drops them at its tail, which is rarely
+// where the message came from — so the card links to the turn itself.
+//
+// Every send leaves the text in a tool call: Claude Code's own SendMessage and
+// Agent tools for an agent team, a Bash `cast send` or agent-send.sh for the
+// rest. So an excerpt of the received body names the turn exactly, and
+// timestamps only bound the search.
+//
+// Those bounds are loose on purpose. A send can wait — `cast send` queues until
+// the recipient is idle — so the recipient's transcript timestamps the DELIVERY,
+// not the writing, and the two can be hours apart. Cost stays flat regardless:
+// the scan walks back from delivery and stops after SENDING_SCAN_LIMIT turns, so
+// a busy sender is bounded by the limit and a quiet one by the window.
+const SENDING_WINDOW_BEFORE_MS = 6 * 60 * 60 * 1000;
+const SENDING_WINDOW_AFTER_MS = 5 * 60 * 1000;
+const SENDING_SCAN_LIMIT = 150;
+// How far back the time fallback may reach when no turn carries the text. Past
+// this the nearest turn is a guess, and a link that opens the sender's session
+// without claiming a spot in it is the more honest answer.
+const SENDING_FALLBACK_MAX_GAP_MS = 5 * 60 * 1000;
+const SENDING_EXCERPT_MIN = 12;
+// Parsing a giant tool input to reach its string fields is not worth it: a
+// paste that big is not the excerpt's source.
+const SENDING_INPUT_PARSE_LIMIT = 200_000;
+
+type SendingCandidate = {
+  _id: any;
+  timestamp: number;
+  content?: string;
+  tool_calls?: Array<{ input: string }>;
+};
+
+// Runs of whitespace collapse to one space so an excerpt survives re-wrapping
+// and indentation. A tool input is JSON, so its newlines are the two characters
+// `\` and `n` — normalizing alone cannot bridge that, which is why the haystack
+// below carries the parsed string fields too.
+function normalizeForMatch(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function toolCallHaystack(message: SendingCandidate): string {
+  const parts: string[] = [];
+  for (const call of message.tool_calls ?? []) {
+    parts.push(call.input);
+    if (call.input.length > SENDING_INPUT_PARSE_LIMIT) continue;
+    try {
+      const parsed = JSON.parse(call.input);
+      if (parsed && typeof parsed === "object") {
+        for (const value of Object.values(parsed)) {
+          if (typeof value === "string") parts.push(value);
+        }
+      }
+    } catch {}
+  }
+  return normalizeForMatch(parts.join("\n"));
+}
+
+// The sender's turn that carries `excerpt`, searched outward from the delivery
+// time: the turns at or before it first (newest first — the send is the last
+// thing that happened before delivery), then the ones after, for clock skew.
+// When no turn carries the text — an excerpt too short to be distinctive, a
+// send whose tool call never synced — the last turn before delivery still puts
+// the reader at the right moment, but only while it is close enough to have
+// plausibly been the send.
+export function pickSendingMessage(
+  messages: SendingCandidate[],
+  deliveredAt: number,
+  excerpt: string,
+): SendingCandidate | null {
+  const needle = normalizeForMatch(excerpt);
+  const before = messages
+    .filter((m) => m.timestamp <= deliveredAt)
+    .sort((a, b) => b.timestamp - a.timestamp);
+  const after = messages
+    .filter((m) => m.timestamp > deliveredAt)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (needle.length >= SENDING_EXCERPT_MIN) {
+    const outward = [...before, ...after];
+    // The send IS a tool call, so a call carrying the text beats a turn that
+    // merely narrates it — an agent often repeats what it just sent.
+    for (const message of outward) {
+      if (toolCallHaystack(message).includes(needle)) return message;
+    }
+    for (const message of outward) {
+      if (normalizeForMatch(message.content ?? "").includes(needle)) return message;
+    }
+  }
+  const nearest = before[0];
+  return nearest && deliveredAt - nearest.timestamp <= SENDING_FALLBACK_MAX_GAP_MS ? nearest : null;
+}
+
+export const findSendingMessage = query({
+  args: {
+    // A conversation id or a 7-char short id — whichever the card had.
+    sender: v.string(),
+    delivered_at: v.number(),
+    excerpt: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await getAuthUserId(ctx as any);
+    if (!me) return null;
+    const sender = await resolveConversationRef(ctx, args.sender, me);
+    if (!sender) return null;
+    if ((await checkConversationAccess(ctx, me, sender)) === "denied") return null;
+    // Assistant turns only: an agent sends, so the tool call lives there, and
+    // the reader is landing on a turn either way. A busy lead's window holds
+    // hundreds of large tool-result rows, and reading them would make the click
+    // wait seconds for an answer it cannot use.
+    const rows = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q: any) =>
+        q
+          .eq("conversation_id", sender._id)
+          .eq("role", "assistant")
+          .gte("timestamp", args.delivered_at - SENDING_WINDOW_BEFORE_MS)
+          .lte("timestamp", args.delivered_at + SENDING_WINDOW_AFTER_MS))
+      .order("desc")
+      .take(SENDING_SCAN_LIMIT);
+    const hit = pickSendingMessage(rows as any, args.delivered_at, args.excerpt ?? "");
+    // The conversation comes back either way: a card that could not name the
+    // turn still opens the right session.
+    return {
+      conversation_id: sender._id.toString(),
+      message_id: hit ? hit._id.toString() : null,
+      timestamp: hit ? hit.timestamp : null,
+    };
   },
 });

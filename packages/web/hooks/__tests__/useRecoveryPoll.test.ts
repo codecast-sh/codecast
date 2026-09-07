@@ -22,6 +22,38 @@ describe("shouldRecover", () => {
 });
 
 describe("createRecoveryController", () => {
+  it("aborts timed-out work and spaces retries from the last attempt", async () => {
+    let nowMs = 10_000;
+    const signals: AbortSignal[] = [];
+    const c = createRecoveryController({
+      getLastSync: () => 0,
+      staleMs: 100,
+      now: () => nowMs,
+      timeoutMs: 10,
+      fetchAndApply: (signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise<void>(() => {});
+      },
+    });
+    void c.tick();
+    await sleep(25);
+    expect(signals[0]?.aborted).toBe(true);
+    await c.tick();
+    expect(signals).toHaveLength(1);
+    nowMs += 100;
+    void c.tick();
+    await sleep(25);
+    expect(signals[1]?.aborted).toBe(true);
+    nowMs += 100;
+    await c.tick();
+    expect(signals).toHaveLength(2);
+    nowMs += 100;
+    void c.tick();
+    expect(signals).toHaveLength(3);
+    c.dispose();
+    expect(signals[2].aborted).toBe(true);
+  });
+
   it("runs the fetch when stale and skips it when fresh", async () => {
     let calls = 0;
     let nowMs = 1000;
@@ -78,10 +110,11 @@ describe("createRecoveryController", () => {
 
   it("a hung fetch can't wedge recovery forever — the timeout releases it", async () => {
     let calls = 0;
+    let nowMs = 10_000;
     const c = createRecoveryController({
       getLastSync: () => 0,
       staleMs: 500,
-      now: () => 10_000,
+      now: () => nowMs,
       timeoutMs: 20,
       // Never resolves: simulates a one-shot query stuck on a reconnecting socket.
       fetchAndApply: () =>
@@ -99,17 +132,20 @@ describe("createRecoveryController", () => {
     await sleep(40);
     expect(c.isInFlight()).toBe(false);
 
+    nowMs += 500;
     void c.tick();
     expect(calls).toBe(2);
+    c.dispose();
   });
 
   it("swallows fetch errors and clears in-flight so the next tick can retry", async () => {
     let calls = 0;
+    let nowMs = 10_000;
     const errors: unknown[] = [];
     const c = createRecoveryController({
       getLastSync: () => 0,
       staleMs: 500,
-      now: () => 10_000,
+      now: () => nowMs,
       onError: (e) => errors.push(e),
       fetchAndApply: async () => {
         calls++;
@@ -122,6 +158,9 @@ describe("createRecoveryController", () => {
     expect(errors).toHaveLength(1);
     expect(c.isInFlight()).toBe(false);
 
+    await c.tick();
+    expect(calls).toBe(1);
+    nowMs += 500;
     await c.tick();
     expect(calls).toBe(2);
   });
