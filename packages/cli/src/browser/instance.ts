@@ -21,6 +21,7 @@ import { isCdpAlive, listTargets, type CdpClient, type CdpTarget } from "./cdp.j
 import { enablePageDomains, TabUnresponsive, type EnablePatience } from "./recovery.js";
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
 import { findChromeBinary, chromeBinaryProbes, isPidAlive, ChromeNotFoundError } from "../workspace/chrome.js";
+import { acquireFileLock } from "../lockFile.js";
 
 export interface InstanceState {
   pid: number;
@@ -105,6 +106,17 @@ export interface InstanceState {
    * command still reports the sign-in is pending, it just leaves focus alone.
    */
   loginRaisedAt?: number;
+  /**
+   * When `cast computer --restore-window` last raised a window.
+   *
+   * Same role as `loginRaisedAt`: a short-lived CLI process telling the
+   * daemon's focus sentinel that this front-switch was asked for. It lives
+   * here, and not in the computer feature's own state file, because this is
+   * the file the sentinel already opens — so the once-a-second tick gains no
+   * read. Written before the raise request goes to the helper, never after, so
+   * a fast raise cannot be judged against a stamp that has not landed yet.
+   */
+  computerRaisedAt?: number;
   /** Fallback for callers with no session (a human at a terminal). */
   activeTargetId: string | null;
 }
@@ -423,90 +435,11 @@ export async function acquireStartLock(
   waitMs = 75_000,
   onWait?: (holderPid: number) => void,
 ): Promise<() => void> {
-  const lockFile = path.join(browserHome(), "start.lock");
-  fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
-  const staleMs = 90_000;
-  const deadline = Date.now() + waitMs;
-  let announced = false;
-  for (;;) {
-    try {
-      const fd = fs.openSync(lockFile, "wx");
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      fs.closeSync(fd);
-      const release = () => {
-        try {
-          fs.unlinkSync(lockFile);
-        } catch {
-          /* already released */
-        }
-      };
-      // Release on the way out, not just on the normal path. The CLI reports
-      // errors through a helper that calls process.exit, which does NOT run
-      // `finally` — so a failed launch left the file behind. Reclaiming it
-      // relies on the holder pid being dead, which is true immediately but
-      // stops being true if that pid is reused, and then every start waits out
-      // the staleness timeout for no reason. Observed after a remote start
-      // failed on an unreachable host.
-      process.once("exit", release);
-      // Signals need their own handlers: Node's default disposition for
-      // SIGINT/SIGTERM terminates WITHOUT running `exit` listeners, and agents
-      // routinely wrap these commands in `timeout`, which sends SIGTERM. Re-
-      // raise afterwards so the exit status stays conventional. SIGKILL cannot
-      // be caught at all, which is what the staleness reclaim above is for.
-      const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
-      const onSignal = (sig: NodeJS.Signals) => {
-        release();
-        cleanup();
-        process.kill(process.pid, sig);
-      };
-      const handlers = signals.map((sig) => {
-        const h = () => onSignal(sig);
-        process.once(sig, h);
-        return [sig, h] as const;
-      });
-      // bun-types narrows removeListener past Node's signal overloads; the
-      // EventEmitter surface is what both runtimes actually implement.
-      const emitter = process as NodeJS.EventEmitter;
-      const cleanup = () => {
-        emitter.removeListener("exit", release);
-        for (const [sig, h] of handlers) emitter.removeListener(sig, h);
-      };
-      return () => {
-        cleanup();
-        release();
-      };
-    } catch {
-      let holder: { pid?: number; at?: number } = {};
-      try {
-        holder = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
-      } catch {
-        /* unreadable — treat as stale below */
-      }
-      const stale = !holder.pid || !isPidAlive(holder.pid) || !holder.at || Date.now() - holder.at > staleMs;
-      if (stale) {
-        try {
-          fs.unlinkSync(lockFile);
-        } catch {
-          /* someone else removed it first */
-        }
-        continue;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(
-          `another \`cast browser start\` (pid ${holder.pid}) has held the launch lock for over ${Math.round(waitMs / 1000)}s — ` +
-            `if it is stuck, remove ${lockFile}`,
-        );
-      }
-      // Say that we are queued behind another launch. A command that blocks in
-      // silence is read as hung, and an agent's response to hung is to kill and
-      // retry — the exact reflex this lock exists to prevent.
-      if (!announced && holder.pid) {
-        announced = true;
-        onWait?.(holder.pid);
-      }
-      await sleep(300);
-    }
-  }
+  return acquireFileLock(path.join(browserHome(), "start.lock"), {
+    waitMs,
+    onWait,
+    describe: "cast browser start",
+  });
 }
 
 export async function stopInstance(state: InstanceState): Promise<void> {

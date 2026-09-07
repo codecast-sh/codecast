@@ -20,6 +20,8 @@ import {
   stampSnippet,
   type SectionSpec,
 } from "./snippets.js";
+import { snippetStamp } from "@codecast/shared/contracts";
+import { getVersion } from "./update.js";
 
 const END = "<!-- /codecast-work -->";
 const WORK: SectionSpec = {
@@ -614,7 +616,12 @@ describe("installSectionToFile: no write when nothing changed", () => {
     fs.writeFileSync(file, `# Mine\n\n## Above\nkeep\n\n## Tasks & Plans\nold\n${END}\n\n## Below\nkeep too\n`);
     installSectionToFile(file, dir, WORK, FRESH, true);
     const out = fs.readFileSync(file, "utf-8");
-    expect(out).toBe(`# Mine\n\n## Above\nkeep\n\n## Tasks & Plans\n\nfresh body\n${END}\n\n## Below\nkeep too\n`);
+    // The writer stamps the running cast above the end marker (ct-49544), so
+    // the bytes are pinned around that line rather than without it.
+    expect(out).toBe(
+      `# Mine\n\n## Above\nkeep\n\n## Tasks & Plans\n\nfresh body\n` +
+      `${snippetStamp(getVersion())}\n${END}\n\n## Below\nkeep too\n`,
+    );
   });
 
   test("the file is written owner-only", () => {

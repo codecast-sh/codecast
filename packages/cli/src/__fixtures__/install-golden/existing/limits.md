@@ -37,4 +37,5 @@ you to checkpoint. Finish the step you are on and keep working; if the limit lan
 parks and comes back. A one-line `cast state` is welcome, stopping is not.
 
 `cast usage` shows the current account's windows, reset times, and which recovery is on.
+<!-- cast @VERSION@ -->
 <!-- /codecast-limits -->
