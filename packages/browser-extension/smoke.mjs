@@ -43,6 +43,9 @@
  *       SMOKE_ENGINE=/path/to/agent-browser to pick the engine binary.
  *       SMOKE_SEED_TOKEN=1 to write the token into extension storage directly
  *       instead of pairing through the URL (a fallback, not the product path).
+ *       SMOKE_STORE_SHOTS=<dir> to also save the Chrome Web Store screenshots
+ *       (1280×800 JPEG, no alpha) of the states this run builds: the options
+ *       page connected, and a driven page wearing the Cast frame and pointer.
  */
 
 import { spawn, execSync } from "node:child_process";
@@ -225,6 +228,26 @@ class Cdp {
 }
 
 /**
+ * A Chrome Web Store screenshot of one target: 1280×800 (the store's larger
+ * size), JPEG so there is no alpha channel to reject. Only under
+ * SMOKE_STORE_SHOTS; the viewport override is lifted afterwards so the run's
+ * own pixel checks see the page as before.
+ */
+async function storeShot(cdp, sessionId, name) {
+  const dir = process.env.SMOKE_STORE_SHOTS;
+  if (!dir) return null;
+  fs.mkdirSync(dir, { recursive: true });
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }, sessionId);
+  await sleep(600);
+  const shot = await cdp.send("Page.captureScreenshot", { format: "jpeg", quality: 92, clip: { x: 0, y: 0, width: 1280, height: 800, scale: 1 } }, sessionId);
+  await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
+  const file = path.join(dir, `${name}.jpg`);
+  fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
+  console.log(`SHOT  ${file}`);
+  return file;
+}
+
+/**
  * An extension context to evaluate in: the options page, opened through the
  * scratch Chrome's CDP port. Evaluating in the service worker directly hangs
  * whenever the worker has gone dormant (CDP attach does not wake a stopped
@@ -256,6 +279,8 @@ async function extensionContext(cdpPort) {
       if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ": " + JSON.stringify(r.exceptionDetails.exception?.description));
       return r.result?.value;
     },
+    /** The options page itself, as the human sees it. */
+    storeShot: (name) => storeShot(cdp, sessionId, name),
     close: () => cdp.send("Target.closeTarget", { targetId }).catch(() => {}),
   };
 }
@@ -466,6 +491,8 @@ async function chromePage(cdpPort, url) {
     borderState() {
       return this.eval(BORDER_STATE_EXPR);
     },
+    /** The page as Chrome's own port sees it: frame and pointer included. */
+    storeShot: (name) => storeShot(cdp, sessionId, name),
     /** Top-left pixel of a capture that skips the bridge. */
     async topLeftPixel() {
       const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
@@ -580,6 +607,23 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
 
   await sleep(4000);
   check("bridge: plain title restored a few seconds after", (await groupTitle()) === "cast smoke", JSON.stringify(await groupTitle()));
+
+  if (process.env.SMOKE_STORE_SHOTS && outside) {
+    // The store shot shows a real page being driven: navigate through the
+    // bridge, move the pointer so it renders, capture from Chrome's own port.
+    await bridge.send("Page.navigate", { url: "https://codecast.sh/" }, sessionId);
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      const ready = await outside.eval("document.readyState").catch(() => "");
+      if (ready === "complete") break;
+    }
+    await sleep(1500);
+    await bridge.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 640, y: 420 }, sessionId).catch(() => {});
+    await sleep(400);
+    await outside.storeShot("2-driven-page-frame");
+    await bridge.send("Page.navigate", { url: pageUrl + "?again" }, sessionId);
+    await sleep(800);
+  }
 
   await bridge.send("Target.detachFromTarget", { sessionId });
   await sleep(300);
@@ -868,6 +912,16 @@ async function main() {
   }
   check("extension connected to bridge host", connected);
   if (!connected) throw new Error("extension never connected");
+  if (process.env.SMOKE_STORE_SHOTS) {
+    // The options page polls the worker every 2 s; wait until it says Connected.
+    const titleDeadline = Date.now() + 10_000;
+    while (Date.now() < titleDeadline) {
+      const title = await ext.eval(`document.querySelector("#status [data-title]").textContent`).catch(() => "");
+      if (title === "Connected") break;
+      await sleep(300);
+    }
+    await ext.storeShot("1-options-connected");
+  }
   check(
     "status never prints the token",
     statuses.every((s) => !s.includes(token)) && statuses.some((s) => /<token>/.test(s)),
