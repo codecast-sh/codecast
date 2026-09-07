@@ -29,6 +29,7 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
 
 Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+<!-- cast @VERSION@ -->
 <!-- /codecast-references -->
 
 ## Deploy notes
@@ -65,4 +66,5 @@ digraph my_flow {
   review -> implement [label="[R] Revise"]
 }
 ```
+<!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->
