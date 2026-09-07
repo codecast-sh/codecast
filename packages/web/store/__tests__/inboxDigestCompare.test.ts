@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { INBOX_PROJECTION_VERSION, STATUS_TRUST_TTL_MS, inboxEpoch, type InboxBucket } from "@codecast/shared/contracts";
 import {
   INBOX_COMPARE_MAX_PAYLOAD_AGE_MS,
@@ -10,12 +10,14 @@ import {
   INBOX_PROBE_MIN_INTERVAL_MS,
   INBOX_PROBE_PAYLOAD_AGE_MS,
   createInboxDigestComparer,
+  createInboxDigestDevHandle,
   evaluateInboxCompare,
   type InboxCompareState,
   type InboxDigestComparerIO,
 } from "../inboxDigestCompare";
 import {
   projectReplicaInbox,
+  useInboxStore,
   type InboxProjectionStamp,
   type InboxSession,
   type SessionsProjectionSlot,
@@ -127,6 +129,69 @@ const ctx = (over: Partial<Parameters<typeof evaluateInboxCompare>[1]> = {}) => 
 });
 
 beforeEach(() => __resetSyncActivityForTests());
+
+describe("development outcome diagnostics", () => {
+  it("logs skipped and disabled checks without projecting an unsettled replica", () => {
+    const read = spyOn(useInboxStore, "getState");
+    const log = spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const handle = createInboxDigestDevHandle(harness().comparer, () => CRAWL_KEY);
+      for (const reason of INBOX_COMPARE_SKIPS) {
+        handle.logOutcome({ kind: "skip", reason });
+        handle.logOutcome({ kind: "skip", reason });
+      }
+      handle.logOutcome({ kind: "disabled" });
+      expect(log.mock.calls.map(([line]) => line)).toEqual([
+        ...INBOX_COMPARE_SKIPS.map(reason => `[inboxDigest] skip:${reason}`),
+        "[inboxDigest] disabled",
+      ]);
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  it("keeps manual placement diagnostics available after a skipped check", () => {
+    const read = spyOn(useInboxStore, "getState").mockReturnValue(driftingState() as ReturnType<typeof useInboxStore.getState>);
+    const now = spyOn(Date, "now").mockReturnValue(NOW);
+    const log = spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const handle = createInboxDigestDevHandle(harness().comparer, () => CRAWL_KEY);
+      handle.logOutcome({ kind: "skip", reason: "not_quiescent" });
+      expect(handle.renderVsStamp()).toEqual([
+        expect.objectContaining({ id: B.slice(0, 7), stamp: "working", render: "needs_input", replica: "needs_input" }),
+      ]);
+    } finally {
+      read.mockRestore();
+      now.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  it("still diagnoses render drift for clean and differing comparisons", () => {
+    const state = driftingState();
+    const read = spyOn(useInboxStore, "getState").mockReturnValue(state as ReturnType<typeof useInboxStore.getState>);
+    const now = spyOn(Date, "now").mockReturnValue(NOW);
+    const log = spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const handle = createInboxDigestDevHandle(harness().comparer, () => CRAWL_KEY);
+      handle.logOutcome({ kind: "clean", epoch: EPOCH, short_circuit: true, payload_age_ms: 0 });
+      handle.logOutcome(evaluateInboxCompare(state, ctx()));
+      const diagnostics = log.mock.calls.filter(([line]) => line === "[inboxDigest] render_vs_stamp");
+      expect(diagnostics).toHaveLength(2);
+      for (const [, json] of diagnostics) {
+        expect(JSON.parse(json as string)).toEqual([
+          expect.objectContaining({ id: B.slice(0, 7), stamp: "working", render: "needs_input" }),
+        ]);
+      }
+    } finally {
+      read.mockRestore();
+      now.mockRestore();
+      log.mockRestore();
+    }
+  });
+});
 
 describe("gates, in contract order", () => {
   const converged = withSlot(baseState({ [A]: row(A), [B]: row(B) }));

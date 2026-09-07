@@ -581,6 +581,7 @@ export function createInboxDigestDevHandle(
     if (line === lastLogged) return;
     lastLogged = line;
     console.info(`[inboxDigest] ${line}`, "diff" in outcome && outcome.diff ? outcome.diff : "");
+    if (outcome.kind === "skip" || outcome.kind === "disabled") return;
     const deltas = renderVsStamp();
     if (deltas.length) console.info("[inboxDigest] render_vs_stamp", JSON.stringify(deltas));
   };
