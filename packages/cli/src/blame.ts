@@ -13,6 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
+import { contentLinesToMatch as selectContentLines, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
 
 const WEB_BASE = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
 
@@ -25,10 +26,6 @@ export function conversationDeepLink(ref: SessionRef): string {
 }
 
 export const ZERO_SHA = "0".repeat(40);
-// Mirror of the server's MIN_LINE_MATCH_LEN: shorter lines are too common to
-// attribute safely, so don't spend request bytes on them.
-const MIN_LINE_MATCH_LEN = 8;
-const MAX_UNCOMMITTED_LINES = 400;
 const MAX_WHO_LABEL = 48;
 const RESOLVE_TIMEOUT_MS = 5000;
 
@@ -247,41 +244,17 @@ export function augmentPorcelain(raw: string, resolution: BlameResolution): stri
   return out.join("\n");
 }
 
-export interface ContentLine {
-  t: string;
-  // Deadline (ms): newest edit timestamp allowed to claim the line. Committed
-  // lines pass commit-time + slack so the authoring edit (which precedes its
-  // commit) matches but later rewrites can't steal the line.
-  d?: number;
-}
-
-// Only commits this recent get content-matched to an authoring session — the
-// server matches against a window of the file's newest edit rows, so older
-// lines can't match anyway and would just bloat the request.
-const CONTENT_MATCH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const COMMIT_DEADLINE_SLACK_MS = 10 * 60 * 1000;
+export type { ContentLine };
 
 export function contentLinesToMatch(parsed: ParsedBlame, nowMs: number): ContentLine[] {
-  const byText = new Map<string, ContentLine>();
-  for (const line of parsed.lines) {
-    const trimmed = line.content.trim();
-    if (trimmed.length < MIN_LINE_MATCH_LEN) continue;
-    let deadline: number | undefined;
-    if (line.sha !== ZERO_SHA) {
-      const meta = parsed.commits.get(line.sha);
-      if (!meta?.authorTime) continue;
-      const authorMs = meta.authorTime * 1000;
-      if (nowMs - authorMs > CONTENT_MATCH_MAX_AGE_MS) continue;
-      deadline = authorMs + COMMIT_DEADLINE_SLACK_MS;
-    }
-    // Duplicate text across lines: keep the most permissive deadline.
-    const existing = byText.get(trimmed);
-    if (!existing || (existing.d !== undefined && (deadline === undefined || deadline > existing.d))) {
-      byText.set(trimmed, { t: trimmed, d: deadline });
-    }
-    if (byText.size >= MAX_UNCOMMITTED_LINES) break;
-  }
-  return [...byText.values()];
+  return selectContentLines(
+    parsed.lines.map((line) => ({
+      text: line.content,
+      uncommitted: line.sha === ZERO_SHA,
+      authorMs: (parsed.commits.get(line.sha)?.authorTime ?? 0) * 1000 || undefined,
+    })),
+    nowMs,
+  );
 }
 
 function execGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
