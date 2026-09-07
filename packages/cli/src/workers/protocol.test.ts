@@ -56,15 +56,18 @@ test("invalid UTF8 cannot silently alter a wire identity or result", () => {
   expect(() => new FrameDecoder().push(bytes)).toThrow();
 });
 
-test("worker static import closure excludes daemon, CLI boot, auth clients and Convex", async () => {
-  const { scanSpecifiers } = await import("../daemonBuildIdCompute.js");
+test("worker runtime import closure excludes daemon, CLI boot and auth; Convex stays in its SDK adapter", async () => {
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
   const fs = await import("node:fs"); const path = await import("node:path");
   const queue = [path.join(import.meta.dir, "runtime.ts")], seen = new Set<string>();
   while (queue.length) {
     const file = queue.pop()!; if (seen.has(file)) continue; seen.add(file);
     expect(["daemon.ts", "index.ts", "main.ts", "ccAccounts.ts", "codexAccounts.ts"].includes(path.basename(file))).toBe(false);
-    for (const spec of scanSpecifiers(fs.readFileSync(file, "utf8"))) {
-      expect(spec.includes("convex")).toBe(false);
+    for (const {path: spec} of transpiler.scanImports(fs.readFileSync(file, "utf8"))) {
+      if (spec.includes("convex")) {
+        expect(path.basename(file)).toBe("messagesSdkCursors.ts");
+        expect(["convex/browser", "convex/values"]).toContain(spec);
+      }
       if (spec.startsWith(".")) {
         const resolved = path.resolve(path.dirname(file), spec.replace(/\.js$/, ".ts"));
         if (fs.existsSync(resolved)) queue.push(resolved);

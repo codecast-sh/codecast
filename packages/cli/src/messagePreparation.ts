@@ -1,5 +1,5 @@
 import { redactSecrets } from './redact.js';
-import { detectImageMediaType } from './syncService.js';
+import { detectImageMediaType } from './imagePayload.js';
 
 export type PreparationImage = { mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string };
 export type PreparationMessage = {

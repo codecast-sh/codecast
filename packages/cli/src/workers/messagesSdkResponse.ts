@@ -30,7 +30,7 @@ export class MessagesSdkResponse {
       const bytes = Buffer.concat(this.pages, this.receiver.length);
       checkpoint();
       const response = new Response(bytes.length ? bytes : null, { status: this.status });
-      if (!bytes.length && process.versions.bun === '1.3.14') {
+      if (!bytes.length && ['1.3.13', '1.3.14'].includes(process.versions.bun ?? '')) {
         response.json = async () => { await response.text(); return null; };
       }
       checkpoint();
