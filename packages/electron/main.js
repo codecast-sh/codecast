@@ -469,6 +469,10 @@ function dropSpareTabWindow() {
 
 function claimSpareTabWindow() {
   const win = spareTabWindow;
+  if (win && !win.isDestroyed() && (win.webContents.isDestroyed() || win.webContents.isCrashed())) {
+    dropSpareTabWindow();
+    return null;
+  }
   if (!win || win.isDestroyed() || !spareTabReady) return null;
   spareTabWindow = null;
   spareTabReady = false;
@@ -1719,8 +1723,12 @@ ipcMain.on("report-window-state", (e, state) => {
   if (!state || typeof state !== "object") return;
   // A window reporting for the first time has not seen the host's mirror yet;
   // without this its talk keys would start blank until the host next moved.
-  if (!windowStates.has(e.sender.id) && lastVoiceMirror && !(callWindow && e.sender === callWindow.webContents)) {
-    e.sender.send("voice-mirror", lastVoiceMirror);
+  if (!windowStates.has(e.sender.id)) {
+    if (lastVoiceMirror && !(callWindow && e.sender === callWindow.webContents)) {
+      e.sender.send("voice-mirror", lastVoiceMirror);
+    }
+    const id = e.sender.id;
+    e.sender.once("destroyed", () => windowStates.delete(id));
   }
   windowStates.set(e.sender.id, {
     active: typeof state.active === "string" ? state.active : null,
@@ -1729,7 +1737,6 @@ ipcMain.on("report-window-state", (e, state) => {
       : [],
     inCall: state.inCall === true,
   });
-  e.sender.once("destroyed", () => windowStates.delete(e.sender.id));
   broadcastWindowRole();
 });
 
