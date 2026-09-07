@@ -74,8 +74,6 @@ docs/workflow-execution-plan.md
 # Local dev configs
 nginx.dev.conf
 com.codecast.nginx.plist
-CLAUDE.md
-AGENTS.md
 ONBOARDING.md
 app_spec.txt
 
