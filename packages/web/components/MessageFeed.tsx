@@ -9,7 +9,7 @@ import { EmptyState } from "./EmptyState";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { EntityIdPill } from "./EntityIdPill";
 import { EstablishedRefsProvider } from "../hooks/entityMentionScope";
-import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
+import { parseAgentAuthoredMessage } from "./sessionMessage";
 import { classifyFeedMessage } from "../lib/conversationProcessor";
 
 type FeedMessage = {
@@ -24,6 +24,12 @@ type FeedMessage = {
   conversation_session_id: string;
   author_name: string;
   is_own: boolean;
+  // Written by an agent, not typed by a person: every turn of a subagent
+  // conversation, and the seed prompt of a session another session spawned.
+  // Server-derived (convex/messageFeed.ts) — is_own only says whose account
+  // owns the row, which is true of machine-delivered prompts too.
+  from_agent?: boolean;
+  agent_source?: string;
 };
 
 // How many real (non-noise) messages to keep on screen before the user has to
@@ -58,17 +64,25 @@ function getRelativeTime(timestamp: number): string {
   });
 }
 
-// Agent-to-agent message (delivered by `cast send`, stored wrapped in a
-// <session-message from="…"> tag). Rendered with the same cyan "Message from
-// <sender>" chrome the conversation view uses (SessionMessageBlock), so the feed
-// reads like the convos. A plain div (not a Link) because EntityIdPill renders
-// its own <a> for the sender — nesting anchors is invalid — so we navigate via a
-// click handler that yields to any inner link/button.
-function SessionMessageCard({ message }: { message: FeedMessage }) {
+// A prompt one agent wrote for another: a `cast send` (stored wrapped in a
+// <session-message from="…"> tag) or the brief a parent agent handed a subagent
+// or a spawned session. Rendered with the same cyan "Message from <sender>"
+// chrome the conversation view uses (SessionMessageBlock), so the feed reads
+// like the convos. A plain div (not a Link) because EntityIdPill renders its own
+// <a> for the sender — nesting anchors is invalid — so we navigate via a click
+// handler that yields to any inner link/button.
+function AgentMessageCard({
+  message,
+  label,
+  from,
+  body,
+}: {
+  message: FeedMessage;
+  label: string;
+  from: string;
+  body: string;
+}) {
   const router = useRouter();
-  const parsed = parseInboundSessionMessage(message.content);
-  const from = parsed?.from || "unknown";
-  const body = parsed?.body || message.content?.trim() || "";
 
   return (
     <div
@@ -86,12 +100,12 @@ function SessionMessageCard({ message }: { message: FeedMessage }) {
       <div className="flex items-center gap-2 mb-1.5">
         <CornerDownRight className="w-3.5 h-3.5 shrink-0 text-sol-cyan/70" />
         <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-cyan/80 shrink-0">
-          message from
+          {label}
         </span>
         {from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : (
-          <span className="text-xs text-sol-text-muted">another session</span>
+          <span className="text-xs text-sol-text-muted">an agent</span>
         )}
         <span className="text-[10px] text-sol-text-dim/30">&middot;</span>
         <span className="text-xs text-sol-text-muted truncate group-hover:text-sol-text transition-colors">
@@ -170,13 +184,18 @@ interface MessageFeedProps {
   filter: "my" | "team";
 }
 
+// "agent" covers both flavours of agent-written prompt: a `cast send` between
+// sessions (envelope in the content) and a brief a parent agent wrote for a
+// subagent or a spawned session (provenance on the row, plain text in the
+// content). Both render through AgentMessageCard; only "text" is a human.
 type FeedItem =
-  | { kind: "session"; msg: FeedMessage }
+  | { kind: "agent"; msg: FeedMessage; label: string; from: string; body: string }
   | { kind: "text"; msg: FeedMessage; text: string };
 
 export function MessageFeed({ filter }: MessageFeedProps) {
-  // Default hides session→session cross-talk (cast send coordination): the
-  // feed is about what people wrote. "All" re-adds the agent-to-agent cards.
+  // Default hides everything an agent wrote — session→session cast sends and the
+  // briefs that start subagents and spawned sessions. The feed is about what
+  // people typed. "All" re-adds the agent cards.
   const [mode, setMode] = useState<"humans" | "mine" | "all">("humans");
   // Store-fed (hooks/useMessageFeed): the feed paints from cached rows on
   // the first frame; the live newest page and one-shot older pages overlay
@@ -195,19 +214,38 @@ export function MessageFeed({ filter }: MessageFeedProps) {
     const items: FeedItem[] = [];
     for (const msg of allMessages) {
       if (msg.role !== "user") continue;
-      if (isSessionMessage(msg.content)) {
-        items.push({ kind: "session", msg });
+      // Envelope first: a `cast send` or a subagent's report names its sender in
+      // the content itself, whatever the conversation's own provenance says.
+      const envelope = parseAgentAuthoredMessage(msg.content);
+      if (envelope) {
+        items.push({
+          kind: "agent",
+          msg,
+          label: envelope.label,
+          from: envelope.from || "unknown",
+          body: envelope.body || msg.content?.trim() || "",
+        });
         continue;
       }
       const d = classifyFeedMessage(msg.content);
       if (d.kind === "hidden") continue;
+      if (msg.from_agent) {
+        items.push({
+          kind: "agent",
+          msg,
+          label: "prompt from",
+          from: msg.agent_source || "unknown",
+          body: d.text,
+        });
+        continue;
+      }
       items.push({ kind: "text", msg, text: d.text });
     }
     return items;
   }, [allMessages]);
 
-  // "humans" = what people typed (no agent cross-talk); "mine" = only my own
-  // prompts; "all" = everything including session→session messages.
+  // "humans" = what people typed; "mine" = only what I typed; "all" = everything,
+  // agent-written prompts included.
   const visibleItems = useMemo(() => {
     if (mode === "all") return displayItems;
     if (mode === "mine") return displayItems.filter((it) => it.kind === "text" && it.msg.is_own);
@@ -275,9 +313,9 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       <div className="flex items-center justify-between">
         <div className="inline-flex items-center gap-0.5 rounded-lg border border-sol-border/40 p-0.5">
           {([
-            { key: "humans", label: "People", title: "Messages people typed (no agent-to-agent traffic)" },
-            { key: "mine", label: "Mine", title: "Only messages I typed" },
-            { key: "all", label: "All", title: "Everything, including session-to-session messages between agents" },
+            { key: "humans", label: "People", title: "Only what people typed — no agent prompts or session-to-session traffic" },
+            { key: "mine", label: "Mine", title: "Only what I typed" },
+            { key: "all", label: "All", title: "Everything, including the prompts agents write for each other" },
           ] as const).map((opt) => (
             <button
               key={opt.key}
@@ -307,8 +345,14 @@ export function MessageFeed({ filter }: MessageFeedProps) {
           </div>
           <div className="space-y-2">
             {group.items.map((item) =>
-              item.kind === "session" ? (
-                <SessionMessageCard key={item.msg._id} message={item.msg} />
+              item.kind === "agent" ? (
+                <AgentMessageCard
+                  key={item.msg._id}
+                  message={item.msg}
+                  label={item.label}
+                  from={item.from}
+                  body={item.body}
+                />
               ) : (
                 <MessageCard key={item.msg._id} message={item.msg} text={item.text} />
               ),
