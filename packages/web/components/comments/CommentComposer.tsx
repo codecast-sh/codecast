@@ -28,6 +28,8 @@ export function CommentComposer({
   placeholder = "Comment…",
   autoFocus,
   className,
+  mentionTeamId,
+  chatMentionMode,
 }: {
   conversationId: string;
   messageId?: string;
@@ -47,6 +49,11 @@ export function CommentComposer({
    *  background and focus ring, and cancels MessageInput's floating scrim and
    *  page background, which would otherwise paint a second box inside it. */
   className?: string;
+  /** The team whose roster and sessions the @ menu offers, when the surface
+   *  is not a conversation (a commit, a pull request). */
+  mentionTeamId?: string;
+  /** Insert a person as `@handle`, the form the server resolves. */
+  chatMentionMode?: boolean;
 }) {
   const draftKey = `comment:${conversationId}:${messageId ?? "global"}`;
   const draft = useInboxStore((s) => (s.drafts[draftKey]?.draft_message as string | undefined) ?? "");
@@ -102,6 +109,8 @@ export function CommentComposer({
           bareComposer
           composerPlaceholder={placeholder}
           autoFocusInput={autoFocus}
+          mentionTeamId={mentionTeamId}
+          chatMentionMode={chatMentionMode}
           onGateSend={async (text) => { await onSubmit(text); onCancelReply?.(); }}
         />
       </div>

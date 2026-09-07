@@ -33,7 +33,7 @@ import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
-import { StatusNoticeChip } from "./StatusNoticeChip";
+import { StatusNoticeStack } from "./StatusNoticeStack";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
@@ -1111,9 +1111,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="SyncStatusChip" level="inline">
               <SyncStatusChip />
             </ErrorBoundary>
-            <ErrorBoundary name="StatusNoticeChip" level="inline">
-              <StatusNoticeChip />
-            </ErrorBoundary>
             <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
             <ErrorBoundary name="AnchorChip" level="inline">
               <AnchorChip />
@@ -1173,11 +1170,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       </header>
 
       {/* Status notices (connection, storage, CLI offline, tmux missing) render
-          nothing here — they publish to the header's StatusNoticeChip, a fixed
-          slot beside the sync chip, so a status that flaps never shifts the
-          layout or covers the page. The onboarding strips still sit in the
-          flow. */}
+          nothing here — they publish to StatusNoticeStack, fixed to the
+          bottom-left corner, so a status that flaps never shifts the layout
+          or covers the header, transcript or composer. The onboarding strips
+          still sit in the flow. */}
       <ErrorBoundary name="Banners" level="inline">
+        <StatusNoticeStack />
         <ConnectionBanner />
         <StorageHealthBanner />
         <DesktopAppBanner />

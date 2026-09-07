@@ -449,7 +449,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => startComment(hoverIndex)}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
           </svg>
         </button>
@@ -469,7 +469,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => useInboxStore.getState().openCommentThread(messageId)}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
         </button>
@@ -723,10 +723,10 @@ function CommentEditor({
           onBlur={() => save(false)}
         />
         <div className="cc-comment-editor-footer">
-          {/* Closing keeps the quote either way. On a fresh quote say so — "Cancel"
-              read as cancelling the quote itself; on a saved note it discards the edit. */}
+          {/* Closing keeps the quote either way. On a fresh quote, "None" means no
+              note (not "cancel the quote"). On a saved note it discards the edit. */}
           <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => cancel(true)}>
-            {comment.body ? "Cancel" : "Skip note"}
+            {comment.body ? "Cancel" : "None"}
             <KeyCap size="xs">Esc</KeyCap>
           </button>
           <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => save(true)}>

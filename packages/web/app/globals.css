@@ -739,6 +739,16 @@ html[data-idle] *::after {
    edge it points toward, with a short delay so it never flashes during the
    auto-scroll glide that follows selecting a session. Transform lives entirely
    here (not in utility classes) because the entrance animates it. */
+/* Bottom-left status cards (StatusNoticeStack): slide in from the edge; the
+   stack is fixed to the viewport so nothing else moves. */
+@keyframes statusNoticeIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.cc-status-notice {
+  animation: statusNoticeIn 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
 @keyframes ccBeaconInUp {
   from { opacity: 0; transform: translate(-50%, -8px) scale(0.92); }
   to { opacity: 1; transform: translate(-50%, 0) scale(1); }
@@ -1373,13 +1383,8 @@ pre[class*="language-"] {
    at its padding edge. MessageReview measures the real visible gutter into
    --cc-gutter-l / --cc-gutter-r (set in measure(), fresh whenever the handle
    is up); clamp the offset to it so the handle sits as deep in the gutter as
-   fits — never clipped, and off the text whenever the gutter allows. Sized
-   down to match the compact type. */
-.simple-view .cc-block-quote,
-.simple-view .cc-block-comment {
-  width: 1.2rem;
-  height: 1.15rem;
-}
+   fits — never clipped, and off the text whenever the gutter allows. Size
+   follows the feed type (1lh) so this view does not need its own box. */
 .simple-view .cc-block-quote {
   left: calc(-1 * min(1.45rem, var(--cc-gutter-l, 1.45rem) - 0.2rem));
 }
@@ -1773,11 +1778,19 @@ pre[class*="language-"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.55rem;
-  height: 1.45rem;
-  margin-top: -1px;
+  /* Same size as the glyphs beside it. --cc-line is the parent line box, so
+     the handle sits on the first line in simple, default, and minimal. */
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  /* Sit on the first line's glyphs. Half-leading overshoots the cap-height
+     of this face; ~0.3 of the extra leading matches the mention chip. */
+  margin-top: calc((1lh - 1em) * 0.3);
   border: 1px solid var(--sol-border);
-  border-radius: 7px;
+  border-radius: 0.28em;
   /* Same surface as .cc-sel-toolbar / the corner toolbars — NOT --sol-card,
      which is pure white in light mode and reads off-theme over the cream. */
   background: var(--sol-bg);
@@ -1787,6 +1800,11 @@ pre[class*="language-"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   animation: ccPop 120ms ease-out;
   transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-block-quote svg {
+  display: block;
+  width: 0.72em;
+  height: 0.72em;
 }
 .cc-block-quote:hover {
   color: var(--sol-cyan);
@@ -1837,11 +1855,17 @@ pre[class*="language-"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.55rem;
-  height: 1.45rem;
-  margin-top: -1px;
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  /* Sit on the first line's glyphs. Half-leading overshoots the cap-height
+     of this face; ~0.3 of the extra leading matches the mention chip. */
+  margin-top: calc((1lh - 1em) * 0.3);
   border: 1px solid var(--sol-border);
-  border-radius: 7px;
+  border-radius: 0.28em;
   background: var(--sol-bg);
   color: var(--sol-text-muted);
   cursor: pointer;
@@ -1849,6 +1873,11 @@ pre[class*="language-"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   animation: ccPop 120ms ease-out;
   transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-block-comment svg {
+  display: block;
+  width: 0.72em;
+  height: 0.72em;
 }
 .cc-block-comment:hover {
   color: var(--sol-cyan);
@@ -1967,6 +1996,7 @@ pre[class*="language-"] {
 .cc-comment-editor-footer {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: nowrap;
   gap: 0.25rem;
 }
 .cc-comment-editor-footer {
@@ -1993,6 +2023,8 @@ pre[class*="language-"] {
   background: transparent;
   color: var(--sol-text-dim);
   cursor: pointer;
+  white-space: nowrap;
+  flex: none;
   transition: background 120ms, color 120ms;
 }
 .cc-comment-btn:hover {
