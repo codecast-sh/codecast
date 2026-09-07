@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion.js";
-import { SCAN_CHUNK_BYTES, readFileTailAsync, readFileTailSync, extractPendingToolUseFromTail, extractPendingToolUseFromTranscriptAsync, resolveTurnEndStatus, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, trackSessionPaneForTests, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { SCAN_CHUNK_BYTES, readFileTailAsync, readFileTailSync, extractPendingToolUseFromTail, extractPendingToolUseFromTranscriptAsync, resolveTurnEndStatus, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -682,7 +682,6 @@ describe("openBackgroundTasks window growth and primeOpenTaskScan", () => {
     const f = path.join(projectDir, `${sid}.jsonl`);
     fs.writeFileSync(f, transcript(...filler(9 * 1024 * 1024), bgStart("managed-task", sid)) + "\n");
     const size = fs.statSync(f).size;
-    cleanups.push(() => trackSessionPaneForTests(sid, null));
     registerManagedStartedSession("conv-managed", sid, "cc-managed-test");
     expect(openTaskScanOffset(f)).toBeUndefined();
     const { maxGapMs } = await measureLoopHold(() => reconcileStatusFromTranscript(sid, {} as any));

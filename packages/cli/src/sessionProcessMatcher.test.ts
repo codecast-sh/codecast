@@ -18,7 +18,6 @@ import {
   parsePsEtimeSeconds,
   processDeclaredSessionId,
   judgeProcessIdentity,
-  registrationPredatesProcess,
   agentBinaryFromPsRow,
 } from "./sessionProcessMatcher.js";
 
@@ -454,14 +453,6 @@ describe("argvSessionId", () => {
     expect(argvSessionId("claude -r 3d2a9117-83fc-47ef-9993-5180b2cf7017")).toBe("3d2a9117-83fc-47ef-9993-5180b2cf7017");
     expect(argvSessionId("claude --session-id=c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00 --chrome")).toBe("c291b8e9-5dc0-4b96-a5c6-a1f60bf9ef00");
   });
-  test("a native fork declares the child (--session-id), not the parent it resumes", () => {
-    const parent = "e1d4009c-ee25-4e8e-9090-5671b3a134e6";
-    const child = "9bea2246-353d-492a-923d-302f763392f2";
-    expect(argvSessionId(`grok --resume ${parent} --fork-session --session-id ${child} --permission-mode bypassPermissions`)).toBe(child);
-    expect(argvSessionId(`claude --resume ${parent} --fork-session --session-id ${child}`)).toBe(child);
-    // A plain resume still names the resumed session.
-    expect(argvSessionId(`grok --resume ${parent} --permission-mode bypassPermissions`)).toBe(parent);
-  });
   test("reads codex resume <id> only right after the codex binary", () => {
     expect(argvSessionId("node /opt/homebrew/bin/codex resume 019fb73a-a740-7000-8000-000000000000")).toBe("019fb73a-a740-7000-8000-000000000000");
     // "resume" inside a prompt argument is just a word.
@@ -588,33 +579,5 @@ describe("registrySupersedesCachedPid", () => {
     expect(registrySupersedesCachedPid(undefined, 16959, fillMs)).toBe(false);
     expect(registrySupersedesCachedPid({ pid: "96988", ts: later, term: "tmux" }, 16959, fillMs)).toBe(false);
     expect(registrySupersedesCachedPid({ pid: 96988, ts: "later", term: "tmux" }, 16959, fillMs)).toBe(false);
-  });
-});
-
-describe("registrationPredatesProcess", () => {
-  // Fixture from 2026-09-07: the daemon registered session 469fd3c9 to pid 44685
-  // at 01:58:32Z; that agent died and a leaked `bun fakeHelper.ts` took the pid
-  // at 02:03:34Z. The fixture declared no session, so judgeProcessIdentity could
-  // only say "unknown" and the registry lookup handed the fixture to delivery
-  // for fourteen hours.
-  const registeredAt = 1788746312; // 01:58:32Z
-  const fixtureStart = 1788746614; // 02:03:34Z
-
-  test("a process that started after the registration is a reused pid", () => {
-    expect(registrationPredatesProcess(registeredAt, fixtureStart)).toBe(true);
-  });
-
-  test("a process that started before the registration is the one registered", () => {
-    expect(registrationPredatesProcess(registeredAt, registeredAt - 120)).toBe(false);
-  });
-
-  test("clock rounding between the write and ps is not a reuse", () => {
-    expect(registrationPredatesProcess(registeredAt, registeredAt + 3)).toBe(false);
-  });
-
-  test("an unknown start time or a stampless binding proves nothing", () => {
-    expect(registrationPredatesProcess(registeredAt, null)).toBe(false);
-    expect(registrationPredatesProcess(undefined, fixtureStart)).toBe(false);
-    expect(registrationPredatesProcess("1788746312", fixtureStart)).toBe(false);
   });
 });

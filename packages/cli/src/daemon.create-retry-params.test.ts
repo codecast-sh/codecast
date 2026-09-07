@@ -79,14 +79,13 @@ describe("createConversation retry preserves subagent params", () => {
 
     const queued: Array<{ type: string; params: Record<string, unknown> }> = [];
     const retryQueue = {
-      getPendingOperations: () => [],
       add: (type: string, params: Record<string, unknown>) => {
         queued.push({ type, params });
         return "op-id";
       },
     } as unknown as RetryQueue;
 
-    await expect(processSessionFile(
+    await processSessionFile(
       filePath,
       agentSessionId,
       projDir,
@@ -98,7 +97,7 @@ describe("createConversation retry preserves subagent params", () => {
       {},
       {},
       () => {},
-    )).rejects.toThrow("retains unread data");
+    );
 
     // The direct attempt carried the detected parent + subagent stamp…
     expect(directCalls.length).toBe(1);

@@ -35,7 +35,6 @@ import { spawnSync } from "../proc.js";
 import { browserHome } from "./profile.js";
 import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
 import { readState } from "./instance.js";
-import { agentTabStampSource } from "./observe.js";
 import { ownerKey } from "./owner.js";
 
 /** Pinned: agent-browser is pre-1.0, so an unpinned upgrade can move the CLI
@@ -227,28 +226,6 @@ export function engineStateDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(os.homedir(), ".agent-browser");
 }
 
-/**
- * The page init script the engine runs before any script of every document
- * it drives: the agent-tab stamp (observe.ts agentTabStampSource), which is
- * how a codecast page knows not to hand an agent's tab to the desktop app.
- * The built-in driver and the extension stamp their tabs themselves; engine
- * sessions have no CDP session of cast's own, so the engine carries it.
- *
- * Written once under the engine home and rewritten only when the source
- * changes, so the path on the command line is identical on every call
- * (runEngine's flags must never vary between commands).
- */
-export function agentTabInitScript(home = engineHome()): string {
-  const file = path.join(home, "agent-tab.js");
-  const source = agentTabStampSource();
-  try {
-    if (fs.readFileSync(file, "utf-8") === source) return file;
-  } catch {}
-  fs.mkdirSync(home, { recursive: true });
-  fs.writeFileSync(file, source);
-  return file;
-}
-
 /** The debugging port of the managed browser, or null when none is recorded. */
 export function managedPort(): number | null {
   const state = readState();
@@ -283,7 +260,7 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
   }
 
   const session = opts.session ?? engineSession();
-  const full = [...args, "--pin-tab", "--init-script", agentTabInitScript()];
+  const full = [...args, "--pin-tab"];
 
   // The engine raises Chrome as a side effect of ordinary commands; if it
   // takes the front during this call, hand focus back (focusGuard.ts).

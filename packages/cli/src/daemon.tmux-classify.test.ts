@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, isResumeCwdPicker, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planResumeCwdPickerKeys, planTrustPromptStep } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planTrustPromptStep } from "./daemon.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -614,41 +614,5 @@ describe("planTrustPromptStep", () => {
   test("walks upward when the affirmative option is above the highlight", () => {
     expect(planTrustPromptStep(["   Yes, I trust this folder", " \u276f No, exit"]))
       .toEqual({ action: "move", key: "Up", times: 1 });
-  });
-});
-
-// Verbatim from a cx-resume-* pane on 2026-09-05: the daemon had launched
-// `codex resume` with cwd `/` (a rollout regenerated under launchd's cwd), so
-// Codex 0.153 asked which directory to open. Escape here quits the resume
-// into a bare shell; a scraped card asks the user to clear it on every resume.
-const CODEX_CWD_PICKER_PANE = `/:cast _disclaimed -- env -u CLAUDECODE codex resume 01a0732d-8365-7e31-898d-e598496afc73 --dangerously-bypass-approvals-and-sandbox
-Choose working directory to resume this session
-  Session = latest cwd recorded in the resumed session
-  Current = your current working directory
-› 1. Use session directory (/Users/ashot/src/codecast)
-  2. Use current directory (/)
-  3. Always use session directory
-  4. Always use current directory
-  Press enter to continue`;
-
-describe("codex resume working-directory picker", () => {
-  test("classifies as cwd_picker, not update_menu (Escape) and not idle (paste)", () => {
-    const region = extractTmuxLiveRegion(CODEX_CWD_PICKER_PANE);
-    expect(classifyTmuxLiveState(region)).toBe("cwd_picker");
-  });
-
-  test("the scraped prompt's question is recognised so it is never minted as a card", () => {
-    const prompt = parseInteractivePrompt(CODEX_CWD_PICKER_PANE);
-    expect(prompt).not.toBeNull();
-    expect(isResumeCwdPicker(prompt!.question)).toBe(true);
-    expect(isResumeCwdPicker("Which approach should I take?")).toBe(false);
-  });
-
-  test("takes the recorded session directory (preselected) when it exists here", () => {
-    expect(planResumeCwdPickerKeys(CODEX_CWD_PICKER_PANE, (p) => p === "/Users/ashot/src/codecast")).toEqual(["Enter"]);
-  });
-
-  test("falls to the current directory when the recorded one is not on this machine", () => {
-    expect(planResumeCwdPickerKeys(CODEX_CWD_PICKER_PANE, () => false)).toEqual(["Down", "Enter"]);
   });
 });

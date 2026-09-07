@@ -157,17 +157,3 @@ describe("classifyPiTranscriptTail", () => {
     expect(typeof classifyTranscriptTailFor("pi")).toBe("function");
   });
 });
-
-// The trim notice a rebuilt pi transcript carries is context for the model only;
-// the parser drops it so it never syncs as a user turn (restart-safe).
-describe("pi codecast import notice", () => {
-  test("is dropped by the pi parser", () => {
-    const lines = [
-      { type: "session", version: 3, id: "s1", timestamp: "2026-09-06T00:00:00.000Z", cwd: "/tmp/p" },
-      { type: "message", id: "n1", parentId: null, timestamp: "2026-09-06T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "[Codecast import] This session was trimmed…" }], timestamp: 1 } },
-      { type: "message", id: "u1", parentId: "n1", timestamp: "2026-09-06T00:00:02.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 2 } },
-    ];
-    const msgs = parsePiSessionFile(lines.map((l) => JSON.stringify(l)).join("\n"));
-    expect(msgs.map((m) => m.uuid)).toEqual(["u1"]);
-  });
-});

@@ -52,25 +52,3 @@ describe("collectPastedInjectedIds", () => {
     expect(collectPastedInjectedIds("conv_scope_d")).toEqual(["m_scope_4"]);
   });
 });
-
-// A resume/switch/fork handler clears a conversation's delivery state after the
-// new pane is up. That clear must never drop a delivery that is still running:
-// the delivery joined the same in-flight resume, will paste into the new pane,
-// and removes its own in-flight entry in `finally`. Dropping it let the poller
-// start a second delivery of the same row mid-paste (a fork's seed landed twice,
-// 2026-09-05). Source-level guard: the clear reads messagesInFlight but never
-// deletes from it, and never releases the per-conversation delivery lock.
-describe("clearMessageDeliveryStateForConversation leaves running deliveries alone", () => {
-  test("never deletes in-flight entries or the conversation delivery lock", async () => {
-    const fs = await import("fs");
-    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
-    const start = source.indexOf("export function clearMessageDeliveryStateForConversation(");
-    const end = source.indexOf("\n}\n", start);
-    const body = source.slice(start, end);
-    expect(start).toBeGreaterThan(0);
-    expect(body).toContain("messagesInFlight");
-    expect(body).not.toContain("messagesInFlight.delete");
-    expect(body).not.toContain("conversationDeliveryActive.delete");
-    expect(body).toContain("injectedMessageTs.delete");
-  });
-});

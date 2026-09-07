@@ -113,23 +113,3 @@ describe("parseOpencodeSessionFile", () => {
     expect(parseOpencodeSessionFile(JSON.stringify({}))).toEqual([]);
   });
 });
-
-// A rebuilt OpenCode session holds the conversation's history as ONE user
-// message starting with the codecast import prefix (context for the model).
-// The parser must drop it — on every pass, including a restart's full re-parse —
-// or the history syncs back into the conversation as a new user turn.
-describe("codecast import message", () => {
-  it("is dropped by the opencode parser", () => {
-    const exported = JSON.stringify({
-      info: { id: "ses_x", directory: "/tmp/p", title: "t", version: "1", time: { created: 1, updated: 2 } },
-      messages: [
-        { info: { id: "msg_import", role: "user", sessionID: "ses_x", time: { created: 1 } },
-          parts: [{ id: "prt_1", type: "text", text: "[Codecast import] This session continues a codecast conversation…\n\n### user\nhello" }] },
-        { info: { id: "msg_real", role: "user", sessionID: "ses_x", time: { created: 2 } },
-          parts: [{ id: "prt_2", type: "text", text: "What word did I say?" }] },
-      ],
-    });
-    const msgs = parseOpencodeSessionFile(exported);
-    expect(msgs.map((m) => m.uuid)).toEqual(["msg_real"]);
-  });
-});

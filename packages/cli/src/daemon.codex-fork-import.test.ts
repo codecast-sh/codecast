@@ -10,7 +10,7 @@ describe("Codex fork import identity", () => {
   test("uses a native UUID for temporary metadata, not the virtual conversation session id", () => {
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
-    expect(importer).toContain("generateCodexJsonl(exportData, { sessionId: randomUUID(), cwd })");
+    expect(importer).toContain("generateCodexJsonl(exportData, { sessionId: randomUUID() })");
     expect(importer).toContain('writeCodexSession(jsonl, importSessionId, "codecast-fork")');
     expect(importer).not.toContain("generateCodexJsonl(exportData, { sessionId })");
   });

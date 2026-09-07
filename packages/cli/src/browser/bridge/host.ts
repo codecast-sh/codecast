@@ -75,18 +75,12 @@ export interface BridgeState {
   hostPid?: number;
   startedAt?: number;
   /** Is the extension on the socket right now? Written by the host process,
-   *  true only while it holds a proven extension connection. */
+   *  true only while it holds a proven extension connection. With a live
+   *  hostPid this is what makes the real Chrome the default (real.ts). */
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;
-  /** Which agent tabs each session may see (host.ts sessionTabs), with the
-   *  URL each was last seen at, so a restarted host restores the partition
-   *  before any engine reconnects and re-pins. */
-  sessionTabs?: SessionTabs;
 }
-
-/** session key → the tabs granted to it, each with its last known URL. */
-export type SessionTabs = Record<string, Array<{ tabId: number; url: string }>>;
 
 export function bridgeStatePath(): string {
   return path.join(browserHome(), "bridge.json");
@@ -142,39 +136,8 @@ export function rotateBridgeToken(): BridgeState {
 export type ProvenBridge = BridgeState & { readonly proven: true };
 
 /** The CDP HTTP face of the bridge, for listTargets/CdpConnection.fromPort. */
-export function bridgeEndpoint(state: ProvenBridge, session?: string | null): CdpEndpoint {
-  return { port: state.port, token: state.token, ...(session ? { session } : {}) };
-}
-
-/**
- * Let a session see (and so drive) one agent tab it did not open: the
- * explicit share. The host refuses a tab that is not an agent's, so the
- * human's tabs stay out of reach whatever id is named. Every command in
- * real mode also re-grants the session's own pinned tab this way, which is
- * how a session finds its tab again after the host was restarted.
- */
-export async function grantTab(
-  state: { port: number; token: string },
-  session: string,
-  targetId: string,
-  opts: { own?: boolean } = {},
-): Promise<void> {
-  const url = new URL(`http://127.0.0.1:${state.port}/grant`);
-  url.searchParams.set("token", state.token);
-  url.searchParams.set("session", session);
-  url.searchParams.set("target", targetId);
-  // `own`: the tab is this session's pinned tab, from the binding file the
-  // engine keeps (pinnedTab.ts). The host takes that as proof the tab is an
-  // agent's even when it has no memory of it — a restarted host, or an
-  // extension that lost its ownership marks — where a share would be refused.
-  if (opts.own) url.searchParams.set("own", "1");
-  const res = await fetch(url, { method: "POST", signal: AbortSignal.timeout(5000) });
-  if (res.ok) return;
-  let detail = "";
-  try {
-    detail = String(((await res.json()) as { error?: string }).error ?? "");
-  } catch {}
-  throw new Error(detail || `bridge host answered ${res.status}`);
+export function bridgeEndpoint(state: ProvenBridge): CdpEndpoint {
+  return { port: state.port, token: state.token };
 }
 
 /** The browser-level CDP socket, for any client that takes a URL (agent-browser's cdp option). */
@@ -292,8 +255,6 @@ export interface BridgeHostStatus {
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionProtocol?: number;
-  /** The host's own protocol; differs from the extension's while a store update is in review. */
-  protocol?: number;
 }
 
 /** Ask a running host whether the extension is connected. */
@@ -303,25 +264,6 @@ export async function bridgeStatus(state: ProvenBridge): Promise<BridgeHostStatu
   });
   if (!res.ok) throw new Error(`bridge host answered ${res.status} — token mismatch? re-run \`cast browser extension setup\``);
   return (await res.json()) as BridgeHostStatus;
-}
-
-/**
- * Ask the extension to reload itself. It answers before it goes; the caller
- * then waits for it to come back (waitForExtension). An extension from before
- * the op exists answers "unknown op", which the host relays as the error.
- */
-export async function reloadExtension(state: ProvenBridge): Promise<void> {
-  const res = await fetch(`http://127.0.0.1:${state.port}/reload?token=${encodeURIComponent(state.token)}`, {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-  });
-  if (res.ok) return;
-  let detail = "";
-  try {
-    detail = String(((await res.json()) as { error?: string }).error ?? "");
-  } catch {}
-  if (res.status === 404) detail = "this bridge host predates the reload route — stop it (cast browser extension revoke rotates the token; or kill the hostPid in bridge.json) and run any verb to start a fresh one";
-  throw new Error(`bridge host answered ${res.status}${detail ? ` — ${detail}` : ""}`);
 }
 
 /**
@@ -358,13 +300,6 @@ interface Client {
   discover: boolean;
   /** The group of the last tab this client created with one or attached to; later creates join it. */
   group: BridgeGroup | null;
-  /** The cast session on this socket (`?session=` on the upgrade). A socket
-   *  with none is a tool of the human's or of cast itself and sees every
-   *  agent tab; a session's socket sees only the tabs granted to it. */
-  session: string | null;
-  /** Tabs this socket has been told about, so a later grant of a tab it
-   *  already knows is not announced twice. */
-  announced: Set<number>;
 }
 
 interface PendingExt {
@@ -399,13 +334,8 @@ export function startBridgeHost(opts: {
   token: string;
   /** The extension came (true) or went (false); the host process records it. */
   onExtension?: (connected: boolean) => void;
-  /** The session → tab partition a previous host left behind; pruned against
-   *  Chrome's live tabs when the extension connects. */
-  sessionTabs?: SessionTabs;
-  /** Called with the partition whenever it changes, for the host process to persist. */
-  onSessionTabs?: (tabs: SessionTabs) => void;
 }): Promise<RunningHost> {
-  const { port, token, onExtension, onSessionTabs } = opts;
+  const { port, token, onExtension } = opts;
 
   let ext: WebSocket | null = null;
   let extMeta: { version?: string; protocol?: number; userAgent?: string } = {};
@@ -454,117 +384,7 @@ export function startBridgeHost(opts: {
     return r;
   };
 
-  // Every tab in the human's Chrome, cast tabs first. `/json/list` serves this
-  // whole list so `cast browser tabs` can name where a session's tabs sit.
-  // Tabs this host created for a client, known the moment tabs.create answers:
-  // the extension stamps ownership a beat after Chrome fires the created event,
-  // so the event alone can arrive looking like the human's.
-  const castTabs = new Set<number>();
-  // Which agent tabs each session may see: the tabs its sockets created or
-  // attached, plus what /grant handed it. Every engine attaches to every tab
-  // it discovers before it does anything (see discoverableTabs), so a session
-  // that could discover another session's tab would put its debugger on it
-  // for every command, and one frozen tab of theirs would stall every command
-  // of its own. Sessions are isolated at the face; sharing is an explicit
-  // grant. Host memory only: a session re-grants its pinned tab on every
-  // command (pinnedTab.ts), so a restarted host learns the partition again
-  // as sessions run.
-  // Persisted through `onSessionTabs`, restored from `opts.sessionTabs`: an
-  // engine daemon outlives the host and reconnects on its own, and one that
-  // discovers no tab of its own pins a fresh one — so the partition must be
-  // back before the first reconnect, not rebuilt as commands arrive. Each
-  // entry keeps the tab's last URL: Chrome reuses tab ids across its own
-  // restarts, so on the extension's next hello a remembered tab is kept only
-  // if it still exists at that URL (or the extension itself still marks it as
-  // an agent's); anything else is dropped rather than risk claiming a tab
-  // the human opened.
-  const sessionTabs = new Map<string, Map<number, string>>();
-  const restored = opts.sessionTabs ?? {};
-  for (const [session, tabs] of Object.entries(restored)) {
-    sessionTabs.set(session, new Map(tabs.map((t) => [t.tabId, t.url])));
-  }
-  let pruned = Object.keys(restored).length === 0;
-  const persist = (): void => {
-    if (!onSessionTabs) return;
-    const out: SessionTabs = {};
-    for (const [session, tabs] of sessionTabs) {
-      if (tabs.size) out[session] = [...tabs].map(([tabId, url]) => ({ tabId, url }));
-    }
-    onSessionTabs(out);
-  };
-  const grantedTo = (session: string): Map<number, string> => {
-    let tabs = sessionTabs.get(session);
-    if (!tabs) sessionTabs.set(session, (tabs = new Map()));
-    return tabs;
-  };
-  const sessionsOf = (tabId: number): string[] => [...sessionTabs].filter(([, tabs]) => tabs.has(tabId)).map(([k]) => k);
-  const isCast = (t: BridgeTab) => castTabs.has(t.tabId) || (t.owned ?? !!t.group) || sessionsOf(t.tabId).length > 0;
-  const canSee = (client: Client, tabId: number): boolean => !client.session || grantedTo(client.session).has(tabId);
-  const remember = (session: string, t: { tabId: number; url: string }): void => {
-    const tabs = grantedTo(session);
-    if (tabs.get(t.tabId) === t.url) return;
-    tabs.set(t.tabId, t.url);
-    castTabs.add(t.tabId);
-    persist();
-  };
-  /** A restored partition against the tabs Chrome actually has: once, on the first tab list. */
-  const pruneRestored = (tabs: BridgeTab[]): void => {
-    if (pruned) return;
-    pruned = true;
-    const byId = new Map(tabs.map((t) => [t.tabId, t]));
-    let changed = false;
-    for (const [, granted] of sessionTabs) {
-      for (const [tabId, url] of granted) {
-        const t = byId.get(tabId);
-        const keep = t && (t.url === url || (t.owned ?? !!t.group));
-        if (keep) castTabs.add(tabId);
-        else {
-          granted.delete(tabId);
-          changed = true;
-        }
-      }
-    }
-    if (changed) persist();
-  };
-  // Target.targetCreated reaches each discovering client that may see the
-  // tab, once: the extension's created event, the createTarget reply and a
-  // later grant all funnel through here.
-  const announce = (t: BridgeTab): void => {
-    for (const c of clients) {
-      if (!c.discover || !canSee(c, t.tabId) || c.announced.has(t.tabId)) continue;
-      c.announced.add(t.tabId);
-      sendJson(c.ws, { method: "Target.targetCreated", params: { targetInfo: targetInfo(t) } });
-    }
-  };
-  const grant = async (session: string, tabId: number): Promise<void> => {
-    if (grantedTo(session).has(tabId)) return;
-    const t = (await listTabs()).find((x) => x.tabId === tabId);
-    remember(session, { tabId, url: t?.url ?? "" });
-    if (t) announce(t);
-  };
-  const forget = (tabId: number): void => {
-    castTabs.delete(tabId);
-    let changed = false;
-    for (const tabs of sessionTabs.values()) if (tabs.delete(tabId)) changed = true;
-    for (const c of clients) c.announced.delete(tabId);
-    if (changed) persist();
-  };
-  const listTabs = async (): Promise<BridgeTab[]> => {
-    const tabs = (await extCall("tabs.list", {}, 10_000)).tabs as BridgeTab[];
-    pruneRestored(tabs);
-    return [...tabs.filter(isCast), ...tabs.filter((t) => !isCast(t))];
-  };
-  // What the CDP face discovers: cast tabs only. An engine that connects over
-  // CDP attaches to every page it is told about before it does anything else
-  // (measured: agent-browser attached to 11 of 53 tabs in list order and died
-  // on the twelfth), so telling it about the human's tabs put a debugger on
-  // each of them for the length of every command, and one frozen or discarded
-  // tab of the human's stalled every client for the whole attach budget. A
-  // session acts only on tabs it opened; hiding the rest is that rule enforced
-  // at the face where it was being broken. An extension older than the
-  // `owned` flag reports a group only for groups it created, the same tabs.
-  const discoverableTabs = async (client: Client): Promise<BridgeTab[]> =>
-    (await listTabs()).filter((t) => isCast(t) && canSee(client, t.tabId));
+  const listTabs = async (): Promise<BridgeTab[]> => (await extCall("tabs.list", {}, 10_000)).tabs as BridgeTab[];
 
   // Ids by which a tab is known to CDP clients. Sessions attach by tabId; a
   // tab is released to the human (debugger detached, banner gone) only when
@@ -635,18 +455,12 @@ export function startBridgeHost(opts: {
       }
       case "tab": {
         const t = msg.tab as BridgeTab;
-        if (msg.kind === "removed") {
-          dropTab(t.tabId, "target closed");
-          forget(t.tabId);
-          // Destroyed goes out unconditionally: a target a client never heard of is ignored.
-          for (const c of clients) if (c.discover) sendJson(c.ws, { method: "Target.targetDestroyed", params: { targetId: targetIdOfTab(t.tabId) } });
-          return;
-        }
-        if (!isCast(t)) return; // the human's tabs are not on the CDP face
-        if (msg.kind === "created") announce(t);
-        else {
-          for (const session of sessionsOf(t.tabId)) remember(session, t);
-          for (const c of clients) if (c.discover && canSee(c, t.tabId)) sendJson(c.ws, { method: "Target.targetInfoChanged", params: { targetInfo: targetInfo(t) } });
+        if (msg.kind === "removed") dropTab(t.tabId, "target closed");
+        for (const c of clients) {
+          if (!c.discover) continue;
+          if (msg.kind === "created") sendJson(c.ws, { method: "Target.targetCreated", params: { targetInfo: targetInfo(t) } });
+          else if (msg.kind === "removed") sendJson(c.ws, { method: "Target.targetDestroyed", params: { targetId: targetIdOfTab(t.tabId) } });
+          else sendJson(c.ws, { method: "Target.targetInfoChanged", params: { targetInfo: targetInfo(t) } });
         }
         return;
       }
@@ -670,13 +484,12 @@ export function startBridgeHost(opts: {
           jsVersion: "",
         };
       case "Target.getTargets":
-        return { targetInfos: (await discoverableTabs(client)).map(targetInfo) };
+        return { targetInfos: (await listTabs()).map(targetInfo) };
       case "Target.setDiscoverTargets": {
         const on = !!params?.discover;
         if (on && !client.discover) {
           // Chrome replays the existing targets on enable; clients rely on it.
-          for (const t of await discoverableTabs(client)) {
-            client.announced.add(t.tabId);
+          for (const t of await listTabs()) {
             sendJson(client.ws, { method: "Target.targetCreated", params: { targetInfo: targetInfo(t) } });
           }
         }
@@ -695,10 +508,7 @@ export function startBridgeHost(opts: {
         await extCall("attach", { tabId }, 20_000);
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
-        // Attaching by id is deliberate (a pinned tab restored from its
-        // binding file, or an explicit --tab), so the session may see it.
         const t = (await listTabs()).find((x) => x.tabId === tabId);
-        if (client.session) remember(client.session, { tabId, url: t?.url ?? "" });
         // Attaching to a grouped tab adopts its group. The extension reports
         // a group only for groups it created itself (background.js
         // ownedGroups), so a human's tab, grouped by the human or not, never
@@ -725,21 +535,13 @@ export function startBridgeHost(opts: {
       }
       case "Target.createTarget": {
         const group = parseGroup(params?.castGroup) ?? client.group;
-        // A tab is created in the background unless the client says
-        // otherwise: an engine that omits the flag (stock agent-browser does)
-        // would otherwise raise the human's Chrome on every fresh session.
         const r = await extCall(
           "tabs.create",
-          { url: params?.url || "about:blank", background: params?.background !== false, ...(group ? { group } : {}) },
+          { url: params?.url || "about:blank", background: !!params?.background, ...(group ? { group } : {}) },
           15_000,
         );
         if (group) client.group = group;
-        const tabId = r.tabId as number;
-        castTabs.add(tabId);
-        const created = (await listTabs()).find((t) => t.tabId === tabId);
-        if (client.session) remember(client.session, { tabId, url: created?.url ?? "" });
-        if (created) announce(created);
-        return { targetId: targetIdOfTab(tabId) };
+        return { targetId: targetIdOfTab(r.tabId as number) };
       }
       case "Target.closeTarget": {
         const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
@@ -862,10 +664,6 @@ export function startBridgeHost(opts: {
               type: "page",
               title: t.title,
               url: t.url,
-              // cast's own fields: an agent's tab, and the sessions it is
-              // granted to. `cast browser tabs --all` reads them.
-              cast: isCast(t),
-              sessions: sessionsOf(t.tabId),
               description: "",
               attached: t.attached,
             })),
@@ -878,40 +676,6 @@ export function startBridgeHost(opts: {
             extensionProtocol: extMeta.protocol,
             protocol: BRIDGE_PROTOCOL,
           });
-          return;
-        case "/grant": {
-          if (req.method !== "POST") {
-            res.writeHead(405, { "content-type": "text/plain" });
-            res.end("POST\n");
-            return;
-          }
-          const session = url.searchParams.get("session") ?? "";
-          const tabId = tabIdOfTarget(url.searchParams.get("target") ?? "");
-          if (!session || tabId === null) {
-            json(400, { error: "grant needs session and target" });
-            return;
-          }
-          const t = (await listTabs()).find((x) => x.tabId === tabId);
-          if (!t) {
-            json(404, { error: `no tab ${targetIdOfTab(tabId)} in the real Chrome` });
-            return;
-          }
-          if (!isCast(t) && url.searchParams.get("own") !== "1") {
-            json(403, { error: `tab ${targetIdOfTab(tabId)} is the human's, not an agent's — only agent tabs can be shared` });
-            return;
-          }
-          await grant(session, tabId);
-          json(200, { ok: true, sessions: sessionsOf(tabId) });
-          return;
-        }
-        case "/reload":
-          if (req.method !== "POST") {
-            res.writeHead(405, { "content-type": "text/plain" });
-            res.end("POST\n");
-            return;
-          }
-          await extCall("reload", {}, 5_000);
-          json(200, { ok: true });
           return;
         default:
           res.writeHead(404, { "content-type": "text/plain" });
@@ -962,12 +726,6 @@ export function startBridgeHost(opts: {
         failAllClients("the extension disconnected");
       });
       sendJson(ws, { op: "welcome", proof: bridgeProof(token, "host", msg.nonce), protocol: BRIDGE_PROTOCOL });
-      // Check a restored partition against the real tab list now, before any
-      // engine's first Target.getTargets; a list that fails is retried by the
-      // next call that needs one. After the welcome: the extension reads the
-      // first message as the handshake's answer.
-      pruned = false;
-      listTabs().catch(() => {});
     });
   };
 
@@ -997,10 +755,7 @@ export function startBridgeHost(opts: {
         return;
       }
 
-      const client: Client = {
-        ws, sessions: new Map(), discover: false, group: null,
-        session: url.searchParams.get("session") || null, announced: new Set(),
-      };
+      const client: Client = { ws, sessions: new Map(), discover: false, group: null };
       clients.add(client);
       ws.on("message", (raw) => {
         void onClientMessage(client, String(raw));
@@ -1062,13 +817,7 @@ export async function runBridgeHost(): Promise<void> {
     if (!!cur.extensionConnected !== connected) log(connected ? "extension connected" : "extension disconnected");
     writeBridgeState({ ...cur, extensionConnected: connected, ...(connected ? { extensionSeenAt: Date.now() } : {}) });
   };
-  const host = await startBridgeHost({
-    port: state.port,
-    token: state.token,
-    onExtension: record,
-    sessionTabs: state.sessionTabs,
-    onSessionTabs: (sessionTabs) => writeBridgeState({ ...(readBridgeState() ?? state), sessionTabs }),
-  });
+  const host = await startBridgeHost({ port: state.port, token: state.token, onExtension: record });
   writeBridgeState({ ...state, hostPid: process.pid, startedAt: Date.now(), extensionConnected: false });
   log(`bridge host pid ${process.pid} listening on 127.0.0.1:${state.port}`);
   const shutdown = async (why: string, code = 0) => {

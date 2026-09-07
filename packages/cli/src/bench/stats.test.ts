@@ -46,7 +46,3 @@ describe("histogram", () => {
     expect(h[3].maxMs).toBeNull();
   });
 });
-
-for (const value of [NaN, Infinity, -1]) test(`rejects invalid latency ${value}`, () => {
-  expect(() => summarizeLatency([1, value])).toThrow("invalid latency sample");
-});

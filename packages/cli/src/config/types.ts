@@ -30,7 +30,6 @@ export type AgentPermissionModes = Partial<Record<AgentClientId, AgentPermission
 export type AgentDefaultParams = Partial<Record<AgentClientId, Record<string, string>>>;
 
 export interface Config {
-  daemon_workers?: boolean;
   // --- Identity / auth (all three writers) ---
   auth_token?: string;
   user_id?: string;
@@ -198,29 +197,9 @@ export interface Config {
    *  something for a vault nobody added by hand. */
   vaults_hidden?: string[];
 
-  // --- Cloud home mirror (cloud/mirror) ---
-  // Ship this laptop's instruction files and agent config (~/.claude, ~/.codex,
-  // ~/.grok, ~/.gemini, ~/.agents, ~/.config/opencode, an allowlisted
-  // ~/.gitconfig) to every reachable cloud host. Default ON; `cast config
-  // cloud_mirror_enabled false` stops the daemon ticks and the spawn-time push.
-  // `cast config` stores strings, so readers tolerate "false" as well.
-  cloud_mirror_enabled?: boolean;
-  // Comma-separated $HOME-relative globs to leave out (same convention as
-  // excluded_paths): `.claude/skills/private-*,.codex/prompts/**`.
-  cloud_mirror_exclude?: string;
-  // Comma-separated extra $HOME-relative files/dirs to ship verbatim. The
-  // denylist (credentials, sessions, caches, ~/.ssh, …) still wins.
-  cloud_mirror_include?: string;
-
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
   updated_at?: string;
-}
-
-/** The mirror is on unless the config says otherwise (the setter stores strings). */
-export function isCloudMirrorEnabled(config: Config | null | undefined): boolean {
-  const v = config?.cloud_mirror_enabled as boolean | string | undefined;
-  return v !== false && v !== "false" && v !== "0";
 }
 
 /**

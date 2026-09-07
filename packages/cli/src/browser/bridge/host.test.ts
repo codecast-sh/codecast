@@ -11,7 +11,7 @@ import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
 import { probeHost, startBridgeHost, type RunningHost } from "./host.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
-import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
+import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, targetIdOfTab } from "./protocol.js";
 
 let host: RunningHost | null = null;
 
@@ -127,89 +127,19 @@ describe("bridge host auth", () => {
 });
 
 describe("bridge host as a CDP endpoint", () => {
-  test("/json/list names every tab with minted ids; the CDP face discovers only agent tabs", async () => {
+  test("/json/list and Target.getTargets expose tabs as page targets with minted ids", async () => {
     const h = await freshHost();
     await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(h.port);
-    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
-    const { targetId: mine } = await conn.send("Target.createTarget", { url: "https://agent.example/" });
-
-    // The HTTP face is the whole browser (cast browser tabs --all reads it), flagged.
-    const raw = await (await fetch(`http://127.0.0.1:${h.port}/json/list?token=${TOKEN}`)).json();
-    expect(raw.map((t: any) => [t.id, t.cast])).toEqual([[mine, true], [targetIdOfTab(7), false], [targetIdOfTab(8), false]]);
-    expect(raw[1].url).toBe("https://example.com/7");
     const listed = await listTargets(cdpEndpoint(h.port));
-    expect(listed.map((t) => t.targetId)).toEqual([mine, targetIdOfTab(7), targetIdOfTab(8)]);
+    expect(listed.map((t) => t.targetId)).toEqual([targetIdOfTab(7), targetIdOfTab(8)]);
+    expect(listed[0].url).toBe("https://example.com/7");
 
-    // An engine attaches to everything it discovers, so the human's tabs are
-    // never on the CDP face: a frozen tab of theirs must not stall an agent.
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
     const { targetInfos } = await conn.send("Target.getTargets");
-    expect(targetInfos.map((t: any) => t.targetId)).toEqual([mine]);
+    expect(targetInfos.map((t: any) => t.targetId)).toEqual([targetIdOfTab(7), targetIdOfTab(8)]);
     const ver = await conn.send("Browser.getVersion");
     expect(ver.userAgent).toBe("FakeChrome/1");
     conn.close();
-  });
-
-  test("a socket that names a session discovers only that session's tabs; sharing is an explicit grant", async () => {
-    const h = await freshHost();
-    await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
-    const a = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "env-a" });
-    const b = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "env-b" });
-    const { targetId: ta } = await a.send("Target.createTarget", { url: "https://a.example/" });
-    const { targetId: tb } = await b.send("Target.createTarget", { url: "https://b.example/" });
-
-    // Each session sees its own tab and nothing else; a tool socket with no
-    // session (cast's own listings, the web's focus route) sees every agent tab.
-    expect((await a.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([ta]);
-    expect((await b.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([tb]);
-    const tool = await CdpConnection.fromPort(cdpEndpoint(h.port));
-    expect((await tool.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([ta, tb]);
-
-    // Discovery streams follow the same partition.
-    const seenByB: string[] = [];
-    b.on((ev) => {
-      if (ev.method === "Target.targetCreated") seenByB.push((ev.params as any).targetInfo.targetId);
-    });
-    await b.send("Target.setDiscoverTargets", { discover: true });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(seenByB).toEqual([tb]);
-
-    // The share: session b is granted a's tab, hears about it once, and the
-    // listing shows both holders.
-    const grantUrl = (session: string, target: string) =>
-      `http://127.0.0.1:${h.port}/grant?token=${TOKEN}&session=${session}&target=${target}`;
-    const granted = await fetch(grantUrl("env-b", ta), { method: "POST" });
-    expect(granted.status).toBe(200);
-    expect((await granted.json()).sessions.sort()).toEqual(["env-a", "env-b"]);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(seenByB).toEqual([tb, ta]);
-    expect((await b.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId).sort()).toEqual([ta, tb].sort());
-    await fetch(grantUrl("env-b", ta), { method: "POST" });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(seenByB).toEqual([tb, ta]);
-    const raw = await (await fetch(`http://127.0.0.1:${h.port}/json/list?token=${TOKEN}`)).json();
-    expect(raw.find((t: any) => t.id === ta).sessions.sort()).toEqual(["env-a", "env-b"]);
-
-    // The human's tabs cannot be shared, and a tab that does not exist is named as such.
-    expect((await fetch(grantUrl("env-b", targetIdOfTab(7)), { method: "POST" })).status).toBe(403);
-    // A session vouching for its own pinned tab (`own`, from the engine's
-    // binding file) is taken at its word even when the host has no memory of
-    // the tab — the case after a host restart. From then on it is an agent tab.
-    expect((await fetch(grantUrl("env-d", targetIdOfTab(7)) + "&own=1", { method: "POST" })).status).toBe(200);
-    const d = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "env-d" });
-    expect((await d.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([targetIdOfTab(7)]);
-    expect((await fetch(grantUrl("env-b", targetIdOfTab(7)), { method: "POST" })).status).toBe(200);
-    d.close();
-    expect((await fetch(grantUrl("env-b", targetIdOfTab(4242)), { method: "POST" })).status).toBe(404);
-    expect((await fetch(grantUrl("", ta), { method: "POST" })).status).toBe(400);
-    expect((await fetch(grantUrl("env-b", ta))).status).toBe(405);
-
-    // Attaching by id is deliberate (a pinned tab restored from its binding
-    // file): the session sees the tab from then on.
-    const c = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "env-c" });
-    expect((await c.send("Target.getTargets")).targetInfos).toEqual([]);
-    await c.send("Target.attachToTarget", { targetId: tb, flatten: true });
-    expect((await c.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([tb]);
-    for (const x of [a, b, c, tool]) x.close();
   });
 
   test("attach → session-scoped commands reach chrome.debugger for that tab; replies route back", async () => {
@@ -282,46 +212,6 @@ describe("bridge host as a CDP endpoint", () => {
     expect(ext.attached.has(7)).toBe(false);
   });
 
-  test("the session partition survives a host restart: restored, checked against Chrome's tabs, kept current", async () => {
-    // A previous host remembered three grants for env-a. Chrome now has tab 7
-    // where it was, tab 8 somewhere else (Chrome reuses ids across its own
-    // restarts, so a moved tab may be the human's), and no tab 9 at all.
-    const persisted: any[] = [];
-    host = await startBridgeHost({
-      port: await freePort(),
-      token: TOKEN,
-      sessionTabs: {
-        "env-a": [
-          { tabId: 7, url: "https://example.com/7" },
-          { tabId: 8, url: "https://was.example/8" },
-          { tabId: 9, url: "https://example.com/9" },
-        ],
-      },
-      onSessionTabs: (t) => persisted.push(t),
-    });
-    const ext = await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(host.port);
-    await ext.waitFor("tabs.list");
-    const a = await CdpConnection.fromPort({ ...cdpEndpoint(host.port), session: "env-a" });
-    expect((await a.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([targetIdOfTab(7)]);
-    expect(persisted.at(-1)).toEqual({ "env-a": [{ tabId: 7, url: "https://example.com/7" }] });
-
-    // The partition follows the session: a create joins it, a navigation
-    // updates the URL it is remembered at, a close drops it.
-    const { targetId } = await a.send("Target.createTarget", { url: "https://new.example/" });
-    const created = tabIdOfTarget(targetId)!;
-    expect(persisted.at(-1)["env-a"]).toEqual([
-      { tabId: 7, url: "https://example.com/7" },
-      { tabId: created, url: "https://new.example/" },
-    ]);
-    ext.tabEvent("updated", { ...FakeExtension.tab(created, "https://new.example/page2") });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(persisted.at(-1)["env-a"][1]).toEqual({ tabId: created, url: "https://new.example/page2" });
-    ext.tabEvent("removed", FakeExtension.tab(7));
-    await new Promise((r) => setTimeout(r, 30));
-    expect(persisted.at(-1)).toEqual({ "env-a": [{ tabId: created, url: "https://new.example/page2" }] });
-    a.close();
-  });
-
   test("createTarget / closeTarget go through the extension and mint/retire ids", async () => {
     const h = await freshHost();
     const ext = await new FakeExtension([]).connect(h.port);
@@ -353,20 +243,15 @@ describe("bridge host as a CDP endpoint", () => {
     const listed = await listTargets(cdpEndpoint(h.port));
     expect("group" in (listed[0] as any)).toBe(false);
 
-    // A plain create stays in the background (the human is working in this
-    // Chrome; an engine that omits the flag must not raise it) and is
-    // ungrouped from the extension's point of view of a new socket. Only an
-    // explicit `background: false` activates the tab.
+    // A plain create is foreground, ungrouped from the extension's point of view of a new socket.
     const other = await CdpConnection.fromPort(cdpEndpoint(h.port));
     await other.send("Target.createTarget", { url: "https://b.example/" });
     const plain = ext.seen.filter((m) => m.op === "tabs.create")[1];
-    expect(plain.background).toBe(true);
+    expect(plain.background).toBe(false);
     expect("group" in plain).toBe(false);
-    await other.send("Target.createTarget", { url: "https://b2.example/", background: false });
-    expect(ext.seen.filter((m) => m.op === "tabs.create")[2].background).toBe(false);
     // A malformed castGroup is ignored rather than forwarded.
     await other.send("Target.createTarget", { url: "https://c.example/", castGroup: { title: "", color: "red" } });
-    expect("group" in ext.seen.filter((m) => m.op === "tabs.create")[3]).toBe(false);
+    expect("group" in ext.seen.filter((m) => m.op === "tabs.create")[2]).toBe(false);
     conn.close();
     other.close();
   });
@@ -413,11 +298,9 @@ describe("bridge host as a CDP endpoint", () => {
     b.close();
   });
 
-  test("setDiscoverTargets replays existing agent tabs and streams tab changes; the human's tabs never appear", async () => {
+  test("setDiscoverTargets replays existing targets and streams tab changes", async () => {
     const h = await freshHost();
     const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
-    const maker = await CdpConnection.fromPort(cdpEndpoint(h.port));
-    const { targetId: agentTab } = await maker.send("Target.createTarget", { url: "https://agent.example/" });
     const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
     const created: string[] = [];
     conn.on((ev) => {
@@ -425,19 +308,14 @@ describe("bridge host as a CDP endpoint", () => {
     });
     await conn.send("Target.setDiscoverTargets", { discover: true });
     await new Promise((r) => setTimeout(r, 50));
-    expect(created).toEqual([agentTab]);
+    expect(created).toEqual([targetIdOfTab(7)]);
 
-    // A tab the human opens is not announced; one the extension marks as its
-    // own (a group it created) is. Removal of anything is announced — a client
-    // that never heard of the target ignores it.
-    ext.tabEvent("created", FakeExtension.tab(9));
-    ext.tabEvent("created", { ...FakeExtension.tab(10), owned: true });
     const destroyed = conn.waitFor((ev) => ev.method === "Target.targetDestroyed", 2000);
+    ext.tabEvent("created", FakeExtension.tab(9));
     ext.tabEvent("removed", FakeExtension.tab(9));
     expect(((await destroyed).params as any).targetId).toBe(targetIdOfTab(9));
-    expect(created).toEqual([agentTab, targetIdOfTab(10)]);
+    expect(created).toEqual([targetIdOfTab(7), targetIdOfTab(9)]);
     conn.close();
-    maker.close();
   });
 
   test("the extension vanishing fails in-flight calls and detaches every session", async () => {

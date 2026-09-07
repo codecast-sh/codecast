@@ -237,24 +237,10 @@ export function buildNonClaudeResumeCommand(
     grokPermFlags?: string | null;
     model?: string;
     effort?: string;
-    /** Launch the client's NATIVE fork of this parent instead of a plain resume:
-     *  the registry `forkCmd` copies the parent's session state under
-     *  `sessionId`. Only clients declaring `forkCmd` can take it. */
-    forkFromSessionId?: string;
-    /** grok: a file holding the stable-context feed, appended to the system
-     *  prompt through `--rules "$(cat <file>)"` (see grokStableRulesFragment). */
-    stableRulesFile?: string;
   } = {},
 ): string | null {
   if (agentType === "claude") return null;
-  const client = AGENT_CLIENTS[agentType];
-  let base: string;
-  if (opts.forkFromSessionId) {
-    if (!client.forkCmd) throw new Error(`${agentType} has no native fork command`);
-    base = client.forkCmd(opts.forkFromSessionId, sessionId);
-  } else {
-    base = client.resumeCmd(sessionId);
-  }
+  const base = AGENT_CLIENTS[agentType].resumeCmd(sessionId);
   const modelFlags: string[] = [];
   appendModelEffortFlags(modelFlags, {
     agentType,
@@ -267,26 +253,8 @@ export function buildNonClaudeResumeCommand(
     return `${base}${extra ? " " + extra : ""}${modelFlags.length ? " " + modelFlags.join(" ") : ""}`;
   };
   if (agentType === "codex") return withFlags(opts.codexArgs, opts.codexPermFlags);
-  if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags) + grokStableRulesFragment(opts.stableRulesFile);
+  if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags);
   return withFlags();
-}
-
-// A path the shell fragment below can carry unquoted: daemon-generated, under
-// ~/.codecast, no whitespace or shell metacharacters.
-const STABLE_RULES_PATH_RE = /^[A-Za-z0-9_./-]+$/;
-
-/**
- * grok's launch-time context channel. Its hooks cannot inject context (SessionStart
- * stdout is ignored), but `--rules <TEXT>` appends to the system prompt — the same
- * slot codex fills through `developerInstructions`. The feed can run to many KB,
- * so the command line carries a `$(cat <file>)` substitution the pane's shell
- * expands, never the text itself (the daemon's argv allowlist would reject it,
- * and a multi-KB typed argument is fragile). Empty when no feed applies.
- */
-export function grokStableRulesFragment(file: string | undefined): string {
-  if (!file) return "";
-  if (!STABLE_RULES_PATH_RE.test(file)) throw new Error(`stable rules path is not shell-safe: ${file}`);
-  return ` --rules "$(cat ${file})"`;
 }
 
 /**

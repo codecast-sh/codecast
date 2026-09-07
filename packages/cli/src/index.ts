@@ -1,32 +1,14 @@
 #!/usr/bin/env node
-import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
-import { registerSessionSendCommand } from "./sessionSendCommand.js";
-import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
-import { registerWorkspaceCommand } from "./workspace/cli.js";
+import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
-import { registerRemoteCommand } from "./remote/cli.js";
-import { registerCloudCommand } from "./cloud/cli.js";
-import { ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
-import { registerHostsCommand } from "./hosts/cli.js";
-import { registerPublishCommand, missingRouteError } from "./publish.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
-import { registerCapabilityCommand } from "./capabilities/cli.js";
-import { registerDecideCommand } from "./decideCommand.js";
-import { registerImageCommand } from "./imageCommand.js";
-import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
-import { registerIntegrationsCommand } from "./integrations.js";
-import { registerPrCommand, readLocalGitContext } from "./prCommand.js";
-import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
-import { registerBrowserCommand } from "./browser/cli.js";
-import { registerAppCommand } from "./app/cli.js";
-import { registerExecCommand } from "./execCommand.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -40,7 +22,7 @@ import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import {
   parseEntityUrl,
   buildEntityUrl,
-  entityTypeFromId,
+  inferEntityTypeFromShortId,
   normalizeEntityType,
   type EntityType,
 } from "@codecast/shared/entities";
@@ -66,7 +48,6 @@ import {
   triggerEventShorthand,
 } from "@codecast/shared/contracts";
 import { buildTaskTree } from "@codecast/shared/tasks";
-import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@codecast/shared/time";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import {
   loadWorkspaceRoster,
@@ -96,6 +77,8 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
+import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -121,7 +104,6 @@ import {
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
-  daemonLauncherMatchesCommand,
   DAEMON_LAUNCHER_FILENAME,
   shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
@@ -155,7 +137,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { type Config, getAgentArgs, isCloudMirrorEnabled } from "./config/types.js";
+import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 import { addVault, findVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
 import {
@@ -540,7 +522,6 @@ interface DaemonState {
   cursorAccess?: "granted" | "denied";
   /** Loop freeze budget written by the daemon's 30s monitor tick (see LoopFreezeLedger). */
   loopFreeze?: LoopFreezeState;
-  fleetCounts?: FleetCounts;
   /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
   timestamp?: number;
 }
@@ -934,20 +915,16 @@ const SESSION_REGISTER_HOOK = `#!/bin/bash
 set -uo pipefail
 
 INPUT=$(cat)
-# Claude sends snake_case (session_id); grok runs these same hooks (it imports
-# ~/.claude/settings.json) with a camelCase envelope (sessionId) and also exports
-# GROK_SESSION_ID — accept all three so the claim is written for either client.
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id') or d.get('sessionId') or '')" 2>/dev/null)
-[ -z "$SESSION_ID" ] && SESSION_ID="\${GROK_SESSION_ID:-}"
+SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
 [ -z "$SESSION_ID" ] && exit 0
 
-# Walk up to find the agent process PID (claude, or grok running claude hooks)
+# Walk up to find the claude process PID
 CLAUDE_PID=""
 CHECK_PID=$PPID
 for _ in 1 2 3 4; do
   [ -z "$CHECK_PID" ] || [ "$CHECK_PID" = "1" ] && break
   CMD=$(ps -o comm= -p "$CHECK_PID" 2>/dev/null)
-  if echo "$CMD" | grep -qiE 'claude|grok|2\\.1\\.' 2>/dev/null; then
+  if echo "$CMD" | grep -qiE 'claude|2\\.1\\.' 2>/dev/null; then
     CLAUDE_PID=$CHECK_PID
     break
   fi
@@ -1112,12 +1089,6 @@ function kickstartManagedDaemon(): boolean {
   return result.status === 0;
 }
 
-function ownsDaemonInstallation(): boolean {
-  if (!getMacLaunchdDaemonStatus()?.configured) return true;
-  const { executablePath, args } = getExecutableInfo();
-  return daemonLauncherMatchesCommand(fs.readFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, "utf-8"), executablePath, args);
-}
-
 function ensureDaemonRunning(): void {
   const config = readConfig();
   if (!config?.auth_token) return;
@@ -1139,7 +1110,6 @@ function ensureDaemonRunning(): void {
           // that could START a restart would let a worktree bounce the main
           // daemon into its own tree on every edit.
           if (daemonBuildUnchanged(readRunningBuildId(), DAEMON_BUILD_ID)) return;
-          if (!ownsDaemonInstallation()) return;
           const pid = getDaemonPid();
           if (pid) {
             try { process.kill(pid, "SIGTERM"); } catch { return; }
@@ -1296,7 +1266,6 @@ function getStuckSyncs(): StuckSync[] {
     // already skips them; without the same skip here they always read as stuck
     // (file grows past lastSyncedPosition) even though every message is synced.
     if (filePath.includes("/.codex/sessions/") && isAppServerManagedRollout(filePath)) continue;
-    if (filePath.includes("/.codex/sessions/") && stats.size <= getPosition(filePath)) continue;
     const unsynced = stats.size - record.lastSyncedPosition;
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
@@ -1649,10 +1618,7 @@ function bounceDaemonIfBuildChanged(daemonWasRunning: boolean): boolean {
   const runningBuild = readRunningBuildId();
 
   let installedBuild: string | null = null;
-  let ownsInstallation = false;
   try {
-    ownsInstallation = ownsDaemonInstallation();
-    if (!ownsInstallation) return false;
     const { executablePath, args } = getExecutableInfo("_build-id");
     const r = spawnSync(executablePath, args, {
       encoding: "utf-8",
@@ -1663,7 +1629,6 @@ function bounceDaemonIfBuildChanged(daemonWasRunning: boolean): boolean {
     if (BUILD_ID_VALUE_RE.test(out)) installedBuild = out;
   } catch {}
 
-  if (!ownsInstallation) return false;
   if (daemonBuildUnchanged(runningBuild, installedBuild)) return false;
 
   stopDaemon();
@@ -2326,7 +2291,7 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
 
   // Copy skill
   const skillSrc = path.join(orchSrc, "skills", "orchestrate", "SKILL.md");
-  const skillDest = path.join(os.homedir(), ORCH_SKILL_REL, "SKILL.md");
+  const skillDest = path.join(claudeDir, "skills", "codecast-orchestrate", "SKILL.md");
   if (fs.existsSync(skillSrc)) {
     fs.mkdirSync(path.dirname(skillDest), { recursive: true });
     const srcContent = fs.readFileSync(skillSrc, "utf-8");
@@ -2382,6 +2347,7 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
     if (!settings.hooks) settings.hooks = {};
 
     const orchHooks = JSON.parse(fs.readFileSync(hooksSrc, "utf-8")).hooks;
+    const ORCH_MARKER = "/.codecast/orchestration/";
 
     for (const [event, handlers] of Object.entries(orchHooks) as [string, any][]) {
       if (!settings.hooks[event]) settings.hooks[event] = [];
@@ -2432,11 +2398,12 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
 
 function uninstallOrchestration(): void {
   const claudeDir = path.join(os.homedir(), ".claude");
+  const ORCH_MARKER = "/.codecast/orchestration/";
 
-  const skillDir = path.join(os.homedir(), ORCH_SKILL_REL);
+  const skillDir = path.join(claudeDir, "skills", "codecast-orchestrate");
   if (fs.existsSync(skillDir)) fs.rmSync(skillDir, { recursive: true });
 
-  for (const name of ORCH_AGENT_FILES) {
+  for (const name of ["implementer.md", "reviewer.md", "critic.md"]) {
     const agentPath = path.join(claudeDir, "agents", name);
     if (fs.existsSync(agentPath)) fs.unlinkSync(agentPath);
   }
@@ -2957,11 +2924,33 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
 // | head -1)` picked up jx7c6zk, the placeholder short id in cast own's own
 // examples, and tried to own a session that never existed. Help goes to stderr
 // here for the same reason: nothing usable may reach stdout on a failure.
+// The suggestion line is bounded by the same reason: it names only siblings at
+// the level the unknown token sits on, and never a destructive command unless
+// the token is a near-miss of that command (commandSuggestion.ts). ct-49545.
 function failUnknownCommand(operands: string[]): never {
   console.error(`error: unknown command '${operands[0]}'`);
+  const nextStep = unknownCommandNextStep(commandTree(program), operands);
+  if (nextStep) console.error(nextStep);
   console.error(`Run 'cast --help' for the list of commands.`);
   process.exit(1);
 }
+
+// Groups never reach failUnknownCommand — commander answers their unknown
+// subcommands itself, and its built-in ranking is pure string similarity, so
+// `cast doc delta` was answered with "(Did you mean delete?)" and
+// `cast workspace estry` with "(Did you mean destroy?)". Route every level of
+// the tree through the same guarded suggester the root uses, so no depth can
+// hand a typo an irreversible verb. Everything else about the error — exit
+// code, the group's own help — stays commander's. ct-49545.
+// (unknownCommand is commander's own hook; it is not in its published types.)
+(Command.prototype as Command & { unknownCommand: (this: Command) => void }).unknownCommand =
+  function unknownCommand(this: Command): void {
+    const typed = String(this.args[0] ?? "");
+    const groupPath: string[] = [];
+    for (let cmd: Command | null = this; cmd?.parent; cmd = cmd.parent) groupPath.unshift(cmd.name());
+    const nextStep = unknownCommandNextStep(commandTree(program), [...groupPath, typed]);
+    this.error(`error: unknown command '${typed}'${nextStep ? `\n${nextStep}` : ""}`);
+  };
 
 program
   .name("cast")
@@ -2979,21 +2968,24 @@ program
     program.outputHelp();
   });
 
-registerWorkspaceCommand(program);
-registerRemoteCommand(program);
-registerCloudCommand(program);
-registerHostsCommand(program);
-registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerCapabilityCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerIntegrationsCommand(program, { getCliEndpoint, detectCurrentSessionId, resolveProjectId });
-registerPrCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerExecCommand(program);
+/** The "your pinned state is stale" nudge after a work write. Behind a dynamic
+ *  import so `cast state`'s module is paid for by the handful of commands that
+ *  nudge, not by every invocation of the CLI. ct-49546. */
+const warnIfThreadStateStale = () =>
+  import("./stateCommand.js").then((m) => m.warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId }));
+
+// Every heavy group as a placeholder carrying its name, aliases and
+// description, so `cast --help` and a typo read a complete tree for the price
+// of one leaf module. The group argv actually names is swapped in for its real
+// registration just before parse (commandGroups.ts). ct-49546.
+registerGroupStubs(program);
+
+/** What every group's register function is handed. One copy, because both
+ *  callers — the group argv names, and `cast agent-context` loading all of them
+ *  — must hand over the same thing. ct-49547. */
+function groupDeps(): GroupDeps {
+  return { getCliEndpoint, detectCurrentSessionId, resolveProjectId };
+}
 
 program
   .command("auth")
@@ -3013,11 +3005,59 @@ program
     await runLogin(token);
   });
 
-registerSessionSendCommand(program, {
-  currentSession: () => ownSessionId(getRealCwd()),
-  post: cliPost,
-  print: text => console.log(text),
-});
+program
+  .command("send")
+  .description(
+    "Send a message to another session — your own or a teammate's\n\n" +
+    "The text is injected into the target session as a new turn, attributed to\n" +
+    "this session so the recipient (and the dashboard) can see who sent it. You\n" +
+    "can message any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). If the target session is offline, the message is\n" +
+    "queued and the cron tells your session if it can't be delivered.\n\n" +
+    "Examples:\n" +
+    "  cast send jx7c6zk \"can you take the auth half?\"\n" +
+    "  cast send jx7c6zk \"done\" --from jx7abcd\n" +
+    "  cast send jx7c6zk --raw \"/model opus\"   # slash command, no wrapper: switches that session's model\n" +
+    "  cast send jx7c6zk - <<'EOF'\n" +
+    "  Multi-line briefing with headings and code blocks,\n" +
+    "  delivered exactly as written.\n" +
+    "  EOF"
+  )
+  .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
+  .argument("<text>", stdinText("Message text"))
+  .option("--from <id>", "Override sender session (default: detect current session)")
+  .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper — for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
+  .action(async (sessionId: string, text: string, options: any) => {
+    const body = text ?? "";
+    if (!body.trim()) {
+      console.error("Message text is empty");
+      process.exit(1);
+    }
+    const from = options.from || detectCurrentSessionId() || undefined;
+    const result = await cliPost("/cli/messages/send", {
+      to: sessionId,
+      from,
+      body,
+      ...(options.raw ? { raw: true } : {}),
+    });
+    const fromNote =
+      result.from_short_id && result.from_short_id !== "unknown"
+        ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`
+        : "";
+    const teamNote = result.cross_user ? ` ${c.dim}(teammate's session)${c.reset}` : "";
+    console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}${teamNote}`);
+    if (!result.from_short_id || result.from_short_id === "unknown") {
+      console.log(`${c.dim}sender session not detected — the recipient won't get a link back to this session; pass --from <your session id> to attribute it${c.reset}`);
+    }
+    // The send always succeeds (it queues); warn if there's no live daemon to receive it, so the
+    // caller knows it may sit until the session reconnects rather than landing now.
+    if (result.target_live === false) {
+      console.log(`${c.yellow}!${c.reset} ${c.dim}that session has no live daemon right now — queued; you'll be told if it can't be delivered${c.reset}`);
+    }
+    if (result.auto_owned) {
+      console.log(`${c.dim}you now own this session — it'll sit in your inbox until dismissed (cast disown ${result.to_short_id || sessionId} to release)${c.reset}`);
+    }
+  });
 
 // ── cast stash / restore / kill (dismiss/undismiss = legacy aliases) ─────────
 // Inbox visibility management: hide a session from the human's inbox, bring it
@@ -3134,7 +3174,43 @@ program
     console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
-registerSessionParkingCommands(program, { post: cliPost, print: text => console.log(text) });
+program
+  .command("hibernate")
+  .description(
+    "Park a session: kill its pane now, keep everything else\n\n" +
+    "The daemon tears the agent's tmux session and process tree down and marks\n" +
+    "the session parked. The transcript, the card and the history all stay, and\n" +
+    "the next message wakes it. Use it to give a loaded machine its memory back\n" +
+    "without retiring anything. `cast wake` brings it back immediately.\n\n" +
+    "Example:\n" +
+    "  cast hibernate jx7c6zk"
+  )
+  .argument("<session>", "Session short ID (e.g. jx7c6zk)")
+  .action(async (session: string) => {
+    const result = await cliPost("/cli/sessions/hibernate", { session });
+    // The daemon parks it a moment later, and refuses if the session turns out
+    // to be mid-turn, watched, or holding a live subagent — so this reports the
+    // ask, not the outcome. Same shape as `cast wake` below.
+    console.log(`${c.green}ok${c.reset} parking ${c.cyan}${result.short_id}${c.reset} ${c.dim}— the next message wakes it${c.reset}`);
+  });
+
+program
+  .command("wake")
+  .description(
+    "Wake a parked session: bring its agent back up now\n\n" +
+    "The undo of `cast hibernate`, and the same thing the next message would do\n" +
+    "on its own. Safe on a session that is already live: the daemon reuses a\n" +
+    "healthy pane rather than replacing it.\n\n" +
+    "Example:\n" +
+    "  cast wake jx7c6zk"
+  )
+  .argument("<session>", "Session short ID (e.g. jx7c6zk)")
+  .action(async (session: string) => {
+    // Waking IS resuming, so this posts to the resume route rather than earning
+    // a second name for one behavior.
+    const result = await cliPost("/cli/sessions/resume", { session });
+    console.log(`${c.green}ok${c.reset} waking ${c.cyan}${result.short_id}${c.reset}${result.deduplicated ? ` ${c.dim}(already on its way)${c.reset}` : ""}`);
+  });
 
 // ── cast keys ─────────────────────────────────────────────────────────────────
 // Manage provider API keys codecast injects into opencode/pi launches. Keys live
@@ -4401,7 +4477,7 @@ accountsCmd
     "also restart every limit/auth-blocked session (last 48h) on the new account and send it a 'continue' (runs via the daemon)"
   )
   .option("--yes", "skip the confirmation when many sessions would be revived")
-  .option("--include-subagents", "also revive blocked subagent workers (by default they are dismissed from the blocked set instead — their parent has usually moved on)")
+  .option("--include-subagents", "also revive blocked subagent workers (skipped by default — their parent has usually moved on)")
   .action(async (name: string, options: any) => {
     if (options.continue) {
       // Daemon-orchestrated: swap + kill blocked sessions + enqueue continues,
@@ -4410,8 +4486,8 @@ accountsCmd
       const reviveArgs = { profile: name, include_subagents: options.includeSubagents === true };
       const probe = await cliPost("/cli/accounts/switch", { ...reviveArgs, dry_run: true });
       const count = probe.conversations ?? 0;
-      const subNote = !options.includeSubagents && (probe.would_dismiss ?? 0) > 0
-        ? ` (${probe.would_dismiss} blocked subagent worker(s) dismissed, not revived — add --include-subagents to revive them too)`
+      const subNote = !options.includeSubagents && (probe.subagents ?? 0) > 0
+        ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to revive them too)`
         : "";
       if (count > REVIVE_CONFIRM_THRESHOLD && !options.yes) {
         console.log(`${c.yellow}!${c.reset} ${count} blocked session(s) would be restarted + continued (of ${probe.total_blocked ?? count} flagged in the last 48h)${subNote}.`);
@@ -4443,13 +4519,13 @@ accountsCmd
   .command("continue")
   .description("Send 'continue' to every session parked on a usage-limit or dropped-connection banner (last 48h; no account switch — use after the limit window resets)")
   .option("--yes", "skip the confirmation when many sessions would be continued")
-  .option("--include-subagents", "also continue blocked subagent workers (by default they are dismissed from the blocked set instead — their parent has usually moved on)")
+  .option("--include-subagents", "also continue blocked subagent workers (skipped by default — their parent has usually moved on)")
   .action(async (options: any) => {
     const reviveArgs = { include_subagents: options.includeSubagents === true };
     const probe = await cliPost("/cli/accounts/continue-blocked", { ...reviveArgs, dry_run: true });
     const count = probe.would_continue ?? 0;
-    const subNote = !options.includeSubagents && (probe.would_dismiss ?? 0) > 0
-      ? ` (${probe.would_dismiss} blocked subagent worker(s) dismissed, not continued — add --include-subagents to continue them)`
+    const subNote = !options.includeSubagents && (probe.subagents ?? 0) > 0
+      ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to include them)`
       : "";
     if (count === 0) {
       console.log(`${c.dim}No sessions are blocked on a usage limit or dropped connection.${subNote}${c.reset}`);
@@ -5297,12 +5373,7 @@ program
     // Event loop freeze budget. A frozen loop delays every delivery and echo,
     // so a late message reads as "the daemon was blocked", not "the session
     // dropped it". The daemon writes this on its 30s monitor tick.
-    const healthState = readDaemonState();
-    console.log(`  ${fmt.muted("Tracked sessions")}`);
-    row("Live", fleetCountText(healthState?.fleetCounts, "live"), 2);
-    row("Hibernated", fleetCountText(healthState?.fleetCounts, "hibernated"), 2);
-    console.log("");
-    const freezeState = healthState?.loopFreeze;
+    const freezeState = readDaemonState()?.loopFreeze;
     console.log(`  ${fmt.muted("Event Loop")}`);
     if (!freezeState) {
       row("Freeze (1h)", fmt.muted("not reported yet"), 2);
@@ -5412,10 +5483,27 @@ function doctorDeps(config: Config & { auth_token: string; convex_url: string })
   };
 }
 
+// The command surface, read off the tree commander dispatches against, so an
+// agent discovers `cast` from the binary instead of from prose that drifts.
+// The one caller of activateAllGroups: the dump has to describe every lazy
+// group, and no ordinary run may pay for that. Needs no auth and no daemon —
+// it is in internalCmds below for that reason. ct-49547.
+program
+  .command("agent-context")
+  .description("Print every cast command as JSON: paths, aliases, flags, arguments, and which are destructive")
+  .option("--json", "Print the full machine-readable command surface")
+  .action(async (options: { json?: boolean }) => {
+    const { activateAllGroups } = await import("./commandGroups.js");
+    await activateAllGroups(program, groupDeps());
+    const { buildAgentContext, formatAgentContextSummary } = await import("./agentContext.js");
+    const context = buildAgentContext(program, getVersion());
+    console.log(options.json ? JSON.stringify(context, null, 2) : formatAgentContextSummary(context));
+  });
+
 program
   .command("bench", { hidden: true })
-  .description("Measure the live daemon: loop lag, loopback route latency, the daemon.log freeze report, and an optional pane load")
-  .argument("<target>", "what to bench (daemon)")
+  .description("Measure the live daemon (loop lag, route latency, the daemon.log freeze report, an optional pane load), or CLI boot (import graph and CPU per invocation)")
+  .argument("<target>", "what to bench (daemon | boot)")
   .option("--duration <seconds>", "observation window, also the churn window under load", "60")
   .option("--load <n>", "spawn N stand-in agent panes against the live daemon")
   .option("--sample <k>", "panes to sample for delivery round trips", "5")
@@ -5424,9 +5512,31 @@ program
   .option("--json", "Print the JSON report instead of the markdown table")
   .option("--keep", "Keep the load panes, transcripts, and server conversations")
   .option("--project-dir <path>", "Scratch project dir for the load transcripts (must be syncable)")
+  .option("--runs <n>", "boot: timed runs per command (the median is reported)", "9")
   .action(async (target: string, options: any) => {
+    if (target === "boot") {
+      // Needs no auth, no daemon and no network: it spawns this CLI with an
+      // empty HOME and measures the CPU it burns before it can answer, next to
+      // the static import graph that explains the number. The graph walk reads
+      // source, so this one runs from a checkout, not from the binary. ct-49546.
+      const srcDir = path.dirname(fileURLToPath(import.meta.url));
+      const entry = path.join(srcDir, "index.ts");
+      if (!fs.existsSync(entry)) {
+        console.error("cast bench boot reads the source tree; run it from a checkout (bun run src/main.ts bench boot)");
+        process.exit(1);
+      }
+      const { runBootBench, renderBootBench } = await import("./bench/bootBench.js");
+      const report = runBootBench({
+        entry,
+        runner: [process.execPath, path.join(srcDir, "main.ts")],
+        cwd: srcDir,
+        runs: Number.parseInt(options.runs, 10),
+      });
+      console.log(options.json ? JSON.stringify(report, null, 2) : renderBootBench(report));
+      process.exit(0);
+    }
     if (target !== "daemon") {
-      console.error(`unknown bench target: ${target} (only "daemon")`);
+      console.error(`unknown bench target: ${target} (daemon | boot)`);
       process.exit(1);
     }
     const deps = doctorDeps(requireAuthedConfig());
@@ -5446,7 +5556,7 @@ program
       projectDir: options.projectDir,
     }, (line) => { if (!options.json) console.log(line); });
     console.log(options.json ? JSON.stringify(report, null, 2) : renderMarkdown(report));
-    process.exit(report.acceptance.status === "FAIL" ? 1 : 0);
+    process.exit(report.load && report.load.teardown.warnings.length > 0 ? 1 : 0);
   });
 
 program
@@ -5465,7 +5575,7 @@ program
     "  cast config excluded_paths     # View specific setting\n" +
     "  cast config excluded_paths \"**/node_modules/**\"  # Set value"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .action(async (key, value) => {
@@ -5482,9 +5592,6 @@ program
         console.log(`  web_url: ${config.web_url || WEB_URL}`);
         if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
         if (config.browser_capture) console.log(`  browser_capture: ${config.browser_capture}`);
-        console.log(`  cloud_mirror_enabled: ${isCloudMirrorEnabled(config)}`);
-        if (config.cloud_mirror_exclude) console.log(`  cloud_mirror_exclude: ${config.cloud_mirror_exclude}`);
-        if (config.cloud_mirror_include) console.log(`  cloud_mirror_include: ${config.cloud_mirror_include}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.agent_args) {
@@ -5614,10 +5721,8 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture"] as const;
     const sensitiveKeys = ["auth_token"];
-    // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -5631,27 +5736,17 @@ program
 
     if (value === undefined) {
       const displayValue = sensitiveKeys.includes(configKey)
-        ? maskToken(currentValue as string | undefined)
-        : currentValue === undefined || currentValue === "" ? "(not set)" : String(currentValue);
+        ? maskToken(currentValue)
+        : currentValue || "(not set)";
       console.log(`${configKey}: ${displayValue}`);
       return;
     }
 
     const newConfig: Config = config || {};
-    let stored: string | boolean = value;
-    if (BOOLEAN_CONFIG_KEYS.has(configKey)) {
-      const v = String(value).trim().toLowerCase();
-      if (v === "true" || v === "1") stored = true;
-      else if (v === "false" || v === "0") stored = false;
-      else {
-        console.error(`${configKey} takes true or false`);
-        process.exit(1);
-      }
-    }
-    (newConfig as Record<string, unknown>)[configKey] = stored;
+    newConfig[configKey] = value;
     writeConfig(newConfig);
 
-    const displayValue = sensitiveKeys.includes(configKey) ? maskToken(value) : String(stored);
+    const displayValue = sensitiveKeys.includes(configKey) ? maskToken(value) : value;
     console.log(`Updated ${configKey}: ${displayValue}`);
   });
 
@@ -6570,7 +6665,7 @@ program
     "  cast sessions --by-label -a    # group all sessions by label"
   )
   .option("-w, --watch", "Stream changes live instead of a one-shot snapshot (state transitions, or messages with -M); silent until something changes")
-  .option("--state <state>", "Filter: needs-input | done | working | dormant | hibernated | idle | pinned | live (with -w: new/gone events fire as sessions enter/leave the filter)")
+  .option("--state <state>", "Filter: needs-input | done | working | dormant | idle | pinned | live (with -w: new/gone events fire as sessions enter/leave the filter)")
   .option("-t, --team", "Show the team's sessions (default: just yours)")
   .option("-g, --global", "All teams (implies --team)")
   .option("-m, --member <name>", "Filter by team member (implies --team)")
@@ -8369,14 +8464,12 @@ program
       const cref = parseConversationRef(ref); // splits #msg, strips stray query
       rawId = cref.conversationId;
       messageId = cref.messageId;
-      // A prefixed short id, or a repository object (`owner/repo#482`,
-      // `owner/repo@sha`), names its own type; anything else is a session.
-      entityType = entityTypeFromId(rawId) ?? "session";
+      entityType = inferEntityTypeFromShortId(rawId) ?? "session";
     }
     if (options.type) {
       const t = normalizeEntityType(options.type);
       if (!t) {
-        console.error(`Error: unknown --type "${options.type}" (use session | task | plan | doc | project | trigger | pr | commit)`);
+        console.error(`Error: unknown --type "${options.type}" (use session | task | plan | doc | project)`);
         process.exit(1);
       }
       entityType = t;
@@ -8930,18 +9023,7 @@ program
   .option("--keep-config", "Keep ~/.codecast config directory")
   .option("-y, --yes", "Skip confirmation prompt")
   .action(async (options) => {
-    if (!options.yes) {
-      const rl = await import("readline");
-      const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        iface.question("This will remove cast, its daemon, auto-start config, and all local data. Continue? [y/N] ", resolve);
-      });
-      iface.close();
-      if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
-        console.log("Aborted");
-        process.exit(0);
-      }
-    }
+    await requireDestructiveConfirm(["uninstall"], { yes: options.yes });
 
     const home = process.env.HOME || "";
 
@@ -10822,7 +10904,7 @@ program
           const name = freshWorktreeName();
           if (!options.json) console.log(`  acquiring worktree ${name} on ${cloud.prepared.cloud.id}`);
           try {
-            const ws = await acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
+            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
             worktreeName = ws.name;
             cloudPlacement = {
               cloud_device_id: cloud.prepared.deviceId,
@@ -11129,7 +11211,7 @@ program
         say(`acquiring worktree ${name} on ${cloud.prepared.cloud.id} (install runs there)`);
         let ws: import("./cloud/prepare.js").RemoteWorkspace;
         try {
-          ws = await acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
+          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
         } catch (err) {
           console.error(`Spawn failed for "${promptGist(prompt)}": ${err instanceof Error ? err.message : String(err)}`);
           process.exit(1);
@@ -11975,10 +12057,10 @@ const EVENT_NAMES = TRIGGER_EVENT_NAMES.join(", ");
  * so the checkout's origin fills in --repo when the flag is absent. Pass
  * `--repo ""` to watch every repository on purpose.
  */
-function buildEventFilter(
+async function buildEventFilter(
   eventName: string,
   opts: { repo?: string; pr?: string },
-): { event_type: string; action?: string; repository?: string; pr_number?: number } {
+): Promise<{ event_type: string; action?: string; repository?: string; pr_number?: number }> {
   const shorthand = EVENT_SHORTHANDS[eventName];
   if (!shorthand) {
     console.error(`Unknown event: ${eventName}. Valid: ${EVENT_NAMES}`);
@@ -12005,7 +12087,7 @@ function buildEventFilter(
   const repository = opts.repo !== undefined
     ? opts.repo
     : isPrTriggerEvent(eventName)
-      ? (readLocalGitContext().repository ?? undefined)
+      ? ((await import("./prCommand.js")).readLocalGitContext().repository ?? undefined)
       : undefined;
   if (repository) filter.repository = repository;
 
@@ -12698,7 +12780,7 @@ trigger
       run_at = Date.now() + interval_ms;
     } else if (options.on) {
       schedule_type = "event";
-      event_filter = buildEventFilter(options.on, options);
+      event_filter = await buildEventFilter(options.on, options);
     } else if (options.in) {
       const delay = parseDuration(options.in);
       if (!delay) {
@@ -13096,7 +13178,7 @@ trigger
       body.interval_ms = interval;
     } else if (options.on) {
       body.schedule_type = "event";
-      body.event_filter = buildEventFilter(options.on, options);
+      body.event_filter = await buildEventFilter(options.on, options);
     } else if (options.in) {
       const delay = parseDuration(options.in);
       if (!delay) {
@@ -13502,6 +13584,7 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
   try {
     result = JSON.parse(text);
   } catch {
+    const { missingRouteError } = await import("./castApi.js");
     const missing = missingRouteError(urlPath, response.status);
     console.error(missing ? `Error: ${missing}` : `API error (${response.status}): ${text.slice(0, 200)}`);
     process.exit(1);
@@ -14172,7 +14255,7 @@ work
       console.log(`${c.green}ok${c.reset} spawned ${c.cyan}${spawned.sessionId}${c.reset} for ${c.cyan}${shortId}${c.reset}`);
       console.log(`  ${c.dim}${link}${c.reset}`);
     }
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 work
@@ -14204,7 +14287,7 @@ work
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
     if (sessionId) clearTaskPulseIfBound(sessionId, shortId);
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 work
@@ -14287,7 +14370,7 @@ work
     }
     await cliPost("/cli/work/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${shortId}${c.reset}`);
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 work
@@ -14890,7 +14973,7 @@ doc
     for (const d of docs) {
       const icon = DOC_TYPE_ICONS[d.doc_type] || "?";
       const pinned = d.pinned ? " *" : "";
-      const age = formatDateSmart(wasEdited(d) ? d.updated_at : d.created_at);
+      const age = formatAge(Date.now() - d.updated_at);
       console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}${pinned} ${c.dim}${age}${c.reset}`);
     }
   });
@@ -14923,7 +15006,6 @@ doc
     const total = lines.length;
 
     console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}] · ${total} lines${c.reset}`);
-    if (result.created_at) console.log(`${c.dim}${describeDatesFull(result).replace("\n", " · ")}${c.reset}`);
     if (result.labels?.length) console.log(`Labels: ${result.labels.join(", ")}`);
 
     const { start, end, page, pages } = resolveLineRange(total, {
@@ -15128,11 +15210,7 @@ doc
   .argument("<id>", "Document ID")
   .option("--yes", "Confirm deletion (required)")
   .action(async (id: string, options: any) => {
-    if (!options.yes) {
-      console.error(`This permanently deletes the document. Re-run with --yes to confirm:`);
-      console.error(`  cast doc delete ${id} --yes`);
-      process.exit(1);
-    }
+    await requireDestructiveConfirm(["doc", "delete"], { yes: options.yes, args: [id] });
     await cliPost("/cli/docs/delete", { id });
     console.log(`${c.green}ok${c.reset} Deleted ${c.cyan}${id}${c.reset}`);
   });
@@ -15513,7 +15591,7 @@ plan
     if (options.author) body.author = options.author;
     await cliPost("/cli/plans/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 plan
@@ -18070,7 +18148,7 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
-  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update'];
+  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update', 'agent-context'];
   if (!internalCmds.includes(cmdName)) {
     logCliCommand(cmdName, args);
     ensureDaemonRunning();
@@ -18106,5 +18184,15 @@ if (runFastPath(process.argv)) {
 } else {
   ensureCastAlias();
   autoBindFromEnv();
-  program.parse();
+  // The one command group argv names replaces its placeholder before commander
+  // sees anything, so parsing, the preAction hook and the unknown-subcommand
+  // suggester all run against the real command — and no other group is loaded.
+  // A verb with no group (`cast send`), `cast --help` and a typo resolve to
+  // nothing here and pay for no group at all. ct-49546.
+  activateGroup(program, groupTokenInArgv(process.argv), groupDeps())
+    .then(() => program.parse())
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
 }

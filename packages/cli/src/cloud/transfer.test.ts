@@ -3,38 +3,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { cloudCopyFiles, copyCloudFiles, refreshRemoteCheckout, stageCloudInputs } from "./transfer";
+import { cloudCopyFiles, copyCloudFiles, refreshRemoteCheckout } from "./transfer";
 import { acquireRemoteWorkspace, prepareCloudHost } from "./prepare";
 import { shq, type RemoteHost } from "../remote/session-move";
 import { healWorkspace, releaseWorkspace } from "../workspace/lifecycle";
 import { readState } from "../workspace/contract";
 
-let dir: string, origin: string, laptop: string, publisher: string, remote: string, host: RemoteHost, home: string;
+let dir: string, origin: string, laptop: string, publisher: string, remote: string, host: RemoteHost;
 let savedEnv: NodeJS.ProcessEnv;
-let realHomeBefore: Record<string, string | null>;
-
-// The developer's real HOME must be untouched by anything the fake ssh runs
-// (it executes remote commands locally): every test pins HOME, XDG_CONFIG_HOME,
-// GIT_CONFIG_GLOBAL and CODEX_HOME to a temp dir, and these files are compared
-// byte for byte afterwards.
-const REAL_HOME_WATCH = [".ssh/known_hosts", ".ssh/config", ".gitconfig", ".codecast/git"];
-
-function snapshotRealHome(realHome: string): Record<string, string | null> {
-  const out: Record<string, string | null> = {};
-  for (const rel of REAL_HOME_WATCH) {
-    const p = path.join(realHome, rel);
-    const st = fs.lstatSync(p, { throwIfNoEntry: false });
-    if (!st) out[rel] = null;
-    else if (st.isDirectory()) {
-      const files = fs.readdirSync(p, { recursive: true, encoding: "utf-8" }).sort();
-      out[rel] = files.map((f) => {
-        const fp = path.join(p, f);
-        return `${f}:${fs.lstatSync(fp).isFile() ? fs.readFileSync(fp).toString("base64") : "dir"}`;
-      }).join("\n");
-    } else out[rel] = fs.readFileSync(p).toString("base64");
-  }
-  return out;
-}
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8", stdio: "pipe" }).trim();
@@ -70,20 +46,12 @@ function laptopState() {
 
 beforeEach(() => {
   savedEnv = { ...process.env };
-  realHomeBefore = snapshotRealHome(savedEnv.HOME || os.homedir());
   dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cloud-transfer-test-")));
   origin = path.join(dir, "origin.git");
   publisher = path.join(dir, "publisher");
   laptop = path.join(dir, "laptop repo");
   remote = path.join(dir, "remote repo");
-  home = path.join(dir, "home");
   fs.mkdirSync(laptop);
-  fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
-  fs.writeFileSync(path.join(home, ".codecast", "update-state.json"), JSON.stringify({ lastCheck: new Date().toISOString() }));
-  process.env.HOME = home;
-  process.env.XDG_CONFIG_HOME = path.join(home, ".config");
-  process.env.GIT_CONFIG_GLOBAL = path.join(home, ".gitconfig");
-  process.env.CODEX_HOME = path.join(home, ".codex");
   host = { address: "cloud-test.invalid", user: "ubuntu", keyPath: "/test key's path", remoteBaseDir: dir };
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
@@ -94,14 +62,6 @@ if (args.includes("-G")) process.exit(0);
 let command = args.at(-1);
 fs.appendFileSync(process.env.CLOUD_TEST_LOG, JSON.stringify(command) + "\\n");
 if (process.env.CLOUD_TEST_UNCONFIRMED && command.includes("bun -e")) process.exit(0);
-// A host-side python receiver (another feature's transport): drain stdin, answer as applied.
-if (command.includes("python3 -c")) { fs.readFileSync(0); process.stdout.write("applied files=0\\n"); process.exit(0); }
-// The host's own cast: a "cast cloud mirror-apply" command runs this checkout's CLI (like cast ws acquire).
-if (command.includes("cast cloud mirror-apply")) {
-  if (process.env.CLOUD_TEST_OLD_HOST) { fs.readFileSync(0); process.stderr.write("error: unknown command 'mirror-apply'\\n"); process.exit(1); }
-  if (process.env.CLOUD_TEST_NO_CAST) { fs.readFileSync(0); process.stderr.write("bash: line 1: cast: command not found\\n"); process.exit(127); }
-  command = command.replace("cast cloud mirror-apply", process.env.CLOUD_TEST_CAST_COMMAND + " cloud mirror-apply");
-}
 if (process.env.CLOUD_TEST_FAIL_ORIGIN && (command.includes("git fetch -q") || (command.startsWith("git clone -q") && !command.includes("main.bundle")))) {
   if (process.env.CLOUD_TEST_OCCUPY) {
     fs.mkdirSync(process.env.CLOUD_TEST_OCCUPY, { recursive: true });
@@ -131,22 +91,14 @@ process.exit(r.status ?? 1);
   process.env.PATH = `${bin}:${process.env.PATH}`;
   process.env.CLOUD_TEST_LOG = path.join(dir, "ssh.log");
   process.env.CLOUD_TEST_BUNDLE = path.join(dir, "received.bundle");
-  process.env.CLOUD_TEST_CAST_COMMAND = `${shq(process.execPath)} ${shq(path.resolve(import.meta.dir, "../main.ts"))}`;
   process.env.CODECAST_DIR = path.join(dir, "host-state");
-  write(process.env.CODECAST_DIR, "config.json", JSON.stringify({ cloud_mirror_enabled: false }));
 });
 
 afterEach(() => {
-  const realHome = savedEnv.HOME || os.homedir();
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
   fs.rmSync(dir, { recursive: true, force: true });
-  expect(snapshotRealHome(realHome)).toEqual(realHomeBefore);
 });
-
-function sshLog(): string[] {
-  return fs.existsSync(process.env.CLOUD_TEST_LOG!) ? fs.readFileSync(process.env.CLOUD_TEST_LOG!, "utf-8").split("\n").filter(Boolean) : [];
-}
 
 describe("cloud origin/main checkout", () => {
   beforeEach(() => {
@@ -193,7 +145,7 @@ SNAPSHOT = "${label}"
       write(laptop, "secrets/key", `${label}-secret\n`);
       expect(git(laptop, "diff", "--name-only")).toBe(".codecast/workspace.toml");
       refreshRemoteCheckout(host, laptop, remote);
-      const ws = await acquireRemoteWorkspace(host, remote, `cloud-${label}`, laptop);
+      const ws = acquireRemoteWorkspace(host, remote, `cloud-${label}`, laptop);
       acquired.push(ws);
       const state = readState(remote, ws.name)!;
       const inputs = path.join(remote, ".codecast/workspaces", ws.name, "inputs");
@@ -212,7 +164,7 @@ SNAPSHOT = "${label}"
     }
     const [one, two] = acquired;
     expect(one!.ports.web).not.toBe(two!.ports.web);
-    await expect(acquireRemoteWorkspace(host, remote, one!.name, laptop)).rejects.toThrow("reserve inputs for workspace cloud-one");
+    expect(() => acquireRemoteWorkspace(host, remote, one!.name, laptop)).toThrow("reserve inputs for workspace cloud-one");
     write(laptop, ".env", "later-laptop-env");
     write(remote, ".env", "shared-base-env");
     write(remote, "secrets/key", "shared-base-secret");
@@ -233,37 +185,6 @@ SNAPSHOT = "${label}"
     expect(fs.existsSync(readState(remote, two!.name)!.env.CODECAST_WORKSPACE_INPUT_ROOT!)).toBe(true);
     await releaseWorkspace(remote, two!.name);
     expect(fs.existsSync(path.join(remote, ".codecast/workspaces", two!.name))).toBe(false);
-    expect(git(remote, "status", "--porcelain", "--untracked-files=all")).toBe("");
-  }, 30_000);
-
-  test("untracked project agent config reaches the host worktree through the manifest copy path; a tracked CLAUDE.md is untouched", async () => {
-    commit(publisher, "CLAUDE.md", "# tracked rules\n");
-    commit(publisher, ".gitignore", ".env\nCLAUDE.local.md\n");
-    git(publisher, "push", "-q", "origin", "main");
-    git(laptop, "pull", "-q", "--ff-only");
-    const runner = path.join(dir, "workspace-cli.ts");
-    fs.writeFileSync(runner, `
-import { Command } from ${JSON.stringify(import.meta.resolve("commander"))};
-import { registerWorkspaceCommand } from ${JSON.stringify(path.resolve(import.meta.dir, "../workspace/cli.ts"))};
-const program = new Command();
-registerWorkspaceCommand(program);
-await program.parseAsync(process.argv);
-`);
-    process.env.CLOUD_TEST_WS_COMMAND = `${shq(process.execPath)} ${shq(runner)}`;
-    write(laptop, ".codecast/workspace.toml", 'backend = "not-a-host-backend"\n[setup]\ninstall = ["true"]\n');
-    write(laptop, "CLAUDE.local.md", "# personal, gitignored\n");
-    write(laptop, "CLAUDE.md", "# laptop edit that must not travel\n");
-    write(laptop, ".claude/skills/b/SKILL.md", "untracked skill\n");
-    write(laptop, ".claude/settings.local.json", JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-ant-secret", NOTES: `${home}/notes` } }));
-    refreshRemoteCheckout(host, laptop, remote);
-    const ws = await acquireRemoteWorkspace(host, remote, "cloud-agent", laptop);
-    expect(fs.readFileSync(path.join(ws.path, "CLAUDE.md"), "utf8")).toBe("# tracked rules\n");
-    expect(fs.readFileSync(path.join(ws.path, "CLAUDE.local.md"), "utf8")).toBe("# personal, gitignored\n");
-    expect(fs.readFileSync(path.join(ws.path, ".claude/skills/b/SKILL.md"), "utf8")).toBe("untracked skill\n");
-    const settings = JSON.parse(fs.readFileSync(path.join(ws.path, ".claude/settings.local.json"), "utf8"));
-    expect(settings.env).toEqual({ NOTES: "/Users/ubuntu/notes" });
-    expect(fs.readFileSync(process.env.CLOUD_TEST_LOG!, "utf-8")).not.toContain("sk-ant-secret");
-    expect(fs.existsSync(path.join(remote, "CLAUDE.local.md"))).toBe(false);
     expect(git(remote, "status", "--porcelain", "--untracked-files=all")).toBe("");
   }, 30_000);
 
@@ -455,125 +376,37 @@ describe("manifest file transfer", () => {
   });
 });
 
-test.each(["state", "worktree"])("existing %s prevents any input recopy before acquire", async (kind) => {
+test.each(["state", "worktree"])("existing %s prevents any input recopy before acquire", (kind) => {
   write(laptop, ".env", "new secret");
   const occupied = path.join(remote, kind === "state" ? ".codecast/workspaces/cloud-1/inputs" : ".codecast/worktrees/cloud-1");
   write(occupied, ".env", "original snapshot");
-  await expect(acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).rejects.toThrow("reserve inputs for workspace cloud-1");
+  expect(() => acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).toThrow("reserve inputs for workspace cloud-1");
   expect(fs.readFileSync(path.join(occupied, ".env"), "utf8")).toBe("original snapshot");
   expect(fs.readFileSync(process.env.CLOUD_TEST_LOG!, "utf8")).not.toContain("cast ws acquire");
 });
 
-test("input reservation refuses symlink destinations without copying secrets", async () => {
+test("input reservation refuses symlink destinations without copying secrets", () => {
   write(laptop, ".env", "new secret");
   fs.mkdirSync(path.join(remote, ".codecast"), { recursive: true });
   const outside = path.join(dir, "outside");
   fs.mkdirSync(outside);
   fs.symlinkSync(outside, path.join(remote, ".codecast/workspaces"));
-  await expect(acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).rejects.toThrow("reserve inputs for workspace cloud-1");
+  expect(() => acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).toThrow("reserve inputs for workspace cloud-1");
   expect(fs.readdirSync(outside)).toEqual([]);
 });
 
-test("unconfirmed input reservation aborts before copy and acquire", async () => {
+test("unconfirmed input reservation aborts before copy and acquire", () => {
   write(laptop, ".env", "new secret");
   process.env.CLOUD_TEST_UNCONFIRMED = "1";
-  await expect(acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).rejects.toThrow("input reservation for workspace cloud-1 was not confirmed");
+  expect(() => acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).toThrow("input reservation for workspace cloud-1 was not confirmed");
   expect(fs.existsSync(remote)).toBe(false);
 });
 
-test("failed acquisition preserves work and never accepts success JSON from a failed process", async () => {
+test("failed acquisition preserves work and never accepts success JSON from a failed process", () => {
   write(remote, "user-work", "preserve me");
   git(remote, "init", "-q", "-b", "main");
   process.env.CLOUD_TEST_ACQUIRE = JSON.stringify({ name: "cloud-1", state: "ready", contract: { ok: true, failures: [] }, path: remote, ports: {}, branch: "codecast/cloud-1", created: true });
   process.env.CLOUD_TEST_ACQUIRE_STATUS = "2";
-  await expect(acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).rejects.toThrow("cast ws acquire cloud-1 failed on the host");
+  expect(() => acquireRemoteWorkspace(host, remote, "cloud-1", laptop)).toThrow("cast ws acquire cloud-1 failed on the host");
   expect(fs.readFileSync(path.join(remote, "user-work"), "utf-8")).toBe("preserve me");
-});
-
-describe("agent config staging", () => {
-  function gitInit(repo: string) {
-    fs.mkdirSync(repo, { recursive: true });
-    git(repo, "init", "-q", "-b", "main");
-  }
-
-  test("stages .claude/settings.local.json scrubbed + remapped and CLAUDE.local.md remapped, 0600, under the inputs dir", () => {
-    gitInit(laptop);
-    gitInit(remote);
-    commit(laptop, ".gitignore", "CLAUDE.local.md\n");
-    write(laptop, ".claude/settings.local.json", JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-ant-secret", NOTES: `${home}/notes` }, permissions: { disableBypassPermissionsMode: "disable", allow: ["Bash(ls)"] } }));
-    write(laptop, "CLAUDE.local.md", `# mine at ${home}/x\n`);
-    const inputRoot = stageCloudInputs(host, laptop, remote, "cloud-1");
-    expect(inputRoot).toBe(path.join(remote, ".codecast/workspaces/cloud-1/inputs"));
-    const settings = JSON.parse(fs.readFileSync(path.join(inputRoot, ".claude/settings.local.json"), "utf8"));
-    expect(settings).toEqual({ env: { NOTES: "/Users/ubuntu/notes" }, permissions: { allow: ["Bash(ls)"] } });
-    expect(fs.readFileSync(path.join(inputRoot, "CLAUDE.local.md"), "utf8")).toBe("# mine at /Users/ubuntu/x\n");
-    expect(fs.statSync(path.join(inputRoot, ".claude/settings.local.json")).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(path.join(inputRoot, "CLAUDE.local.md")).mode & 0o777).toBe(0o600);
-    expect(fs.readFileSync(process.env.CLOUD_TEST_LOG!, "utf-8")).not.toContain("sk-ant-secret");
-  });
-
-  test("invalid active settings fail staging before writing any input", () => {
-    gitInit(laptop);
-    gitInit(remote);
-    write(laptop, ".claude/settings.local.json", "{ not json");
-    write(laptop, "CLAUDE.local.md", "# mine\n");
-    expect(() => stageCloudInputs(host, laptop, remote, "cloud-1")).toThrow("cannot parse active context config:");
-    expect(fs.existsSync(path.join(remote, ".codecast/workspaces/cloud-1/inputs/CLAUDE.local.md"))).toBe(false);
-  });
-
-  test("an untracked .claude/skills/a -> ../shared symlink does not abort staging", () => {
-    gitInit(laptop);
-    gitInit(remote);
-    write(dir, "shared/SKILL.md", "shared\n");
-    fs.mkdirSync(path.join(laptop, ".claude/skills"), { recursive: true });
-    fs.symlinkSync(path.join(dir, "shared"), path.join(laptop, ".claude/skills/a"));
-    write(laptop, ".claude/skills/b/SKILL.md", "b\n");
-    const inputRoot = stageCloudInputs(host, laptop, remote, "cloud-1");
-    expect(fs.readFileSync(path.join(inputRoot, ".claude/skills/b/SKILL.md"), "utf8")).toBe("b\n");
-    expect(fs.existsSync(path.join(inputRoot, ".claude/skills/a"))).toBe(false);
-  });
-
-  test("more than 8 files go through ONE `cast cloud mirror-apply --stdin --into` ssh; an older host falls back to per-file bun -e", () => {
-    gitInit(laptop);
-    for (let i = 0; i < 12; i++) write(laptop, `.claude/skills/s${i}/SKILL.md`, `skill ${i}\n`);
-    write(laptop, ".claude/skills/s0/run.sh", "#!/bin/sh\n");
-    fs.chmodSync(path.join(laptop, ".claude/skills/s0/run.sh"), 0o755);
-    fs.mkdirSync(remote);
-    copyCloudFiles(host, laptop, remote);
-    const log = sshLog();
-    expect(log.filter((l) => l.includes("cast cloud mirror-apply --stdin --into"))).toHaveLength(1);
-    expect(log.filter((l) => l.includes('copied'))).toHaveLength(0);
-    for (let i = 0; i < 12; i++) expect(fs.readFileSync(path.join(remote, `.claude/skills/s${i}/SKILL.md`), "utf8")).toBe(`skill ${i}\n`);
-    expect(fs.statSync(path.join(remote, ".claude/skills/s0/run.sh")).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(path.join(remote, ".claude/skills/s1/SKILL.md")).mode & 0o777).toBe(0o600);
-
-    fs.rmSync(remote, { recursive: true, force: true });
-    fs.mkdirSync(remote);
-    fs.rmSync(process.env.CLOUD_TEST_LOG!);
-    process.env.CLOUD_TEST_OLD_HOST = "1";
-    copyCloudFiles(host, laptop, remote);
-    const old = sshLog();
-    expect(old.filter((l) => l.includes("cast cloud mirror-apply"))).toHaveLength(1);
-    expect(old.filter((l) => l.includes('copied'))).toHaveLength(13);
-    for (let i = 0; i < 12; i++) expect(fs.readFileSync(path.join(remote, `.claude/skills/s${i}/SKILL.md`), "utf8")).toBe(`skill ${i}\n`);
-
-    // A host with no cast on PATH at all (exit 127) also falls back: bun is enough there.
-    delete process.env.CLOUD_TEST_OLD_HOST;
-    process.env.CLOUD_TEST_NO_CAST = "1";
-    fs.rmSync(remote, { recursive: true, force: true });
-    fs.mkdirSync(remote);
-    fs.rmSync(process.env.CLOUD_TEST_LOG!);
-    copyCloudFiles(host, laptop, remote);
-    expect(sshLog().filter((l) => l.includes('copied'))).toHaveLength(13);
-    for (let i = 0; i < 12; i++) expect(fs.readFileSync(path.join(remote, `.claude/skills/s${i}/SKILL.md`), "utf8")).toBe(`skill ${i}\n`);
-  }, 90_000);
-
-  test("a small set stays on the per-file path", () => {
-    gitInit(laptop);
-    write(laptop, ".claude/skills/only/SKILL.md", "one\n");
-    fs.mkdirSync(remote);
-    copyCloudFiles(host, laptop, remote);
-    expect(sshLog().some((l) => l.includes("mirror-apply"))).toBe(false);
-    expect(fs.readFileSync(path.join(remote, ".claude/skills/only/SKILL.md"), "utf8")).toBe("one\n");
-  });
 });

@@ -234,9 +234,8 @@ export function staleTmuxServerKillPlan(
   livePid: number | null,
   ownerUid?: number,
   selfPid: number = process.pid,
-): { kill: StaleTmuxServer[]; selfHosted: StaleTmuxServer[]; refused: "tmux-unreachable" | "owner-unknown" | null } {
-  if (!Number.isInteger(livePid) || livePid! <= 1) return { kill: [], selfHosted: [], refused: "tmux-unreachable" };
-  if (!Number.isInteger(ownerUid) || ownerUid! < 0) return { kill: [], selfHosted: [], refused: "owner-unknown" };
+): { kill: StaleTmuxServer[]; selfHosted: StaleTmuxServer[]; refused: "tmux-unreachable" | null } {
+  if (livePid === null) return { kill: [], selfHosted: [], refused: "tmux-unreachable" };
   const kill: StaleTmuxServer[] = [];
   const selfHosted: StaleTmuxServer[] = [];
   for (const server of findStaleTmuxServers(procs, livePid, ownerUid)) {

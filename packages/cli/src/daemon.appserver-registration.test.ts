@@ -6,7 +6,6 @@ import {
   buildCodexUserTurnMessage,
   codexForkParentIdFromHead,
   isAppServerOwnedCodexTranscript,
-  isImportBornCodexRolloutFirstSight,
   isMissingAppServerThreadError,
   isTmuxSessionMetadataMatch,
   mayMaterializeClaudeTranscript,
@@ -37,18 +36,6 @@ describe("Codex app-server transcript ownership", () => {
     expect(isAppServerOwnedCodexTranscript("thread-live", normalHead, new Set(["thread-live"]), new Set(), new Set())).toBe(true);
     expect(isAppServerOwnedCodexTranscript("thread-persisted", normalHead, new Set(), new Set(["thread-persisted"]), new Set())).toBe(true);
     expect(isAppServerOwnedCodexTranscript("thread-cli", normalHead, new Set(), new Set(), new Set())).toBe(false);
-  });
-
-  test("pins a rollout forked from a codecast import at EOF on first sight only", () => {
-    // thread/fork timed out, the parent guard is gone, the file has never been read:
-    // its replayed history must not become new messages.
-    const importFile = "codecast-fork-2026-09-04T20-18-31-22b96cbf-2460-426a-8334-9cf6838815c1.jsonl";
-    expect(isImportBornCodexRolloutFirstSight(0, importFile)).toBe(true);
-    // Already positioned: appends after the pin are real turns.
-    expect(isImportBornCodexRolloutFirstSight(6747184, importFile)).toBe(false);
-    // A fork of an ordinary rollout (Codex Desktop re-open) syncs from the start.
-    expect(isImportBornCodexRolloutFirstSight(0, "rollout-2026-09-04T16-18-58-01a06e13-0e36-7202-b795-4719aa020cf4.jsonl")).toBe(false);
-    expect(isImportBornCodexRolloutFirstSight(0, null)).toBe(false);
   });
 });
 
@@ -146,9 +133,7 @@ describe("Codex history import routing", () => {
   test("imports copied history through app-server before generic resume", () => {
     const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
     const start = source.indexOf('if (resumeAgentType === "codex" && (parsed.fork === true || forceReconstitute) && conversationId)');
-    // The Codex branch ends where the registry-driven native fork branch begins
-    // (grok forks through its own resume flags there, via autoResumeSession).
-    const end = source.indexOf("// Native fork: the client copies its own session state", start);
+    const end = source.indexOf("let resumed = false", start);
     const branch = source.slice(start, end);
 
     expect(start).toBeGreaterThan(0);
@@ -165,9 +150,7 @@ describe("Codex history import routing", () => {
     expect(source).toContain('parsed.switch_agent === true && conversationId && resumeAgentType !== "codex"');
 
     const start = source.indexOf('if (resumeAgentType === "codex" && (parsed.fork === true || forceReconstitute) && conversationId)');
-    // The Codex branch ends where the registry-driven native fork branch begins
-    // (grok forks through its own resume flags there, via autoResumeSession).
-    const end = source.indexOf("// Native fork: the client copies its own session state", start);
+    const end = source.indexOf("let resumed = false", start);
     const branch = source.slice(start, end);
 
     expect(branch).toContain("activeCodexAppServer.threadFork");

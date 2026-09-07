@@ -1,20 +1,5 @@
 #!/usr/bin/env node
-import { VersionedObservationSet } from "./versionedObservationSet.js";
-import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { isCodexSafetyError, isMachineDeliveredMessage } from "@codecast/shared/contracts";
-import { codexTurnErrorMessage } from "./codexTurnError.js";
-import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
-import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
-import { ingestRetainedWeight } from "./workers/ingestTransport.js";
-import { ingestMessageTitle, ingestRecord, ingestSource } from "./workers/ingestClient.js";
-import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
-import { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
-export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
-import { validateTranscriptIngest, readTranscriptIngest, serializeTranscript, computeIngestSyncDelta, ingestIdentity, sameIngestFile, sameIngestSnapshot } from "./workers/ingestClient.js";
-import { readCompleteLines, readCompleteLinesSync, readIngestWindow, cursorPassBoundary } from "./transcriptWindow.js";
-export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type PassBoundary, type ReadWindowOpts } from "./transcriptWindow.js";
 import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.js";
-import { countTrackedFleet, type FleetCounts } from "./fleetCounts.js";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
@@ -26,11 +11,11 @@ import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
-import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
   HIBERNATE_MAX_PER_PASS,
+  HIBERNATE_SUBAGENT_QUIET_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -38,7 +23,7 @@ import {
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
+import { walkFiles, walkDirs, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
@@ -48,13 +33,10 @@ import { readInputIdleMs } from "./inputIdle.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
 import { hostForDevice, listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
-import { hasActiveCloudWork } from "./cloud/activity.js";
-import { releaseSessionWorktree } from "./worktreeGc.js";
+import { hasActiveCloudWork } from "./cloud/activity.js";import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
-import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, type LocalReadRequest } from "./repoMirror.js";
-import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
   useProfile,
@@ -101,9 +83,7 @@ import { OpencodeServer } from "./opencodeServer.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
-  buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
-  daemonLauncherMatchesCommand,
   daemonTickStale,
   DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
@@ -143,7 +123,6 @@ import {
   judgeProcessIdentity,
   processDeclaredSessionId,
   registrySupersedesCachedPid,
-  registrationPredatesProcess,
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
@@ -177,12 +156,6 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
-import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
-import { collectScan, visitScan, scanCanFallback, ScanCancelled, yieldScanBatch } from "./workers/scanClient.js";
-import { recentScan } from "./workers/scanJobs.js";
-import type { ScanJob, ScanRow } from "./workers/scanTypes.js";
-import { SUSPEND_GAP_MIN_MS, clocksDisagree, sawSuspend } from "./suspendClock.js";
-export { SUSPEND_GAP_MIN_MS, clocksDisagree, sawSuspend } from "./suspendClock.js";
 import {
   PASTE_END,
   PASTE_START,
@@ -208,11 +181,10 @@ import { HookStatusGate } from "./hookStatusGate.js";
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
-import { handleFsBrowseHttp } from "./fs/browseHttp.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
-import { enumerateProjectRoots, enumerateAgentHomeDirs, enumerateLocalRootsAsync, MAX_PROJECT_ROOTS, PROJECT_PARENT_DIRS, AGENT_HOME_DIRS } from "./projectRoots.js";
+import { enumerateProjectRoots, enumerateAgentHomeDirs, MAX_PROJECT_ROOTS, PROJECT_PARENT_DIRS, AGENT_HOME_DIRS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -224,12 +196,6 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   resumeModelFlagFromFile,
   resumeEffortFlagFromFile,
-  type ExportResult,
-  generateGrokSession,
-  writeGrokSession,
-  generatePiSession,
-  piSessionFilePath,
-  renderConversationHandoff,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
@@ -249,15 +215,14 @@ import {
   resumeTmuxName,
   rewriteSubagentJsonlToUuid,
   upgradedLegacyResumeTmuxName,
-  grokStableRulesFragment,
 } from "./resumeCommand.js";
-import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
-import { readThreadStateStamp } from "./stateCommand.js";
-import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { readThreadStateStamp } from "./threadStateStamp.js";
+import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
   FENCED_TMUX_TAG_NAMES,
@@ -406,18 +371,6 @@ async function resolveResumeCwdOrRefuse(opts: {
         }
       : undefined,
   });
-}
-
-// Where a transcript regenerated from Convex should say it ran. Explicit
-// override first, then the conversation's recorded project path; never the
-// daemon's own cwd (see generatedSessionCwd) and never the filesystem root.
-// Null means "refuse to regenerate": a rollout with no honest cwd is one the
-// resume path would only refuse anyway, after overwriting the real file.
-function regenerationCwd(data: ExportResult, cwdOverride?: string): string | null {
-  for (const candidate of [cwdOverride, data.conversation.project_path]) {
-    if (isResumableCwd(candidate) && fs.existsSync(candidate)) return candidate;
-  }
-  return null;
 }
 
 // "Clone it first" is only an actionable banner when there is a git remote to
@@ -744,7 +697,7 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
 // both answer with this floor: the tick monitor below, and the freeze probe's
 // CPU rule (isSuspendGap). Tuning it in one place used to leave the two
 // watchers disagreeing about the same window. Exported for tests.
-
+export const SUSPEND_GAP_MIN_MS = 30_000;
 
 // The one rule both loop watchers use to answer "did the machine sleep during
 // this window". The wall clock runs through a suspend and the monotonic clock
@@ -754,7 +707,9 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
 // under it, while the freeze probe sees 100ms ticks and asks instead whether
 // the sleep was a large FRACTION of the gap. One name, two bars, so the next
 // reader cannot pick whichever rule they find first.
-
+export function clocksDisagree(wallMs: number, monoMs: number, minGapMs: number): boolean {
+  return wallMs - monoMs >= minGapMs;
+}
 
 // "Did the machine sleep in this window" — a different question from
 // classifyTickGap's "was the loop pinned in it", and one window can answer yes
@@ -763,7 +718,9 @@ async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
 // backend outage clock) is owed to the sleep whatever the loop did around it:
 // the FSEvents stream can go silent across a suspend without erroring, and a
 // stall verdict on the same window must not swallow that recovery.
-
+export function sawSuspend(wallMs: number, monoMs: number): boolean {
+  return clocksDisagree(wallMs, monoMs, SUSPEND_GAP_MIN_MS);
+}
 
 // A long gap between timer ticks has two very different causes: the MACHINE slept
 // (the process consumed ~no CPU during the gap) or the EVENT LOOP was pinned by
@@ -921,8 +878,6 @@ const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
 // in the right working directory even when the repo lives off the convention paths.
 const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
-// sessionId -> repair key (see projectPathRepairKey) the server last confirmed.
-const PROJECT_PATH_REPAIRS_FILE = path.join(CONFIG_DIR, "project-path-repairs.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
 
@@ -1004,10 +959,6 @@ interface PendingMessages {
     timestamp: number;
     filePath: string;
     fileSize: number;
-    ingestKey?: string;
-    ingestSignature?: string;
-    ingestIdentity?: string;
-    ingestClient?: string;
     thinking?: string;
     toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
@@ -1035,7 +986,6 @@ interface DaemonState {
   // Loop freeze budget, written by the 30s monitor tick so `cast health` can
   // print it without asking the daemon.
   loopFreeze?: LoopFreezeState;
-  fleetCounts?: FleetCounts;
   // macOS App Data (TCC) outcome for Cursor's data dir, recorded so later
   // logins can start the watcher without re-touching an undecided TCC state
   // (see cursorWatcherDecision) and doctor can explain a denial.
@@ -1428,20 +1378,15 @@ export function collectPastedInjectedIds(conversationId: string): string[] {
   return ids;
 }
 
-// Forgets what THIS process has already pasted for a conversation so re-pended
-// rows can land again after the pane was replaced. It does NOT touch a delivery
-// that is still running: an in-flight entry belongs to a delivery that will
-// paste into whichever pane the (shared, in-flight) resume produces and then
-// clears its own entry in `finally` — or is reclaimed by IN_FLIGHT_HARD_TTL_MS
-// if it hangs. Dropping it here let the poller start a second delivery of the
-// same row while the first was mid-paste, so a fork's seed prompt landed twice
-// (2026-09-05, grok rebuild path). `inFlight` is reported for the log only.
 export function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number; preserved: number } {
   let inFlight = 0;
   let dedup = 0;
   let preserved = 0;
-  for (const entry of messagesInFlight.values()) {
-    if (entry.conversationId === conversationId) inFlight++;
+  for (const [id, entry] of messagesInFlight) {
+    if (entry.conversationId === conversationId) {
+      messagesInFlight.delete(id);
+      inFlight++;
+    }
   }
   for (const [id, entry] of injectedMessageTs) {
     if (entry.conversationId === conversationId) {
@@ -1459,7 +1404,7 @@ export function clearMessageDeliveryStateForConversation(conversationId: string)
       dedup++;
     }
   }
-  // The per-conversation lock is released by the running delivery's `finally`.
+  conversationDeliveryActive.delete(conversationId);
   return { inFlight, dedup, preserved };
 }
 
@@ -1489,7 +1434,7 @@ async function clearConversationDeliveryAndResumeState(
 
   const cleared = clearMessageDeliveryStateForConversation(conversationId);
   if (cleared.inFlight || cleared.dedup || cleared.preserved) {
-    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.dedup} dedup, ${cleared.preserved} unconfirmed-injected preserved, ${cleared.inFlight} in-flight left to finish`);
+    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.inFlight} in-flight, ${cleared.dedup} dedup, ${cleared.preserved} unconfirmed-injected preserved`);
   }
   recentSessionInjections.delete(conversationId);
 }
@@ -1528,32 +1473,17 @@ export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThre
 type InvocableSkill = { name: string; description: string };
 const SKILLS_SCAN_TTL_MS = 5 * 60_000;
 const skillsScanMemo = new Map<string, { at: number; value: Promise<InvocableSkill[]> }>();
-const skillsScanGood = new Map<string, InvocableSkill[]>();
-let skillsScanGeneration = 0;
 export function readAvailableSkills(projectPath?: string): Promise<InvocableSkill[]> {
-  const home = process.env.HOME || "";
-  const key = `${home}\0${projectPath ?? ""}`;
+  const key = projectPath ?? "";
   const memo = skillsScanMemo.get(key);
-  if (memo && Date.now() - memo.at < SKILLS_SCAN_TTL_MS) return skillsScanGood.has(key) ? Promise.resolve(skillsScanGood.get(key)!) : memo.value;
-  const generation = skillsScanGeneration;
-  const value = readInventoryAsync(home, projectPath).then(inventory => {
-    if (generation !== skillsScanGeneration) throw new ScanCancelled("skills scan reset");
-    if (inventory.unreadable.length) throw new Error("skills inventory unavailable");
-    const skills = toInvocableList(inventory);
-    skillsScanGood.set(key, skills);
-    return skills;
-  });
-  const entry = { at: Date.now(), value };
-  skillsScanMemo.set(key, entry);
-  void value.catch(() => { if (skillsScanMemo.get(key) === entry) skillsScanMemo.delete(key); });
-  const good = skillsScanGood.get(key);
-  return good ? Promise.resolve(good) : value;
+  if (memo && Date.now() - memo.at < SKILLS_SCAN_TTL_MS) return memo.value;
+  const value = readInventoryAsync(process.env.HOME || "", projectPath).then(toInvocableList);
+  skillsScanMemo.set(key, { at: Date.now(), value });
+  value.catch(() => skillsScanMemo.delete(key));
+  return value;
 }
-
 export function resetSkillsScanMemoForTests(): void {
-  skillsScanGeneration++;
   skillsScanMemo.clear();
-  skillsScanGood.clear();
 }
 
 function syncSkillsForConversation(conversationId: string, projectPath: string | undefined, syncService: SyncService): void {
@@ -1598,10 +1528,7 @@ function sendAgentStatus(
   // brings it back.
   opts?: { hibernatedAt?: number | null },
 ): void {
-  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   const prevStatus = lastSentAgentStatus.get(sessionId);
-  const parking = hibernationInFlight.get(sessionId);
-  if (parking && prevStatus !== status) parking.cancel();
   const isTransition = prevStatus !== status;
   // The throttle drops redundant "working" re-sends. A write carrying a park
   // stamp is never redundant: dropping it would leave hibernated_at set on a
@@ -1627,16 +1554,11 @@ function sendAgentStatus(
   const openTasks = pendingOpenTaskReports.get(sessionId);
   pendingOpenTaskReports.delete(sessionId);
   const withTasks = openTasks !== undefined && SETTLE_STATUSES_WITH_TASKS.has(status);
-  const payload: PendingStatusPayload = { conversationId, status, permissionMode, openTasks: withTasks ? openTasks : undefined };
-  void serializeSessionStatus(sessionId, async () => {
-    if (status === "hibernated" && !hibernatedSessions.has(sessionId)) return false;
-    const acknowledged = await syncService.updateSessionAgentStatus(conversationId, status, clientTs, payload.permissionMode, payload.openTasks, presumed, opts?.hibernatedAt);
-    if (acknowledged && payload.openTasks !== undefined) {
-      lastOpenTasksSentAt.set(sessionId, Date.now());
-      lastOpenTasksSentJson.set(sessionId, JSON.stringify(payload.openTasks));
-    }
-    return acknowledged;
-  }, "status", payload);
+  if (withTasks) {
+    lastOpenTasksSentAt.set(sessionId, Date.now());
+    lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
+  }
+  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
@@ -1809,7 +1731,6 @@ function startHookServer(): http.Server {
     if (handleTerminalHttp(req, res, terminalServerOptions())) return;
     if (handleVaultHttp(req, res, vaultServerOptions())) return;
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
-    if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
 
     res.writeHead(404);
     res.end();
@@ -1954,7 +1875,7 @@ export async function extractPendingToolUseFromTranscriptAsync(transcriptPath: s
 }
 
 const permissionRecordPending = new Set<string>();
-const permissionJustResolved = new VersionedObservationSet<string>();
+const permissionJustResolved = new Set<string>();
 // One-shot cleanup tracking: when a session is first observed in
 // bypassPermissions mode (post-daemon-restart or post-upgrade), sweep any
 // stale pending_permissions records left over from before the phantom-suppression
@@ -2575,42 +2496,11 @@ const localProjectRootsCache = createMtimeGatedCache<string[]>(
   computeLocalProjectRootsNow,
   { ttlMs: 5 * 60_000 },
 );
-let localRootsSnapshot: { home: string; data: string[]; at: number } | null = null;
-let localRootsGeneration = 0;
-let localRootsRefresh: { home: string; promise: Promise<void> } | null = null;
-export function refreshLocalProjectRoots(): Promise<void> {
-  const home = process.env.HOME || "";
-  if (localRootsRefresh?.home === home) return localRootsRefresh.promise;
-  const generation = ++localRootsGeneration;
-  const started = [...new Set([...startedSessionTmux.values()].map(s => s.projectPath).filter((p): p is string => !!p))].slice(0, MAX_PROJECT_ROOTS);
-  const promise = (async () => {
-    let roots: string[];
-    if (daemonWorkersEnabled()) {
-      try {
-        const rows = await collectScan({ name: "roots", home, started });
-        roots = rows.map(r => { if (r.type !== "root") throw new Error("invalid root observation"); return r.path; });
-      } catch (error) { if (!scanCanFallback(error)) throw error; roots = await enumerateLocalRootsAsync(home, started); }
-    } else roots = await enumerateLocalRootsAsync(home, started);
-    if (generation === localRootsGeneration && home === (process.env.HOME || "")) localRootsSnapshot = { home, data: roots, at: Date.now() };
-  })().catch(() => {}).finally(() => { if (localRootsRefresh?.promise === promise) localRootsRefresh = null; });
-  localRootsRefresh = { home, promise };
-  return promise;
-}
 export function computeLocalProjectRoots(): string[] {
-  if (!daemonWorkersEnabled()) return localProjectRootsCache.get();
-  const home = process.env.HOME || "";
-  if (!localRootsSnapshot || localRootsSnapshot.home !== home || Date.now() - localRootsSnapshot.at > 30_000) void refreshLocalProjectRoots();
-  return localRootsSnapshot?.home === home ? localRootsSnapshot.data : [];
-}
-function projectRootsHeartbeatFields(): { local_project_roots?: string[] } {
-  const roots = computeLocalProjectRoots();
-  return !daemonWorkersEnabled() || localRootsSnapshot?.home === (process.env.HOME || "") ? { local_project_roots: roots } : {};
+  return localProjectRootsCache.get();
 }
 export function invalidateLocalProjectRoots(): void {
   localProjectRootsCache.invalidate();
-  localRootsGeneration++;
-  localRootsRefresh = null;
-  if (localRootsSnapshot) localRootsSnapshot.at = 0;
 }
 
 // Sync-backlog fields published on every heartbeat so the web can show a
@@ -2802,33 +2692,6 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
     log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     remoteKeysPushInFlight = false;
-  }
-}
-
-// Home mirror fan-out (cloud/mirror): this laptop's instruction files and
-// agent config to every reachable host, on the credential loop's cadence.
-// Hash-gated on the fast tick, stamp-verified on the periodic one, and a
-// host whose push failed is left alone until the local hash changes or the
-// periodic tick — a push that retried every minute would keep a broken box
-// awake (its idle watchdog counts inbound ssh as activity).
-let remoteMirrorPushInFlight = false;
-
-async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean; verifyRemote?: boolean } = {}): Promise<void> {
-  if (isRemoteDevice() || remoteMirrorPushInFlight) return;
-  const config = readConfig();
-  if (!config || !isCloudMirrorEnabled(config)) return;
-  remoteMirrorPushInFlight = true;
-  try {
-    const { runMirrorTick } = await import("./cloud/mirror/push.js");
-    await runMirrorTick({ reason, onlyIfChanged: opts.onlyIfChanged, verifyRemote: opts.verifyRemote }, {
-      listHosts: reachableTransferHosts,
-      readConfig: () => config,
-      log: (m) => log(`[MIRROR] ${m}`),
-    });
-  } catch (err) {
-    log(`[MIRROR] mirror push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    remoteMirrorPushInFlight = false;
   }
 }
 
@@ -3473,8 +3336,7 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
-  const config = readConfig();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();  const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
   }
@@ -3509,7 +3371,7 @@ async function sendHeartbeat(): Promise<void> {
         pid: process.pid,
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
-        ...projectRootsHeartbeatFields(),
+        local_project_roots: computeLocalProjectRoots(),
         // Per-repo git health (origin real? fetch ok? ahead/behind) — see gitPlane.ts.
         git_plane: gitPlaneHeartbeatPayload(),
         // The device's PUBLIC git key (gitIdentity.ts) — not a secret; the web
@@ -3965,8 +3827,7 @@ export async function killLocalPanesForConversation(
 async function killConversationBackends(
   conversationId: string,
   sessionIdHint?: string,
-  retireWorkspace = false,
-): Promise<{ result?: string; error?: string }> {
+  retireWorkspace = false,): Promise<{ result?: string; error?: string }> {
   let result: string | undefined;
   let error: string | undefined;
 
@@ -3977,7 +3838,6 @@ async function killConversationBackends(
   // being anybody's.
   let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath
     ?? persistedAppServerThreads.get(conversationId)?.cwd;
-
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
   // start_session so "one backend per conversation" is enforced identically
@@ -3990,8 +3850,7 @@ async function killConversationBackends(
       sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
     }
     log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
-    result = "killed_app_server";
-  }
+    result = "killed_app_server";  }
   if (teardown.killedTmux) {
     result = "killed_tmux";
   }
@@ -4028,7 +3887,7 @@ async function killConversationBackends(
   // already-dead tree, and the guard is what makes killing a child alone safe. The
   // parent's own kill is unaffected: it owns its process, so it takes the branch
   // below and tears its tree down normally.
-  const teardownPlan = planSessionTeardown(sessionId ? await acquireSessionProcessOwnership(sessionId) : "unknown");
+  const teardownPlan = planSessionTeardown(sessionId ? sessionProcessOwnership(sessionId) : "owned");
   if (sessionId && !result && !teardownPlan.reapPidTree) {
     log(`[REMOTE] Skipping process teardown for ${shortId(sessionId)}: does not own its process (conversation ${conversationId.slice(0, 12)})`);
   } else if (sessionId && !result) {
@@ -4096,7 +3955,6 @@ async function killConversationBackends(
       : Promise.reject(new Error("No session roster")));
     log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
   }
-
   if (!result) result = sessionId ? "no_process" : "no_session";
   return { result, error };
 }
@@ -4116,7 +3974,7 @@ async function killConversationBackendsForAgentSwitch(
       : undefined;
 
   if (sessionId) {
-    const plan = planSessionTeardown(await acquireSessionProcessOwnership(sessionId));
+    const plan = planSessionTeardown(sessionProcessOwnership(sessionId));
     const cachedTmux = resumeSessionCache.get(sessionId);
     if (cachedTmux && cachedTmux !== startedTmux && validateTmuxTarget(cachedTmux) && plan.killCachedResumeTmux) {
       await killTmuxSessionAndTree(cachedTmux);
@@ -4728,17 +4586,6 @@ async function executeRemoteCommand(
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
         // plain argv, which works here because envPrefix starts with `env`.
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
-        if (agentType === "grok") {
-          // The feed rides `--rules` (grok has no hook channel for context); the
-          // fragment is a shell substitution, so it is appended to the typed
-          // command after the argv allowlist, never passed through it.
-          try {
-            const rulesFile = await writeGrokStableRulesFile(config, cwd, stablePrefs, conversationId || `launch-${Date.now()}`, conversationId);
-            cmdText += grokStableRulesFragment(rulesFile);
-          } catch (err) {
-            log(`grok stable rules skipped: ${err instanceof Error ? err.message : String(err)}`, "warn");
-          }
-        }
 
         let codexThreadId: string | null = null;
         const codexPermissions = codexPermissionsFromArgs(binaryArgs);
@@ -4789,7 +4636,7 @@ async function executeRemoteCommand(
           log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
-            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy, sandbox: codexPermissions.sandbox, persist: true });
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
             // This device now owns and runs the session — claim it and clear any
             // stale "clone it first" error a different device may have left.
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
@@ -4884,15 +4731,15 @@ async function executeRemoteCommand(
           break;
         }
 
-        const escapeThreadId = appServerConversations.get(conversationId) ?? persistedAppServerThreads.get(conversationId)?.threadId;
-        if (escapeThreadId) {
+        const escapeThreadId = appServerConversations.get(conversationId);
+        if (escapeThreadId && codexAppServerInstance?.running) {
           const activeTurnId = findActiveTurnForThread(escapeThreadId);
           const persisted = persistedAppServerThreads.get(conversationId);
           if (persisted?.activeTurnId) {
             persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
             persistAppServerThreadRegistrations();
           }
-          if (activeTurnId && codexAppServerInstance?.running) {
+          if (activeTurnId) {
             await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
             result = "escape_interrupted";
             log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
@@ -5135,8 +4982,7 @@ async function executeRemoteCommand(
         const sessionIdHint = typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined;
         const killed = pendingAgentSwitches.has(conversationId)
           ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
-          : await killConversationBackends(conversationId, sessionIdHint, true);
-        result = killed.result;
+          : await killConversationBackends(conversationId, sessionIdHint, true);        result = killed.result;
         error = killed.error;
         break;
       }
@@ -5443,27 +5289,9 @@ async function executeRemoteCommand(
                 const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
                 if (exportData.messages.length > 0) {
                   const tailMessages = chooseClaudeAutoTrim(exportData);
-                  let newSessionId: string;
-                  let reconFilePath: string;
-                  if (targetAgent === "grok") {
-                    const files = generateGrokSession(exportData, { tailMessages, cwd });
-                    ({ sessionId: newSessionId, filePath: reconFilePath } = writeGrokSession(files));
-                  } else if (targetAgent === "pi") {
-                    const pi = generatePiSession(exportData, { tailMessages, cwd });
-                    newSessionId = pi.sessionId;
-                    reconFilePath = piSessionFilePath(pi.cwd, pi.sessionId);
-                    await writeRebuiltDeltaTranscript("pi", pi.jsonl, reconFilePath, pi.sessionId);
-                  } else if (targetAgent === "opencode") {
-                    const sesId = await rebuildOpencodeSession(exportData, cwd);
-                    if (!sesId) throw new Error("opencode serve sidecar unavailable");
-                    newSessionId = sesId;
-                    reconFilePath = "";
-                  } else {
-                    let reconJsonl: string;
-                    ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, cwd }));
-                    ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
-                  }
-                  if (reconFilePath) setPosition(reconFilePath, fs.statSync(reconFilePath).size);
+                  const { jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
+                  const { filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd);
+                  setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                   remapConversationSession(sessionId, newSessionId, conversationId);
                   void pushSessionIdBinding(conversationId, newSessionId, cwd);
                   const resumed = await autoResumeSession(
@@ -5625,8 +5453,6 @@ async function executeRemoteCommand(
           }
         }
         if (resumeAgentType === "codex" && (parsed.fork === true || forceReconstitute) && conversationId) {
-          let forkTimeoutMs = 0;
-          let forkFailed = false;
           try {
             const activeCodexAppServer = codexAppServerInstance?.running ? codexAppServerInstance : null;
             if (!activeCodexAppServer) {
@@ -5640,14 +5466,14 @@ async function executeRemoteCommand(
               result = JSON.stringify({ forked: false, reason: "no_local_checkout" });
               break;
             }
-            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId: randomUUID(), cwd });
+            const { jsonl, sessionId: importSessionId } = generateCodexJsonl(exportData, { sessionId: randomUUID() });
             const { filePath: importPath } = writeCodexSession(jsonl, importSessionId, "codecast-fork");
             const importBytes = fs.statSync(importPath).size;
             setPosition(importPath, importBytes);
             const { approvalPolicy, sandbox } = resolveCodexPermissionDefaults(config);
             pendingAppServerForkParents.add(importSessionId);
             pendingForkParentId = importSessionId;
-            forkTimeoutMs = threadForkTimeoutMsForBytes(importBytes);
+            const forkTimeoutMs = threadForkTimeoutMsForBytes(importBytes);
             if (forkTimeoutMs > 60_000) {
               log(`[REMOTE] Codex history import is ${Math.ceil(importBytes / (1024 * 1024))} MiB; allowing ${Math.round(forkTimeoutMs / 1000)}s for thread/fork`);
             }
@@ -5670,7 +5496,6 @@ async function executeRemoteCommand(
               cwd,
               persist: true,
               approvalPolicy,
-              sandbox,
             });
             if (forked.thread.path && fs.existsSync(forked.thread.path)) {
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
@@ -5699,71 +5524,11 @@ async function executeRemoteCommand(
             const message = forkErr instanceof Error ? forkErr.message : String(forkErr);
             logError(`[REMOTE] Codex app-server fork import failed for ${sessionId.slice(0, 8)}`, forkErr instanceof Error ? forkErr : new Error(message));
             error = `Codex history import failed: ${message}`;
-            forkFailed = true;
             stopManagedSessionHeartbeat(sessionId);
             await syncServiceRef?.unregisterManagedSession(sessionId).catch(logConvexFailure);
             await syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
           } finally {
-            if (pendingForkParentId) {
-              // A fork that timed out on our side is usually still running in the
-              // app-server, which keeps writing the replayed history into the new
-              // rollout after we gave up. Keep the parent guarded for one more
-              // timeout window so the watcher pins that rollout at EOF instead of
-              // ingesting the replay as new messages (jx7652s, 2026-09-04).
-              const releasedParentId = pendingForkParentId;
-              if (forkFailed && forkTimeoutMs > 0) {
-                setTimeout(() => pendingAppServerForkParents.delete(releasedParentId), forkTimeoutMs).unref();
-              } else {
-                pendingAppServerForkParents.delete(releasedParentId);
-              }
-            }
-            restartingSessionIds.delete(sessionId);
-          }
-          break;
-        }
-        // Native fork: the client copies its own session state under the new id
-        // (registry `forkCmd` — grok's `--resume <parent> --fork-session
-        // --session-id <new>`). The server offers it only for at-tip plain forks
-        // and passes the parent id; this branch never falls through to the
-        // rebuild path, because a client that forks natively is one whose
-        // transcript codecast cannot write. The new id must be one the client
-        // accepts, so a key it would reject is replaced by a fresh UUID and the
-        // row rebound — the same shape as a claude reconstitution. The
-        // session→conversation map is written BEFORE launch so the watcher
-        // links the child's transcript instead of minting a doppelgänger.
-        // No delivery-state reset afterwards: the branch's seed message is
-        // already in flight against this very launch (its delivery joined the
-        // in-flight resume), and clearing it re-delivers the seed (observed
-        // 2026-09-05). Nothing stale can exist for a session that never ran.
-        if (parsed.fork === true && conversationId && resumeAgentType && agentForksNatively(resumeAgentType)
-            && typeof parsed.parent_session_id === "string" && parsed.parent_session_id !== sessionId
-            && !findSessionFile(sessionId)) {
-          const parentId = parsed.parent_session_id as string;
-          const nativeId = isValidResumeSessionId(resumeAgentType, sessionId) ? sessionId : randomUUID();
-          log(`[REMOTE] Native fork ${parentId.slice(0, 8)} → ${nativeId.slice(0, 8)} (${resumeAgentType}) for conv ${conversationId.slice(0, 12)}`);
-          try {
-            const cache = readConversationCache();
-            cache[nativeId] = conversationId;
-            saveConversationCache(cache);
-            if (conversationCacheRef) conversationCacheRef[nativeId] = conversationId;
-            if (nativeId !== sessionId) {
-              remapConversationSession(sessionId, nativeId, conversationId);
-              await pushSessionIdBinding(conversationId, nativeId, projectPath || undefined);
-            }
-            const forked = await autoResumeSession(
-              nativeId, "", readTitleCache(), projectPath, conversationId, resumeAgentType,
-              { ...resumeOptions, forkFromSessionId: parentId },
-            );
-            if (forked) {
-              syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
-              conversationResumeFailures.delete(conversationId);
-              result = JSON.stringify({ forked: true, session_id: nativeId });
-              log(`[REMOTE] Native fork ${nativeId.slice(0, 8)} running for conv ${conversationId.slice(0, 12)}`);
-            } else {
-              error = `Native ${resumeAgentType} fork of ${parentId.slice(0, 8)} failed`;
-              await syncServiceRef?.setSessionError(conversationId, error).catch(logConvexFailure);
-            }
-          } finally {
+            if (pendingForkParentId) pendingAppServerForkParents.delete(pendingForkParentId);
             restartingSessionIds.delete(sessionId);
           }
           break;
@@ -5836,28 +5601,15 @@ async function executeRemoteCommand(
                 let newSessionId: string;
                 let reconFilePath: string;
                 if (reconAgent === "codex") {
-                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId, cwd }));
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId }));
                   ({ filePath: reconFilePath } = writeCodexSession(reconJsonl, newSessionId));
-                } else if (reconAgent === "grok") {
-                  const files = generateGrokSession(exportData, { tailMessages: chooseClaudeAutoTrim(exportData), cwd });
-                  ({ sessionId: newSessionId, filePath: reconFilePath } = writeGrokSession(files));
-                } else if (reconAgent === "pi") {
-                  const pi = generatePiSession(exportData, { tailMessages: chooseClaudeAutoTrim(exportData), cwd });
-                  newSessionId = pi.sessionId;
-                  reconFilePath = piSessionFilePath(pi.cwd, pi.sessionId);
-                  await writeRebuiltDeltaTranscript("pi", pi.jsonl, reconFilePath, pi.sessionId);
-                } else if (reconAgent === "opencode") {
-                  const sesId = await rebuildOpencodeSession(exportData, cwd);
-                  if (!sesId) throw new Error("opencode serve sidecar unavailable");
-                  newSessionId = sesId;
-                  reconFilePath = "";
                 } else {
                   const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
                   const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId, cwd }));
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
                   ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
                 }
-                if (reconFilePath) setPosition(reconFilePath, fs.statSync(reconFilePath).size);
+                setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
 
                 const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType, resumeOptions);
@@ -6486,32 +6238,6 @@ export async function buildCodexStableContext(
 /** A stable-context card represents context that reached a real Codex thread.
  * Never publish it before threadStart resolves: app-server startup can fail and
  * fall back to tmux, where no developerInstructions were injected. */
-/**
- * grok gets the stable-context feed at launch through `--rules` (see
- * grokStableRulesFragment): build it in-process exactly as the codex app-server
- * path does, write it to a private file the pane's shell substitutes in, and
- * record what was injected against the conversation. Returns the file path, or
- * undefined when stable mode is off for this launch.
- */
-export async function writeGrokStableRulesFile(
-  config: Config | null,
-  cwd: string | undefined,
-  prefs: StableLaunchPrefs | undefined,
-  key: string,
-  conversationId?: string,
-): Promise<string | undefined> {
-  const built = await buildCodexStableContext(config, cwd, prefs);
-  if (!built) return undefined;
-  const dir = path.join(CONFIG_DIR, "stable-rules");
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = path.join(dir, `${key.replace(/[^A-Za-z0-9_-]/g, "_")}.md`);
-  fs.writeFileSync(file, built.text, { mode: 0o600 });
-  if (conversationId && config) {
-    recordStableContext(config, { conversation_id: conversationId, data: built.data }).catch(() => {});
-  }
-  return file;
-}
-
 export async function startCodexThreadThenRecordStableContext<T>(
   startThread: () => Promise<T>,
   record?: () => void,
@@ -6622,7 +6348,30 @@ function saveTitleCache(cache: TitleCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
-export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
+function generateTitleFromMessage(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const cmdNameMatch = trimmed.match(/<command-name>([^<]*)<\/command-name>/);
+  if (cmdNameMatch) return `/${cmdNameMatch[1].replace(/^\//, "")}`;
+
+  const cmdMsgMatch = trimmed.match(/<command-message>([^<]*)<\/command-message>/);
+  if (cmdMsgMatch) return `/${cmdMsgMatch[1].replace(/^\//, "")}`;
+
+  const cleaned = trimmed
+    .replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, "")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+
+  const result = cleaned || trimmed;
+  if (result.length <= 50) {
+    return result;
+  }
+
+  return result.slice(0, 50) + "...";
+}
 
 // Every watcher event, the command poll and the sweeps read the state file
 // first; on a 200 session fleet that is one sync read per transcript append.
@@ -6950,7 +6699,7 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
   if (cached !== undefined) return cached;
   const decodedSlugPath = decodeProjectDirName(dirName);
   let recordedCwd: string | undefined;
-  try { recordedCwd = extractCwd(readFileHeadLines(filePath)); } catch {}
+  try { recordedCwd = extractCwd(readFileHead(filePath, 65536)); } catch {}
   const result = pickProjectPath({ decodedSlugPath, recordedCwd, home: process.env.HOME });
   // Only memoize a trustworthy answer: a found cwd, or a slug that resolved to a
   // real non-$HOME project. A not-yet-populated transcript (no cwd line yet)
@@ -6961,432 +6710,50 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
   return result;
 }
 
-export async function retryCreateTranscriptConversation(params: CreateConversationParams, conversationCache: ConversationCache, pendingMessages: PendingMessages, syncService: SyncService, retryQueue: RetryQueue, updateState: () => void): Promise<boolean> {
-  return serializeTranscript(`ingest-session:${params.sessionId}`, async () => {
-      // Ops carry the exact params the direct create attempted (including
-      // parentConversationId/isSubagent — dropping them minted flat,
-      // unparented subagent conversations, jx70pyh 2026-07-29).
-      const before = conversationCache[params.sessionId];
-      const created = await syncService.createConversation(params);
-      checkTranscriptDeadline();
-      const conversationId = conversationCache[params.sessionId] !== before && conversationCache[params.sessionId] ? conversationCache[params.sessionId] : created;
-      conversationCache[params.sessionId] = conversationId;
-      saveConversationCache(conversationCache);
-      log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
-
-      // Mirror the direct path's pending-subagent resolution so a child whose
-      // queued op predates full params (older daemon's persisted queue) still
-      // re-parents via linkSessions.
-      for (const link of resolvePendingSubagentLinks(params.sessionId, conversationId, pendingSubagentParents, conversationCache)) {
-        syncService.linkSessions(link.parentConvId, link.childConvId, subagentDescriptions.get(link.childSessionId)).then(() => {
-          log(`Retry: Linked pending subagent ${link.childSessionId.slice(0, 8)} -> parent ${link.parentSessionId.slice(0, 8)}`);
-        }).catch((linkErr) => {
-          log(`Retry: Failed to link subagent ${link.childSessionId.slice(0, 8)}: ${linkErr}`);
-        });
-        pendingSubagentParents.delete(link.childSessionId);
-      }
-
-      try {
-        if (!await flushPendingTranscript(pendingMessages, params.sessionId, conversationId, conversationCache, syncService, retryQueue)) return false;
-      } finally { transcriptRetries.delete(params.sessionId); }
-      updateState();
-      return true;
-  });
-}
-
-class TranscriptIngestRetry extends Error {}
-const transcriptRetries = new Set<string>();
-const transcriptRetryOwners = new TranscriptRetryOwner({
-  allowed: () => !readDaemonState()?.authExpired && !isSyncPaused(),
-  retryable: error => !(error instanceof AuthExpiredError),
-  onMissing: async source => {
-    transcriptAckObserved.delete(source.file);
-    codexModelPositions.delete(source.file);
-    bakImageRecoveryDone.delete(source.file);
-    await pruneAcceptedTranscript(source.file);
-  },
-  onStop: source => { transcriptAckObserved.delete(source.file); },
-});
-type TranscriptAckWindow = { file: string; identity: string; boundary: number; source: ReturnType<typeof ingestIdentity>; pasted: Map<string, string[]> };
-const transcriptAckObserved = new Map<string, ReturnType<typeof ingestIdentity>>();
-const TRANSCRIPT_ACK_OBSERVATIONS = 4096;
-const transcriptAckWindows = new Map<string, TranscriptAckWindow>();
-async function observeTranscriptAckWindow(sessionId: string, file: string): Promise<void> {
-  const pasted = new Map<string, string[]>();
-  for (const [id, entry] of injectedMessageTs) {
-    if (messagesInFlight.has(id)) continue;
-    const ids = pasted.get(entry.conversationId) ?? [];
-    ids.push(id); pasted.set(entry.conversationId, ids);
-  }
-  let current: ReturnType<typeof ingestIdentity>;
-  try { current = ingestIdentity(await fs.promises.stat(file)); }
-  catch (err: any) {
-    if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) { transcriptAckObserved.delete(file); return; }
-    throw err;
-  }
-  const previous = transcriptAckObserved.get(file);
-  transcriptAckObserved.delete(file);
-  transcriptAckObserved.set(file, current);
-  if (transcriptAckObserved.size > TRANSCRIPT_ACK_OBSERVATIONS) transcriptAckObserved.delete(transcriptAckObserved.keys().next().value!);
-  if (previous && sameIngestFile(previous, current) && current.size >= previous.size) {
-    transcriptAckWindows.set(sessionId, { file, identity: JSON.stringify([current.dev, current.ino, current.birthtimeMs]), boundary: previous.size, source: current, pasted });
-  }
-}
-function transcriptAckEligibility(messages: RawMessage[], sessionId: string, conversationId: string, pendingReplay: boolean): () => Promise<boolean> {
-  const window = transcriptAckWindows.get(sessionId);
-  const eligible = !pendingReplay && !!window && messages.every(msg => {
-    if (msg.role !== "user") return true;
-    if (isHarnessEmittedUserTurn(msg.content)) return false;
-    const record = ingestRecord(msg);
-    return !!record && ["claude", "cursor", "codex"].includes(record.client) && record.file === window.file && record.identity === window.identity && record.offset >= window.boundary;
-  });
-  const pasted = window?.pasted.get(conversationId) ?? [];
-  return async () => {
-    if (!eligible || !window) return false;
-    let source: ReturnType<typeof ingestIdentity>;
-    try { source = ingestIdentity(await fs.promises.stat(window.file)); }
-    catch (err: any) {
-      if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) return false;
-      throw err;
-    }
-    if (!sameIngestFile(window.source, source) || source.size < window.source.size || source.size === window.source.size && !sameIngestSnapshot(window.source, source)) return false;
-    const current = collectPastedInjectedIds(conversationId);
-    return current.length === pasted.length && current.every((id, i) => id === pasted[i]);
-  };
-}
-type TranscriptReceipt = { signature: string; file: string; identity: string; size: number; sessionId: string; weight: number; sourceKey: string };
-const acceptedPending = new Map<string, Map<string, TranscriptReceipt>>();
-let acceptedPendingReserved = 0;
-let acceptedPendingCount = 0;
-let acceptedPendingBytes = 0;
-let acceptedPendingReservedBytes = 0;
-const acceptedPendingOwners = new Map<string,{count:number;bytes:number;reserved:number;reservedBytes:number}>();
-const retainedPendingWeights = new WeakMap<object,number>();
-const pendingTranscriptVersions = new WeakMap<PendingMessages,object>();
-const TRANSCRIPT_PENDING_ROWS = INGEST_WINDOW_ROWS;
-const TRANSCRIPT_PENDING_BYTES = 2 * 1024 * 1024;
-const TRANSCRIPT_RECEIPT_ROWS = 2048;
-const TRANSCRIPT_RECEIPT_BYTES = 8 * 1024 * 1024;
-let transcriptCapacityLogAt = 0;
-function transcriptCapacityRefused(sessionId: string, kind: string): void {
-  transcriptRetries.add(sessionId);
-  if (Date.now() - transcriptCapacityLogAt >= 5000) {
-    transcriptCapacityLogAt = Date.now();
-    log(`Transcript ${sessionId} ${kind} capacity; source remains unread; receipts=${acceptedPendingCount} reserved=${acceptedPendingReserved} bytes=${acceptedPendingBytes + acceptedPendingReservedBytes}`);
-  }
-}
-const transcriptReceiptKey = (key: string, signature: string) => key + "\0" + signature;
-function deleteTranscriptReceipt(receipts: Map<string,TranscriptReceipt>, key: string, receipt: TranscriptReceipt): void {
-  if (receipts.get(key) !== receipt || !receipts.delete(key)) return;
-  acceptedPendingCount--; acceptedPendingBytes -= receipt.weight;
-  const owner = acceptedPendingOwners.get(receipt.sessionId)!;
-  owner.count--; owner.bytes -= receipt.weight;
-  if (!owner.count && !owner.reserved) acceptedPendingOwners.delete(receipt.sessionId);
-}
-function reserveTranscriptReceipts(sessionId: string, conversationId: string, entries: Array<{key:string;signature:string;file:string;identity:string;size:number} | undefined>): {accept:(inputIndexes?:readonly number[])=>void;release:()=>void} | null {
-  const owner = acceptedPendingOwners.get(sessionId) ?? {count:0,bytes:0,reserved:0,reservedBytes:0};
-  const additions = new Map<string,TranscriptReceipt>();
-  const keys = entries.map(entry => entry ? transcriptReceiptKey(entry.key,entry.signature) : undefined);
-  for (const entry of entries) {
-    if (!entry) continue;
-    const key = transcriptReceiptKey(entry.key,entry.signature);
-    if (acceptedPending.get(conversationId)?.has(key)) continue;
-    additions.set(key,{signature:entry.signature,file:entry.file,identity:entry.identity,size:entry.size,sessionId,sourceKey:entry.key,weight:2*(key.length+entry.file.length+entry.identity.length+sessionId.length)+512});
-  }
-  const count=additions.size,bytes=[...additions.values()].reduce((sum,entry)=>sum+entry.weight,0);
-  if (owner.count+owner.reserved+count>TRANSCRIPT_RECEIPT_ROWS || owner.bytes+owner.reservedBytes+bytes>TRANSCRIPT_RECEIPT_BYTES || acceptedPendingCount+acceptedPendingReserved+count>65_536 || acceptedPendingBytes+acceptedPendingReservedBytes+bytes>64*1024*1024) {
-    transcriptCapacityRefused(sessionId,"receipt");return null;
-  }
-  acceptedPendingOwners.set(sessionId,owner);
-  owner.reserved+=count;owner.reservedBytes+=bytes;acceptedPendingReserved+=count;acceptedPendingReservedBytes+=bytes;
-  let released=false;
-  const acceptKey=(key:string|undefined)=>{
-    if(released||!key)return;
-    const receipt=additions.get(key);
-    if(!receipt)return;
-    additions.delete(key);
-    owner.reserved--;owner.reservedBytes-=receipt.weight;acceptedPendingReserved--;acceptedPendingReservedBytes-=receipt.weight;
-    let receipts=acceptedPending.get(conversationId);
-    if(!receipts){receipts=new Map();acceptedPending.set(conversationId,receipts);}
-    if(!receipts.has(key)){
-      receipts.set(key,receipt);owner.count++;owner.bytes+=receipt.weight;acceptedPendingCount++;acceptedPendingBytes+=receipt.weight;
-    }
-  };
-  return {
-    accept:(inputIndexes)=>{
-      if(inputIndexes)for(const index of inputIndexes)acceptKey(keys[index]);
-      else for(const key of additions.keys())acceptKey(key);
-    },
-    release:()=>{
-      if(released)return;released=true;
-      const remainingBytes=[...additions.values()].reduce((sum,entry)=>sum+entry.weight,0);
-      owner.reserved-=additions.size;owner.reservedBytes-=remainingBytes;acceptedPendingReserved-=additions.size;acceptedPendingReservedBytes-=remainingBytes;
-      additions.clear();
-      if(!owner.count&&!owner.reserved)acceptedPendingOwners.delete(sessionId);
-    },
-  };
-}
-
-const pendingKey = (m: PendingMessages[string][number]) => m.uuid ? `uuid:${m.uuid}` : m.ingestKey;
-function publishPendingTranscript(pending: PendingMessages, sessionId: string, rows: PendingMessages[string]): void {
-  if (rows.length) pending[sessionId] = rows;
-  else delete pending[sessionId];
-  pendingTranscriptVersions.set(pending, {});
-}
-function retirePendingTranscript(pending: PendingMessages, sessionId: string, accepted: ReadonlySet<PendingMessages[string][number]>): void {
-  const current = pending[sessionId];
-  if (!current) return;
-  const remaining = current.filter(row => !accepted.has(row));
-  if (remaining.length !== current.length) publishPendingTranscript(pending, sessionId, remaining);
-}
-async function pruneAcceptedTranscript(file?: string, missingSession?: string): Promise<void> {
-  const observed = new Map<string, fs.Stats | null>();
-  let checked = 0;
-  for (const [conversationId, receipts] of acceptedPending) {
-    for (const [key, receipt] of receipts) {
-      if (++checked % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
-      if (file && receipt.file !== file) continue;
-      if (!observed.has(receipt.file)) {
-        try { observed.set(receipt.file, await fs.promises.stat(receipt.file)); }
-        catch (err: any) {
-          if (err.code === "ENOENT" || err.code === "ENOTDIR") observed.set(receipt.file, null);
-          else throw err;
-        }
-      }
-      const stat = observed.get(receipt.file);
-      if (receipt.sessionId === missingSession || !stat || receipt.identity !== JSON.stringify([stat.dev, stat.ino, stat.birthtimeMs]) || stat.size < receipt.size) {
-        deleteTranscriptReceipt(receipts,key,receipt);
-      }
-    }
-    if (!receipts.size && acceptedPending.get(conversationId) === receipts) acceptedPending.delete(conversationId);
-  }
-}
-async function runTranscriptPass(sessionId: string, file: string, run: () => Promise<void>): Promise<void> {
-  return serializeTranscript(`ingest-session:${sessionId}`, () => serializeTranscript(file, async () => {
-    transcriptRetries.delete(sessionId);
-    try {
-      await pruneAcceptedTranscript(file);
-      await observeTranscriptAckWindow(sessionId, file);
-      await run();
-      if (transcriptRetries.has(sessionId)) throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unread data`);
-    } finally { transcriptRetries.delete(sessionId); transcriptAckWindows.delete(sessionId); }
-  }));
-}
-function queueTranscriptConversation(retryQueue: RetryQueue, params: Record<string, unknown>, error: string): string {
-  const existing = retryQueue.getPendingOperations().find(op => op.type === "createConversation" && op.params.sessionId === params.sessionId);
-  return existing?.id ?? retryQueue.add("createConversation", params, error);
-}
-export async function retainPendingTranscript(pending: PendingMessages, sessionId: string, messages: RawMessage[], filePath: string, fileSize: number): Promise<void> {
-  transcriptRetries.add(sessionId);
-  const version = pendingTranscriptVersions.get(pending);
-  const original = pending[sessionId], snapshot = [...(original ?? [])], candidate = [...snapshot];
-  const indexes = new Map<string,number>();
-  for (let i=0;i<candidate.length;i++) { const key=pendingKey(candidate[i]);if(key)indexes.set(key,i); }
-  for (const msg of messages) {
-    const record=ingestRecord(msg);
-    const weight=record ? record.weight+2*(record.key.length+filePath.length)+1024 : await ingestRetainedWeight(msg,checkTranscriptDeadline)+2*filePath.length+1024;
-    if(weight>TRANSCRIPT_PENDING_BYTES){transcriptCapacityRefused(sessionId,"pending row");return;}
-    const row:PendingMessages[string][number]={...msg,role:mapRole(msg.role),content:redactSecrets(msg.content),filePath,fileSize,ingestKey:record?.key,ingestSignature:record?.signature,ingestIdentity:record?.identity,ingestClient:record?.client};
-    retainedPendingWeights.set(row,weight);
-    const key=pendingKey(row),index=key?indexes.get(key):undefined;
-    if(index===undefined){if(candidate.length>=TRANSCRIPT_PENDING_ROWS){transcriptCapacityRefused(sessionId,"pending count");return;}if(key)indexes.set(key,candidate.length);candidate.push(row);}
-    else candidate[index]=row;
-  }
-  let ownerBytes=0,globalBytes=0,globalCount=0,checked=0;
-  const generations=new Set<string>();
-  for (const row of candidate) {
-    ownerBytes+=retainedPendingWeights.get(row)??await ingestRetainedWeight(row,checkTranscriptDeadline);
-    generations.add(JSON.stringify([row.filePath,row.ingestIdentity]));
-  }
-  if(ownerBytes>TRANSCRIPT_PENDING_BYTES||generations.size>2){transcriptCapacityRefused(sessionId,"pending owner");return;}
-  for (const key in pending) {
-    if(key===sessionId)continue;
-    for(const row of pending[key]){
-      globalBytes+=retainedPendingWeights.get(row)??await ingestRetainedWeight(row,checkTranscriptDeadline);globalCount++;
-      if(++checked%128===0){await new Promise<void>(resolve=>setImmediate(resolve));checkTranscriptDeadline();}
-    }
-  }
-  if(globalBytes+ownerBytes>32*1024*1024||globalCount+candidate.length>8192){transcriptCapacityRefused(sessionId,"pending global");return;}
-  if(pendingTranscriptVersions.get(pending)!==version){transcriptCapacityRefused(sessionId,"pending publication changed");return;}
-  if(pending[sessionId]!==original||original&&(original.length!==snapshot.length||snapshot.some((row,i)=>original[i]!==row)))return;
-  publishPendingTranscript(pending,sessionId,candidate);
-}
-
-export async function flushPendingMessagesBatch(
-  pendingMsgs: PendingMessages[string], conversationId: string, syncService: SyncService, retryQueue: RetryQueue, onAccepted?: () => void,
-  onBatchAccepted?: (inputIndexes: readonly number[]) => void,
-  beforeBatch?: () => void,
-): Promise<"accepted" | "stale" | "auth" | "unresolved"> {
-  const messages = [];
-  for (let i = 0; i < pendingMsgs.length; i++) {
-    const {filePath, fileSize, ingestKey, ingestSignature, ingestIdentity, ingestClient, uuid, ...msg} = pendingMsgs[i];
-    messages.push({...msg, messageUuid: uuid});
-    if (i % 128 === 127) await new Promise<void>(resolve => setImmediate(resolve));
-  }
+async function flushPendingMessagesBatch(
+  pendingMsgs: Array<{ uuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string }>,
+  conversationId: string,
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+): Promise<void> {
   try {
-    await syncService.addMessages({conversationId, messages},onBatchAccepted || beforeBatch ? {onBatchAccepted,beforeBatch} : undefined);
-    onAccepted?.();
-    return "accepted";
+    await syncService.addMessages({
+      conversationId,
+      messages: pendingMsgs.map(msg => ({
+        messageUuid: msg.uuid,
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        thinking: msg.thinking,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        images: msg.images,
+        subtype: msg.subtype,
+        model: msg.model,
+      })),
+    });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    if (isStaleConversationError(errMsg)) return "stale";
-    if (err instanceof AuthExpiredError) return "auth";
-    log(`Batch pending flush unresolved: ${errMsg}`);
-    return "unresolved";
-  }
-}
-export async function flushPendingTranscript(pending: PendingMessages, sessionId: string, conversationId: string, cache: ConversationCache, syncService: SyncService, retryQueue: RetryQueue): Promise<boolean> {
-  if (cache[sessionId] !== conversationId) { transcriptRetries.add(sessionId); return false; }
-  checkTranscriptDeadline();
-  const snapshot = (pending[sessionId] ?? []).slice(0,TRANSCRIPT_PENDING_ROWS);
-  if (!snapshot.length) return true;
-  const unsent=snapshot.filter(row=>!row.ingestKey||!row.ingestSignature||!acceptedPending.get(conversationId)?.has(transcriptReceiptKey(row.ingestKey,row.ingestSignature)));
-  const entries=[];
-  for(const row of unsent){
-    if(row.ingestKey&&row.ingestSignature&&row.ingestIdentity)entries.push({key:row.ingestKey,signature:row.ingestSignature,file:row.filePath,identity:row.ingestIdentity,size:0});
-    else if(!row.uuid){transcriptCapacityRefused(sessionId,"unproven pending receipt");return false;}
-    else entries.push(undefined);
-  }
-  const reservation=reserveTranscriptReceipts(sessionId,conversationId,entries);
-  if(!reservation)return false;
-  const accept = (inputIndexes?: readonly number[]) => {
-    reservation.accept(inputIndexes);
-    const accepted = new Set(inputIndexes ? inputIndexes.map(index => unsent[index]) : unsent);
-    retirePendingTranscript(pending,sessionId,accepted);
-    for(const row of accepted)if(row.ingestClient)transcriptRetryOwners.wake({client:row.ingestClient,file:row.filePath,sessionId});
-  };
-  try {
-    retirePendingTranscript(pending,sessionId,new Set(snapshot.filter(row=>!unsent.includes(row))));
-    const outcome=unsent.length?await flushPendingMessagesBatch(unsent,conversationId,syncService,retryQueue,accept,accept,()=>assertTranscriptAuthority(sessionId,conversationId,cache)):"accepted";
-    if(outcome!=="accepted"){
-      if(outcome!=="auth")transcriptRetries.add(sessionId);
-      else for(const row of unsent)transcriptRetryOwners.defer(row.filePath,sessionId);
-      if(outcome==="stale"&&cache[sessionId]===conversationId){delete cache[sessionId];saveConversationCache(cache);}
-      return false;
+    if (isStaleConversationError(errMsg)) {
+      log(`Batch pending flush hit stale conversation ${conversationId}; dropping batch so the caller can re-resolve: ${errMsg}`);
+      return;
     }
-    for(const row of snapshot)if(row.ingestClient)transcriptRetryOwners.wake({client:row.ingestClient,file:row.filePath,sessionId});
-    if(cache[sessionId]!==conversationId){transcriptRetries.add(sessionId);return false;}
-    checkTranscriptDeadline();
-    retirePendingTranscript(pending,sessionId,new Set(snapshot));
-    const remaining=pending[sessionId]??[];
-    if(remaining.length)transcriptRetries.add(sessionId);
-    return !remaining.length;
-  }finally{reservation.release();}
-}
-
-async function syncTranscriptMessages(messages: RawMessage[], conversationId: string, syncService: SyncService, retryQueue: RetryQueue, pending: PendingMessages, sessionId: string, cache: ConversationCache, authorityKeys: readonly string[] = [sessionId], forceNoAck = false) {
-  const unresolved={authExpired:false,conversationNotFound:false,accepted:false};
-  if(authorityKeys.some(key=>cache[key]!==conversationId)){transcriptRetries.add(sessionId);return unresolved;}
-  checkTranscriptDeadline();
-  const pendingReplay=!!pending[sessionId]?.length||!!acceptedPending.get(conversationId)?.size;
-  if(!await flushPendingTranscript(pending,sessionId,conversationId,cache,syncService,retryQueue))return unresolved;
-  const remaining:RawMessage[]=[];
-  for(let i=0;i<messages.length;i++){
-    const msg=messages[i],record=ingestRecord(msg);
-    if(!record||!acceptedPending.get(conversationId)?.has(transcriptReceiptKey(record.key,record.signature)))remaining.push(msg);
-    if(i%128===127){await new Promise<void>(resolve=>setImmediate(resolve));checkTranscriptDeadline();}
-  }
-  const eligible=transcriptAckEligibility(messages,sessionId,conversationId,pendingReplay);
-  for(let offset=0;offset<remaining.length;offset+=TRANSCRIPT_PENDING_ROWS){
-    assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys);
-    const batch=remaining.slice(offset,offset+TRANSCRIPT_PENDING_ROWS),entries=[];
-    for(const msg of batch){
-      if(msg.uuid){entries.push(undefined);continue;}
-      const record=ingestRecord(msg);
-      if(!record){transcriptCapacityRefused(sessionId,"unproven direct receipt");return unresolved;}
-      entries.push({key:record.key,signature:record.signature,file:record.file,identity:record.identity,size:record.sourceSize});
+    log(`Batch pending flush failed, queueing individually: ${errMsg}`);
+    for (const msg of pendingMsgs) {
+      retryQueue.add("addMessage", {
+        conversationId,
+        messageUuid: msg.uuid,
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        thinking: msg.thinking,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        images: msg.images,
+        subtype: msg.subtype,
+        model: msg.model,
+      }, errMsg);
     }
-    const reservation=reserveTranscriptReceipts(sessionId,conversationId,entries);
-    if(!reservation)return unresolved;
-    try{
-      const result=await syncMessagesBatch(batch,conversationId,syncService,retryQueue,batch.every(msg=>!!msg.uuid),async()=>!forceNoAck&&remaining.length<=TRANSCRIPT_PENDING_ROWS&&authorityKeys.every(key=>cache[key]===conversationId)&&await eligible()&&authorityKeys.every(key=>cache[key]===conversationId),reservation.accept,reservation.accept,()=>assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys));
-      if(authorityKeys.some(key=>cache[key]!==conversationId)){transcriptRetries.add(sessionId);return {...result,accepted:false,conversationNotFound:false};}
-      checkTranscriptDeadline();
-      if(!result.accepted){
-        if(!result.authExpired)transcriptRetries.add(sessionId);
-        else for(const msg of batch){const record=ingestRecord(msg);if(record)transcriptRetryOwners.defer(record.file,sessionId);}
-        return result;
-      }
-    }finally{reservation.release();}
-  }
-  assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys);
-  return {authExpired:false,conversationNotFound:false,accepted:true};
-}
-
-function captureTranscriptMapping(sessionId: string, cache: ConversationCache, keys: readonly string[] = [sessionId]): (created: string) => string {
-  checkTranscriptDeadline();
-  const snapshot = keys.map(key => [key,cache[key]] as const);
-  return created => {
-    checkTranscriptDeadline();
-    if (snapshot.some(([key,value]) => cache[key] !== value)) {
-      transcriptRetries.add(sessionId);
-      throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed during creation`);
-    }
-    return snapshot.find(([,value]) => !!value)?.[1] ?? created;
-  };
-}
-function assertTranscriptAuthority(sessionId: string, conversationId: string | undefined, cache: ConversationCache, keys: readonly string[] = [sessionId]): void {
-  checkTranscriptDeadline();
-  if (keys.some(key => cache[key] !== conversationId)) {
-    transcriptRetries.add(sessionId);
-    throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed`);
-  }
-}
-async function transcriptSignatureWatermark(signatures: ReadonlyMap<string,string>): Promise<string> {
-  const hash = createHash("sha256");
-  let chunks = 0;
-  for (const [uuid, signature] of signatures) {
-    for (const value of [uuid, signature]) {
-      hash.update(String(value.length)).update(":");
-      for (let offset = 0; offset < value.length; offset += 8192) {
-        hash.update(value.slice(offset, offset + 8192));
-        if (++chunks % 128 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); checkTranscriptDeadline(); }
-      }
-    }
-  }
-  return hash.digest("hex");
-}
-function transcriptCountReplaced(result: object, count: number): boolean {
-  const source = ingestSource(result);
-  if (!source) throw new Error("unknown transcript count source");
-  const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
-  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && (previous.dev !== source.identity.dev || previous.ino !== source.identity.ino || previous.birthtimeMs !== source.identity.birthtimeMs));
-}
-async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionId: string, conversationId: string | undefined, cache: ConversationCache, commit: () => void, keys: readonly string[] = [sessionId], signatureState?: ReadonlyMap<string,string>, consumedMessages: RawMessage[] = result.messages): Promise<void> {
-  const source = ingestSource(result);
-  if (!source) throw new Error("unknown transcript source commit");
-  const unit = ["claude","cursor","codex"].includes(source.client) ? "bytes" : ["pi","grok"].includes(source.client) ? "signatures" : "count";
-  const currentWatermark = () => source.client === "gemini" ? geminiSyncedCounts.get(source.file) ?? 0 : source.client === "opencode" ? opencodeSyncedCounts.get(sessionId) ?? 0 : getPosition(source.file);
-  const priorSignatures = piSyncedSigs.get(source.file) ?? new Map<string,string>();
-  const before = unit === "signatures" ? await transcriptSignatureWatermark(priorSignatures) : currentWatermark();
-  const nextSignatures = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures) : undefined;
-  const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
-  const paired = previous?.client === source.client && previous.sessionId === sessionId && previous.unit === unit && previous.watermark === before && (unit === "signatures" ? ledger?.lastSyncedPosition === 0 : ledger?.lastSyncedPosition === before);
-  const same = paired && previous.dev === source.identity.dev && previous.ino === source.identity.ino && previous.birthtimeMs === source.identity.birthtimeMs;
-  const prefixProven = (unit === "signatures" ? priorSignatures.size === 0 : before === 0) || !!(same && previous.prefixProven);
-  assertTranscriptAuthority(sessionId,conversationId,cache,keys);
-  await validateTranscriptIngest(result);
-  assertTranscriptAuthority(sessionId,conversationId,cache,keys);
-  commit();
-  const watermark = nextSignatures ?? currentWatermark();
-  updateSyncRecord(source.file, {
-    lastSyncedAt: Date.now(),
-    lastSyncedPosition: unit === "signatures" ? 0 : watermark as number,
-    conversationId,
-    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,prefixProven},
-  });
-  const consumed=new Set<string>();
-  for(let i=0;i<consumedMessages.length;i++){
-    const record=ingestRecord(consumedMessages[i]);if(record)consumed.add(record.key);
-    if(i%128===127)await new Promise<void>(resolve=>setImmediate(resolve));
-  }
-  let checked=0;
-  for(const [destination,receipts] of acceptedPending){
-    for(const [key,receipt] of receipts){
-      if(receipt.sessionId===sessionId&&consumed.has(receipt.sourceKey))deleteTranscriptReceipt(receipts,key,receipt);
-      if(++checked%128===0)await new Promise<void>(resolve=>setImmediate(resolve));
-    }
-    if(!receipts.size&&acceptedPending.get(destination)===receipts)acceptedPending.delete(destination);
   }
 }
 
@@ -7453,39 +6820,27 @@ async function syncMessagesBatch(
   conversationId: string,
   syncService: SyncService,
   retryQueue: RetryQueue,
-  enqueueOnFailure = true,
-  ackEligible?: () => boolean | Promise<boolean>,
-  onAccepted?: () => void,
-  onBatchAccepted?: (inputIndexes: readonly number[]) => void,
-  beforeBatch?: () => void,
-): Promise<{ authExpired: boolean; conversationNotFound: boolean; accepted: boolean }> {
+): Promise<{ authExpired: boolean; conversationNotFound: boolean }> {
   // Prepare + offload images ONCE. offloadImages mutates the prepared messages in
   // place (raw base64 → storageId, or drops oversized images), so the same small
   // array is reused for the send, the inline retry, and the retry-queue enqueue.
   // Previously each of those re-ran messages.map(prepMessageForSync), so the queue
   // persisted the full raw base64 and every retry re-uploaded the same image.
-  let dispatchRefused = false;
-  const guard = beforeBatch ? () => {
-    try { beforeBatch(); }
-    catch (err) { dispatchRefused = true; throw err; }
-  } : undefined;
   const prepared = messages.map(prepMessageForSync);
   await syncService.offloadImages(prepared);
-  guard?.();
   if (retryQueue.hasPendingConversation(conversationId)) {
     log(`Conversation ${conversationId.slice(0, 12)} already has retry backlog; buffering ${messages.length} new msgs into retry queue`);
-    if (enqueueOnFailure) retryQueue.add("addMessages", {
+    retryQueue.add("addMessages", {
       conversationId,
       messages: prepared,
     }, "conversation backlog already queued");
-    return { authExpired: false, conversationNotFound: false, accepted: false };
+    return { authExpired: false, conversationNotFound: false };
   }
   try {
     const synced = await syncService.addMessages({
       conversationId,
       messages: prepared,
-    },onBatchAccepted || guard ? {onBatchAccepted,beforeBatch:guard} : undefined);
-    onAccepted?.();
+    });
     resetAuthFailureCount();
     // If we just synced a user message from the JSONL, ack the injected pending
     // messages THIS process pasted (scoped — see collectPastedInjectedIds). The
@@ -7494,7 +6849,7 @@ async function syncMessagesBatch(
     // oversized content). Passing the explicit id list (even empty) stops a
     // historical user turn — e.g. an auto-resume resyncing a fresh JSONL from
     // position 0 — from terminalizing rows that never landed (DEC-01).
-    if ((ackEligible ? await ackEligible() : true) && messages.some(m => m.role === "user")) {
+    if (messages.some(m => m.role === "user")) {
       const pastedIds = collectPastedInjectedIds(conversationId);
       const transcriptIds = synced.ids.filter((_, index) =>
         messages[index]?.role === "user" && !isHarnessEmittedUserTurn(messages[index]?.content));
@@ -7515,18 +6870,17 @@ async function syncMessagesBatch(
         deliveryAcks,
       ).catch(logConvexFailure);
     }
-    return { authExpired: false, conversationNotFound: false, accepted: true };
+    return { authExpired: false, conversationNotFound: false };
   } catch (err) {
-    if (dispatchRefused) throw err;
     if (err instanceof AuthExpiredError) {
       if (handleAuthFailure()) {
-        return { authExpired: true, conversationNotFound: false, accepted: false };
+        return { authExpired: true, conversationNotFound: false };
       }
     }
 
     const errMsg = err instanceof Error ? err.message : String(err);
     if (isStaleConversationError(errMsg)) {
-      return { authExpired: false, conversationNotFound: true, accepted: false };
+      return { authExpired: false, conversationNotFound: true };
     }
 
     // Hand the failed batch straight to the retry queue instead of burning a
@@ -7538,11 +6892,11 @@ async function syncMessagesBatch(
     // the right owner of retries; a transient single blip just lands on the
     // queue's short initial backoff (~seconds) instead of a sub-minute freeze.
     log(`Batch sync failed (${messages.length} msgs), queueing for retry: ${errMsg}`);
-    if (enqueueOnFailure) retryQueue.add("addMessages", {
+    retryQueue.add("addMessages", {
       conversationId,
       messages: prepared,
     }, errMsg);
-    return { authExpired: false, conversationNotFound: false, accepted: false };
+    return { authExpired: false, conversationNotFound: false };
   }
 }
 
@@ -7552,39 +6906,6 @@ function readFileHead(filePath: string, maxBytes: number = 8192): string {
     const buf = Buffer.alloc(maxBytes);
     const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
     return buf.slice(0, bytesRead).toString("utf-8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-// The transcript head reader for anything that PARSES the first lines (cwd,
-// session id, session_meta). A fixed byte prefix is the wrong tool for that:
-// Codex 0.153 writes its session_meta line with the full base_instructions text
-// inline (22KB observed on 2026-09-05), so a 5000-byte prefix cut inside that
-// line, JSON.parse threw, and every field on it read as absent. The resume then
-// refused for "no cwd", regenerated the rollout from Convex under the daemon's
-// own cwd (/), and re-resumed into Codex's "Choose working directory" picker
-// on every delivery. Reads whole lines: 64KB at a time until `minLines` are
-// complete (or EOF / `maxBytes`), so the caller sees the same superset a
-// 64KB prefix gave it whenever that was enough, and the full lines when not.
-const HEAD_LINES_CHUNK = 65536;
-export function readFileHeadLines(filePath: string, minLines = 8, maxBytes = 4 * 1024 * 1024): string {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let newlines = 0;
-    while (total < maxBytes && newlines < minLines) {
-      const want = Math.min(HEAD_LINES_CHUNK, maxBytes - total);
-      const buf = Buffer.alloc(want);
-      const n = fs.readSync(fd, buf, 0, want, total);
-      if (n <= 0) break;
-      const got = buf.subarray(0, n);
-      for (const b of got) if (b === 0x0a) newlines++;
-      chunks.push(got);
-      total += n;
-    }
-    return Buffer.concat(chunks, total).toString("utf-8");
   } finally {
     fs.closeSync(fd);
   }
@@ -7612,7 +6933,17 @@ const CODEX_META_HEAD_CHUNK = 256 * 1024;
 const CODEX_META_HEAD_MAX = 16 * 1024 * 1024;
 /** Where the leading session_meta block ends: the index just past its last
  *  line, or -1 while no complete non meta line exists yet. */
-
+export function sessionMetaHeadCut(acc: string): number {
+  let cut = 0;
+  let nl = acc.indexOf("\n");
+  while (nl >= 0) {
+    const line = acc.slice(cut, nl);
+    if (line.trim() && !line.includes('"type":"session_meta"')) return cut;
+    cut = nl + 1;
+    nl = acc.indexOf("\n", cut);
+  }
+  return -1;
+}
 function readCodexSessionMetaHeadSync(filePath: string): string {
   const fd = fs.openSync(filePath, "r");
   try {
@@ -7636,6 +6967,21 @@ function readCodexSessionMetaHeadSync(filePath: string): string {
 /** The same head for the metrics tick, read one window at a time off the
  *  loop. Same cap on bytes read; a torn trailing line is left out, which the
  *  metadata parse would have rejected anyway. */
+export async function readCodexSessionMetaHeadAsync(filePath: string): Promise<string> {
+  const size = (await fs.promises.stat(filePath)).size;
+  const limit = Math.min(size, CODEX_META_HEAD_MAX);
+  let acc = "";
+  let offset = 0;
+  while (offset < limit) {
+    const { content, bytesConsumed } = await readIngestWindow(filePath, offset, limit - offset, { step: CODEX_META_HEAD_CHUNK });
+    if (bytesConsumed === 0) break;
+    acc += content;
+    offset += bytesConsumed;
+    const cut = sessionMetaHeadCut(acc);
+    if (cut >= 0) return acc.slice(0, cut);
+  }
+  return acc;
+}
 
 // The leading session_meta block is immutable once written, so a rollout file's fork root
 // never changes — cache it per path to avoid re-reading ~200KB on every incremental sync.
@@ -7652,6 +6998,16 @@ function rememberCodexMeta(filePath: string, head: string): ReturnType<typeof ex
 }
 function codexSessionMetadataFor(filePath: string): ReturnType<typeof extractCodexSessionMetadata> {
   return codexSessionMetaCache.get(filePath) ?? rememberCodexMeta(filePath, readCodexSessionMetaHead(filePath));
+}
+/** Fill the metadata cache for a rollout off the loop, so the sync lookup
+ *  the metrics tick makes next answers from the cache. */
+async function primeCodexSessionMetadata(filePath: string): Promise<void> {
+  if (codexSessionMetaCache.has(filePath)) return;
+  try {
+    rememberCodexMeta(filePath, await readCodexSessionMetaHeadAsync(filePath));
+  } catch {
+    // unreadable this pass; the sync lookup reports unknown
+  }
 }
 function resolveCodexForkRoot(filePath: string): string | undefined {
   if (codexForkRootCache.has(filePath)) return codexForkRootCache.get(filePath);
@@ -7687,101 +7043,69 @@ function resolveCodexForkRoot(filePath: string): string | undefined {
 // SIGKILL during the exact race the guard exists for. Callers choose the safe
 // direction for their side: destructive paths fail closed, metrics fail open.
 //
-type OwnershipObservation = { home: string; path: string; identity: string; ownership: ProcessOwnership };
-const sessionOwnershipCache = new Map<string, OwnershipObservation>();
-const ownershipFileIdentity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:${stat.ctimeMs}:${stat.size}`;
-
+// Memoized only once DECIDED. The leading session_meta is immutable after it is
+// fully written (same reasoning as codexForkRootCache), so a decided answer never
+// changes; an undecided one must not be cached or the race becomes permanent.
+// Note the cost asymmetry this leaves: an undecidable id re-walks findSessionFile
+// on every call (~3.5ms), which is deliberate — correctness over a cached guess.
+const sessionOwnershipCache = new Map<string, ProcessOwnership>();
+// staleOk answers from the session-file index without the recent-changes probe
+// (for the metrics tick, which fails open and re-asks). A "no rollout → owned"
+// verdict from a possibly stale index is returned but NOT memoized: a rollout
+// younger than the index could flip it, and memoizing the guess would hand the
+// kill guard a wrong "owned" forever. Destructive callers use the default.
 export function sessionProcessOwnership(sessionId: string, opts?: { staleOk?: boolean }): ProcessOwnership {
-  const home = process.env.HOME || "";
-  if (sessionFileIndexHome !== home || !sessionFileIndexReady) return "unknown";
-  const rollout = codexRolloutIndex?.get(sessionId);
-  if (!rollout) return "unknown";
   const memo = sessionOwnershipCache.get(sessionId);
-  if (opts?.staleOk) return memo?.home === home && memo.path === rollout ? memo.ownership : "unknown";
-  try {
-    const before = fs.statSync(rollout);
-    const meta = extractCodexSessionMetadata(readCodexSessionMetaHead(rollout));
-    if (!before.isFile() || meta?.id !== sessionId || ownershipFileIdentity(before) !== ownershipFileIdentity(fs.statSync(rollout))) return "unknown";
-    return classifyProcessOwnership(meta);
-  } catch { return "unknown"; }
-}
+  if (memo !== undefined) return memo;
 
-let codexOwnershipScan: { home: string; generation: number; pending: Promise<Map<string, string[]>> } | undefined;
-async function freshCodexOwnershipFiles(): Promise<Map<string, string[]>> {
-  const home = process.env.HOME || "", generation = sessionFileIndexGeneration;
-  if (codexOwnershipScan?.home === home && codexOwnershipScan.generation === generation) return codexOwnershipScan.pending;
-  const pending = (async () => {
-    const files = new Map<string, string[]>();
-    const job: ScanJob = { name: "walk", root: path.join(home, ".codex", "sessions"), policy: { files: "jsonl" }, stats: false, requireComplete: true };
-    const apply = (rows: ScanRow[]) => {
-      for (const row of rows) if (row.type === "file") {
-        const id = row.name.match(TRAILING_UUID_JSONL_RE)?.[1];
-        if (id) files.set(id, [...(files.get(id) ?? []), row.path]);
-      }
-    };
-    if (daemonWorkersEnabled()) await visitScan(job, apply);
-    else {
-      const { scanPages } = await import("./workers/scanJobs.js");
-      for await (const rows of scanPages(job)) { apply(rows); await yieldScanBatch(); }
-    }
-    if (home !== (process.env.HOME || "") || generation !== sessionFileIndexGeneration || !sessionFileIndexReady) throw new ScanCancelled("ownership evidence changed");
-    return files;
-  })();
-  const entry = { home, generation, pending };
-  codexOwnershipScan = entry;
-  try { return await pending; }
-  finally { if (codexOwnershipScan === entry) codexOwnershipScan = undefined; }
-}
-
-async function observeCodexOwnership(sessionId: string, rollout: string, home: string): Promise<ProcessOwnership> {
-  const before = await fs.promises.stat(rollout);
-  const meta = extractCodexSessionMetadata(await readCodexSessionMetaHeadAsync(rollout));
-  const after = await fs.promises.stat(rollout);
-  if (home !== (process.env.HOME || "") || !before.isFile() || meta?.id !== sessionId || ownershipFileIdentity(before) !== ownershipFileIdentity(after)) return "unknown";
-  const ownership = classifyProcessOwnership(meta);
-  sessionOwnershipCache.set(sessionId, { home, path: rollout, identity: ownershipFileIdentity(after), ownership });
-  return ownership;
-}
-
-export async function acquireSessionProcessOwnership(sessionId: string, signal?: AbortSignal): Promise<ProcessOwnership> {
-  const home = process.env.HOME || "";
-  if (!home || signal?.aborted) return "unknown";
-  await ensureSessionFileIndex();
-  const generation = sessionFileIndexGeneration;
-  const current = () => !signal?.aborted && home === (process.env.HOME || "") && generation === sessionFileIndexGeneration && sessionFileIndexReady;
-  if (!current()) return "unknown";
-  try {
-    const paths = (await freshCodexOwnershipFiles()).get(sessionId);
-    if (!current()) return "unknown";
-    if (paths) {
-      if (paths.length !== 1) return "unknown";
-      const ownership = await observeCodexOwnership(sessionId, paths[0], home);
-      return current() ? ownership : "unknown";
-    }
-    if (codexRolloutIndex?.has(sessionId) || sessionOwnershipCache.get(sessionId)?.home === home) return "unknown";
-    const file = sessionFileIndex?.get(sessionId) ?? await freshSessionObservation(sessionId, false);
-    if (!file || file.agentType === "codex") return "unknown";
-    await fs.promises.access(file.path, fs.constants.R_OK);
-    const stat = await fs.promises.stat(file.path);
-    if (!current() || !stat.isFile()) return "unknown";
-    sessionFileIndex?.set(sessionId, file);
+  // Ask the Codex rollout store DIRECTLY. Routing this through findSessionFile
+  // was a live hole: that helper searches ~/.claude/projects first, and
+  // materializeSession writes a CLAUDE-shaped JSONL under a Codex session id
+  // (clientOwnsSessionStore excludes codex, so its regeneration skip never fires).
+  // A materialized Codex subagent therefore resolved as agentType "claude" →
+  // "owned" → memoized, silently restoring the full SIGKILL-the-parent defect and
+  // keeping it until daemon restart. The rollout is the authority on what a Codex
+  // session is; a materialized mirror is a copy, and must never answer this.
+  const rolloutPath = findCodexRolloutPath(sessionId, opts);
+  if (!rolloutPath) {
+    // No rollout: either a genuinely non-Codex session (only Codex threads can
+    // borrow, so it owns its process) or an id we know nothing about yet.
+    if (!findSessionFile(sessionId, opts)) return "unknown";
+    if (!opts?.staleOk) sessionOwnershipCache.set(sessionId, "owned");
     return "owned";
-  } catch { return "unknown"; }
+  }
+
+  let meta: ReturnType<typeof extractCodexSessionMetadata>;
+  try {
+    meta = codexSessionMetadataFor(rolloutPath);
+  } catch {
+    return "unknown"; // unreadable this pass
+  }
+  if (!meta) return "unknown"; // file exists but session_meta isn't complete yet
+  const ownership = classifyProcessOwnership(meta);
+  if (ownership === "unknown") return "unknown"; // an unrecognized shape may change meaning; don't cache
+  sessionOwnershipCache.set(sessionId, ownership);
+  return ownership;
 }
 
 /** Metrics fail OPEN: only a session we positively know to be a borrower is
  *  denied credit for its subtree. An undecided session keeps reporting — the
  *  worst case is a transiently double-counted tree, not a lost signal. */
+// Metrics-side negative memo: an "unknown" verdict re-walks two directory
+// scans per call, and collectResourceSnapshot asks for every cached session
+// every tick — under load that loop alone froze the event loop 6s (readdirSync,
+// 2026-08-21). The kill guard keeps re-asking (it must); metrics, which fail
+// open anyway, can reuse an undecided answer for a few minutes.
 const borrowsUnknownUntil = new Map<string, number>();
 const BORROWS_UNKNOWN_MEMO_MS = 5 * 60_000;
 function sessionBorrowsProcess(sessionId: string): boolean {
-  const until = borrowsUnknownUntil.get(`${process.env.HOME || ""}:${sessionId}`);
+  const until = borrowsUnknownUntil.get(sessionId);
   if (until !== undefined && until > Date.now()) return false;
   // staleOk: metrics fail open and re-ask; index staleness is within the same
   // few minutes this memo already tolerates. The kill guard asks fresh.
   const ownership = sessionProcessOwnership(sessionId, { staleOk: true });
-  if (ownership === "unknown") borrowsUnknownUntil.set(`${process.env.HOME || ""}:${sessionId}`, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
-  else borrowsUnknownUntil.delete(`${process.env.HOME || ""}:${sessionId}`);
+  if (ownership === "unknown") borrowsUnknownUntil.set(sessionId, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
+  else borrowsUnknownUntil.delete(sessionId);
   return ownership === "borrowed";
 }
 
@@ -7796,18 +7120,14 @@ function sessionBorrowsProcess(sessionId: string): boolean {
 export async function classifySharedPidSessions(sessionIds: string[]): Promise<Set<string>> {
   await ensureSessionFileIndex();
   const now = Date.now();
-  const home = process.env.HOME || "";
-  const undecided = sessionIds.filter(id => !((borrowsUnknownUntil.get(`${home}:${id}`) ?? 0) > now));
+  const undecided = sessionIds.filter(
+    (id) => !sessionOwnershipCache.has(id) && !((borrowsUnknownUntil.get(id) ?? 0) > now),
+  );
   await runBounded(undecided, 4, async (id) => {
-    const rollout = sessionFileIndexHome === home ? codexRolloutIndex?.get(id) : undefined;
+    const rollout = findCodexRolloutPath(id, { staleOk: true });
     if (!rollout) return;
-    try {
-      const stat = await fs.promises.stat(rollout);
-      const memo = sessionOwnershipCache.get(id);
-      if (memo?.home === home && memo.path === rollout && memo.identity === ownershipFileIdentity(stat)) return;
-      sessionOwnershipCache.delete(id);
-      await observeCodexOwnership(id, rollout, home);
-    } catch { sessionOwnershipCache.delete(id); }
+    await primeCodexSessionMetadata(rollout);
+    if (!codexSessionMetaCache.has(rollout)) borrowsUnknownUntil.set(id, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
   }, "Ownership prime");
   return new Set(sessionIds.filter(sessionBorrowsProcess));
 }
@@ -8261,29 +7581,29 @@ export function subagentParentSessionFromPath(filePath: string): string | undefi
 // processSessionFile is the one function every append passes through.
 const subagentActivityByParent = new Map<string, number>();
 const SUBAGENT_ACTIVITY_MAX_ENTRIES = 500;
-let subagentCoverageLost = false;
 
 export function noteSubagentActivity(filePath: string, at: number = Date.now()): void {
   const parent = subagentParentSessionFromPath(filePath);
   if (!parent) return;
-  if (!subagentActivityByParent.has(parent) && subagentActivityByParent.size >= SUBAGENT_ACTIVITY_MAX_ENTRIES) {
-    subagentCoverageLost = true;
-    return;
+  subagentActivityByParent.set(parent, at);
+  // A machine that ran thousands of subagents would otherwise hold every parent
+  // id forever. Anything past the quiet window can no longer block a park.
+  if (subagentActivityByParent.size > SUBAGENT_ACTIVITY_MAX_ENTRIES) {
+    const cutoff = at - HIBERNATE_SUBAGENT_QUIET_MS;
+    for (const [id, seen] of subagentActivityByParent) if (seen < cutoff) subagentActivityByParent.delete(id);
   }
-  subagentActivityByParent.set(parent, Math.max(at, subagentActivityByParent.get(parent) ?? -Infinity));
 }
 
 /** How long since a subagent of `sessionId` produced output. Infinity when the
  *  daemon has never seen one write. */
 export function subagentActiveAgoMs(sessionId: string, now: number = Date.now()): number {
   const seen = subagentActivityByParent.get(sessionId);
-  return seen === undefined ? (subagentCoverageLost ? NaN : Infinity) : now - seen;
+  return seen === undefined ? Infinity : now - seen;
 }
 
 /** Test seam: forget every recorded subagent append. */
 export function resetSubagentActivityForTests(): void {
   subagentActivityByParent.clear();
-  subagentCoverageLost = false;
 }
 
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
@@ -8305,6 +7625,99 @@ const SYNC_BYTES_PER_PASS = 1 * 1024 * 1024;
 export const MAX_SYNC_CONTINUATIONS = 24;
 
 /**
+ * Where a read window may be cut: the index of the LAST byte to consume, or
+ * -1 to ask for a bigger window. `len` is how many bytes of `buf` are valid;
+ * `atEof` says no more bytes exist past them; `from` is the first byte an
+ * earlier step of the same window did not already search (bytes before it
+ * hold no boundary, so a step costs only the tail it read).
+ */
+export type PassBoundary = (buf: Buffer, len: number, atEof: boolean, from?: number) => number;
+
+// A newline is one byte and never part of a multibyte sequence, so a byte cut
+// at it is charset safe and the byte count needs no re-encode.
+const newlineBoundary: PassBoundary = (buf, len, _atEof, from = 0) => {
+  const i = buf.subarray(from, len).lastIndexOf(0x0a);
+  return i < 0 ? -1 : from + i;
+};
+
+type ReadRequest = { buf: Buffer; offset: number; length: number; position: number };
+
+export type ReadWindowOpts = { step?: number; boundary?: PassBoundary; buffer?: Buffer };
+
+// The window algorithm both readers share: fill one window, look for a
+// boundary, and when there is none and bytes remain, grow the window and
+// read only the new tail. Growth doubles (capped at what exists) so an
+// oversized line costs under twice its size in copying and a logarithmic
+// number of steps; the boundary search covers only the new tail. Each
+// `yield` is one read the driver performs (awaited or synchronous), so the
+// async driver frees the loop between steps.
+function* completeLinesPlan(
+  position: number,
+  available: number,
+  opts: ReadWindowOpts,
+): Generator<ReadRequest, { content: string; bytesConsumed: number; steps: number }, number> {
+  const step = opts.step ?? SYNC_BYTES_PER_PASS;
+  const boundary = opts.boundary ?? newlineBoundary;
+  // allocUnsafe: every byte read below `len` is written by a read first.
+  let buf = opts.buffer ?? Buffer.allocUnsafe(Math.min(available, step));
+  let len = 0;
+  let steps = 0;
+  for (;;) {
+    const from = len;
+    const want = Math.min(buf.length, available) - len;
+    const n = want > 0 ? yield { buf, offset: len, length: want, position: position + len } : 0;
+    steps++;
+    if (n <= 0) available = len; // the file shrank under us: what we hold is all there is
+    len += n;
+    const atEof = len >= available;
+    const cut = len > 0 ? boundary(buf, len, atEof, from) : -1;
+    if (cut >= 0) return { content: buf.toString("utf8", 0, cut + 1), bytesConsumed: cut + 1, steps };
+    // No boundary at EOF: a line still being written. Consume nothing and let
+    // the next pass re-read it (same rule as before the window existed).
+    if (atEof) return { content: "", bytesConsumed: 0, steps };
+    const grown = Buffer.allocUnsafe(Math.min(Math.max(buf.length * 2, step), available));
+    buf.copy(grown, 0, 0, len);
+    buf = grown;
+  }
+}
+
+/**
+ * The complete lines available at `position`, read one window at a time.
+ * Replaces the old escape that, on a line longer than the window, re-read the
+ * whole remaining file in one allocation; now an oversized line costs one
+ * more window per step, with the loop free during every read.
+ */
+export async function readCompleteLines(
+  fd: fs.promises.FileHandle,
+  position: number,
+  available: number,
+  opts: ReadWindowOpts = {},
+): Promise<{ content: string; bytesConsumed: number; steps: number }> {
+  const plan = completeLinesPlan(position, available, opts);
+  let r = plan.next(0);
+  while (!r.done) {
+    const { bytesRead } = await fd.read(r.value.buf, r.value.offset, r.value.length, r.value.position);
+    r = plan.next(bytesRead);
+  }
+  return r.value;
+}
+
+/** The synchronous twin, for the hook paths that cannot await. */
+export function readCompleteLinesSync(
+  fd: number,
+  position: number,
+  available: number,
+  opts: ReadWindowOpts = {},
+): { content: string; bytesConsumed: number; steps: number } {
+  const plan = completeLinesPlan(position, available, opts);
+  let r = plan.next(0);
+  while (!r.done) {
+    r = plan.next(fs.readSync(fd, r.value.buf, r.value.offset, r.value.length, r.value.position));
+  }
+  return r.value;
+}
+
+/**
  * Drain any remaining known backlog in bounded passes instead of waiting for
  * the next file watch event or the 5 minute watchdog. The caller has already
  * advanced its position, so each continuation is durable forward progress.
@@ -8319,8 +7732,7 @@ export async function continueSyncPass(
   depth: number,
   next: () => Promise<void>,
 ): Promise<void> {
-  if (!(bytesConsumed > 0 && lastPosition + bytesConsumed < size)) return;
-  if (depth >= MAX_SYNC_CONTINUATIONS) throw new TranscriptIngestRetry("Transcript continuation budget retains unread data");
+  if (!(bytesConsumed > 0 && lastPosition + bytesConsumed < size && depth < MAX_SYNC_CONTINUATIONS)) return;
   await new Promise((resolve) => setImmediate(resolve));
   await next();
 }
@@ -8332,38 +7744,13 @@ export async function continueSyncPass(
  * of throwing ENOENT forever, which turned a deleted transcript into a
  * permanent retry loop). A shrink is a rotation and resets to the start.
  */
-async function ingestStat(filePath: string, lastPosition: number, client: string, sessionId: string): Promise<{ size: number; lastPosition: number; identity: ReturnType<typeof ingestIdentity> } | null> {
-  let size: number, identity: ReturnType<typeof ingestIdentity>;
+async function ingestStat(filePath: string, lastPosition: number): Promise<{ size: number; lastPosition: number } | null> {
+  let size: number;
   try {
-    identity = ingestIdentity(await fs.promises.stat(filePath));
-    const ledger = getSyncRecord(filePath);
-    const saved = ledger?.sourceGeneration;
-    const previous = saved?.client === client && saved.sessionId === sessionId && saved.unit === "bytes" && saved.watermark === lastPosition && ledger?.lastSyncedPosition === lastPosition ? saved : undefined;
-    size = identity.size;
-    if (previous && (previous.dev !== identity.dev || previous.ino !== identity.ino || previous.birthtimeMs !== identity.birthtimeMs)) {
-      lastPosition = 0;
-      setPosition(filePath,0);
-      codexModelPositions.delete(filePath);
-    }
-    if (lastPosition > 0 && size >= lastPosition && ["claude", "codex", "cursor"].includes(client)) {
-      const fd = await fs.promises.open(filePath, "r");
-      try {
-        const byte = Buffer.alloc(1);
-        const { bytesRead } = await fd.read(byte, 0, 1, lastPosition - 1);
-        if (bytesRead !== 1 || byte[0] !== 0x0a) {
-          log(`Transcript cursor no longer starts a complete record for ${sessionId}: position=${lastPosition}. Replaying from start.`);
-          lastPosition = 0;
-          setPosition(filePath, 0);
-          codexModelPositions.delete(filePath);
-        }
-      } finally {
-        await fd.close();
-      }
-    }
+    size = (await fs.promises.stat(filePath)).size;
   } catch (err: any) {
     if (err.code === "EACCES" || err.code === "EPERM") {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
-      transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
       return null;
     }
     if (err.code === "ENOENT") {
@@ -8377,23 +7764,59 @@ async function ingestStat(filePath: string, lastPosition: number, client: string
     setPosition(filePath, 0);
     lastPosition = 0;
   }
-  return { size, lastPosition, identity };
+  return { size, lastPosition };
 }
-function assertTranscriptReadGeneration(result: object, identity: ReturnType<typeof ingestIdentity>): void {
-  const source = ingestSource(result);
-  if (!source) throw new Error("unknown transcript read generation");
-  if (!sameIngestFile(identity,source.identity)) {
-    checkTranscriptDeadline();
-    if (getPosition(source.file) === source.offset) setPosition(source.file,0);
-    throw new TranscriptIngestRetry("Transcript generation changed after offset lookup");
+
+/**
+ * One window of complete lines from `position`, on a handle held only for
+ * the read. The read is async: a 1MB window still blocked the loop 8s when
+ * the disk was contended (2026-09-02). The parse the caller does next stays
+ * on the loop, which is what SYNC_BYTES_PER_PASS bounds.
+ */
+async function readIngestWindow(
+  filePath: string,
+  position: number,
+  available: number,
+  opts?: { step?: number; boundary?: PassBoundary },
+): Promise<{ content: string; bytesConsumed: number; steps: number }> {
+  const fd = await fs.promises.open(filePath, "r");
+  try {
+    return await readCompleteLines(fd, position, available, opts);
+  } finally {
+    await fd.close().catch(() => {});
   }
 }
 
-export async function processSessionFile(...args: Parameters<typeof processSessionFilePass>): Promise<void> {
-  return runTranscriptPass(args[1], path.resolve(args[0]), () => processSessionFilePass(...args));
-}
+/**
+ * Cut a cursor transcript window just before its last role header, so a
+ * message whose lines straddle the window is never synced truncated:
+ * parseCursorTranscriptFile buffers lines until the next header, so a newline
+ * cut inside a message would sync the first half and drop the rest. At EOF
+ * the cut is the last newline, which is what a whole tail read did before.
+ */
+export const cursorPassBoundary: PassBoundary = (buf, len, atEof, from = 0) => {
+  // At EOF the whole window is consumed, so this is the one full search.
+  if (atEof) return newlineBoundary(buf, len, atEof, 0);
+  const end = newlineBoundary(buf, len, atEof, from);
+  if (end < 0) return -1; // the tail added no complete line, so no new header
+  // Only a line the window holds whole can be a header: past the last
+  // newline, "user:" may be the start of a content line still to come. The
+  // header rule is the parser's own, so the cut and the parse agree. Lines
+  // whole before `from` were judged by an earlier step, so decode from the
+  // line that straddles it.
+  const lineStart = from > 0 ? buf.lastIndexOf(0x0a, from - 1) + 1 : 0;
+  const lines = buf.toString("utf8", lineStart, end).split("\n");
+  let headerAt = -1;
+  let bytes = lineStart;
+  for (const l of lines) {
+    if (bytes > 0 && isCursorRoleHeaderLine(l)) headerAt = bytes;
+    bytes += Buffer.byteLength(l, "utf8") + 1;
+  }
+  // The byte before the header line is the newline that ends the previous one.
+  return headerAt < 0 ? -1 : headerAt - 1;
+};
 
-async function processSessionFilePass(
+export async function processSessionFile(
   filePath: string,
   sessionId: string,
   projectPath: string,
@@ -8410,7 +7833,7 @@ async function processSessionFilePass(
   continuationDepth: number = 0,
 ): Promise<void> {
   const isSubagent = filePath.split(path.sep).includes("subagents");
-  const stats = await ingestStat(filePath, getPosition(filePath), "claude", sessionId);
+  const stats = await ingestStat(filePath, getPosition(filePath));
   if (!stats) return;
   const lastPosition = stats.lastPosition;
   // New bytes in a subagent transcript mean its parent has a live child inside
@@ -8446,28 +7869,49 @@ async function processSessionFilePass(
     // drains in bounded, convergent steps (see constant above) rather than
     // one giant batch. A trailing partial line (a large entry still being
     // written) is left for the next pass.
-    const ingest = await readTranscriptIngest({client:"claude",file:filePath,sessionId,offset:lastPosition,recoverBackup:!bakImageRecoveryDone.has(filePath)});
-    assertTranscriptReadGeneration(ingest,stats.identity);
-    const { bytesConsumed, metadata } = ingest;
-    if (!bytesConsumed) return;
-    let messages = ingest.messages;
-    const permissionObservation = permissionJustResolved.capture(sessionId);
-    const suppressPermissionResponses = permissionObservation !== undefined;
-    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
+    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition);
 
-    if (suppressPermissionResponses) {
+    if (!newContent) {
+      // No complete lines yet — don't advance position
+      return;
+    }
+    const LARGE_BATCH_BYTES = 64 * 1024;
+    if (bytesConsumed >= LARGE_BATCH_BYTES) {
+      log(`Processing ${bytesConsumed} bytes for session ${sessionId.slice(0, 8)} (from position ${lastPosition})`);
+    }
+    let messages = parseTranscriptFor("claude", newContent);
+
+    const bakPath = filePath + ".bak";
+    if (!bakImageRecoveryDone.has(filePath) && fs.existsSync(bakPath)) {
+      bakImageRecoveryDone.add(filePath);
+      messages = recoverImagesFromBackup(messages, bakPath, log);
+    }
+
+    if (permissionJustResolved.has(sessionId)) {
       const before = messages.length;
       messages = messages.filter(m => !(m.role === "user" && /^[yn]$/i.test(m.content?.trim())));
       if (messages.length < before) {
         log(`Filtered ${before - messages.length} permission response message(s) for session ${sessionId.slice(0, 8)}`);
       }
+      permissionJustResolved.delete(sessionId);
     }
 
     let conversationId = conversationCache[sessionId];
 
     // Check for summary title using the already-read new chunk + small tail read
     if (conversationId) {
-      const summaryTitle = metadata.summaryTitle;
+      let titleContent: string;
+      try {
+        titleContent = newContent + "\n" + readFileTailSync(filePath, 4096);
+      } catch (err: any) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
+          setPosition(filePath, lastPosition + bytesConsumed);
+          return;
+        }
+        throw err;
+      }
+      const summaryTitle = extractSummaryTitle(titleContent);
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
           await syncService.updateTitle(conversationId, summaryTitle);
@@ -8482,7 +7926,12 @@ async function processSessionFilePass(
 
       if (!planHandoffChecked.has(sessionId)) {
         planHandoffChecked.add(sessionId);
-        const userMsgs = metadata.headMessages ?? [];
+        let headContent: string;
+        try {
+          headContent = readFileHead(filePath, 16384);
+        } catch { headContent = ""; }
+        const headMessages = parseSessionFile(headContent);
+        const userMsgs = headMessages.filter(m => m.role === "user").slice(0, 3);
         for (const msg of userMsgs) {
           if (!msg.content) continue;
           const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
@@ -8509,49 +7958,40 @@ async function processSessionFilePass(
     }
 
   if (messages.length === 0) {
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      setPosition(filePath, lastPosition + bytesConsumed);
-      if (metadata.backupAttempted) bakImageRecoveryDone.add(filePath);
-      permissionJustResolved.consume(sessionId, permissionObservation);
-    });
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFilePass(
-      filePath,
-      sessionId,
-      projectPath,
-      syncService,
-      userId,
-      teamId,
-      conversationCache,
-      retryQueue,
-      pendingMessages,
-      titleCache,
-      updateStateCallback,
-      parentConversationId,
-      overrideAgentType,
-      continuationDepth + 1,
-    ));
+    setPosition(filePath, lastPosition + bytesConsumed);
     return;
   }
 
   if (!conversationId) {
+    let headContent: string;
+    try {
+      headContent = readFileHead(filePath, 16384);
+    } catch (err: any) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
+        return;
+      }
+      throw err;
+    }
+
     // The exact params the direct create attempts, kept for the catch block: a
     // failed create must retry with THIS object, not a rebuilt reduced one.
     let createParams: CreateConversationParams | null = null;
     try {
-      const slug = metadata.slug;
-      const parentMessageUuid = metadata.parentUuid;
+      const slug = extractSlug(headContent);
+      const parentMessageUuid = extractParentUuid(headContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
       const dirName = path.basename(path.dirname(filePath));
       const decodedPath = dirName ? decodeProjectDirName(dirName) : undefined;
       const actualProjectPath = pickProjectPath({
         decodedSlugPath: decodedPath || projectPath,
-        recordedCwd: metadata.cwd,
+        recordedCwd: extractCwd(headContent),
         home: process.env.HOME,
       });
       const gitInfo = actualProjectPath ? await getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
       // Detect parent conversation from file path (subagents/) or content (plan handoff)
       let isPlanHandoff = false;
@@ -8568,9 +8008,13 @@ async function processSessionFilePass(
       if (!parentConversationId) {
         const userMessages = messages.filter(msg => msg.role === "user").slice(0, 3);
         for (const msg of userMessages) {
-          const parentSessionId = ingestRecord(msg)?.handoffParent;
-          if (parentSessionId !== undefined) {
-            if (parentSessionId) {
+          if (!msg.content) continue;
+          const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
+          if (handoffMatch) {
+            const jsonlPath = handoffMatch[1];
+            const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+            if (parentSessionMatch) {
+              const parentSessionId = parentSessionMatch[1];
               if (conversationCache[parentSessionId]) {
                 parentConversationId = conversationCache[parentSessionId];
                 isPlanHandoff = true;
@@ -8661,24 +8105,31 @@ async function processSessionFilePass(
         // frozen doppelgänger that receives input but never output. Skip it,
         // and advance position + ledger so the stale-file scan doesn't
         // re-detect the file forever.
-        checkTranscriptDeadline();
         setPosition(filePath, stats.size);
         markSynced(filePath, stats.size, 0);
         log(`Skipped conversation creation for fork artifact ${sessionId.slice(0, 28)} (${filePath})`);
         return;
       } else {
-        const cliFlags = metadata.cliFlags;
+        const cliFlags = detectCliFlags(headContent + "\n" + newContent);
         let subagentDescription: string | undefined;
         let subagentAgentType: string | undefined;
-        if (isSubagent && metadata.subagent) {
-          subagentDescription = metadata.subagent.description;
-          subagentAgentType = metadata.subagent.agentType;
-          if (subagentDescription) subagentDescriptions.set(sessionId, subagentDescription);
+        if (isSubagent) {
+          try {
+            const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
+            if (fs.existsSync(metaPath)) {
+              const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+              if (meta.description) {
+                subagentDescription = meta.description;
+                subagentDescriptions.set(sessionId, meta.description);
+              }
+              if (meta.agentType) subagentAgentType = meta.agentType;
+            }
+          } catch {}
         }
         // Teammate transcripts self-identify on every line — stamp the team
         // identity at create so the row never exists without it. The parent
         // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
-        const teamInfo = !isSubagent ? metadata.teamInfo : undefined;
+        const teamInfo = !isSubagent && newContent.includes('"teamName"') ? extractTeamInfo(newContent) : undefined;
         // A headless claude child (`claude -p` run from another session's Bash)
         // nests under its spawner as a subagent. Fork lineage (parentMessageUuid)
         // and agent-team teammates keep their first-class semantics — teammates
@@ -8713,9 +8164,7 @@ async function processSessionFilePass(
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         };
-        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation(createParams);
-        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
@@ -8782,12 +8231,15 @@ async function processSessionFilePass(
         });
       }
 
-      if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+      if (pendingMessages[sessionId]) {
+        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+        delete pendingMessages[sessionId];
+      }
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
-          transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
           log("⚠️  Authentication expired - sync paused");
+          setPosition(filePath, lastPosition + bytesConsumed);
           return;
         }
         // Let it fall through to retry queue
@@ -8796,7 +8248,25 @@ async function processSessionFilePass(
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Failed to create conversation, queueing for retry: ${errMsg}`);
 
-      await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
+      if (!pendingMessages[sessionId]) {
+        pendingMessages[sessionId] = [];
+      }
+      for (const msg of messages) {
+        pendingMessages[sessionId].push({
+          uuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          filePath,
+          fileSize: stats.size,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+          model: msg.model,
+        });
+      }
 
       // A subagent whose create failed must stay re-parentable no matter what
       // the retry ends up sending (e.g. a stale persisted op from an older
@@ -8811,23 +8281,36 @@ async function processSessionFilePass(
       if (createParams) {
         // Retry exactly what the direct call attempted — rebuilding a reduced
         // param set here silently dropped parentConversationId/isSubagent.
-        queueTranscriptConversation(retryQueue, createParams as unknown as Record<string, unknown>, errMsg);
+        retryQueue.add("createConversation", createParams as unknown as Record<string, unknown>, errMsg);
+        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
 
       // Create failed before the params were assembled — rebuild what we can.
-      const slug = metadata.slug;
+      let retryHeadContent: string;
+      try {
+        retryHeadContent = readFileHead(filePath, 16384);
+      } catch (readErr: any) {
+        if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for retry queue. Skipping.`);
+          setPosition(filePath, lastPosition + bytesConsumed);
+          return;
+        }
+        throw readErr;
+      }
+
+      const slug = extractSlug(retryHeadContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
       const retryDirName = path.basename(path.dirname(filePath));
       const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : undefined;
       const retryProjectPath = pickProjectPath({
         decodedSlugPath: retryDecoded || projectPath,
-        recordedCwd: metadata.cwd,
+        recordedCwd: extractCwd(retryHeadContent),
         home: process.env.HOME,
       });
       const gitInfo = retryProjectPath ? await getGitInfo(retryProjectPath) : undefined;
 
-      queueTranscriptConversation(retryQueue, {
+      retryQueue.add("createConversation", {
         userId,
         teamId,
         sessionId,
@@ -8839,6 +8322,7 @@ async function processSessionFilePass(
         isSubagent: isSubagent || undefined,
       }, errMsg);
 
+      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
   }
@@ -8855,19 +8339,28 @@ async function processSessionFilePass(
   // conversation yet on the pass that saw the stamp, and the lead may only
   // resolve once the team's panes are live. Cheap string gate first — only
   // teammate transcripts carry the stamp.
-  if (conversationId && !isSubagent && !teamLinkDone.has(sessionId) && metadata.teamInfo) {
-    maybeLinkTeamSpawn(sessionId, conversationId, JSON.stringify(metadata.teamInfo), syncService, conversationCache).catch((err) => {
+  if (conversationId && !isSubagent && !teamLinkDone.has(sessionId) && newContent.includes('"teamName"')) {
+    maybeLinkTeamSpawn(sessionId, conversationId, newContent, syncService, conversationCache).catch((err) => {
       log(`Teammate link attempt failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
   // Intercept plan mode tool calls (ExitPlanMode, TaskCreate, TaskUpdate) and sync to Convex
-  if (conversationId && metadata.planTools?.length) {
-    for (const block of metadata.planTools) {
+  if (conversationId && (newContent.includes("ExitPlanMode") || newContent.includes("TaskCreate") || newContent.includes("TaskUpdate"))) {
+    const lines = newContent.split("\n");
+    for (const line of lines) {
+      if (!line.includes("ExitPlanMode") && !line.includes("TaskCreate") && !line.includes("TaskUpdate")) continue;
+      try {
+        const entry = JSON.parse(line);
+        const msg = entry.message || entry;
+        const blocks = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of blocks) {
+          if (block.type !== "tool_use") continue;
+
           if (block.name === "ExitPlanMode" && block.input?.plan && !planModeSynced.has(sessionId)) {
             planModeSynced.add(sessionId);
             const dirName = path.basename(path.dirname(filePath));
-            const projPath = dirName ? pickProjectPath({decodedSlugPath:decodeProjectDirName(dirName),recordedCwd:metadata.cwd,home:process.env.HOME}) : undefined;
+            const projPath = dirName ? resolveTranscriptProjectPath(filePath, dirName) : undefined;
             try {
               const planShortId = await syncService.syncPlanFromPlanMode({
                 sessionId,
@@ -8885,37 +8378,23 @@ async function processSessionFilePass(
           }
 
           if (block.name === "TaskCreate" && block.input?.subject) {
-            const receiptKey = `occurrence:${block.occurrence}`;
-            let taskMap = planModeTaskMap.get(sessionId);
-            if (!taskMap?.has(receiptKey)) {
-              assertTranscriptAuthority(sessionId, conversationId, conversationCache);
-              let shortId: string | null;
-              try {
-                shortId = await syncService.syncTaskFromPlanMode({
-                  sessionId,
-                  title: block.input.subject,
-                  description: block.input.description,
-                  planShortId: planModePlanMap.get(sessionId),
-                  clientKey: `transcript-task:${block.occurrence}`,
-                });
-              } catch (err) {
-                if (err instanceof AuthExpiredError) { transcriptRetryOwners.defer(path.resolve(filePath),sessionId); return; }
-                log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
-                throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unresolved TaskCreate ${block.occurrence}`);
-              }
-              if (!shortId) throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unresolved TaskCreate ${block.occurrence}`);
-              await validateTranscriptIngest(ingest);
-              assertTranscriptAuthority(sessionId, conversationId, conversationCache);
-              taskMap = planModeTaskMap.get(sessionId) ?? new Map<string, string>();
-              if (!taskMap.has(receiptKey)) {
-                let localId = 1;
-                for (const key of taskMap.keys()) if (/^[1-9][0-9]*$/.test(key)) localId = Math.max(localId, Number(key) + 1);
-                taskMap.set(String(localId), shortId);
-                taskMap.set(receiptKey, shortId);
+            const taskMap = planModeTaskMap.get(sessionId) || new Map();
+            const localId = String(taskMap.size + 1);
+            try {
+              const shortId = await syncService.syncTaskFromPlanMode({
+                sessionId,
+                title: block.input.subject,
+                description: block.input.description,
+                planShortId: planModePlanMap.get(sessionId),
+              });
+              if (shortId) {
+                taskMap.set(localId, shortId);
                 planModeTaskMap.set(sessionId, taskMap);
                 savePlanModeCache();
                 log(`Synced task ${shortId} from TaskCreate in session ${sessionId.slice(0, 8)}: ${block.input.subject}`);
               }
+            } catch (err) {
+              log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
 
@@ -8949,6 +8428,8 @@ async function processSessionFilePass(
               }
             }
           }
+        }
+      } catch {}
     }
   }
 
@@ -8966,34 +8447,43 @@ async function processSessionFilePass(
     if (turnTs !== null) markTurnStarted(sessionId, turnTs);
   }
 
-  const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
   if (batchResult.authExpired) {
     log("⚠️  Authentication expired - sync paused");
     return;
   }
-  if (!batchResult.accepted && !batchResult.conversationNotFound) return;
   if (batchResult.conversationNotFound) {
-    if (conversationCache[sessionId] !== conversationId) return;
     log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
     delete conversationCache[sessionId];
     saveConversationCache(conversationCache);
 
-    const slug = metadata.slug;
+    let recreateHeadContent: string;
+    try {
+      recreateHeadContent = readFileHead(filePath, 16384);
+    } catch (readErr: any) {
+      if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
+        log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
+        setPosition(filePath, lastPosition + bytesConsumed);
+        return;
+      }
+      throw readErr;
+    }
+
+    const slug = extractSlug(recreateHeadContent);
     const firstMessageTimestamp = messages[0]?.timestamp;
     const recreateDirName = path.basename(path.dirname(filePath));
     const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : undefined;
     const recreateProjectPath = pickProjectPath({
       decodedSlugPath: recreateDecoded || projectPath,
-      recordedCwd: metadata.cwd,
+      recordedCwd: extractCwd(recreateHeadContent),
       home: process.env.HOME,
     });
     const gitInfo = recreateProjectPath ? await getGitInfo(recreateProjectPath) : undefined;
 
     try {
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
-      const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
         teamId,
@@ -9005,27 +8495,22 @@ async function processSessionFilePass(
         startedAt: firstMessageTimestamp,
         gitInfo,
       });
-      conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for session ${sessionId}`);
 
-      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
-        if (!retryResult.accepted) return;
+      await syncService.addMessages({
+        conversationId,
+        messages: messages.map(prepMessageForSync),
+      });
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-      transcriptRetries.add(sessionId);
       log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
-      return;
     }
   }
 
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      setPosition(filePath, lastPosition + bytesConsumed);
-      if (metadata.backupAttempted) bakImageRecoveryDone.add(filePath);
-      permissionJustResolved.consume(sessionId, permissionObservation);
-      markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
-    });
+    setPosition(filePath, lastPosition + bytesConsumed);
+    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     log(`Synced ${messages.length} messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -9048,7 +8533,7 @@ async function processSessionFilePass(
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
-      const permissionPrompt = metadata.permissionPrompt;
+      const permissionPrompt = detectPermissionPrompt(lastAssistantMessage.content);
       if (permissionPrompt && !permissionRecordPending.has(sessionId)) {
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
         permissionRecordPending.add(sessionId);
@@ -9173,7 +8658,7 @@ async function processSessionFilePass(
 
     updateStateCallback();
 
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFilePass(
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFile(
       filePath,
       sessionId,
       projectPath,
@@ -9192,7 +8677,6 @@ async function processSessionFilePass(
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
-      transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
       return;
     }
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -9202,11 +8686,7 @@ async function processSessionFilePass(
   }
 }
 
-export async function processCursorSession(...args: Parameters<typeof processCursorSessionPass>): Promise<void> {
-  return runTranscriptPass(args[1], path.resolve(args[0]), () => processCursorSessionPass(...args));
-}
-
-async function processCursorSessionPass(
+async function processCursorSession(
   dbPath: string,
   sessionId: string,
   workspacePath: string,
@@ -9218,30 +8698,22 @@ async function processCursorSessionPass(
   pendingMessages: PendingMessages,
   updateStateCallback: () => void
 ): Promise<void> {
-  let syncedCount = getPosition(dbPath);
+  const syncedCount = getPosition(dbPath);
 
   let result: { messages: ParsedMessage[]; maxRowId: number; totalCount: number };
   try {
-    result = await readTranscriptIngest({client:"cursorDb",file:dbPath,sessionId,offset:syncedCount});
-    if (transcriptCountReplaced(result,syncedCount)) {
-      syncedCount = 0;
-      setPosition(dbPath,0);
-      result = await readTranscriptIngest({client:"cursorDb",file:dbPath,sessionId,offset:0});
-    }
+    result = extractMessagesFromCursorDb(dbPath, syncedCount);
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${dbPath}. Will retry when permissions are restored.`);
-      transcriptRetryOwners.defer(path.resolve(dbPath),sessionId);
       return;
     }
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Failed to extract messages from Cursor DB: ${errMsg}`);
-    throw err;
+    return;
   }
 
-  const { totalCount } = result;
-  const messages = result.messages.slice(0, TRANSCRIPT_PENDING_ROWS);
-  const committedCount = syncedCount + messages.length;
+  const { messages, totalCount } = result;
 
   if (messages.length === 0) {
     return;
@@ -9253,9 +8725,8 @@ async function processCursorSessionPass(
     try {
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
-      const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
         teamId,
@@ -9265,17 +8736,19 @@ async function processCursorSessionPass(
         title,
         startedAt: firstMessageTimestamp,
       });
-      conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Created conversation ${conversationId} for Cursor session ${sessionId}`);
 
-      if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+      if (pendingMessages[sessionId]) {
+        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+        delete pendingMessages[sessionId];
+      }
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
-          transcriptRetryOwners.defer(path.resolve(dbPath),sessionId);
           log("⚠️  Authentication expired - sync paused");
+          setPosition(dbPath, totalCount);
           return;
         }
         // Let it fall through to retry queue
@@ -9284,11 +8757,29 @@ async function processCursorSessionPass(
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
 
-      await retainPendingTranscript(pendingMessages, sessionId, messages, dbPath, totalCount);
+      if (!pendingMessages[sessionId]) {
+        pendingMessages[sessionId] = [];
+      }
+      for (const msg of messages) {
+        pendingMessages[sessionId].push({
+          uuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          filePath: dbPath,
+          fileSize: totalCount,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+          model: msg.model,
+        });
+      }
 
       const firstMsgTimestamp = messages[0]?.timestamp;
 
-      queueTranscriptConversation(retryQueue, {
+      retryQueue.add("createConversation", {
         userId,
         teamId,
         sessionId,
@@ -9297,28 +8788,26 @@ async function processCursorSessionPass(
         startedAt: firstMsgTimestamp,
       }, errMsg);
 
+      setPosition(dbPath, totalCount);
       return;
     }
   }
 
-  const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
   if (batchResult.authExpired) {
     log("⚠️  Authentication expired - sync paused");
     return;
   }
-  if (!batchResult.accepted && !batchResult.conversationNotFound) return;
   if (batchResult.conversationNotFound) {
-    if (conversationCache[sessionId] !== conversationId) return;
     log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
     delete conversationCache[sessionId];
     saveConversationCache(conversationCache);
 
     const firstMessageTimestamp = messages[0]?.timestamp;
     const firstUserMessage = messages.find(msg => msg.role === "user");
-    const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+    const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
     try {
-      const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
         teamId,
@@ -9328,25 +8817,21 @@ async function processCursorSessionPass(
         title,
         startedAt: firstMessageTimestamp,
       });
-      conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
 
-      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
-        if (!retryResult.accepted) return;
+      await syncService.addMessages({
+        conversationId,
+        messages: messages.map(prepMessageForSync),
+      });
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-      transcriptRetries.add(sessionId);
       log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
-      return;
     }
   }
 
-  await commitTranscriptIngest(result,sessionId,conversationId,conversationCache,() => {
-    setPosition(dbPath, committedCount);
-  }, [sessionId], undefined, messages);
-  if (committedCount < totalCount) transcriptRetries.add(sessionId);
+  setPosition(dbPath, totalCount);
   log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
   syncStats.messagesSynced += messages.length;
   syncStats.sessionsActive.add(sessionId);
@@ -9354,11 +8839,7 @@ async function processCursorSessionPass(
   updateStateCallback();
 }
 
-export async function processCursorTranscriptFile(...args: Parameters<typeof processCursorTranscriptFilePass>): Promise<void> {
-  return runTranscriptPass(args[1], path.resolve(args[0]), () => processCursorTranscriptFilePass(...args));
-}
-
-async function processCursorTranscriptFilePass(
+async function processCursorTranscriptFile(
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -9370,54 +8851,38 @@ async function processCursorTranscriptFilePass(
   updateStateCallback: () => void,
   continuationDepth: number = 0,
 ): Promise<void> {
-  const stats = await ingestStat(filePath, getPosition(filePath), "cursor", sessionId);
+  const stats = await ingestStat(filePath, getPosition(filePath));
   if (!stats || stats.size <= stats.lastPosition) return;
   const lastPosition = stats.lastPosition;
 
   try {
     // Windowed like claude ingest; the boundary keeps a multi line message
     // whole across passes (see cursorPassBoundary).
-    const ingest = await readTranscriptIngest({client:"cursor",file:filePath,sessionId,offset:lastPosition});
-    assertTranscriptReadGeneration(ingest,stats.identity);
-    const {messages,bytesConsumed} = ingest;
-    if (!bytesConsumed) return;
+    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition, { boundary: cursorPassBoundary });
+    if (!newContent) return;
+    const messages = parseTranscriptFor("cursor", newContent);
 
     let conversationId = conversationCache[sessionId];
 
     if (messages.length === 0) {
-      await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-        setPosition(filePath, lastPosition + bytesConsumed);
-      });
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFilePass(
-      filePath,
-      sessionId,
-      syncService,
-      userId,
-      teamId,
-      conversationCache,
-      retryQueue,
-      pendingMessages,
-      updateStateCallback,
-      continuationDepth + 1,
-    ));
+      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
 
     if (!conversationId) {
       let projectPath: string | undefined;
       try {
-        projectPath = await findWorkspacePathForCursorConversation(sessionId) || undefined;
+        projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
       } catch {
         projectPath = undefined;
       }
 
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
       const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
 
       try {
-        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9430,18 +8895,20 @@ async function processCursorTranscriptFilePass(
           parentMessageUuid: undefined,
           gitInfo,
         });
-        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Created conversation ${conversationId} for Cursor transcript ${sessionId}`);
         syncStats.conversationsCreated++;
 
-        if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+        if (pendingMessages[sessionId]) {
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+          delete pendingMessages[sessionId];
+        }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-          transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
             log("⚠️  Authentication expired - sync paused");
+            setPosition(filePath, lastPosition + bytesConsumed);
             return;
           }
         }
@@ -9449,9 +8916,27 @@ async function processCursorTranscriptFilePass(
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
 
-        await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
+        if (!pendingMessages[sessionId]) {
+          pendingMessages[sessionId] = [];
+        }
+        for (const msg of messages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: stats.size,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+            model: msg.model,
+          });
+        }
 
-        queueTranscriptConversation(retryQueue, {
+        retryQueue.add("createConversation", {
           userId,
           teamId,
           sessionId,
@@ -9462,30 +8947,28 @@ async function processCursorTranscriptFilePass(
           gitInfo,
         }, errMsg);
 
+        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
     }
 
-    const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
     }
-    if (!batchResult.accepted && !batchResult.conversationNotFound) return;
     if (batchResult.conversationNotFound) {
-      if (conversationCache[sessionId] !== conversationId) return;
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
       delete conversationCache[sessionId];
       saveConversationCache(conversationCache);
 
       try {
-        const projectPath = await findWorkspacePathForCursorConversation(sessionId) || undefined;
+        const projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
         const firstMessageTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find(m => m.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
 
-        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9498,32 +8981,29 @@ async function processCursorTranscriptFilePass(
           parentMessageUuid: undefined,
           gitInfo,
         });
-        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
 
-        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
-        if (!retryResult.accepted) return;
+        await syncService.addMessages({
+          conversationId,
+          messages: messages.map(prepMessageForSync),
+        });
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        transcriptRetries.add(sessionId);
         log(`Failed to recreate Cursor conversation and add messages: ${retryErrMsg}`);
-        return;
       }
     }
 
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      setPosition(filePath, lastPosition + bytesConsumed);
-      markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
-    });
+    setPosition(filePath, lastPosition + bytesConsumed);
+    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     log(`Synced ${messages.length} Cursor transcript messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
 
     updateStateCallback();
 
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFilePass(
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFile(
       filePath,
       sessionId,
       syncService,
@@ -9538,17 +9018,12 @@ async function processCursorTranscriptFilePass(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
-    throw err;
   }
 }
 
 const codexModelPositions = new Map<string, { offset: number; model?: string }>();
 
-export async function processCodexSession(...args: Parameters<typeof processCodexSessionPass>): Promise<void> {
-  return runTranscriptPass(args[1], path.resolve(args[0]), () => processCodexSessionPass(...args));
-}
-
-async function processCodexSessionPass(
+async function processCodexSession(
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -9561,19 +9036,24 @@ async function processCodexSessionPass(
   updateStateCallback: () => void,
   continuationDepth: number = 0,
 ): Promise<void> {
-  const stats = await ingestStat(filePath, getPosition(filePath), "codex", sessionId);
+  const stats = await ingestStat(filePath, getPosition(filePath));
   if (!stats || stats.size <= stats.lastPosition) return;
   const lastPosition = stats.lastPosition;
 
   try {
     // Windowed like claude ingest: one pass per window, continuation below.
-    const cachedModel = codexModelPositions.get(filePath);
-    const ingest = await readTranscriptIngest({client:"codex",file:filePath,sessionId,offset:lastPosition,model:cachedModel?.model,modelKnown:cachedModel?.offset === lastPosition});
-    assertTranscriptReadGeneration(ingest,stats.identity);
-    const {messages,bytesConsumed,metadata} = ingest;
-    if (!bytesConsumed) return;
-    const sessionMetaHead = metadata.appServerHead ?? "";
-    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
+    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition);
+    if (!newContent) return;
+    let sessionMetaHead: string;
+    try {
+      sessionMetaHead = readFileHead(filePath, 4096);
+    } catch (err: any) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        log(`Warning: Permission denied reading ${filePath} for Codex session metadata. Skipping.`);
+        return;
+      }
+      throw err;
+    }
     const persistedAppServerThreadIds = new Set(
       [...persistedAppServerThreads.values()].map((record) => record.threadId),
     );
@@ -9584,21 +9064,25 @@ async function processCodexSessionPass(
       persistedAppServerThreadIds,
       pendingAppServerForkParents,
     )) {
-      checkTranscriptDeadline();
       setPosition(filePath, stats.size);
       markSynced(filePath, stats.size, 0);
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
-    const codexMetadata = metadata.codex;
+    const codexMetadata = codexSessionMetadataFor(filePath);
     const nativeParentSessionId = codexMetadata?.parentThreadId;
-    codexModelPositions.set(filePath, {offset:lastPosition+bytesConsumed,model:ingest.model});
+    const cachedModel = codexModelPositions.get(filePath);
+    const modelState = { model: cachedModel?.offset === lastPosition
+      ? cachedModel.model
+      : await readCodexModelBeforeOffset(filePath, lastPosition) };
+    const messages = parseCodexSessionFile(newContent, modelState);
+    codexModelPositions.set(filePath, { offset: lastPosition + bytesConsumed, model: modelState.model });
 
     // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
     // session embeds its lineage back to a common root, so we key the conversation off that
     // root. We register BOTH the live fork id and the root so future forks collapse here and
     // lookups by the live session id (inject/status/kill) keep resolving.
-    const forkRoot = metadata.forkRoot;
+    const forkRoot = resolveCodexForkRoot(filePath);
     const lineageKeys =
       forkRoot && forkRoot !== sessionId ? [sessionId, forkRoot] : [sessionId];
     const setConversationCache = (cid: string): void => {
@@ -9614,7 +9098,7 @@ async function processCodexSessionPass(
     const clearConversationCache = (): void => {
       let changed = false;
       for (const k of lineageKeys) {
-        if (k in conversationCache && conversationCache[k] === conversationId) {
+        if (k in conversationCache) {
           delete conversationCache[k];
           changed = true;
         }
@@ -9633,7 +9117,18 @@ async function processCodexSessionPass(
     if (conversationId) setConversationCache(conversationId);
 
     if (conversationId) {
-      const summaryTitle = metadata.summaryTitle;
+      let titleContent: string;
+      try {
+        titleContent = newContent + "\n" + readFileTailSync(filePath, 4096);
+      } catch (err: any) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
+          setPosition(filePath, lastPosition + bytesConsumed);
+          return;
+        }
+        throw err;
+      }
+      const summaryTitle = extractSummaryTitle(titleContent);
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
           await syncService.updateTitle(conversationId, summaryTitle);
@@ -9648,28 +9143,14 @@ async function processCodexSessionPass(
     }
 
     if (messages.length === 0) {
-      await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-        setPosition(filePath, lastPosition + bytesConsumed);
-      },lineageKeys);
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSessionPass(
-      filePath,
-      sessionId,
-      syncService,
-      userId,
-      teamId,
-      conversationCache,
-      retryQueue,
-      pendingMessages,
-      titleCache,
-      updateStateCallback,
-      continuationDepth + 1,
-    ));
+      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
 
     if (!conversationId) {
       try {
-        const projectPath = metadata.cwd;
+        const headContent = sessionMetaHead.length >= 16384 ? sessionMetaHead : readFileHead(filePath, 16384);
+        const projectPath = extractCodexCwd(headContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
         let matchedStartedConversation: string | null = null;
 
@@ -9725,7 +9206,7 @@ async function processCodexSessionPass(
         } else {
 
           const firstUserMessage = messages.find(msg => msg.role === "user");
-          const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
           // A codex session spawned by another session's Bash tool (`codex
           // exec`) nests under its spawner as a subagent instead of surfacing
@@ -9751,7 +9232,6 @@ async function processCodexSessionPass(
             if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
           }
 
-          const finishCreate = captureTranscriptMapping(sessionId,conversationCache,lineageKeys);
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -9766,7 +9246,6 @@ async function processCodexSessionPass(
             isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
             gitInfo: undefined,
           });
-          conversationId = finishCreate(conversationId);
           setConversationCache(conversationId);
           await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
           log(`Created conversation ${conversationId} for Codex session ${sessionId}${forkRoot && forkRoot !== sessionId ? ` (lineage root ${forkRoot.slice(0, 8)})` : ""}`);
@@ -9779,13 +9258,16 @@ async function processCodexSessionPass(
             });
           }
 
-          if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+          if (pendingMessages[sessionId]) {
+            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+            delete pendingMessages[sessionId];
+          }
         }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-          transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
             log("⚠️  Authentication expired - sync paused");
+            setPosition(filePath, lastPosition + bytesConsumed);
             return;
           }
           // Let it fall through to retry queue
@@ -9794,13 +9276,31 @@ async function processCodexSessionPass(
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create Codex conversation, queueing for retry: ${errMsg}`);
 
-        await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
+        if (!pendingMessages[sessionId]) {
+          pendingMessages[sessionId] = [];
+        }
+        for (const msg of messages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: stats.size,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+            model: msg.model,
+          });
+        }
 
         const firstMsgTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
-        queueTranscriptConversation(retryQueue, {
+        retryQueue.add("createConversation", {
           userId,
           teamId,
           sessionId,
@@ -9809,27 +9309,25 @@ async function processCodexSessionPass(
           startedAt: firstMsgTimestamp,
         }, errMsg);
 
+        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
     }
 
-    const batchResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, lineageKeys);
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
     }
-    if (!batchResult.accepted && !batchResult.conversationNotFound) return;
     if (batchResult.conversationNotFound) {
-      if (conversationCache[sessionId] !== conversationId) return;
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
       clearConversationCache();
 
       const firstMsgTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
       try {
-        const finishCreate = captureTranscriptMapping(sessionId,conversationCache,lineageKeys);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9838,24 +9336,21 @@ async function processCodexSessionPass(
           title,
           startedAt: firstMsgTimestamp,
         });
-        conversationId = finishCreate(conversationId);
         setConversationCache(conversationId);
         log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
 
-        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, lineageKeys, true);
-        if (!retryResult.accepted) return;
+        await syncService.addMessages({
+          conversationId,
+          messages: messages.map(prepMessageForSync),
+        });
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        transcriptRetries.add(sessionId);
         log(`Failed to recreate Codex conversation and add messages: ${retryErrMsg}`);
-        return;
       }
     }
 
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      setPosition(filePath, lastPosition + bytesConsumed);
-      markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
-    },lineageKeys);
+    setPosition(filePath, lastPosition + bytesConsumed);
+    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -9867,8 +9362,17 @@ async function processCodexSessionPass(
       // newContent is only the bytes since the last sync position — a live-watched
       // review delivers exited_review_mode and task_complete in different chunks.
       // Once the terminal task_complete shows up, judge against the whole transcript.
-      if (metadata.completedReview) {
-        scheduleCodexReviewRetirement(filePath, sessionId, conversationId, syncService);
+      if (codexMetadata?.originator === "codex_exec" && newContent.includes('"task_complete"')) {
+        let fullContent = newContent;
+        try {
+          fullContent = await fs.promises.readFile(filePath, "utf-8");
+        } catch {}
+        if (
+          isCompletedStandaloneCodexReview(codexMetadata, fullContent) ||
+          isCompletedNativeCodexReviewChild(codexMetadata, fullContent)
+        ) {
+          scheduleCodexReviewRetirement(filePath, sessionId, conversationId, syncService);
+        }
       }
     }
 
@@ -9887,7 +9391,7 @@ async function processCodexSessionPass(
 
     updateStateCallback();
 
-    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSessionPass(
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSession(
       filePath,
       sessionId,
       syncService,
@@ -9903,17 +9407,12 @@ async function processCodexSessionPass(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Codex session file ${filePath}: ${errMsg}`);
-    throw err;
   }
 }
 
 const geminiSyncedCounts = new Map<string, number>();
 
-export async function processGeminiSession(...args: Parameters<typeof processGeminiSessionPass>): Promise<void> {
-  return runTranscriptPass(args[1], path.resolve(args[0]), () => processGeminiSessionPass(...args));
-}
-
-async function processGeminiSessionPass(
+async function processGeminiSession(
   filePath: string,
   sessionId: string,
   projectHash: string,
@@ -9927,26 +9426,33 @@ async function processGeminiSessionPass(
   updateStateCallback: () => void
 ): Promise<void> {
   try {
-    const ingest = await readTranscriptIngest({client:"gemini",file:filePath,sessionId,offset:0});
-    const allMessages = ingest.messages;
-    let previousCount = geminiSyncedCounts.get(filePath) || 0;
-    if (transcriptCountReplaced(ingest,previousCount)) { previousCount = 0; geminiSyncedCounts.delete(filePath); }
+    let content: string;
+    try {
+      content = await fs.promises.readFile(filePath, "utf-8");
+    } catch (err: any) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
+        return;
+      }
+      throw err;
+    }
+
+    const allMessages = parseTranscriptFor("gemini", content);
+    const previousCount = geminiSyncedCounts.get(filePath) || 0;
 
     if (allMessages.length <= previousCount) {
       return;
     }
 
-    const newMessages = allMessages.slice(previousCount, previousCount + TRANSCRIPT_PENDING_ROWS);
-    const committedCount = previousCount + newMessages.length;
+    const newMessages = allMessages.slice(previousCount);
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
       try {
         const firstUserMessage = allMessages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         const startTime = allMessages[0]?.timestamp;
 
-        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -9959,7 +9465,6 @@ async function processGeminiSessionPass(
           parentMessageUuid: undefined,
           gitInfo: undefined,
         });
-        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Created conversation ${conversationId} for Gemini session ${sessionId}`);
@@ -9972,12 +9477,15 @@ async function processGeminiSessionPass(
           });
         }
 
-        if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+        if (pendingMessages[sessionId]) {
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+          delete pendingMessages[sessionId];
+        }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-          transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
             log("⚠️  Authentication expired - sync paused");
+            geminiSyncedCounts.set(filePath, allMessages.length);
             return;
           }
         }
@@ -9985,12 +9493,30 @@ async function processGeminiSessionPass(
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create Gemini conversation, queueing for retry: ${errMsg}`);
 
-        await retainPendingTranscript(pendingMessages, sessionId, newMessages, filePath, ingest.fileSize);
+        if (!pendingMessages[sessionId]) {
+          pendingMessages[sessionId] = [];
+        }
+        for (const msg of newMessages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: content.length,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+            model: msg.model,
+          });
+        }
 
         const firstUserMessage = allMessages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
-        queueTranscriptConversation(retryQueue, {
+        retryQueue.add("createConversation", {
           userId,
           teamId,
           sessionId,
@@ -9999,27 +9525,25 @@ async function processGeminiSessionPass(
           startedAt: allMessages[0]?.timestamp,
         }, errMsg);
 
+        geminiSyncedCounts.set(filePath, allMessages.length);
         return;
       }
     }
 
-    const batchResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
+    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
     }
-    if (!batchResult.accepted && !batchResult.conversationNotFound) return;
     if (batchResult.conversationNotFound) {
-      if (conversationCache[sessionId] !== conversationId) return;
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
       delete conversationCache[sessionId];
       saveConversationCache(conversationCache);
 
       const firstUserMessage = allMessages.find(msg => msg.role === "user");
-      const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
       try {
-        const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -10028,25 +9552,21 @@ async function processGeminiSessionPass(
           title,
           startedAt: allMessages[0]?.timestamp,
         });
-        conversationId = finishCreate(conversationId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Gemini session ${sessionId}`);
 
-        const retryResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
-        if (!retryResult.accepted) return;
+        await syncService.addMessages({
+          conversationId,
+          messages: newMessages.map(prepMessageForSync),
+        });
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        transcriptRetries.add(sessionId);
         log(`Failed to recreate Gemini conversation and add messages: ${retryErrMsg}`);
-        return;
       }
     }
 
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      geminiSyncedCounts.set(filePath, committedCount);
-    }, [sessionId], undefined, newMessages);
-    if (committedCount < allMessages.length) transcriptRetries.add(sessionId);
+    geminiSyncedCounts.set(filePath, allMessages.length);
     log(`Synced ${newMessages.length} Gemini messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -10056,7 +9576,6 @@ async function processGeminiSessionPass(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Gemini session file ${filePath}: ${errMsg}`);
-    throw err;
   }
 }
 
@@ -10136,31 +9655,7 @@ export function seedOpencodeForkSyncBaseline(forkSessionId: string): number {
   }
 }
 
-/**
- * Rebuild a conversation as an OpenCode session: create one through the serve
- * sidecar in `cwd` and append the whole (trimmed) history as a single `noReply`
- * user message. The message starts with the codecast import prefix, which the
- * opencode parser drops, so the watcher never syncs it back. Returns the real
- * `ses_` id `opencode -s` resumes, or null when the sidecar cannot run.
- */
-async function rebuildOpencodeSession(exportData: ExportResult, cwd: string | undefined): Promise<string | null> {
-  const server = await ensureOpencodeServer(readConfig());
-  if (!server) return null;
-  const created = await server.createSession(
-    exportData.conversation.title ? { title: exportData.conversation.title } : {},
-    { directory: cwd },
-  );
-  const text = renderConversationHandoff(exportData, chooseClaudeAutoTrim(exportData));
-  await server.appendUserMessage(created.id, text, { directory: cwd });
-  log(`[REMOTE] Rebuilt conversation ${exportData.conversation.id.slice(0, 12)} as opencode session ${created.id.slice(0, 12)} (${exportData.messages.length} msgs as one import message)`);
-  return created.id;
-}
-
-export async function processOpencodeSession(...args: Parameters<typeof processOpencodeSessionPass>): Promise<void> {
-  return runTranscriptPass(args[0], opencodeDbPath(), () => processOpencodeSessionPass(...args));
-}
-
-async function processOpencodeSessionPass(
+async function processOpencodeSession(
   sessionId: string,
   syncService: SyncService,
   userId: string,
@@ -10172,16 +9667,12 @@ async function processOpencodeSessionPass(
   updateStateCallback: () => void
 ): Promise<void> {
   try {
-    const ingest = await readTranscriptIngest({client:"opencode",file:opencodeDbPath(),sessionId,offset:0});
-    if (ingest.metadata.sessionExists === false) {
-      opencodeSyncedCounts.delete(sessionId);
-      await pruneAcceptedTranscript(opencodeDbPath(),sessionId);
-      return;
-    }
-    if (transcriptCountReplaced(ingest,opencodeSyncedCounts.get(sessionId) ?? 0)) opencodeSyncedCounts.delete(sessionId);
-    const allMessages = ingest.messages;
+    const assembled = assembleOpencodeSession(sessionId);
+    if (!assembled) return;
+    const allMessages = parseTranscriptFor("opencode", assembled);
     if (allMessages.length === 0) return;
-    const cwd = ingest.metadata.cwd;
+
+    const cwd = resolveOpencodeSessionCwd(sessionId);
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
@@ -10190,7 +9681,7 @@ async function processOpencodeSessionPass(
       // (same contract as the codex native-review path). A task-tool child is
       // never the session a user launched, so it must not claim a started stub
       // (its cwd matches its parent's, which would collide with the cwd match).
-      const lineage = ingest.metadata;
+      const lineage = readOpencodeSessionLineage(sessionId);
 
       // Bind a freshly launched opencode session to its pending started-tmux
       // conversation. opencode's session id never appears in the launched process
@@ -10225,14 +9716,13 @@ async function processOpencodeSessionPass(
         log(`Linked opencode session ${sessionId} to started conversation ${conversationId.slice(0, 12)} via cwd ${cwd}`);
       } else {
         const firstUserMessage = allMessages.find((m) => m.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         const parentConversationId = lineage.parentSessionId ? conversationCache[lineage.parentSessionId] : undefined;
         if (lineage.parentSessionId && !parentConversationId) {
           // Parent hasn't synced yet (backfill order is arbitrary) — link when it does.
           pendingNativeParents.set(sessionId, { parentSessionId: lineage.parentSessionId, description: lineage.agentName });
         }
         try {
-          const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -10248,10 +9738,8 @@ async function processOpencodeSessionPass(
             subagentDescription: parentConversationId ? lineage.agentName : undefined,
             gitInfo: cwd ? await getGitInfo(cwd) : undefined,
           });
-          conversationId = finishCreate(conversationId);
         } catch (err) {
           if (err instanceof AuthExpiredError && handleAuthFailure()) {
-          transcriptRetryOwners.defer(opencodeDbPath(),sessionId);
             log("⚠️  Authentication expired - sync paused");
             return;
           }
@@ -10260,24 +9748,24 @@ async function processOpencodeSessionPass(
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Created conversation ${conversationId} for opencode session ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId.slice(0, 12)})` : ""}`);
-        if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+        if (pendingMessages[sessionId]) {
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+          delete pendingMessages[sessionId];
+        }
       }
     }
 
     // Upsert-based delta: re-send the last already-synced message (its body may have
     // grown as parts streamed in) plus everything new. addMessages patches by uuid.
     const prevCount = opencodeSyncedCounts.get(sessionId) ?? 0;
-    const committedCount = Math.min(allMessages.length, Math.max(0, prevCount - 1) + TRANSCRIPT_PENDING_ROWS);
-    const toSync = allMessages.slice(Math.max(0, prevCount - 1), committedCount);
+    const toSync = allMessages.slice(Math.max(0, prevCount - 1));
     if (toSync.length > 0) {
-      const batchResult = await syncTranscriptMessages(toSync, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
+      const batchResult = await syncMessagesBatch(toSync, conversationId, syncService, retryQueue);
       if (batchResult.authExpired) {
         log("⚠️  Authentication expired - sync paused");
         return;
       }
-      if (!batchResult.accepted && !batchResult.conversationNotFound) return;
       if (batchResult.conversationNotFound) {
-        if (conversationCache[sessionId] !== conversationId) return;
         log(`Conversation ${conversationId} not found, invalidating opencode cache`);
         delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
@@ -10285,17 +9773,14 @@ async function processOpencodeSessionPass(
         return;
       }
     }
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      opencodeSyncedCounts.set(sessionId, committedCount);
-    }, [sessionId], undefined, toSync);
-    if (committedCount < allMessages.length) transcriptRetries.add(sessionId);
+    opencodeSyncedCounts.set(sessionId, allMessages.length);
 
     // This session may be the parent a task-tool child synced ahead of.
     await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
 
     // Title: opencode names the session in its meta (info.title); mirror it.
     try {
-      const metaTitle = ingest.metadata.title;
+      const metaTitle = (JSON.parse(assembled).info as { title?: string } | undefined)?.title;
       if (metaTitle && titleCache[sessionId] !== metaTitle) {
         await syncService.updateTitle(conversationId, metaTitle);
         titleCache[sessionId] = metaTitle;
@@ -10307,7 +9792,7 @@ async function processOpencodeSessionPass(
     // defers on them): the newest message tells us working vs turn-complete, so this
     // fires the idle flip that routes the session into needs-input when its turn ends.
     if (conversationId && !appServerConversations.has(conversationId)) {
-      const turn = ingest.metadata.turn;
+      const turn = classifyOpencodeTranscriptTail(assembled);
       sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId, null) : "working");
     }
 
@@ -10318,7 +9803,6 @@ async function processOpencodeSessionPass(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing opencode session ${sessionId}: ${errMsg}`);
-    throw err;
   }
 }
 
@@ -10340,31 +9824,6 @@ async function processOpencodeSessionPass(
 // the opening line), so uuid membership alone would freeze every message at
 // whatever prefix the first watcher pass caught.
 const piSyncedSigs = new Map<string, Map<string, string>>();
-
-/**
- * Write a transcript codecast REBUILT for a delta-synced client (pi) so the
- * watcher ingests only what the client appends afterwards. The delta sync has
- * no file position: every pass re-parses the whole file and syncs whatever is
- * not in `piSyncedSigs`, so a rebuilt file — the conversation's own history —
- * would be synced back into the conversation under fresh uuids (a duplicate
- * "PONG" on 2026-09-06). The file is written to a staging name the watcher's
- * `.jsonl` filter ignores, ingested once through the same worker to obtain the
- * exact signatures, registered as synced under the final path, then renamed
- * into place.
- */
-async function writeRebuiltDeltaTranscript(client: "pi", content: string, finalPath: string, sessionId: string): Promise<void> {
-  const staging = `${finalPath}.codecast-rebuild`;
-  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
-  fs.writeFileSync(staging, content);
-  try {
-    const ingest = await readTranscriptIngest({ client, file: staging, sessionId, offset: 0 });
-    const { nextSynced } = await computeIngestSyncDelta(ingest.messages, ingest.signatures!, new Map());
-    piSyncedSigs.set(path.resolve(finalPath), nextSynced);
-  } catch (err) {
-    log(`Rebuilt ${client} transcript baseline failed for ${sessionId.slice(0, 8)} (history may re-sync): ${err instanceof Error ? err.message : String(err)}`, "warn");
-  }
-  fs.renameSync(staging, finalPath);
-}
 
 // One message's sync signature: the whole serialized message. A grok assistant
 // message GROWS under an unchanged uuid across parses — content/thinking chunks
@@ -10449,11 +9908,7 @@ export function isGrokInternalSessionDir(updatesPath: string): boolean {
 // upsert the new turns, delete the orphaned ones. Everything client-specific is
 // parameterized here; the wrappers below (processPiSession / processGrokSession)
 // are what the watcher registrations bind.
-export async function processTranscriptDeltaSession(...args: Parameters<typeof processTranscriptDeltaSessionPass>): Promise<void> {
-  return runTranscriptPass(args[2], path.resolve(args[1]), () => processTranscriptDeltaSessionPass(...args));
-}
-
-async function processTranscriptDeltaSessionPass(
+async function processTranscriptDeltaSession(
   client: Extract<AgentClientId, "pi" | "grok">,
   filePath: string,
   sessionId: string,
@@ -10470,15 +9925,29 @@ async function processTranscriptDeltaSessionPass(
     // grok-internal children (subagents, hidden sessions) sync through their
     // parent's transcript; ingesting them here would mint a top-level codecast
     // conversation per subagent.
-    const ingest = await readTranscriptIngest({client,file:filePath,sessionId,offset:0});
-    if (client === "grok" && ingest.metadata.internal) return;
-    const allMessages = ingest.messages;
+    if (client === "grok" && isGrokInternalSessionDir(filePath)) return;
+    let content: string;
+    try {
+      content = await fs.promises.readFile(filePath, "utf-8");
+    } catch (err: any) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
+        return;
+      }
+      if (err.code === "ENOENT") {
+        log(`${client} transcript ${filePath} no longer exists; nothing to sync.`);
+        return;
+      }
+      throw err;
+    }
+
+    const allMessages = parseTranscriptFor(client, content);
     // A transient empty/corrupt parse must be a no-op, never a signal to delete the
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
     const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
-    const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
+    const { newMessages, orphanUuids, nextSynced } = computePiSyncDelta(allMessages, syncedSigs);
     if (newMessages.length === 0 && orphanUuids.length === 0) return;
 
     let conversationId = conversationCache[sessionId];
@@ -10490,8 +9959,8 @@ async function processTranscriptDeltaSessionPass(
         // slug dir decodes back to it only lossily (see decodePiCwdSlug — and
         // grok's long-path hash dirs don't decode at all).
         const projectPath = client === "pi"
-          ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-          : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
+          ? extractPiCwd(content) ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
+          : grokSessionCwdFromTranscriptPath(filePath);
 
         // Bind a daemon-launched agent to its start_session stub (codex pattern):
         // find the live process's tmux pane and match it against the pending started
@@ -10535,8 +10004,7 @@ async function processTranscriptDeltaSessionPass(
           log(`Linked ${client} session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
         } else {
           const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-          const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
-          const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -10549,7 +10017,6 @@ async function processTranscriptDeltaSessionPass(
             parentMessageUuid: undefined,
             gitInfo: undefined,
           });
-          conversationId = finishCreate(conversationId);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
           log(`Created conversation ${conversationId} for ${client} session ${sessionId}`);
@@ -10558,25 +10025,45 @@ async function processTranscriptDeltaSessionPass(
             (global as any).activeSessions.set(conversationId, { sessionId, conversationId, projectPath: "" });
           }
 
-          if (!await flushPendingTranscript(pendingMessages, sessionId, conversationId, conversationCache, syncService, retryQueue)) return;
+          if (pendingMessages[sessionId]) {
+            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+            delete pendingMessages[sessionId];
+          }
         }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-          transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
             log("⚠️  Authentication expired - sync paused");
+            piSyncedSigs.set(filePath, nextSynced);
             return;
           }
         }
         const errMsg = err instanceof Error ? err.message : String(err);
         log(`Failed to create ${client} conversation, queueing for retry: ${errMsg}`);
 
-        await retainPendingTranscript(pendingMessages, sessionId, newMessages, filePath, ingest.fileSize);
+        if (!pendingMessages[sessionId]) pendingMessages[sessionId] = [];
+        for (const msg of newMessages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: content.length,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+            model: msg.model,
+          });
+        }
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
-        queueTranscriptConversation(retryQueue, {
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        retryQueue.add("createConversation", {
           userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
         }, errMsg);
+        piSyncedSigs.set(filePath, nextSynced);
         return;
       }
     }
@@ -10585,39 +10072,32 @@ async function processTranscriptDeltaSessionPass(
     // orphans — skip the empty batch and go straight to cleanup.
     let conversationRecreated = false;
     if (newMessages.length > 0) {
-      const batchResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache);
+      const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
       if (batchResult.authExpired) {
         log("⚠️  Authentication expired - sync paused");
         return; // leave the synced set unadvanced so the next pass retries
       }
-      if (!batchResult.accepted && !batchResult.conversationNotFound) return;
       if (batchResult.conversationNotFound) {
-        if (conversationCache[sessionId] !== conversationId) return;
         conversationRecreated = true;
         log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
         delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
 
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         try {
-          const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
             userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
           });
-          conversationId = finishCreate(conversationId);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
           log(`Recreated conversation ${conversationId} for ${client} session ${sessionId}`);
           // Fresh conversation: rebuild it from the FULL active branch, not just the
           // delta (the shared prefix isn't there anymore). No orphans to clean.
-          const retryResult = await syncTranscriptMessages(allMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
-        if (!retryResult.accepted) return;
+          await syncService.addMessages({ conversationId, messages: allMessages.map(prepMessageForSync) });
         } catch (retryErr) {
           const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          transcriptRetries.add(sessionId);
           log(`Failed to recreate ${client} conversation and add messages: ${retryErrMsg}`);
-          return;
         }
       }
     }
@@ -10634,14 +10114,11 @@ async function processTranscriptDeltaSessionPass(
       } catch (err) {
         logConvexFailure(err);
         finalSynced = new Map(nextSynced);
-        transcriptRetryOwners.defer(path.resolve(filePath),sessionId);
         for (const uuid of orphanUuids) finalSynced.set(uuid, syncedSigs.get(uuid) ?? "");
       }
     }
 
-    await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
-      piSyncedSigs.set(filePath, finalSynced);
-    }, [sessionId], finalSynced);
+    piSyncedSigs.set(filePath, finalSynced);
     log(`Synced ${newMessages.length} ${client} messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -10656,7 +10133,7 @@ async function processTranscriptDeltaSessionPass(
       // turn-end verdict. The final tail always reaches here: turn_completed
       // stamps stopReason on the last assistant message, which changes its
       // messageSyncSig and re-opens the delta.
-      const turn = ingest.metadata.turn ?? "unknown";
+      const turn = classifyTranscriptTailFor(client)?.(content) ?? "unknown";
       sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId, { path: filePath, agentType: client }) : "working");
     }
 
@@ -10664,7 +10141,6 @@ async function processTranscriptDeltaSessionPass(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing ${client} session file ${filePath}: ${errMsg}`);
-    throw err;
   }
 }
 
@@ -10965,28 +10441,7 @@ let hookClaimsIndexing: Promise<void> | null = null;
 // The registry dir holds thousands of files; only the recent ones (by mtime) are
 // parsed, and the scan is async and shared so concurrent lookups don't each pay
 // for it or block the loop.
-async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]>;
-async function hookClaimsForPid(pid: number, opts: { fresh: true; registryDir?: string }): Promise<ProcessSessionClaim[] | null>;
-async function hookClaimsForPid(pid: number, opts?: { fresh: true; registryDir?: string }): Promise<ProcessSessionClaim[] | null> {
-  if (opts?.fresh) {
-    const claims: ProcessSessionClaim[] = [];
-    const dir = opts.registryDir ?? path.join(CONFIG_DIR, "session-registry");
-    let scanned = 0;
-    try {
-      for await (const file of await fs.promises.opendir(dir)) {
-        if (++scanned > 50_000) return null;
-        if (!file.name.endsWith(".json")) continue;
-        const reg = JSON.parse(await fs.promises.readFile(path.join(dir, file.name), "utf8"));
-        if (!isHookRegistration(reg)) continue;
-        if (!Number.isInteger(reg.pid) || reg.pid <= 1 || !Number.isFinite(reg.ts)) return null;
-        if (reg.pid === pid) claims.push({ sessionId: file.name.slice(0, -5), ts: reg.ts });
-      }
-      return claims;
-    } catch (err) {
-      log(`[IDENTITY] destructive claim read unavailable: ${String(err)}`);
-      return null;
-    }
-  }
+async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]> {
   if (Date.now() - hookClaimsIndexedAt >= HOOK_CLAIM_INDEX_TTL_MS) {
     hookClaimsIndexing ??= (async () => {
       const dir = path.join(CONFIG_DIR, "session-registry");
@@ -11038,28 +10493,9 @@ async function processDeclaredSession(pid: number): Promise<string | null> {
   return processDeclaredSessionId(await describeProcessIdentity(pid));
 }
 
-/** The controlling tty of a pid as "/dev/ttysNNN", or "" when it has none. */
-async function ttyOfPid(pid: number): Promise<string> {
-  try {
-    const { stdout } = await execAsync(`ps -o tty= -p ${pid} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
-    const tty = stdout.trim();
-    return !tty || tty === "?" || tty === "??" ? "" : normalizeTty(tty);
-  } catch {
-    return "";
-  }
-}
-
-/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`,
- *  or started after `registeredAtSec` (epoch seconds) bound it to the session — a
- *  reused pid, which no identity claim can convict when the new process names no
- *  session of its own (registrationPredatesProcess). */
-async function rejectsForeignProcess(sessionId: string, pid: number, via: string, registeredAtSec?: number): Promise<boolean> {
-  const identity = await describeProcessIdentity(pid);
-  if (registrationPredatesProcess(registeredAtSec, identity.processStartSec)) {
-    log(`[IDENTITY] pid=${pid} (${via}) started after session ${shortId(sessionId)} was bound to it — reused pid, not using it`);
-    return true;
-  }
-  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...identity });
+/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`. */
+async function rejectsForeignProcess(sessionId: string, pid: number, via: string): Promise<boolean> {
+  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...(await describeProcessIdentity(pid)) });
   if (verdict !== "foreign") return false;
   log(`[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
   return true;
@@ -11090,7 +10526,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (checkPs.trim()) {
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${shortId(sessionId)} (pid=${pid})`);
-          } else if (await rejectsForeignProcess(sessionId, pid, "registry", typeof reg.ts === "number" ? reg.ts : undefined)) {
+          } else if (await rejectsForeignProcess(sessionId, pid, "registry")) {
             // The pid lives on but runs another session now (a reused pid, or an
             // in-process switch): this registration is stale, not this session's.
             try { fs.unlinkSync(registryFile); } catch {}
@@ -11271,7 +10707,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
 
       if (recentlyModified) {
         // Determine the project directory from the JSONL content
-        const jsonlContent = readFileHeadLines(jsonlPath);
+        const jsonlContent = readFileHead(jsonlPath, 5000);
         const projectCwd = extractCwd(jsonlContent) || (agentType === "codex" ? extractCodexCwd(jsonlContent) : null);
 
         if (projectCwd) {
@@ -11453,28 +10889,10 @@ const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|
 const SPINNER_ROW = /^[✻✶✢✳✽·]\s+\S/;
 const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
 
-function machineComposerBelow(lines: string[], fromIdx: number): boolean {
-  const caret = /^\s?[❯›](?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
-  const footerAfter = (idx: number) => lines.slice(idx + 1).some(line =>
-    isMenuFooterRow(line) || /(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)/i.test(line));
-  for (let top = 0; top < lines.length; top++) {
-    if (!SEPARATOR_LINE.test(lines[top].trim())) continue;
-    let prompt = top + 1;
-    while (prompt < lines.length && !lines[prompt].trim()) prompt++;
-    if (!caret.test(lines[prompt] ?? "")) continue;
-    for (let bottom = lines.length - 1; bottom > Math.max(prompt, fromIdx); bottom--) {
-      if (SEPARATOR_LINE.test(lines[bottom].trim()) && !footerAfter(bottom)) return true;
-    }
-  }
-  return lines.slice(fromIdx + 1).some((line, offset) =>
-    (caret.test(line) || SPINNER_ROW.test(line)) && !footerAfter(fromIdx + 1 + offset));
-}
-
 // True when any live-composer row sits below `fromIdx` — the pane is not blocked
 // on a dialog there. Box-art rows are skipped (a dialog's right-hand preview box
 // can contain arbitrary text, including hint-like glyphs).
-function liveComposerBelow(lines: string[], fromIdx: number, machineInput = false): boolean {
-  if (machineInput) return machineComposerBelow(lines, fromIdx);
+function liveComposerBelow(lines: string[], fromIdx: number): boolean {
   for (let i = fromIdx + 1; i < lines.length; i++) {
     if (BOX_DRAWING_CHARS.test(lines[i])) continue;
     if (COMPOSER_BAR.test(lines[i]) || SPINNER_ROW.test(lines[i]) || COMPOSER_CARET_ROW.test(lines[i])) return true;
@@ -11490,9 +10908,9 @@ function liveComposerBelow(lines: string[], fromIdx: number, machineInput = fals
 // hint-like text from the composer/status region dozens of rows further down. Walk
 // down only while rows stay dialog-shaped; anything else (an assistant ⏺ bullet,
 // the ❯ composer, a shell prompt) means we left the dialog without meeting a footer.
-export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number, machineInput = false): boolean {
+export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number): boolean {
   for (let i = lastOptionIdx + 1, cap = Math.min(lines.length, lastOptionIdx + 41); i < cap; i++) {
-    if (!machineInput && COMPOSER_BAR.test(lines[i])) return false;
+    if (COMPOSER_BAR.test(lines[i])) return false;
     if (isMenuFooterRow(lines[i])) return true;
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
@@ -11533,7 +10951,7 @@ function extractPromptHeading(lines: string[], firstOptionIdx: number): { header
   return { header, question };
 }
 
-export function parseInteractivePrompt(text: string, machineInput = false): InteractivePrompt | null {
+export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
   // '›' (U+203A) belongs here alongside '❯': codex draws its menu cursor with it.
   // Without it the cursor ROW of a codex menu fails to parse, so a three-option
@@ -11611,8 +11029,8 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
   // proves the pane is NOT blocked on a dialog — the "menu"/"hint" is scrolled
   // conversation content. Content checks alone can't make this call (prose here
   // routinely contains literal key-hint text).
-  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx, machineInput)) {
-    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx, machineInput);
+  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx)) {
+    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
       return { question, options, firstOptionIdx, ...(header ? { header } : {}), ...(hasCheckbox ? { multiSelect: true } : {}) };
@@ -11624,7 +11042,7 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
   const joined = tailLines.join("\n");
   const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
   const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
-  if (enterMatch && !(machineInput ? machineComposerBelow(lines, -1) : tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l)))) {
+  if (enterMatch && !tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l))) {
     // Question extraction: real interstitials (the usage-limit dialog, trust
     // prompts) draw a rule as their top edge with the question right below it.
     // Search only BELOW the last rule in the tail — the old "topmost non-hint
@@ -12021,14 +11439,6 @@ async function checkForInteractivePrompt(
 
     log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
 
-    // Codex's working-directory picker is a launch artifact (see
-    // isResumeCwdPicker), answered here rather than minted as a card the user
-    // would have to clear on every resume.
-    if (isResumeCwdPicker(prompt.question)) {
-      await answerResumeCwdPicker(tmuxTarget, paneContent);
-      return;
-    }
-
     // The spend-limit interstitial is a limit park, not a question: emit the
     // canonical limit banner (see spendLimitDialogBanner) instead of a scraped
     // card whose "Continue" would confirm a billing action. The banner message
@@ -12200,18 +11610,6 @@ export function extractTmuxLiveRegion(paneContent: string): string {
   const lines = paneContent.replace(/\s+$/, "").split("\n");
   const TAIL = 25;
   const tail = lines.slice(-TAIL);
-  const codexPrompt = tail.map((line) => /^\s*›(?:\s|$)/.test(line)).lastIndexOf(true);
-  if (codexPrompt >= 0) {
-    const beforePrompt = tail.slice(0, codexPrompt);
-    const queue = beforePrompt.map((line) => /^\s*• Messages to be submitted after next tool call \(press esc to interrupt and send immediately\)\s*$/.test(line)).lastIndexOf(true);
-    if (queue >= 0 && beforePrompt.slice(queue + 1).every((line) => !line.trim() || /^\s{2,}\S/.test(line))) {
-      return tail.slice(queue).join("\n");
-    }
-    const working = beforePrompt.map((line) => /^\s*• .+\([^\n]*esc to interrupt\)\s*$/.test(line)).lastIndexOf(true);
-    if (working >= 0 && beforePrompt.slice(working + 1).every((line) => !line.trim())) {
-      return tail.slice(working).join("\n");
-    }
-  }
   const isSep = (line: string) => /[─━]{20,}/.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
@@ -12256,42 +11654,6 @@ export function paneContentAfterLaunchEcho(paneContent: string): string {
   return nl >= 0 ? paneContent.slice(nl + 1) : "";
 }
 
-// Codex's working-directory picker, as the TUI renders it (0.153):
-//
-//   Choose working directory to resume this session
-//     Session = latest cwd recorded in the resumed session
-//     Current = your current working directory
-//   › 1. Use session directory (/Users/ashot/src/codecast)
-//     2. Use current directory (/)
-//     3. Always use session directory
-//     4. Always use current directory
-//     Press enter to continue
-//
-// parseInteractivePrompt reads the two "=" lines as the question; the
-// classifier's live region (a five-line tail when no separators are on screen)
-// holds only the option rows. Both shapes are matched, so the same test serves
-// the scraped card path and the live-region classifier.
-const RESUME_CWD_PICKER_RE = /latest cwd recorded in the resumed session|Choose working directory to resume|Use session directory \(|Always use (?:session|current) directory/i;
-export function isResumeCwdPicker(text: string): boolean {
-  return RESUME_CWD_PICKER_RE.test(text);
-}
-
-// Keys that answer the picker. The recorded session directory is the truth
-// about where the session ran and is preselected, so Enter alone takes it.
-// When that directory does not exist on this machine (a checkout that lives
-// elsewhere here) the current directory is the only one Codex can open.
-export function planResumeCwdPickerKeys(text: string, exists: (p: string) => boolean = fs.existsSync): string[] {
-  const sessionDir = text.match(/1\.\s*Use session directory \(([^)]+)\)/)?.[1]?.trim();
-  return sessionDir && exists(sessionDir) ? ["Enter"] : ["Down", "Enter"];
-}
-
-async function answerResumeCwdPicker(target: string, paneText: string): Promise<void> {
-  const keys = planResumeCwdPickerKeys(paneText);
-  log(`Answering Codex working-directory picker in ${target} (${keys.join("+")})`);
-  for (const key of keys) await tmuxExec(["send-keys", "-t", target, key]);
-  await new Promise(resolve => setTimeout(resolve, 800));
-}
-
 export type TmuxLiveState =
   | "idle"          // empty input prompt — safe to paste
   | "busy"          // spinner / "esc to interrupt" — wait
@@ -12300,7 +11662,6 @@ export type TmuxLiveState =
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
-  | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
@@ -12373,14 +11734,6 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // AskUserQuestion menu has numbered options but not this footer, so it stays a
   // blocking menu for parseInteractivePrompt to handle rather than being dismissed
   // out from under the user.
-  // Codex's "Choose working directory to resume this session" picker: a
-  // `codex resume` launched in a cwd other than the rollout's recorded one. A
-  // launch artifact the daemon caused, not a question for the user, so it is
-  // answered in place (answerResumeCwdPicker) and never minted as a card.
-  // Checked before the update-menu rule: same '›' + numbered rows + "Press
-  // enter to continue" shape, but Escape here quits the resume into a bare
-  // shell, and the next delivery would then paste into that shell.
-  if (isResumeCwdPicker(region)) return "cwd_picker";
   const numberedCursorRow = /^[^\S\n]*[›❯>][^\S\n]*\d+[.)][^\S\n]/m.test(region);
   if (numberedCursorRow && /Press enter to continue|Update available!/i.test(region)) {
     return "update_menu";
@@ -12519,7 +11872,6 @@ function reconcileStatusFromPane(
   conversationId: string,
   syncService: SyncService,
 ): void {
-  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   // The claude-chrome classifier below cannot read GLYPHLESS_PROMPT_CLIENTS
   // panes — worse than "unknown" for grok, whose ❯ composer stays visible for
   // the whole turn while its busy chrome (header spinner, "Esc:cancel",
@@ -13552,13 +12904,8 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   const baseTarget = target.split(":")[0];
   const start = Date.now();
   while (tmuxTargetLocks.has(baseTarget)) {
-    const parking = [...hibernationInFlight.values()].find(park => park.done === tmuxTargetLocks.get(baseTarget));
-    if (parking) parking.cancel();
     const elapsed = Date.now() - start;
     if (elapsed >= TMUX_LOCK_WAIT_MS) {
-      if ([...hibernationInFlight.values()].some(park => park.done === tmuxTargetLocks.get(baseTarget))) {
-        throw new Error("Hibernation still owns this tmux target");
-      }
       log(`tmux lock for ${baseTarget} held >${Math.round(elapsed / 1000)}s, forcing release and proceeding`);
       tmuxTargetLocks.delete(baseTarget);
       break;
@@ -13782,98 +13129,31 @@ async function paneOwnsPid(target: string, pid: number): Promise<boolean> {
  * Any doubt skips the reap. Skipping costs one stray process; guessing wrong
  * kills a live agent somebody is talking to.
  */
-const orphanReaperIo = {
-  identity: async (pid: number, sessionId: string) => {
-    const { stdout } = await _execFileAsync("ps", ["-ww", "-p", String(pid), "-o", "lstart=,uid=,ppid=,command="],
-      { timeout: 3000, env: { ...process.env, LC_ALL: "C" } });
-    return parseOrphanProcessIdentity(stdout, sessionId, process.getuid?.());
-  },
-  claims: (pid: number) => hookClaimsForPid(pid, { fresh: true }),
-  processes: () => snapshotProcessTableAsync({ timeout: 3000 }),
-  panes: () => tmuxExec(["list-panes", "-a", "-F", "#{pane_pid}"], { timeout: 3000 }),
-  conversationId: (sessionId: string) => conversationCacheRef?.[sessionId],
-  signal: (pid: number) => { process.kill(pid, "SIGKILL"); },
-};
-
-async function reapOrphanedAgent(sessionId: string, pid: number, pane: string, signal?: AbortSignal): Promise<void> {
-  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid || !validateTmuxTarget(pane)) return;
-  const conversationId = orphanReaperIo.conversationId(sessionId);
-  if (!conversationId || hibernationInFlight.has(sessionId) || signal?.aborted) return;
-  const home = process.env.HOME;
-  const cachedPane = resumeSessionCache.get(sessionId);
-  const resumedAt = lastResumeAt.get(sessionId);
-  const status = lastSentAgentStatus.get(sessionId);
-  const commands = JSON.stringify([[...processedCommandIds], [...processedPollCommandIds]]);
-  const targets = [...new Set([pane, pane.split(":")[0], `=${pane.split(":")[0]}`])];
-  if (targets.some(target => tmuxTargetLocks.has(target))) return;
-  const abort = new AbortController();
-  let release!: () => void;
-  let revoke!: () => void;
-  const revoked = new Promise<void>(resolve => { revoke = resolve; });
-  const reservation: HibernationReservation = {
-    done: new Promise<void>(resolve => { release = resolve; }),
-    cancelled: false,
-    committing: false,
-    cancel: () => { reservation.cancelled = true; abort.abort(); revoke(); },
-  };
-  const unchanged = () => !reservation.cancelled && !signal?.aborted &&
-    hibernationInFlight.get(sessionId) === reservation &&
-    targets.every(target => tmuxTargetLocks.get(target) === reservation.done) &&
-    home === process.env.HOME && orphanReaperIo.conversationId(sessionId) === conversationId &&
-    resumeSessionCache.get(sessionId) === cachedPane && lastResumeAt.get(sessionId) === resumedAt &&
-    lastSentAgentStatus.get(sessionId) === status && !restartingSessionIds.has(sessionId) &&
-    !pendingAgentSwitches.has(conversationId) && heldClaimIds.size === 0 &&
-    commands === JSON.stringify([[...processedCommandIds], [...processedPollCommandIds]]) &&
-    !productionHibernationIo.deliveryActive(sessionId, conversationId);
-  hibernationInFlight.set(sessionId, reservation);
-  for (const target of targets) tmuxTargetLocks.set(target, reservation.done);
-  signal?.addEventListener("abort", reservation.cancel, { once: true });
-  const deadline = setTimeout(reservation.cancel, HIBERNATION_ATTEMPT_TIMEOUT_MS);
-  const work = Promise.resolve().then(async () => {
-    if (!unchanged()) return;
-    const initial = await orphanReaperIo.identity(pid, sessionId);
-    if (!initial || !unchanged()) return;
-    if (!planSessionTeardown(await acquireSessionProcessOwnership(sessionId, abort.signal)).reapPidTree || !unchanged()) return;
-    const generation = sessionFileIndexGeneration;
-    const current = () => unchanged() && sessionFileIndexReady && generation === sessionFileIndexGeneration;
-    const sameIdentity = async () => JSON.stringify(await orphanReaperIo.identity(pid, sessionId)) === JSON.stringify(initial) && current();
-    if (!await sameIdentity()) return;
-    const observedAt = performance.now();
-    const [claims, procs, { stdout }] = await Promise.all([
-      orphanReaperIo.claims(pid),
-      orphanReaperIo.processes(),
-      orphanReaperIo.panes(),
-    ]);
-    if (!claims || !current()) return;
-    if (judgeProcessIdentity({ sessionId, argvId: sessionId, claims, processStartSec: initial.startSec }).verdict !== "owned") return;
-    const newest = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
-    if (claims.some(claim => claim.ts >= initial.startSec - 5 && claim.ts === newest && claim.sessionId !== sessionId)) return;
-    const root = procs.find(proc => proc.pid === pid);
-    if (!root || root.ppid !== 1 || root.uid !== initial.uid || root.command !== initial.command || descendantPids(procs, pid).length) return;
-    const panes = stdout.trim().split("\n");
-    if (panes.some(value => !/^\d+$/.test(value) || Number(value) <= 1 || Number(value) === pid)) return;
-    if (!await sameIdentity() || performance.now() - observedAt > 1000 || !current()) return;
-    reservation.committing = true;
-    orphanReaperIo.signal(pid);
-    log(`[ORPHAN] reaped verified childless pid=${pid} for ${shortId(sessionId)} (stranded off ${pane})`);
-  }).catch(err => { log(`[ORPHAN] refused pid=${pid} for ${shortId(sessionId)}: ${String(err)}`); });
+async function reapOrphanedAgent(sessionId: string, pid: number, pane: string): Promise<void> {
   try {
-    await Promise.race([work, revoked]);
-  } finally {
-    clearTimeout(deadline);
-    signal?.removeEventListener("abort", reservation.cancel);
-    reservation.cancel();
-    if (hibernationInFlight.get(sessionId) === reservation) hibernationInFlight.delete(sessionId);
-    for (const target of targets) if (tmuxTargetLocks.get(target) === reservation.done) tmuxTargetLocks.delete(target);
-    release();
-  }
+    const { stdout } = await execAsync(
+      `ps -o ppid=,command= -p ${pid} 2>/dev/null`,
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const line = stdout.trim();
+    if (!line) return;
+    const ppid = parseInt(line.split(/\s+/)[0] ?? "", 10);
+    if (ppid !== 1) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: parent ${ppid} is alive, so it is not orphaned`);
+      return;
+    }
+    if (!line.includes(sessionId)) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: argv does not name this session (likely a borrowed parent pid)`);
+      return;
+    }
+    if (!planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: session does not positively own its process`);
+      return;
+    }
+    const killed = await reapPidTree(pid);
+    log(`[ORPHAN] reaped ${killed} process(es) for ${shortId(sessionId)} (pid=${pid}, stranded off ${pane})`);
+  } catch {}
 }
-
-export const orphanReaperForTests = {
-  reapOrphanedAgent, io: orphanReaperIo, pendingAgentSwitches,
-  get restartingSessionIds() { return restartingSessionIds; },
-  conversationDeliveryActive, processedCommandIds, withTmuxLock,
-};
 
 /**
  * Accept Claude Code's workspace trust dialog by SELECTING the affirmative
@@ -13954,34 +13234,7 @@ export async function acceptTrustPrompt(target: string): Promise<boolean> {
   return false;
 }
 
-class MachineInputBlockedError extends Error {
-  constructor(reason: string) {
-    super(`AGENT_STDIN_NOT_READY: ${reason}; machine message remains pending`);
-  }
-}
-
-function assertMachinePromptAbsent(pane: string): void {
-  if (!pane.trim()) throw new MachineInputBlockedError("terminal capture is empty");
-  if (parseInteractivePrompt(pane, true)) throw new MachineInputBlockedError("terminal is waiting for a human answer");
-}
-
-function machineInputGuard(content: string, capture: () => Promise<string>): (() => Promise<void>) | undefined {
-  if (!isMachineDeliveredMessage(content)) return undefined;
-  let blocked: MachineInputBlockedError | undefined;
-  return async () => {
-    if (blocked) throw blocked;
-    try {
-      assertMachinePromptAbsent(await capture());
-    } catch (err) {
-      blocked = err instanceof MachineInputBlockedError
-        ? err
-        : new MachineInputBlockedError(`terminal capture failed: ${err instanceof Error ? err.message : String(err)}`);
-      throw blocked;
-    }
-  };
-}
-
-export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines = inspectPane ? 80 : 25): Promise<{ busy: boolean }> {
+export async function ensureTmuxReady(target: string, agentType?: AgentClientId): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
@@ -13996,12 +13249,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
   while (true) {
     let stdout: string;
     try {
-      ({ stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]));
+      ({ stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-25"]));
     } catch (err) {
-      if (inspectPane) throw new MachineInputBlockedError(`terminal capture failed: ${String(err)}`);
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
-    inspectPane?.(stdout);
     const region = glyphlessPattern ? stdout : extractTmuxLiveRegion(stdout);
     const state = glyphlessPattern
       ? classifyGlyphlessClientPaneState(stdout, glyphlessPattern)
@@ -14080,8 +13331,6 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       log(`Dismissing agent update menu in ${target} (Escape, never Enter)`);
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 800));
-    } else if (state === "cwd_picker") {
-      await answerResumeCwdPicker(target, region);
     } else if (state === "warning") {
       log(`Dismissing warning banner in ${target}`);
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -14097,7 +13346,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
 async function paneInteractiveQuestion(target: string): Promise<string | null> {
   try {
     const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"]);
-    return (parseInteractivePrompt(stdout) ?? parseInteractivePrompt(stdout, true))?.question ?? null;
+    return parseInteractivePrompt(stdout)?.question ?? null;
   } catch {
     return null;
   }
@@ -14266,67 +13515,30 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
 }
 
-// Text the composer shows after its last ❯/› glyph: the prompt line plus the
-// wrapped/continuation lines under it, up to the box rule or a blank line.
-// null when no glyph is visible (glyphless client or mid-redraw).
-export function tmuxComposerText(pane: string): string | null {
-  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
-  if (glyphAt === -1) return null;
-  const lines = pane.slice(glyphAt + 1).split("\n");
-  const body = [lines[0]];
-  for (const line of lines.slice(1)) {
-    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
-    body.push(line);
-  }
-  return body.join("\n");
-}
-
-// Drains the composer before a paste.
+// Drains the composer with blind C-a/C-k cycles before a paste.
 //
-// One cycle is C-a (start of line), C-k (kill to end of line), BSpace (join
-// onto the line above). Why not a single C-u: in Claude Code 2.1.x's input box
-// a single C-u does not reliably empty the buffer when stale text is present
+// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
+// single C-u does not reliably empty the buffer when stale text is present
 // (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
 // the paste and the trailing Enter submits both as one message — the
-// "old prompt + new follow-up" duplication seen on 2026-05-19. Why BSpace:
-// C-a/C-k only ever empties the CURRENT line, so a multi-line draft (a pasted
-// <session-message> block, a stale multi-paragraph prompt) kept every line
-// above the cursor no matter how many cycles ran, the Enter gate saw foreign
-// text forever, and the message sat pending for hours (msg ns7c8zkm,
-// 2026-09-04, 294 failed drains). BSpace on the emptied line removes the
-// newline and pulls the cursor onto the line above, so each cycle retires one
-// line; on an empty composer all three keys are no-ops.
-//
-// Three blind cycles cover the common short draft. Past that the drain
-// captures the pane every three cycles and keeps going only while text is
-// still visible at the prompt, so a long draft drains fully without a fixed
-// guess at its line count. See daemon.inject-enter-gate.test.ts.
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
+// (start of line) + C-k (kill to end) drains reliably; three cycles handles
+// multi-line drafts. See daemon.inject-clear.test.ts.
 //
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
-export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
 ): Promise<void> {
-  const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  for (let cycle = 1; cycle <= DRAIN_MAX_CYCLES; cycle++) {
-    for (const key of ["C-a", "C-k", "BSpace"]) {
-      await exec(["send-keys", "-t", target, key]);
-      await pause(20);
-    }
-    if (cycle % 3 !== 0) continue;
-    let pane: string;
-    try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
-    } catch {
-      break; // capture problems are diagnosed by the Enter gate
-    }
-    const text = tmuxComposerText(pane);
-    if (text === null || !text.trim()) break;
+  for (let i = 0; i < 3; i++) {
+    await exec(["send-keys", "-t", target, "C-a"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await exec(["send-keys", "-t", target, "C-k"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
   }
-  await pause(50);
+  await new Promise(resolve => setTimeout(resolve, 50));
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -14540,14 +13752,6 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // -p` only emits the markers for a program that asked for the mode) — see
   // prepareInjectedContent and the bracketedPaste capability.
   const sanitized = prepareInjectedContent(content, { bracketed });
-  const contentLines = content.split(/\r?\n/).length;
-  const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
-  const beforeInput = machineInputGuard(content, async () =>
-    (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout);
-  const exec: typeof tmuxExec = beforeInput ? async (args, opts) => {
-    if (args[0] === "send-keys" || args[0] === "paste-buffer") await beforeInput();
-    return tmuxExec(args, opts);
-  } : tmuxExec;
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
@@ -14555,11 +13759,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // the invariant that prevents Escape-at-idle from spuriously opening the Rewind
   // dialog. `busy` = agent mid-turn with a live type-ahead box; we paste into its
   // native queue rather than waiting for the turn to finish.
-  const { busy } = await ensureTmuxReady(target, agentType, beforeInput ? assertMachinePromptAbsent : undefined, beforeInput ? captureLines : undefined);
+  const { busy } = await ensureTmuxReady(target, agentType);
 
+  const contentLines = content.split(/\r?\n/).length;
+  const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
 
-  const doPaste = () => pasteTextIntoPaneWith(exec, target, sanitized, bracketed);
+  const doPaste = () => pasteTextIntoPane(target, sanitized, bracketed);
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter —
@@ -14570,16 +13776,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
   // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
   // pasted message then rides Claude Code's native queue until the turn ends.
-  if (!busy && agentType !== "codex") {
-    await exec(["send-keys", "-t", target, "Escape"]);
+  if (!busy) {
+    await tmuxExec(["send-keys", "-t", target, "Escape"]);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  await drainTmuxComposer(target, exec);
+  await drainTmuxComposer(target);
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";
   try {
-    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
     prePaste = stdout;
   } catch {}
 
@@ -14595,11 +13801,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     multiline: bracketed && sanitized.includes("\n"),
     prePaste,
     rePaste: doPaste,
-    exec,
   });
   let pasteConfirmed = gate === "matched";
   if (gate === "matched") {
-    await exec(["send-keys", "-t", target, "Enter"]);
+    await tmuxExec(["send-keys", "-t", target, "Enter"]);
   } else {
     // Unwatchable pane (glyphless client, blank payload): legacy timing.
     // Brief confirmation — did the pane change? (4 checks, 100ms apart.)
@@ -14607,7 +13812,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     for (let attempt = 0; attempt < 4; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
-        const { stdout: postPaste } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        const { stdout: postPaste } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
         if (postPaste !== prePaste) {
           pasteConfirmed = true;
           break;
@@ -14620,7 +13825,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // Adaptive delay so tmux paste-buffer flushes before Enter; the same
     // pty-stream ordering that makes the gate sound keeps this safe too.
     await new Promise(resolve => setTimeout(resolve, enterDelay));
-    await exec(["send-keys", "-t", target, "Enter"]);
+    await tmuxExec(["send-keys", "-t", target, "Enter"]);
   }
 
   // Post-submit: verify the agent started processing — see
@@ -14632,16 +13837,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const verify = await verifyTmuxSubmitAfterPaste(
     {
       capture: async () =>
-        (await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
+        (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
       sendEnter: async () => {
-        await exec(["send-keys", "-t", target, "Enter"]);
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
       },
       rePaste: async () => {
-        await exec(["send-keys", "-t", target, "C-u"]);
+        await tmuxExec(["send-keys", "-t", target, "C-u"]);
         await new Promise(resolve => setTimeout(resolve, 200));
         await doPaste();
         await new Promise(resolve => setTimeout(resolve, enterDelay));
-        await exec(["send-keys", "-t", target, "Enter"]);
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
       },
       sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
       log: (msg) => log(`${msg} (${target})`),
@@ -14673,7 +13878,6 @@ export function buildAppleScript(
   poll: ReturnType<typeof parsePollMessage>,
   keystrokes = false,
   bracketed = true,
-  submit = true,
 ): { script: string; args: string } {
   const isIterm = app === "iTerm2";
   const prepareMessageText = (text: string): string => {
@@ -14781,7 +13985,9 @@ end run`;
         repeat with s in sessions of t
           set sTty to tty of s
           if sTty is targetTty then
-            tell s to write text msgText without newline${submit ? '\n            delay 0.15\n            tell s to write text ""' : ""}
+            tell s to write text msgText without newline
+            delay 0.15
+            tell s to write text ""
             return "ok"
           end if
         end repeat
@@ -14826,33 +14032,6 @@ const TMUX_ONLY_TERMINALS = new Set(["ghostty", "Alacritty"]);
 
 // ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
 // Extracted from original injectViaTerminal — logic is identical
-async function captureAppleScriptPane(app: "iTerm2" | "Terminal", tty: string): Promise<string> {
-  const script = app === "iTerm2"
-    ? `on run argv
-  tell application "iTerm2"
-    repeat with w in windows
-      repeat with t in tabs of w
-        repeat with s in sessions of t
-          if tty of s is item 1 of argv then return contents of s
-        end repeat
-      end repeat
-    end repeat
-  end tell
-  error "Terminal session not found"
-end run`
-    : `on run argv
-  tell application "Terminal"
-    repeat with w in windows
-      repeat with t in tabs of w
-        if tty of t is item 1 of argv then return contents of t
-      end repeat
-    end repeat
-  end tell
-  error "Terminal tab not found"
-end run`;
-  return (await _execFileAsync("osascript", ["-e", script, tty], { timeout: EXEC_TIMEOUT_MS })).stdout;
-}
-
 async function injectViaAppleScript(
   tty: string,
   content: string,
@@ -14864,27 +14043,25 @@ async function injectViaAppleScript(
   const poll = keystrokes ? null : parsePollMessage(content);
 
   const app: "iTerm2" | "Terminal" = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
-  const beforeInput = keystrokes ? undefined : machineInputGuard(content, () => captureAppleScriptPane(app, normalizedTty));
-  const write = async (text: string, keys: boolean, submit = true) => {
-    const { script, args } = buildAppleScript(app, normalizedTty, text, poll, keys, bracketed, submit);
-    const tmpFile = writeTerminalInjectionScript(script);
-    try {
-      await beforeInput?.();
-      const { stdout } = await execAsync(`osascript "${tmpFile}" ${args}`);
-      if (stdout.trim() === "not_found") throw new Error(`${app} session not found for TTY ${normalizedTty}`);
-    } finally {
-      try { fs.unlinkSync(tmpFile); } catch {}
+  const { script, args } = buildAppleScript(
+    app,
+    normalizedTty,
+    content,
+    poll,
+    keystrokes,
+    bracketed,
+  );
+
+  const tmpFile = writeTerminalInjectionScript(script);
+  try {
+    const { stdout } = await execAsync(`osascript "${tmpFile}" ${args}`);
+    if (stdout.trim() === "not_found") {
+      throw new Error(`${app} session not found for TTY ${normalizedTty}`);
     }
-  };
-  if (beforeInput && app === "iTerm2") {
-    await pasteAndSubmitText({
-      paste: () => write(content, false, false),
-      submit: () => write("\r", true, false),
-    });
-  } else {
-    await write(content, keystrokes);
+    log(`Injected ${poll ? "poll response" : "message"} via ${app} for TTY ${normalizedTty}`);
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
   }
-  log(`Injected ${poll ? "poll response" : "message"} via ${app} for TTY ${normalizedTty}`);
 }
 
 export function writeTerminalInjectionScript(
@@ -14938,17 +14115,15 @@ async function findKittyWindowId(normalizedTty: string): Promise<number | null> 
 //                      skip it and receive text flattened before this call.
 // The flag is newer than the oldest kitty we might meet, so an invocation that
 // fails retries flattened on the plain send-text that has always worked.
-async function kittySendText(match: string, text: string, bracketed: boolean, beforeInput?: () => Promise<void>): Promise<void> {
+async function kittySendText(match: string, text: string, bracketed: boolean): Promise<void> {
   const tmpFile = writeKittyInjectionPayload(
     prepareInjectedContent(text, { bracketed }),
   );
   try {
     const pasteFlag = bracketed ? " --bracketed-paste=auto" : "";
     try {
-      await beforeInput?.();
       await execAsync(`kitty @ send-text ${match}${pasteFlag} --from-file '${tmpFile}'`);
     } catch (err) {
-      if (err instanceof MachineInputBlockedError) throw err;
       log(`kitty bracketed paste failed (${err instanceof Error ? err.message : String(err)}), sending flattened`);
       // Keep the fallback file-based too: putting arbitrary prompt text in the
       // shell command leaks it through process listings and reintroduces escape
@@ -14958,7 +14133,6 @@ async function kittySendText(match: string, text: string, bracketed: boolean, be
         prepareInjectedContent(text, { bracketed: false }),
         { mode: 0o600 },
       );
-      await beforeInput?.();
       await execAsync(`kitty @ send-text ${match} --from-file '${tmpFile}'`);
     }
   } finally {
@@ -15027,14 +14201,9 @@ async function injectViaKitty(
     return;
   }
 
-  const beforeInput = machineInputGuard(content, async () =>
-    (await execAsync(`kitty @ get-text ${match} --extent screen`)).stdout);
   await pasteAndSubmitText({
-    paste: () => kittySendText(match, content, bracketed, beforeInput),
-    submit: async () => {
-      await beforeInput?.();
-      await execAsync(`kitty @ send-key ${match} enter`);
-    },
+    paste: () => kittySendText(match, content, bracketed),
+    submit: () => execAsync(`kitty @ send-key ${match} enter`),
   });
   log(`Injected message via Kitty for TTY ${normalizedTty}`);
 }
@@ -15129,17 +14298,9 @@ async function injectViaWezTerm(
     return;
   }
 
-  const beforeInput = machineInputGuard(content, async () =>
-    (await execAsync(`wezterm cli get-text --pane-id ${paneId}`)).stdout);
   await pasteAndSubmitText({
-    paste: async () => {
-      await beforeInput?.();
-      await weztermSendText(paneId, content, { bracketed });
-    },
-    submit: async () => {
-      await beforeInput?.();
-      await weztermSendKeys(paneId, "\r");
-    },
+    paste: () => weztermSendText(paneId, content, { bracketed }),
+    submit: () => weztermSendKeys(paneId, "\r"),
   });
   log(`Injected message via WezTerm for TTY ${normalizedTty}`);
 }
@@ -15200,7 +14361,12 @@ class UndeliverableMessageError extends Error {}
  *  when the expiring negative memos re-asked in a batch on a saturated disk
  *  (2026-08-29, and the same shape on 2026-08-21).
  *
- */
+ *  A MISS still answers with per-call ground truth: sessionProcessOwnership
+ *  memoizes "owned" for an id with no rollout, so a stale "no rollout" here
+ *  would freeze the wrong verdict and re-open the SIGKILL-the-parent hole for
+ *  any rollout younger than the index. Creating (or moving) a rollout bumps
+ *  its containing day dir's mtime, so scanning only the leaf dirs touched
+ *  since the walk closes that window at a few stats' cost. */
 function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): string | null {
   const hit = indexedSessionLookup(() => codexRolloutIndex, (p) => p, codexRolloutKnownMisses, sessionId);
   if (hit || opts?.staleOk) return hit;
@@ -15218,7 +14384,6 @@ function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): 
 // non-leaf level are checked whenever their parent dir is fresh, matching the
 // old fully-recursive walk for anything recently added.
 function probeRecentCodexRollouts(sessionId: string): string | null {
-  if (daemonWorkersEnabled()) return recentSessionObservation(sessionId, true)?.path ?? null;
   return timeSyncFs("probeRecentCodexRollouts", sessionId, () => probeRecentCodexRolloutsSync(sessionId));
 }
 function probeRecentCodexRolloutsSync(sessionId: string): string | null {
@@ -15350,11 +14515,6 @@ const sessionFilePendingMisses = new Map<string, number>();
 
 /** Test hook: forget the index so the next lookup re-walks. */
 export function resetSessionFileIndexForTests(): void {
-  if (!sessionFileIndexRefresh) sessionFileIndexGeneration++;
-  sessionFileIndexReady = false;
-  recentSessionScans.clear();
-  sessionOwnershipCache.clear();
-  borrowsUnknownUntil.clear();
   sessionFileIndex = null;
   codexRolloutIndex = null;
   sessionFileIndexBuiltAt = 0;
@@ -15406,7 +14566,6 @@ function sessionFileIndexStores(home: string): IndexStore[] {
       agentType: "claude",
       walk: {
         maxDepth: 6,
-        policy: { dirs: "claudeIndex", files: "claudeIndex" },
         dirFilter: (rel) => {
           const d = segs(rel);
           return d.length <= 2 || (d.length === 3 && d[2] === "subagents") || (d.length === 4 && d[3] === "workflows") || d.length === 5;
@@ -15419,21 +14578,21 @@ function sessionFileIndexStores(home: string): IndexStore[] {
     {
       root: path.join(home, ".codex", "sessions"),
       agentType: "codex",
-      walk: { policy: {} },
+      walk: {},
       idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
     },
     // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
     {
       root: path.join(home, ".gemini", "tmp"),
       agentType: "gemini",
-      walk: { policy: { dirs: "gemini", files: "geminiIndex" }, maxDepth: 3, dirFilter: (rel) => { const d = segs(rel); return d.length === 1 || d[1] === "chats"; }, fileFilter: (rel) => rel.endsWith(".json") && segs(rel).length === 3 },
+      walk: { maxDepth: 3, dirFilter: (rel) => { const d = segs(rel); return d.length === 1 || d[1] === "chats"; }, fileFilter: (rel) => rel.endsWith(".json") && segs(rel).length === 3 },
       idOf: (f) => f.name.slice(0, -5),
     },
     // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl
     {
       root: path.join(home, ".pi", "agent", "sessions"),
       agentType: "pi",
-      walk: { policy: { files: "piIndex" }, maxDepth: 2, fileFilter: (rel) => segs(rel).length === 2 },
+      walk: { maxDepth: 2, fileFilter: (rel) => segs(rel).length === 2 },
       idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
     },
     // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
@@ -15441,7 +14600,7 @@ function sessionFileIndexStores(home: string): IndexStore[] {
     {
       root: path.join(home, ".grok", "sessions"),
       agentType: "grok",
-      walk: { policy: { files: "grokIndex" }, maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
+      walk: { maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
       idOf: (f) => segs(f.rel)[1],
     },
   ];
@@ -15468,16 +14627,15 @@ function buildSessionFileIndex(home: string): SessionFileIndexBuild {
   return build;
 }
 
-async function buildSessionFileIndexAsync(home: string, signal?: AbortSignal): Promise<SessionFileIndexBuild> {
+async function buildSessionFileIndexAsync(home: string): Promise<SessionFileIndexBuild> {
   const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
   for (const store of sessionFileIndexStores(home)) {
-    await walkEntryBatches(store.root, { ...store.walk, signal, requireComplete: true }, (files) => recordIndexFiles(build, store, files));
+    await walkDirs(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
   }
   return build;
 }
 
-function installSessionFileIndex(home: string, built: SessionFileIndexBuild, ready = true): void {
-  sessionFileIndexReady = ready;
+function installSessionFileIndex(home: string, built: SessionFileIndexBuild): void {
   sessionFileIndexHome = home;
   sessionFileIndex = built.index;
   codexRolloutIndex = built.codexRollouts;
@@ -15487,9 +14645,6 @@ function installSessionFileIndex(home: string, built: SessionFileIndexBuild, rea
 }
 
 function rebuildSessionFileIndex(): void {
-  sessionFileIndexGeneration++;
-  sessionFileIndexController?.abort();
-  sessionFileIndexRefresh = null;
   const home = process.env.HOME || "";
   installSessionFileIndex(home, buildSessionFileIndex(home));
 }
@@ -15502,27 +14657,19 @@ function rebuildSessionFileIndex(): void {
 // One refresh in flight at a time; the boot path kicks the first one so the
 // first lookup rarely has to build cold.
 let sessionFileIndexRefresh: Promise<void> | null = null;
-let sessionFileIndexRefreshHome = "";
-let sessionFileIndexGeneration = 0;
-let sessionFileIndexReady = false;
-let sessionFileIndexController: AbortController | null = null;
 export function refreshSessionFileIndex(): Promise<void> {
+  if (sessionFileIndexRefresh) return sessionFileIndexRefresh;
   const home = process.env.HOME || "";
-  if (sessionFileIndexRefresh && sessionFileIndexRefreshHome === home) return sessionFileIndexRefresh;
-  sessionFileIndexController?.abort();
-  sessionFileIndexReady = false;
-  const controller = new AbortController();
-  sessionFileIndexController = controller;
-  const generation = ++sessionFileIndexGeneration;
-  sessionFileIndexRefreshHome = home;
-  const pending = buildSessionFileIndexAsync(home, controller.signal)
+  sessionFileIndexRefresh = buildSessionFileIndexAsync(home)
     .then((built) => {
-      if (!controller.signal.aborted && generation === sessionFileIndexGeneration && (process.env.HOME || "") === home) installSessionFileIndex(home, built);
+      // A sync build that ran meanwhile (HOME swap, cold lookup) is at least as
+      // fresh as this one only if it is newer than our start; simpler and safe:
+      // install unless HOME moved under us.
+      if ((process.env.HOME || "") === home) installSessionFileIndex(home, built);
     })
     .catch(() => {})
-    .finally(() => { if (sessionFileIndexRefresh === pending) sessionFileIndexRefresh = null; });
-  sessionFileIndexRefresh = pending;
-  return pending;
+    .finally(() => { sessionFileIndexRefresh = null; });
+  return sessionFileIndexRefresh;
 }
 
 /** The boot path: an empty index first, so the status file replay and the
@@ -15530,14 +14677,14 @@ export function refreshSessionFileIndex(): Promise<void> {
  *  the refresh lands the real map off the loop. Every replayed session would
  *  otherwise hit the cold sync build before the warmup finished. */
 export function primeSessionFileIndexAtBoot(): Promise<void> {
-  installSessionFileIndex(process.env.HOME || "", { index: new Map(), codexRollouts: new Map() }, false);
+  installSessionFileIndex(process.env.HOME || "", { index: new Map(), codexRollouts: new Map() });
   return refreshSessionFileIndex();
 }
 
 /** Resolves once an index for the current HOME exists. Awaiting this before a
  *  lookup is what keeps the lookup's cold rebuild off the loop. */
 export function ensureSessionFileIndex(): Promise<void> {
-  if (sessionFileIndexReady && sessionFileIndex && sessionFileIndexHome === (process.env.HOME || "")) return Promise.resolve();
+  if (sessionFileIndex && sessionFileIndexHome === (process.env.HOME || "")) return Promise.resolve();
   return refreshSessionFileIndex();
 }
 
@@ -15559,7 +14706,6 @@ function indexedSessionLookup<T>(
   if (!getMap() || sessionFileIndexHome !== (process.env.HOME || "")) {
     // A build already in flight lands the map off the loop; answer null
     // meanwhile rather than walk the stores on the loop (1s at load 60).
-    if (daemonWorkersEnabled()) { void refreshSessionFileIndex(); return null; }
     if (sessionFileIndexRefresh) return null;
     rebuildSessionFileIndex();
     rebuiltThisCall = true;
@@ -15604,45 +14750,7 @@ function indexedSessionLookup<T>(
 // window at ~1ms. Nested claude layouts (subagents, workflow runs) are not
 // probed: those agents are reached through their parent and tolerate index
 // latency.
-type RecentSessionScan = { home: string; generation: number; at: number; pending: Promise<SessionFileInfo | null>; value?: SessionFileInfo | null };
-const recentSessionScans = new Map<string, RecentSessionScan>();
-async function freshSessionObservation(sessionId: string, codexOnly: boolean, complete = false): Promise<SessionFileInfo | null> {
-  const home = process.env.HOME || "";
-  const generation = sessionFileIndexGeneration;
-  const job: Extract<ScanJob, { name: "recent" }> = { name: "recent", home, sessionId, since: sessionFileIndexBuiltAt - 60_000, codexOnly, complete };
-  let rows: ScanRow[];
-  if (daemonWorkersEnabled()) {
-    try { rows = await collectScan(job); }
-    catch (error) { if (!scanCanFallback(error)) throw error; rows = await recentScan(job); }
-  } else rows = await recentScan(job);
-  if (home !== (process.env.HOME || "") || generation !== sessionFileIndexGeneration) throw new ScanCancelled("session root changed");
-  const row = rows[0];
-  return row?.type === "recent" ? { path: row.path, agentType: row.agentType as AgentClientId } : null;
-}
-function recentSessionObservation(sessionId: string, codexOnly: boolean): SessionFileInfo | null {
-  const home = process.env.HOME || "", key = `${codexOnly}:${sessionId}`;
-  const existing = recentSessionScans.get(key);
-  if (existing?.home === home && existing.generation === sessionFileIndexGeneration && (existing.value === undefined || Date.now() - existing.at < 2_000)) return existing.value ?? null;
-  if (recentSessionScans.size >= 512) recentSessionScans.delete(recentSessionScans.keys().next().value!);
-  const entry: RecentSessionScan = { home, generation: sessionFileIndexGeneration, at: Date.now(), pending: freshSessionObservation(sessionId, codexOnly) };
-  recentSessionScans.set(key, entry);
-  void entry.pending.then(value => {
-    if (recentSessionScans.get(key) !== entry || home !== (process.env.HOME || "") || entry.generation !== sessionFileIndexGeneration) return;
-    entry.value = value; entry.at = Date.now();
-    if (value) {
-      if (codexOnly) { codexRolloutIndex?.set(sessionId, value.path); codexRolloutKnownMisses.delete(sessionId); }
-      else { sessionFileIndex?.set(sessionId, value); sessionFileKnownMisses.delete(sessionId); }
-    }
-  }, () => { if (recentSessionScans.get(key) === entry) recentSessionScans.delete(key); });
-  return null;
-}
-export async function refreshRecentSessionFileForTests(sessionId: string, codexOnly = false): Promise<void> {
-  recentSessionObservation(sessionId, codexOnly);
-  await recentSessionScans.get(`${codexOnly}:${sessionId}`)?.pending;
-}
-
 function probeRecentSessionFiles(sessionId: string): SessionFileInfo | null {
-  if (daemonWorkersEnabled()) return recentSessionObservation(sessionId, false);
   return timeSyncFs("probeRecentSessionFiles", sessionId, () => probeRecentSessionFilesSync(sessionId));
 }
 function probeRecentSessionFilesSync(sessionId: string): SessionFileInfo | null {
@@ -15735,19 +14843,13 @@ const hibernatedSessions = new Set<string>();
 // any session therefore clears the stamp whether or not the daemon remembers
 // parking it, and this set keeps that to one extra write per session per boot
 // instead of one per message delivery.
-const hibernationStampCleared = new Map<string, string>();
+const hibernationStampCleared = new Set<string>();
 // A teardown retires the session, so there is no wake coming to clear the mark
 // and nothing left on the server to clear it from. Local bookkeeping only: no
 // status write, no log line. Without this a killed parked session stayed in the
 // set for the life of the daemon and the live-versus-parked count over-reported.
 function forgetHibernationPark(sessionId: string | undefined): void {
-  if (!sessionId) return;
-  expectedHibernationExits.delete(sessionId);
-  hibernatedSessions.delete(sessionId);
-  hibernationStampCleared.delete(sessionId);
-  pendingHibernationStamps.delete(sessionId);
-  const parking = hibernationInFlight.get(sessionId);
-  if (parking) parking.cancel();
+  if (sessionId) hibernatedSessions.delete(sessionId);
 }
 // When each session last finished a resume. The hibernation policy refuses to
 // park a session somebody just asked for; the reaper has no equivalent because
@@ -15790,7 +14892,7 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy; sandbox?: PersistedCodexThread["sandbox"] };
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
 type PersistedAppServerThreadRecord = PersistedCodexThread;
 type AppServerStreamingPartial = { itemId: string; content: string };
 type AppServerPartialMessage = AppServerStreamingPartial;
@@ -15816,17 +14918,6 @@ const appServerRecoveryRetryAt = new Map<string, number>();
 const appServerRecoveringThreads = new Set<string>();
 let appServerShuttingDown = false;
 
-export function isSupersededAppServerSession(
-  sessionId: string,
-  conversationId = conversationCacheRef?.[sessionId],
-  live: ReadonlyMap<string, string> = appServerConversations,
-  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
-): boolean {
-  if (!conversationId) return false;
-  const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
-  return !!threadId && threadId !== sessionId;
-}
-
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
   const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
   if (!firstLine) return undefined;
@@ -15851,19 +14942,6 @@ export function isAppServerOwnedCodexTranscript(
   if (liveThreadIds.has(sessionId) || persistedThreadIds.has(sessionId)) return true;
   const forkParentId = codexForkParentIdFromHead(headContent);
   return !!forkParentId && pendingForkParents.has(forkParentId);
-}
-
-/** A rollout the app-server forked from a codecast import (a `codecast-fork-*`
- *  file written by generateCodexJsonl) starts with the whole imported history
- *  replayed under fresh item ids and fork-time timestamps. Nothing in that
- *  prefix is new: it is the conversation's own past, already in Convex. If the
- *  fork's registration never landed (thread/fork timed out, daemon restarted),
- *  ingesting the file from offset 0 re-creates every message as if typed at
- *  fork time (jx7652s and jx7b88a, 2026-09-04). So on the FIRST sight of such
- *  a rollout with no position, pin it at EOF; later appends are real turns
- *  (a tmux `codex resume` fallback writes there) and sync normally. */
-export function isImportBornCodexRolloutFirstSight(lastPosition: number, forkParentFileName: string | null): boolean {
-  return lastPosition === 0 && !!forkParentFileName && forkParentFileName.startsWith("codecast-fork-");
 }
 
 export function upsertAppServerThreadRegistration(
@@ -16020,7 +15098,7 @@ async function stopLocalSessionBackends(conversationId: string, sessionId: strin
   // running parent TUI. The tmux-name sweep further down is genuinely safe
   // unguarded: it matches names derived from THIS session's id, which a parent's
   // tmux never carries.
-  const teardownPlan = planSessionTeardown(await acquireSessionProcessOwnership(sessionId));
+  const teardownPlan = planSessionTeardown(sessionProcessOwnership(sessionId));
   try {
     if (teardownPlan.reapPidTree) {
       const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
@@ -16292,12 +15370,11 @@ function registerAppServerConversation(
     updatedAt?: number;
     persist?: boolean;
     approvalPolicy?: ApprovalPolicy;
-    sandbox?: PersistedCodexThread["sandbox"];
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
@@ -16308,7 +15385,7 @@ function registerAppServerConversation(
   persistedAppServerThreads.set(conversationId, {
     ...(carried ?? {}),
     threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
-    sandbox: sandboxPolicy === undefined ? opts.sandbox ?? carried?.sandbox : undefined,
+    sandbox: sandboxPolicy === undefined ? carried?.sandbox : undefined,
     sandboxPolicy,
   });
   persistAppServerThreadRegistrations();
@@ -16341,8 +15418,8 @@ function markAppServerConversationResumable(
   if (!resolvedThreadId) return false;
   const liveEntry = appServerThreads.get(resolvedThreadId);
   const previous = persistedAppServerThreads.get(conversationId);
-  // A thread the live map has forgotten still has a saved cwd, policy and
-  // sandbox worth keeping: erasing them here is what left records that later
+  // A thread the live map has forgotten still has a saved cwd and approval
+  // policy worth keeping: erasing them here is what left records that later
   // resumed under whatever default Codex chose.
   const carried = previous?.threadId === resolvedThreadId ? previous : undefined;
   const sandboxPolicy = policyForPersist(resolvedThreadId, carried);
@@ -16352,7 +15429,7 @@ function markAppServerConversationResumable(
     updatedAt,
     cwd: liveEntry?.cwd ?? carried?.cwd,
     approvalPolicy: liveEntry?.approvalPolicy ?? carried?.approvalPolicy,
-    sandbox: sandboxPolicy === undefined ? liveEntry?.sandbox ?? carried?.sandbox : undefined,
+    sandbox: sandboxPolicy === undefined ? carried?.sandbox : undefined,
     sandboxPolicy,
   });
   return persistAppServerThreadRegistrations();
@@ -16373,7 +15450,6 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
     if ((appServerRecoveryRetryAt.get(conversationId) ?? 0) > Date.now()) continue;
     if (appServerConversations.has(conversationId) && (!record.activeTurnId || findActiveTurnForThread(record.threadId))) continue;
     try {
-      let hasPendingMessages = false;
       if (record.activeTurnId) {
         const service = syncServiceRef;
         if (!service) continue;
@@ -16386,8 +15462,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
-        hasPendingMessages = !!lifecycle.hasPendingMessages;
-        if (hasPendingMessages && appServerConversations.has(conversationId)) continue;
+        if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
       const policy = record.approvalPolicy ?? resolveCodexPermissionDefaults(activeConfig).approvalPolicy;
       const response = await server.threadResume(codexResumeParams(record, policy));
@@ -16397,12 +15472,9 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
         updatedAt: record.updatedAt,
         persist: false,
         approvalPolicy: policy,
-        sandbox: record.sandbox,
       });
-      log(`[codex-app-server] resumed thread ${record.threadId.slice(0, 8)} policy=${response.sandbox?.type ?? "server-default"} approvalPolicy=${policy}`);
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
-      if (hasPendingMessages) continue;
       appServerRecoveringThreads.add(record.threadId);
       try {
         const action = await recoverCodexTurn({
@@ -16656,7 +15728,6 @@ export const MAX_RESUME_READINESS_POLL_MS = 120_000;
 // session, six seconds apart stays under the provider's per-minute cap that
 // a same-second burst of eighteen tripped.
 const SWITCH_CONTINUE_SPACING_MS = 6_000;
-let resumeInnerForTests: typeof autoResumeSessionInner | null = null;
 const accountLifecycleGate = new AccountLifecycleGate();
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
@@ -16841,7 +15912,7 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
-  if (!syncServiceRef || isSupersededAppServerSession(sessionId)) return;
+  if (!syncServiceRef) return;
   managedHeartbeatSessions.add(sessionId);
   ensureHeartbeatFlushLoop();
 }
@@ -16913,13 +15984,12 @@ async function flushManagedHeartbeats(): Promise<void> {
   }
 }
 
-export async function runHeartbeatFlush(): Promise<void> {
+async function runHeartbeatFlush(): Promise<void> {
   // Capture once so the non-null narrowing holds across the awaits below
   // (a module-level `let` would re-widen to `SyncService | null` after each).
   const sync = syncServiceRef;
   if (!sync) return;
-  retryHibernationStamps();
-  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
+  const ids = [...managedHeartbeatSessions];
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -16932,17 +16002,17 @@ export async function runHeartbeatFlush(): Promise<void> {
 
   // Batched liveness write. logHeartbeatStatus stays per-session (throttled,
   // local-only). Resource metrics are pushed separately by collectResourceSnapshot.
-  const batchCount = Math.ceil(ids.length / HEARTBEAT_BATCH_SIZE);
-  for (let i = 0; i < ids.length; i += HEARTBEAT_BATCH_SIZE) {
-    const payload = ids.slice(i, i + HEARTBEAT_BATCH_SIZE).map((sessionId) => {
-      const status = lastSentAgentStatus.get(sessionId);
-      logHeartbeatStatus(sessionId, status);
-      return status
-        ? { session_id: sessionId, agent_status: status, client_ts: now }
-        : { session_id: sessionId };
-    });
+  const payload = ids.map((sessionId) => {
+    const status = lastSentAgentStatus.get(sessionId);
+    logHeartbeatStatus(sessionId, status);
+    return status
+      ? { session_id: sessionId, agent_status: status, client_ts: now }
+      : { session_id: sessionId };
+  });
+  const batchCount = Math.ceil(payload.length / HEARTBEAT_BATCH_SIZE);
+  for (let i = 0; i < payload.length; i += HEARTBEAT_BATCH_SIZE) {
     try {
-      await sync.heartbeatManagedSessionsBatch(payload);
+      await sync.heartbeatManagedSessionsBatch(payload.slice(i, i + HEARTBEAT_BATCH_SIZE));
     } catch {}
   }
   // One line/tick to confirm the fleet flushes in a handful of transactions
@@ -16955,7 +16025,7 @@ export async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
+  const ids = [...managedHeartbeatSessions];
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -16993,10 +16063,6 @@ async function runHeartbeatMaintenance(): Promise<void> {
   if (tick % GIT_PLANE_EVERY_N_FLUSHES === 0) {
     await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
   }
-
-  // Reflog tail fallback: the watchers report within a second; this catches
-  // anything they missed at the flush cadence. See pollGitActivity.
-  await pollGitActivity().catch((e) => log(`[GITACTIVITY] poll error: ${(e as Error)?.message ?? e}`));
 }
 
 // ─── Working-tree snapshots ────────────────────────────────────────────────
@@ -17072,7 +16138,7 @@ function collectGitSweepTargets(
     let cwd = sessionCwdCache.get(file.path);
     if (!cwd) {
       try {
-        const head = readFileHeadLines(file.path);
+        const head = readFileHead(file.path, 65536);
         cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
       } catch {}
       if (cwd) sessionCwdCache.set(file.path, cwd);
@@ -17244,232 +16310,6 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
   const bad = states.filter((s) => !s.origin_ok || s.fetch_ok === false);
   if (bad.length) {
     log(`[GITPLANE] ${states.length} repos, ${bad.length} unhealthy: ${bad.map((s) => `${path.basename(s.root)}(${!s.origin_ok ? "origin" : s.needs_access ? "needs-access" : "fetch"})`).join(", ")}`);
-  }
-
-  await reportGitStates(targets, states).catch((e) => log(`[GITPLANE] state report error: ${(e as Error)?.message ?? e}`));
-  await syncGitActivityTailers(byRoot).catch((e) => log(`[GITACTIVITY] tailer sync error: ${(e as Error)?.message ?? e}`));
-  await publishLocalRepos([...byRoot.keys()], byRoot).catch((e) => log(`[REPOMIRROR] pass error: ${(e as Error)?.message ?? e}`));
-}
-
-// ─── Local git activity ───────────────────────────────────────────────────────
-// Every live checkout's reflog is tailed (gitActivity.ts): a commit, checkout,
-// merge, pull, rebase, reset, cherry-pick, revert or push appends a line the
-// moment it happens, whoever ran it, and that line becomes a team activity
-// event (convex gitActivity.recordLocal) with the session attached when one
-// live session owns the checkout. A filesystem watcher on the log files gives
-// the seconds-level reaction; the per-flush poll below is the fallback for a
-// watcher that missed. Because the refs moved, the mirror publish runs right
-// away instead of waiting for the next sweep.
-
-const gitActivityTailers = new Map<string, GitActivityTailer>();
-const gitActivityWatchers = new Map<string, { close: () => Promise<void> | void }>();
-const gitActivityPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
-/** root -> live conversation ids, from the last git plane sweep. */
-let liveRootSessions = new Map<string, string[]>();
-/** Roots the server declined as private: not tailed again this lifetime. */
-const gitActivityPrivate = new Set<string>();
-
-async function syncGitActivityTailers(byRoot: Map<string, { conversationIds: string[] }>): Promise<void> {
-  liveRootSessions = new Map([...byRoot].map(([root, group]) => [root, group.conversationIds]));
-  for (const root of byRoot.keys()) {
-    if (gitActivityTailers.has(root) || gitActivityPrivate.has(root)) continue;
-    const tailer = new GitActivityTailer(root);
-    if (!(await tailer.init().catch(() => false))) continue;
-    gitActivityTailers.set(root, tailer);
-    try {
-      const watcher = chokidarWatch(tailer.watchPaths(), { ignoreInitial: true, depth: 3, persistent: true });
-      watcher.on("all", () => scheduleGitActivityPoll(root));
-      gitActivityWatchers.set(root, watcher);
-    } catch (e) {
-      log(`[GITACTIVITY] no watcher for ${root}, polling only: ${(e as Error)?.message ?? e}`);
-    }
-  }
-  for (const root of [...gitActivityTailers.keys()]) {
-    if (byRoot.has(root)) continue;
-    dropGitActivityTailer(root);
-  }
-}
-
-function dropGitActivityTailer(root: string): void {
-  gitActivityTailers.delete(root);
-  const watcher = gitActivityWatchers.get(root);
-  gitActivityWatchers.delete(root);
-  if (watcher) void Promise.resolve(watcher.close()).catch(() => {});
-}
-
-function scheduleGitActivityPoll(root: string): void {
-  const pending = gitActivityPollTimers.get(root);
-  if (pending) clearTimeout(pending);
-  gitActivityPollTimers.set(root, setTimeout(() => {
-    gitActivityPollTimers.delete(root);
-    void pollGitActivity(root).catch((e) => log(`[GITACTIVITY] poll error for ${root}: ${(e as Error)?.message ?? e}`));
-  }, 750));
-}
-
-async function pollGitActivity(onlyRoot?: string): Promise<void> {
-  if (!syncServiceRef) return;
-  for (const root of onlyRoot ? [onlyRoot] : [...gitActivityTailers.keys()]) {
-    const tailer = gitActivityTailers.get(root);
-    if (!tailer) continue;
-    const events = await tailer.poll().catch(() => []);
-    if (!events.length) continue;
-    const sessions = liveRootSessions.get(root) ?? [];
-    const conversationId = sessions.length === 1 ? sessions[0] : undefined;
-    const [origin, branch] = await Promise.all([gitOut(root, ["remote", "get-url", "origin"]), gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"])]);
-    const payload = [];
-    for (const event of events) {
-      let commits_count: number | undefined;
-      if (event.kind === "push" && !/^0+$/.test(event.old_sha)) {
-        const count = await gitOut(root, ["rev-list", "--count", `${event.old_sha}..${event.new_sha}`]);
-        if (count) commits_count = Number(count);
-      }
-      payload.push({ ...event, conversation_id: conversationId, commits_count });
-    }
-    const result = await syncServiceRef.recordGitActivity({
-      root,
-      repository: repositoryKeyFor(root, origin),
-      remote_url: origin,
-      branch: branch && branch !== "HEAD" ? branch : undefined,
-      events: payload,
-    });
-    if (!result) continue;
-    if (result.reason === "private") {
-      gitActivityPrivate.add(root);
-      dropGitActivityTailer(root);
-      continue;
-    }
-    log(`[GITACTIVITY] ${path.basename(root)}: ${events.map((e) => e.kind).join(", ")}`);
-    if (events.some((e) => e.kind !== "checkout")) {
-      await publishLocalRepos([root], new Map([[root, { conversationIds: sessions }]])).catch((e) => log(`[REPOMIRROR] publish after activity failed: ${(e as Error)?.message ?? e}`));
-    }
-  }
-}
-
-// ─── The session header's prompt line ─────────────────────────────────────────
-// Each live session's checkout, as a shell prompt shows it: HEAD, branch,
-// ahead/behind its upstream (from the sweep above, per repo), and whether the
-// tree is dirty. Sent to conversations.updateGitState only when the tuple
-// changed, so an idle session costs three cheap git reads per sweep and no
-// write. Several sessions in one checkout share the reads' cost per cwd.
-
-/** conversation id -> last reported state, to send only changes. */
-const lastGitStateSent = new Map<string, string>();
-
-async function reportGitStates(
-  targets: Array<{ conversationId: string; cwd: string }>,
-  states: RepoPlaneState[],
-): Promise<void> {
-  if (!syncServiceRef) return;
-  const byRootState = new Map(states.map((s) => [s.root, s]));
-  const perCwd = new Map<string, Promise<{ head?: string; branch?: string; remote?: string; dirty: boolean } | null>>();
-  const readCwd = (cwd: string) => {
-    let pending = perCwd.get(cwd);
-    if (!pending) {
-      pending = (async () => {
-        const [head, branch, remote, status] = await Promise.all([
-          gitOut(cwd, ["rev-parse", "HEAD"]),
-          gitOut(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
-          gitOut(cwd, ["remote", "get-url", "origin"]),
-          gitOut(cwd, ["status", "--porcelain"]),
-        ]);
-        if (!head) return null;
-        return { head, branch: branch && branch !== "HEAD" ? branch : undefined, remote, dirty: !!status };
-      })();
-      perCwd.set(cwd, pending);
-    }
-    return pending;
-  };
-  for (const target of targets) {
-    const read = await readCwd(target.cwd).catch(() => null);
-    if (!read) continue;
-    const root = await repoRootFor(target.cwd);
-    const plane = root ? byRootState.get(root) : undefined;
-    const state = {
-      git_commit_hash: read.head,
-      git_branch: read.branch,
-      git_remote_url: read.remote,
-      git_ahead: plane?.ahead,
-      git_behind: plane?.behind,
-      git_dirty: read.dirty,
-    };
-    const key = JSON.stringify(state);
-    if (lastGitStateSent.get(target.conversationId) === key) continue;
-    const result = await syncServiceRef.updateGitState({ conversation_id: target.conversationId, ...state });
-    if (result) lastGitStateSent.set(target.conversationId, key);
-  }
-}
-
-/** One git value from a cwd, or undefined; never throws. */
-async function gitOut(cwd: string, args: string[]): Promise<string | undefined> {
-  try {
-    const { stdout } = await _execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf-8", timeout: 15_000, maxBuffer: 1024 * 1024 });
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// ─── Publishing checkouts into the repository cache ──────────────────────────
-// The fourth git-plane duty: every repo with live sessions publishes its
-// branches, tags, first page of history, root tree and readme into the server's
-// repository cache (repos.ingestLocal), so the repo pages work from this
-// machine's checkout with no GitHub App at all. The server decides who may read
-// it from the directory team mapping — the same rule that shares this path's
-// sessions — and answers `private` for a path that shares nothing, which is
-// remembered so a private checkout costs one call per daemon lifetime.
-//
-// A checkout is pushed again only when its refs move (refsFingerprint), or
-// after REPO_MIRROR_MAX_AGE_MS so a row's freshness stamp never goes stale for
-// good. Engine in repoMirror.ts.
-
-const REPO_MIRROR_MAX_AGE_MS = 6 * 60 * 60_000;
-/** root -> fingerprint and time of the last successful push. */
-const repoMirrorPushed = new Map<string, { fingerprint: string; at: number }>();
-/** Roots the server declined as private: not asked again this lifetime. */
-const repoMirrorPrivate = new Set<string>();
-
-async function publishLocalRepos(
-  roots: string[],
-  byRoot: Map<string, { conversationIds: string[] }> = new Map(),
-): Promise<void> {
-  if (!syncServiceRef) return;
-  const now = Date.now();
-  for (const root of roots) {
-    if (repoMirrorPrivate.has(root)) continue;
-    const fingerprint = await refsFingerprint(root);
-    const last = repoMirrorPushed.get(root);
-    if (last && last.fingerprint === fingerprint && now - last.at < REPO_MIRROR_MAX_AGE_MS) continue;
-
-    const mirror = await buildRepoMirror(root);
-    if (!mirror) continue;
-    // Attribution, only when it is certain: one live session in this checkout,
-    // and only commits made since the last publish (the first publish carries
-    // history nobody here wrote). Two sessions in one checkout name nobody.
-    const sessions = byRoot.get(root)?.conversationIds ?? [];
-    const since = last?.at;
-    const commits = sessions.length === 1 && since
-      ? mirror.commits.map((c) => (c.timestamp >= since ? { ...c, conversation_id: sessions[0] } : c))
-      : mirror.commits;
-    const result = await syncServiceRef.ingestLocalRepo({
-      root,
-      repository: mirror.repository,
-      remote_url: mirror.remote_url,
-      device_label: deviceLabel(),
-      default_branch: mirror.default_branch,
-      head_sha: mirror.head_sha,
-      rows: mirror.rows,
-      commits,
-    });
-    if (!result) continue;
-    if (result.published) {
-      repoMirrorPushed.set(root, { fingerprint, at: now });
-      log(`[REPOMIRROR] published ${mirror.repository} from ${root}: ${result.rows} rows, ${result.commits_created} new commits`);
-    } else if (result.reason === "private") {
-      repoMirrorPrivate.add(root);
-      log(`[REPOMIRROR] ${root} shares no sessions with a team; not published`);
-    } else {
-      repoMirrorPushed.set(root, { fingerprint, at: now });
-    }
   }
 }
 
@@ -17854,11 +16694,10 @@ async function reapOneTerminal(
   tmux: string,
   convId: string | undefined,
   idleHours: number,
-  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated"; boundary?: HibernationBoundary } = {},
+  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated" } = {},
 ): Promise<boolean> {
-  if (opts.parkAs === "hibernated") {
-    return opts.boundary ? parkHibernationTerminal(sessionId, tmux, convId, idleHours, opts.boundary) : false;
-  }
+  const hibernating = opts.parkAs === "hibernated";
+  if (hibernating) return false;
   // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
   // False here means the pane survived, so no caller may count or report a kill.
   try {
@@ -17876,18 +16715,40 @@ async function reapOneTerminal(
   // path decay a frozen "working" into "stopped"/needs-attention. No session_error
   // (this is a tidy reap, not a crash).
   if (convId && syncServiceRef) {
-    await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
+    if (hibernating) {
+      const now = Date.now();
+      sendAgentStatus(syncServiceRef, convId, sessionId, "hibernated", now, undefined, undefined, { hibernatedAt: now });
+    } else {
+      await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
+    }
   }
   // A dismissed or killed conversation's worktree goes with its terminal when
   // it holds no work (worktreeGc.ts); a stash is a park, and keeps it.
   const gcCwd = opts.gcWorktree ? await tmuxPaneCwd(tmux + ":0.0") : undefined;
   await killTmuxSessionAndTree(tmux);
-  reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  if (hibernating) {
+    // Put the session BACK in the heartbeat set, after the pane is gone and
+    // after resumeSessionCache.delete above. Two facts make that safe and
+    // necessary: reapStaleManagedSessions deletes any managed_sessions row that
+    // stops beating for an hour, which would throw away the park stamp and the
+    // status; and heartbeatHealthCheck returns at once for a session with no
+    // resumeSessionCache entry, so it cannot reconstitute the pane we just
+    // killed.
+    hibernatedSessions.add(sessionId);
+    // Straight into the set rather than through ensureManagedSessionHeartbeat,
+    // which is a no-op until the sync service exists: what must survive is the
+    // membership, and the flush loop (started once, never stopped) is already
+    // running by the time anything can be parked.
+    managedHeartbeatSessions.add(sessionId);
+    ensureHeartbeatFlushLoop();
+    reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  } else {
+    reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+  }
   if (gcCwd) {
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
       ? syncServiceRef.isWorktreeShared(convId, p)
-      : Promise.reject(new Error("No session roster"))).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
-    reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
+      : Promise.reject(new Error("No session roster"))).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));    reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
   }
   return true;
 }
@@ -17950,250 +16811,7 @@ async function reapIdleOrphanTerminals(): Promise<void> {
 // Every dependency goes through an injected io so the test can drive the fleet
 // without a real one. The production io below is the only place that touches
 // tmux, the transcript or Convex.
-export type HibernationTarget = {
-  session: string;
-  pane: string;
-  pid: number;
-  start: string;
-  stamp: string;
-  conversationStamp: string;
-};
-
-type HibernationBoundary = {
-  target: HibernationTarget;
-  terminal(args: string[]): Promise<{ stdout: string }>;
-  revalidate(): Promise<boolean>;
-  unchanged(): boolean;
-  beginCommit(): boolean;
-};
-
-type HibernationReservation = { done: Promise<void>; cancelled: boolean; committing: boolean; cancel(): void };
-const hibernationInFlight = new Map<string, HibernationReservation>();
-const hibernationEvidenceJobs = new Map<string, Promise<string | null>>();
-const HIBERNATION_ATTEMPT_TIMEOUT_MS = 15_000;
-type HibernationExit = { phase: "committing" | "parked"; replayStop?: () => void };
-const expectedHibernationExits = new Map<string, HibernationExit>();
-
-function deferHibernationHookStop(sessionId: string, status: AgentStatus, replay: () => void): boolean {
-  const expected = expectedHibernationExits.get(sessionId);
-  if (!expected || status !== "stopped") return false;
-  if (expected.phase === "committing") expected.replayStop = replay;
-  return true;
-}
-
-export function publishHookStatus(sync: SyncService, conversationId: string, sessionId: string, data: HookStatusData, statusChanged: boolean, modeChanged = false): void {
-  if (deferHibernationHookStop(sessionId, data.status, () => publishHookStatus(sync, conversationId, sessionId, data, statusChanged, modeChanged))) return;
-  if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
-    sendAgentStatus(sync, conversationId, sessionId, data.status, data.ts * 1000, data.permission_mode);
-  } else pendingOpenTaskReports.delete(sessionId);
-  if (data.status === "stopped" && statusChanged) {
-    const restartTs = restartingSessionIds.get(sessionId);
-    if (!restartTs || Date.now() - restartTs >= RESTART_GUARD_TTL_MS) void sync.markSessionCompleted(conversationId).catch(logConvexFailure);
-  }
-}
-const HIBERNATION_PANE_FORMAT = "#{session_id}|#{pane_id}|#{pane_pid}|#{session_name}|#{session_attached}|#{@codecast_session_id}|#{@codecast_conversation_id}|#{pane_dead}";
-
-export async function inspectHibernationTarget(sessionId: string, tmux: string, conversationId: string, registryDir?: string): Promise<HibernationTarget | null> {
-  if (!validateTmuxTarget(tmux)) return null;
-  await ensureSessionFileIndex();
-  if (!sessionFileIndexReady || sessionFileIndexHome !== (process.env.HOME || "") || codexRolloutIndex?.has(sessionId)) return null;
-  try { if ((await freshCodexOwnershipFiles()).has(sessionId)) return null; } catch { return null; }
-  const { stdout } = await tmuxExec(["list-panes", "-s", "-t", `=${tmux}`, "-F", HIBERNATION_PANE_FORMAT], { timeout: 3000 });
-  if (!tmuxSessionIsSinglePane(stdout)) return null;
-  const [session, pane, rawPid, name, attached, stamp, conversationStamp, dead] = stdout.trim().split("|");
-  if (!/^\$\d+$/.test(session) || !/^%\d+$/.test(pane) || name !== tmux || attached !== "0" || dead !== "0") return null;
-  if (stamp && stamp !== sessionId) return null;
-  if (conversationStamp && conversationStamp !== conversationId) return null;
-  const pid = Number(rawPid);
-  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return null;
-  const { stdout: identity } = await _execFileAsync("ps", ["-p", String(pid), "-o", "lstart=,uid=,command="], { timeout: 3000 });
-  const match = identity.trim().match(/^(\S+\s+\S+\s+\d+\s+\S+\s+\d+)\s+(\d+)\s+(.+)$/);
-  if (!match || process.getuid?.() !== Number(match[2])) return null;
-  const argvId = argvSessionId(match[3]);
-  if (argvId !== sessionId) return null;
-  const processStartSec = Date.parse(match[1]) / 1000;
-  if (!Number.isFinite(processStartSec)) return null;
-  const claims = await hookClaimsForPid(pid, { fresh: true, registryDir });
-  if (!claims || judgeProcessIdentity({ sessionId, argvId, claims, processStartSec }).verdict !== "owned") return null;
-  const newestClaim = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
-  if (claims.some(c => c.ts >= processStartSec - 5 && c.sessionId !== sessionId && c.ts === newestClaim)) return null;
-  if (!await hibernationChildHistoryIsClear(sessionId)) return null;
-  const procs = await snapshotProcessTableAsync({ timeout: 3000 });
-  const root = procs.find(p => p.pid === pid);
-  if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return null;
-  if (descendantPids(procs, pid).length > 0) return null;
-  return { session, pane, pid, start: match[1], stamp, conversationStamp };
-}
-
-async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolean> {
-  if (subagentActiveAgoMs(sessionId) !== Infinity) return false;
-  const file = findReapTranscript(sessionId);
-  if (!file || file.agentType !== "claude") return false;
-  const dir = path.join(path.dirname(file.path), sessionId, "subagents");
-  try {
-    if ((await fs.promises.readdir(dir)).length > 0) return false;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return false;
-  }
-  const stat = await fs.promises.stat(file.path);
-  if (stat.size > 1024 * 1024) return false;
-  const content = await fs.promises.readFile(file.path, "utf8");
-  const after = await fs.promises.stat(file.path);
-  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return false;
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    const row = JSON.parse(line);
-    if (!Array.isArray(row.message?.content)) continue;
-    for (const block of row.message.content) {
-      if (block?.type === "tool_use" &&
-          (["Agent", "Task", "Workflow", "Monitor"].includes(block.name) || block.input?.run_in_background)) return false;
-    }
-  }
-  return true;
-}
-
-function hibernationLocalUnchanged(cand: HibernationCandidate, io: HibernationPassIo, reservation: HibernationReservation): boolean {
-  if (reservation.cancelled || hibernationInFlight.get(cand.sessionId) !== reservation) return false;
-  if (resumeSessionCache.get(cand.sessionId) !== cand.tmux || !managedHeartbeatSessions.has(cand.sessionId)) return false;
-  if (lastSentAgentStatus.get(cand.sessionId) !== cand.status) return false;
-  const cachedConv = io.conversationIds()[cand.sessionId];
-  if (cachedConv && cachedConv !== cand.conversationId) return false;
-  const fresh = {
-    ...cand,
-    sharedPane: [...resumeSessionCache.values()].filter(tmux => tmux === cand.tmux).length !== 1,
-    subagentActiveAgoMs: io.subagentActiveAgoMs(cand.sessionId),
-    resumedAgoMs: io.now() - (lastResumeAt.get(cand.sessionId) ?? -Infinity),
-    messagesInFlight: io.deliveryActive(cand.sessionId, cand.conversationId),
-  };
-  return hibernationBlockReason(fresh) === null;
-}
-
-async function attemptHibernation(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
-  if (hibernationInFlight.has(cand.sessionId) || hibernationEvidenceJobs.has(cand.sessionId) || tmuxTargetLocks.has(cand.tmux)) return "in-flight-messages";
-  if (hibernationEvidenceJobs.size >= HIBERNATE_MAX_PER_PASS) return "evidence-busy";
-  let release!: () => void;
-  let revoke!: () => void;
-  const revoked = new Promise<void>(resolve => { revoke = resolve; });
-  const reservation: HibernationReservation = {
-    done: new Promise<void>(resolve => { release = resolve; }),
-    cancelled: false,
-    committing: false,
-    cancel: () => {
-      reservation.cancelled = true;
-      if (!reservation.committing) revoke();
-    },
-  };
-  const lockTargets = [cand.tmux, `=${cand.tmux}`];
-  if (lockTargets.some(target => tmuxTargetLocks.has(target))) return "in-flight-messages";
-  hibernationInFlight.set(cand.sessionId, reservation);
-  for (const target of lockTargets) tmuxTargetLocks.set(target, reservation.done);
-  const deadline = setTimeout(() => reservation.cancel(), Math.min(io.attemptTimeoutMs ?? HIBERNATION_ATTEMPT_TIMEOUT_MS, HIBERNATION_ATTEMPT_TIMEOUT_MS));
-  const work = Promise.resolve().then(async () => {
-    const refusal = await hibernationRefusalReason(cand, io);
-    if (refusal) return refusal;
-    if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
-    const target = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
-    if (!target) return "target-unverified";
-    if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
-    for (const alias of [target.session, target.pane]) {
-      if (tmuxTargetLocks.has(alias)) return "in-flight-messages";
-      tmuxTargetLocks.set(alias, reservation.done);
-      lockTargets.push(alias);
-    }
-    const boundary: HibernationBoundary = {
-      target,
-      terminal: io.terminal,
-      beginCommit: () => {
-        if (!hibernationLocalUnchanged(cand, io, reservation)) return false;
-        clearTimeout(deadline);
-        reservation.committing = true;
-        return true;
-      },
-      unchanged: () => hibernationLocalUnchanged(cand, io, reservation),
-      revalidate: async () => {
-        if (!hibernationLocalUnchanged(cand, io, reservation)) return false;
-        if (await hibernationRefusalReason(cand, io)) return false;
-        const attached = await io.tmuxSessions();
-        if (attached.get(cand.tmux) !== 0) return false;
-        const current = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
-        return JSON.stringify(current) === JSON.stringify(target) && hibernationLocalUnchanged(cand, io, reservation);
-      },
-    };
-    if (!await boundary.revalidate()) return "evidence-changed";
-    return await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000), boundary)
-      ? null : "teardown-refused";
-  }).catch(err => {
-    log(`[HIBERNATE] refused ${cand.sessionId}: ${String(err)}`);
-    return "evidence-unavailable";
-  }).finally(() => {
-    if (hibernationEvidenceJobs.get(cand.sessionId) === work) hibernationEvidenceJobs.delete(cand.sessionId);
-  });
-  hibernationEvidenceJobs.set(cand.sessionId, work);
-  try {
-    return await Promise.race([work, revoked.then(() => "evidence-cancelled")]);
-  } finally {
-    clearTimeout(deadline);
-    reservation.cancelled = true;
-    if (hibernationInFlight.get(cand.sessionId) === reservation) hibernationInFlight.delete(cand.sessionId);
-    for (const target of lockTargets) {
-      if (tmuxTargetLocks.get(target) === reservation.done) tmuxTargetLocks.delete(target);
-    }
-    release();
-  }
-}
-
-async function parkHibernationTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean> {
-  const { target } = boundary;
-  const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
-  if (classifyLivePaneFor(detectSessionAgentType(sessionId), pane) !== "idle") return false;
-  if (!await boundary.revalidate() || !boundary.unchanged()) return false;
-  const checks = [
-    `#{==:#{session_id},${target.session}}`, `#{==:#{pane_id},${target.pane}}`,
-    `#{==:#{pane_pid},${target.pid}}`, "#{==:#{session_attached},0}",
-    "#{==:#{session_windows},1}", "#{==:#{window_panes},1}", "#{==:#{pane_dead},0}",
-    `#{==:#{@codecast_session_id},${target.stamp}}`,
-    `#{==:#{@codecast_conversation_id},${target.conversationStamp}}`,
-  ];
-  const condition = checks.reduce((a, b) => `#{&&:${a},${b}}`);
-  if (!boundary.beginCommit()) return false;
-  const expected: HibernationExit = { phase: "committing" };
-  expectedHibernationExits.set(sessionId, expected);
-  let killed = false;
-  try {
-    const { stdout } = await boundary.terminal(["if-shell", "-F", "-t", target.pane, condition,
-      `kill-pane -t ${target.pane} ; display-message -p parked`, "display-message -p refused"]);
-    if (stdout.trim() !== "parked") return false;
-    killed = true;
-    expected.phase = "parked";
-    delete expected.replayStop;
-    const remaining = await boundary.terminal(["list-panes", "-a", "-F", "#{pane_id}"]).catch(error => {
-      if (/no server running on|no sessions|error connecting to .*\(No such file or directory\)/i.test(String(error))) return { stdout: "" };
-      throw error;
-    });
-    if (remaining.stdout.trim().split("\n").includes(target.pane)) return false;
-    if (!boundary.unchanged()) return false;
-  } finally {
-    if (killed && resumeSessionCache.get(sessionId) === tmux) resumeSessionCache.delete(sessionId);
-    if (expected.phase !== "parked" && expectedHibernationExits.get(sessionId) === expected) {
-      expectedHibernationExits.delete(sessionId);
-      expected.replayStop?.();
-    }
-  }
-  stopCodexPermissionPoller(sessionId);
-  resumeSessionCache.delete(sessionId);
-  hibernatedSessions.add(sessionId);
-  hibernationStampCleared.delete(sessionId);
-  lastSentAgentStatus.set(sessionId, "hibernated");
-  managedHeartbeatSessions.add(sessionId);
-  ensureHeartbeatFlushLoop();
-  if (convId) queueHibernationStamp(sessionId, convId, Date.now());
-  reaperLog(`HIBERNATED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
-  return true;
-}
-
 export type HibernationPassIo = {
-  attemptTimeoutMs?: number;
-  terminal(args: string[]): Promise<{ stdout: string }>;
   policy(): { maxLive: number; idleMs: number; maxPerPass: number };
   /** tmux session name to the number of clients attached to it. */
   tmuxSessions(): Promise<Map<string, number>>;
@@ -18206,17 +16824,15 @@ export type HibernationPassIo = {
   transcriptLastRealMs(sessionId: string): Promise<number | null>;
   lifecycle(conversationId: string, sessionId: string): Promise<ConversationLifecycle | null>;
   /** False when the session runs inside another session's process tree. */
-  canReapPidTree(sessionId: string): boolean | Promise<boolean>;
+  canReapPidTree(sessionId: string): boolean;
   /** True when work is reaching this session right now. Read again at the kill. */
   deliveryActive(sessionId: string, conversationId: string | undefined): boolean;
   /** True when the pane is gone; false when the kill-time recheck refused it. */
-  inspectTarget(sessionId: string, tmux: string, conversationId: string): Promise<HibernationTarget | null>;
-  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean>;
+  park(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<boolean>;
   now(): number;
 };
 
 const productionHibernationIo: HibernationPassIo = {
-  terminal: (args) => tmuxExec(args, { timeout: 3000, killSignal: "SIGKILL" }),
   policy: () => ({
     // The cached config, never readConfig: that is a synchronous file read and
     // this runs on the maintenance tick.
@@ -18235,20 +16851,14 @@ const productionHibernationIo: HibernationPassIo = {
     const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}|#{session_attached}"], { timeout: 5000 });
     for (const line of stdout.split("\n")) {
       const [name, count] = line.trim().split("|");
-      if (name) attached.set(name, count && /^\d+$/.test(count) ? Number(count) : NaN);
+      if (name) attached.set(name, Number(count) || 0);
     }
     return attached;
   },
   awakeIdleMs: (sessionId) => getSessionAwakeIdleMs(sessionId),
   subagentActiveAgoMs: (sessionId) => subagentActiveAgoMs(sessionId),
   conversationIds: () => readConversationCache(),
-  askSidecarMtimeMs: async (sessionId) => {
-    try { return (await fs.promises.stat(path.join(ASK_INPUT_DIR, `${sessionId}.json`))).mtimeMs; }
-    catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw err;
-    }
-  },
+  askSidecarMtimeMs: (sessionId) => askInputSidecarMtimeMs(sessionId),
   transcriptLastRealMs: async (sessionId) => {
     const file = findReapTranscript(sessionId);
     if (!file) return null;
@@ -18259,17 +16869,22 @@ const productionHibernationIo: HibernationPassIo = {
     }
   },
   lifecycle: async (conversationId, sessionId) =>
-    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId).catch(() => null) : null,
-  canReapPidTree: async (sessionId) => planSessionTeardown(await acquireSessionProcessOwnership(sessionId)).reapPidTree,
+    syncServiceRef ? await syncServiceRef.getConversationLifecycle(conversationId, sessionId).catch(() => null) : null,
+  // Asked FRESH, like every other destructive caller (killConversationBackends,
+  // teardownConversationBackends). staleOk answers from the session file index
+  // alone, and a Codex subagent whose rollout is younger than that index reads
+  // as "owned" — the exact wrong answer, because the teardown would then kill
+  // the parent's process tree on the child's behalf. The cost is bounded: at
+  // most HIBERNATE_MAX_PER_PASS lookups per pass, and the probes behind a miss
+  // only read directories that changed since the last index build.
+  canReapPidTree: (sessionId) => planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree,
   deliveryActive: (sessionId, conversationId) =>
     resumeInFlight.has(sessionId) ||
     (!!conversationId &&
       (conversationDeliveryActive.has(conversationId) ||
-        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId) ||
-        [...injectedMessageTs.values()].some((m) => m.conversationId === conversationId && !m.confirmed))),
-  inspectTarget: inspectHibernationTarget,
-  park: (sessionId, tmux, convId, idleHours, boundary) =>
-    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated", boundary }),
+        [...messagesInFlight.values()].some((m) => m.conversationId === conversationId))),
+  park: (sessionId, tmux, convId, idleHours) =>
+    reapOneTerminal(sessionId, tmux, convId, idleHours, { parkAs: "hibernated" }),
   now: () => Date.now(),
 };
 
@@ -18290,7 +16905,8 @@ export function trackSessionPaneForTests(
   if (tmux === null) {
     resumeSessionCache.delete(sessionId);
     managedHeartbeatSessions.delete(sessionId);
-    forgetHibernationPark(sessionId);
+    hibernatedSessions.delete(sessionId);
+    hibernationStampCleared.delete(sessionId);
     lastSentAgentStatus.delete(sessionId);
     lastResumeAt.delete(sessionId);
     return;
@@ -18299,15 +16915,8 @@ export function trackSessionPaneForTests(
   managedHeartbeatSessions.add(sessionId);
   // `parked` stands in for a park this daemon did, which only a real teardown
   // sets: the pass tests stub io.park, so without it nothing local is marked.
-  if (facts.parked) {
-    hibernatedSessions.add(sessionId);
-    hibernationStampCleared.delete(sessionId);
-  }
-  if (facts.status) {
-    const parking = hibernationInFlight.get(sessionId);
-    if (parking && lastSentAgentStatus.get(sessionId) !== facts.status) parking.cancel();
-    lastSentAgentStatus.set(sessionId, facts.status);
-  }
+  if (facts.parked) hibernatedSessions.add(sessionId);
+  if (facts.status) lastSentAgentStatus.set(sessionId, facts.status);
   if (facts.resumedAt !== undefined) lastResumeAt.set(sessionId, facts.resumedAt);
 }
 
@@ -18387,32 +16996,8 @@ async function collectHibernationCandidates(io: HibernationPassIo): Promise<Hibe
  * a live subagent, or borrowing a parent's process, because those kill work the
  * person asking did not mean to kill.
  */
-async function hibernationRefusalReason(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
-  const blocked = hibernationBlockReason(cand);
-  if (blocked) return blocked;
-
-  const sidecarMtimeMs = await io.askSidecarMtimeMs(cand.sessionId);
-  if (sidecarMtimeMs !== null) {
-    const lastRealMs = await io.transcriptLastRealMs(cand.sessionId);
-    if (askUserQuestionStillPending(sidecarMtimeMs, lastRealMs)) return "pending-question";
-  }
-  if (!cand.conversationId) return "conversation-unknown";
-  const lifecycle = await io.lifecycle(cand.conversationId, cand.sessionId);
-  if (!lifecycle) return "lifecycle-unknown";
-  if (lifecycle.hideStateKnown !== true || lifecycle.source !== "lifecycle") return "lifecycle-degraded";
-  if (!lifecycle.status || !["active", "completed"].includes(lifecycle.status)) return "lifecycle-unknown";
-  if (lifecycle.inboxPinnedAt === undefined || lifecycle.hasPendingMessages === undefined) return "lifecycle-degraded";
-  if (lifecycle.inboxPinnedAt !== null) return "pinned";
-  if (lifecycle.hasPendingMessages !== false) return "pending-messages";
-  // A borrowed process means the pane belongs to a parent. Killing the tree
-  // would kill the parent on the child's behalf.
-  if (!await io.canReapPidTree(cand.sessionId)) return "borrowed-process";
-  // The delivery facts came from a snapshot taken before the gates above, and
-  // each gate can wait seconds on a stat, a transcript tail and a Convex round
-  // trip. A message that started delivering inside that window is already
-  // marked delivered, so read the facts again in the instant before the kill.
-  if (io.deliveryActive(cand.sessionId, cand.conversationId)) return "in-flight-messages";
-  return null;
+async function hibernationRefusalReason(cand: HibernationCandidate, _io: HibernationPassIo): Promise<string | null> {
+  return hibernationBlockReason(cand) ?? "parking-safety-unavailable";
 }
 
 /**
@@ -18433,12 +17018,15 @@ export async function hibernateSessionNow(
   if (!cand) return hibernatedSessions.has(sessionId)
     ? { result: "already_parked" }
     : { result: "skipped_no-live-pane", error: "not parked: no-live-pane" };
-  if (conversationId && cand.conversationId && conversationId !== cand.conversationId) {
-    return { result: "skipped_conversation-conflict", error: "not parked: conversation-conflict" };
-  }
-  cand.conversationId ??= conversationId;
-  const refusal = await attemptHibernation(cand, io);
-  return refusal ? { result: `skipped_${refusal}`, error: `not parked: ${refusal}` } : { result: "hibernated" };
+  const refusal = await hibernationRefusalReason(cand, io);
+  if (refusal) return { result: `skipped_${refusal}`, error: `not parked: ${refusal}` };
+  const parked = await io.park(
+    cand.sessionId,
+    cand.tmux,
+    cand.conversationId ?? conversationId,
+    Math.round(cand.awakeIdleMs / 3600000),
+  );
+  return parked ? { result: "hibernated" } : { result: "skipped_busy", error: "the pane went busy at kill time" };
 }
 
 // `io` overrides only the parts a test needs; everything else stays real, so
@@ -18457,9 +17045,10 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   const { picked, skips } = selectHibernationCandidates(candidates, policy);
   let hibernated = 0;
   for (const cand of picked) {
-    const refusal = await attemptHibernation(cand, io);
-    if (refusal) skips.push(refusal);
-    else hibernated++;
+    const refusal = await hibernationRefusalReason(cand, io);
+    if (refusal) { skips.push(refusal); continue; }
+    if (await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000))) hibernated++;
+    else skips.push("busy-at-kill");
   }
   // File-only, like the reaper's pass line: this fires every ~5 min.
   reaperLog(`hibernation pass: ${candidates.length} live, cap=${policy.maxLive}, hibernated ${hibernated}, skipped: ${summarizeReapSkips(skips)}`, false);
@@ -18513,7 +17102,6 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
 export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
-  if (isSupersededAppServerSession(sessionId)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -18616,12 +17204,10 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
 }
 
 async function heartbeatHealthCheck(sessionId: string): Promise<void> {
-  if (isSupersededAppServerSession(sessionId)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
   if (resumeInFlight.has(sessionId)) return;
-  if (expectedHibernationExits.has(sessionId)) return;
   const restartTs = restartingSessionIds.get(sessionId);
   if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) return;
 
@@ -18704,13 +17290,6 @@ export type ResumeOptions = {
    * Only the gate reads this; nothing downstream does.
    */
   userInitiated?: boolean;
-  /**
-   * Launch the client's native fork of this parent session (registry `forkCmd`)
-   * under the new id instead of resuming an existing transcript. The parent's
-   * local transcript supplies the cwd; the child's appears when the client
-   * writes it.
-   */
-  forkFromSessionId?: string;
   model?: string;
   effort?: string;
 };
@@ -18792,6 +17371,14 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 }
 
 export function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
+  // A pane is coming back for a session this daemon parked. autoResumeSession is
+  // the wake most parks end in, but not the only one: the transcript driven pane
+  // adoption and the warm restart scan land here instead, and without this the
+  // session would carry hibernated_at while visibly holding a pane. Gated on the
+  // park mark rather than the boot scoped clear, because this also runs for
+  // sessions that are merely starting, and a status write there would race the
+  // start's own "resuming".
+  if (hibernatedSessions.has(sessionId)) clearHibernationPark(sessionId, conversationId);
   // Track the pane immediately, exactly as a resumed/warm-recovered session is. The periodic
   // health sweep (heartbeatHealthCheck) and the pane-authoritative status reconcile both gate
   // on resumeSessionCache membership. A freshly-started session that was never resumed wasn't
@@ -18800,7 +17387,6 @@ export function registerManagedStartedSession(conversationId: string, sessionId:
   // into the cache, which was the only reason it ever recovered). Set before the syncServiceRef
   // guard: this is local bookkeeping that doesn't depend on the sync client.
   resumeSessionCache.set(sessionId, tmuxSession);
-  clearHibernationPark(sessionId, conversationId);
   if (!syncServiceRef) return;
   setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
   setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId).catch(() => {});
@@ -18866,7 +17452,7 @@ export function classifyStartedPane(paneContent: string, promptPattern: RegExp):
 // showing ("Yes, I trust" is preselected; Enter accepts) and reports "trust" so
 // the caller keeps polling. A failed capture is "booting" while the tmux
 // session exists and "gone" once it does not.
-async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: string) => void): Promise<{ state: StartedPaneState; pane: string }> {
+async function probeStartedPane(entry: StartedSessionInfo): Promise<{ state: StartedPaneState; pane: string }> {
   let paneContent: string;
   try {
     ({ stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]));
@@ -18874,7 +17460,6 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
     const alive = await tmuxExec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
     return { state: alive ? "booting" : "gone", pane: "" };
   }
-  inspectPane?.(paneContent);
   const state = classifyStartedPane(paneContent, AGENT_CLIENTS[entry.agentType].promptReadyPattern);
   if (state === "trust") {
     // Same dialog, same hazard as the resume path: "No, exit" is the default
@@ -19202,7 +17787,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
     // Alive, an agent, and still THIS session's agent — a cached pid outlives an
     // in-process /clear or /resume switch as easily as it outlives the process.
-    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache", Math.floor(cached.filledAt / 1000))) {
+    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache")) {
       sessionProcessCache.delete(sessionId);
       return null;
     }
@@ -19214,7 +17799,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
 async function validateProcessCache(): Promise<void> {
   for (const [sessionId, cached] of sessionProcessCache) {
     if (dropSupersededProcessCacheEntry(sessionId)) continue;
-    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache sweep", Math.floor(cached.filledAt / 1000))) {
+    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid))) {
       sessionProcessCache.delete(sessionId);
     }
   }
@@ -19389,30 +17974,16 @@ async function reconcileSessionLiveness(): Promise<void> {
     const batch = pending.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async (row) => {
       let agentPid: number | null = null;
-      let tty = "";
       const panePid = row.tmux_session ? paneByTmux.get(row.tmux_session) : undefined;
       if (panePid !== undefined) {
-        // The row's tmux name is where the session was PUT; the pane says what
-        // runs there now. One long-lived resume tmux carried six sessions' rows
-        // on 2026-09-07 and this sweep seeded all six with its one agent pid.
-        const found = await findAgentPidInTree(panePid);
-        if (found !== null && !(await rejectsForeignProcess(row.session_id, found, `liveness tmux ${row.tmux_session}`))) agentPid = found;
+        agentPid = await findAgentPidInTree(panePid);
       } else if (row.agent_pid && isProcessRunning(row.agent_pid) && (await isAgentProcess(row.agent_pid))) {
-        // A bare pid off the server row carries no stamp, so a reused pid can't
-        // be told from the real one by age, and "agent-shaped" admits any bun or
-        // node process (a leaked test fixture took one on 2026-09-07). Only a
-        // process that says it runs this session — argv or hook claim — is
-        // taken; an unknown one is left to on-demand discovery.
-        const identity = await describeProcessIdentity(row.agent_pid);
-        if (judgeProcessIdentity({ sessionId: row.session_id, ...identity }).verdict === "owned") {
-          agentPid = row.agent_pid;
-          tty = await ttyOfPid(row.agent_pid);
-        }
+        agentPid = row.agent_pid;
       }
       if (agentPid !== null) {
         cacheSessionProcess(
           row.session_id,
-          { pid: agentPid, tty, sessionId: row.session_id },
+          { pid: agentPid, tty: "", sessionId: row.session_id },
           row.tmux_session,
         );
         seeded++;
@@ -19473,12 +18044,10 @@ export function resumeReuseCandidates(
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
 export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
-  const prefix = agentType === "claude"
-    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : AGENT_ENV_SCRUB;
   const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
-  return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
-}
+  return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;}
 
 // The settings-level transcript pin (agentEnv.ts): idempotent, respects an
 // authored value, logs only when it actually writes.
@@ -19692,17 +18261,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
     if (resumeInFlight.get(sessionId) !== promise) return false;
     if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
-
-    const parking = hibernationInFlight.get(sessionId);
-    if (parking) {
-      parking.cancel();
-      await parking.done;
-      if (resumeInFlight.get(sessionId) !== promise) return false;
-      if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
-    }
-    if (resumeInFlight.get(sessionId) !== promise) return false;
-    expectedHibernationExits.delete(sessionId);
-    const resumed = await (resumeInnerForTests ?? autoResumeSessionInner)(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
+    const resumed = await autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
     if (resumed && resumeInFlight.get(sessionId) === promise) clearHibernationPark(sessionId, conversationId);
     return resumed;
   });
@@ -19749,131 +18308,25 @@ export function wakeStatusAfterPark(stored: AgentStatus | undefined): AgentStatu
  * which keeps the common case — a message reaching an already live session — at
  * zero extra Convex writes.
  */
-type HibernationStamp = { conversationId?: string; at: number | null };
-const pendingHibernationStamps = new Map<string, HibernationStamp>();
-const hibernationStampWrites = new Map<string, Promise<void>>();
-const sessionStatusWrites = new Map<string, Promise<boolean>>();
-type PendingStatusPayload = { conversationId: string; status: AgentStatus; permissionMode?: PermissionMode; openTasks?: OpenTaskReport[] };
-type PendingStatusWrite = { order: number; write: () => Promise<boolean>; settle: (ack: boolean) => void; payload?: PendingStatusPayload };
-type SessionStatusQueue = { next: number; status?: PendingStatusWrite; stamp?: PendingStatusWrite };
-const sessionStatusQueues = new Map<string, SessionStatusQueue>();
-
-function serializeSessionStatus(sessionId: string, write: () => Promise<boolean>, kind: "status" | "stamp" = "status", payload?: PendingStatusPayload, acknowledgmentTimeoutMs = 30_000): Promise<boolean> {
-  let queue = sessionStatusQueues.get(sessionId);
-  const start = !queue;
-  if (!queue) {
-    queue = { next: 0 };
-    sessionStatusQueues.set(sessionId, queue);
-  }
-  const previous = queue[kind];
-  if (payload && previous?.payload?.conversationId === payload.conversationId) {
-    payload.permissionMode ??= previous.payload.permissionMode;
-    if (SETTLE_STATUSES_WITH_TASKS.has(payload.status) && SETTLE_STATUSES_WITH_TASKS.has(previous.payload.status)) {
-      payload.openTasks ??= previous.payload.openTasks;
-    }
-  }
-  previous?.settle(false);
-  const result = new Promise<boolean>(resolve => {
-    let settled = false;
-    const settle = (acknowledged: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      resolve(acknowledged);
-    };
-    const deadline = setTimeout(() => settle(false), acknowledgmentTimeoutMs);
-    queue[kind] = { order: queue.next++, write, settle, payload };
-  });
-  if (start) {
-    const owned = queue;
-    const drain = Promise.resolve().then(async () => {
-      while (owned.status || owned.stamp) {
-        const kind = owned.status && (!owned.stamp || owned.status.order < owned.stamp.order) ? "status" : "stamp";
-        const next = owned[kind]!;
-        delete owned[kind];
-        let acknowledged = false;
-        try { acknowledged = await next.write(); }
-        catch (err) { log(`[sendAgentStatus] error: ${String(err)}`); }
-        next.settle(acknowledged === true);
-      }
-      if (sessionStatusQueues.get(sessionId) === owned) {
-        sessionStatusQueues.delete(sessionId);
-        sessionStatusWrites.delete(sessionId);
-      }
-      return true;
-    });
-    sessionStatusWrites.set(sessionId, drain);
-  }
-  return result;
-}
-
-export const hibernationConcurrencyForTests = {
-  sendAgentStatus, serializeSessionStatus, sessionStatusQueues, sessionStatusWrites,
-  pendingHibernationStamps, hibernationStampWrites, hibernationStampCleared,
-  pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession,
-  hibernationInFlight, hibernationEvidenceJobs, subagentActivityByParent, tmuxTargetLocks,
-  freshClaims: (pid: number, registryDir: string) => hookClaimsForPid(pid, { fresh: true, registryDir }),
-  setResumeInner: (fn: typeof autoResumeSessionInner | null) => { resumeInnerForTests = fn; },
-};
-
-function queueHibernationStamp(sessionId: string, conversationId: string | undefined, at: number | null): void {
-  pendingHibernationStamps.set(sessionId, { conversationId, at });
-  if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
-}
-
-function flushHibernationStamp(sessionId: string): Promise<void> {
-  const running = hibernationStampWrites.get(sessionId);
-  if (running) return running;
-  const stamp = pendingHibernationStamps.get(sessionId);
-  if (!stamp || !syncServiceRef) return Promise.resolve();
-  const conversationId = stamp.conversationId ?? readConversationCache()[sessionId];
-  if (!conversationId) return Promise.resolve();
-  const sync = syncServiceRef;
-  const write = serializeSessionStatus(sessionId, async () => {
-    if (pendingHibernationStamps.get(sessionId) !== stamp) return false;
-    if ((stamp.at !== null) !== hibernatedSessions.has(sessionId)) return false;
-    const status = stamp.at === null ? wakeStatusAfterPark(lastSentAgentStatus.get(sessionId)) : "hibernated";
-    return sync.updateSessionAgentStatus(conversationId, status, Date.now(), undefined, undefined, undefined, stamp.at);
-  }, "stamp").then(confirmed => {
-    if (confirmed !== true || pendingHibernationStamps.get(sessionId) !== stamp) return;
-    pendingHibernationStamps.delete(sessionId);
-    if (stamp.at === null) {
-      if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
-      hibernationStampCleared.set(sessionId, conversationId);
-    }
-  }).finally(() => {
-    if (hibernationStampWrites.get(sessionId) !== write) return;
-    hibernationStampWrites.delete(sessionId);
-    const pending = pendingHibernationStamps.get(sessionId);
-    if (pending && pending !== stamp) void flushHibernationStamp(sessionId);
-  });
-  hibernationStampWrites.set(sessionId, write);
-  return write;
-}
-
-export async function flushHibernationStamps(): Promise<void> {
-  await Promise.all([...pendingHibernationStamps.keys()].map(flushHibernationStamp));
-}
-
-function retryHibernationStamps(): void {
-  for (const sessionId of pendingHibernationStamps.keys()) {
-    if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
-  }
-}
-
 export function clearHibernationPark(sessionId: string, conversationId?: string): void {
-  expectedHibernationExits.delete(sessionId);
-  const parking = hibernationInFlight.get(sessionId);
-  if (parking) parking.cancel();
   const wasParked = hibernatedSessions.delete(sessionId);
-  lastSentAgentStatus.set(sessionId, wakeStatusAfterPark(lastSentAgentStatus.get(sessionId)));
+  if (!wasParked && hibernationStampCleared.has(sessionId)) return;
+  // Forgetting the memo costs one extra status write the next time a session
+  // wakes and can never cost a missed clear, so a flat cap is enough to keep a
+  // daemon that runs for weeks from holding every id it ever woke.
+  if (hibernationStampCleared.size > 5000) hibernationStampCleared.clear();
+  hibernationStampCleared.add(sessionId);
   const convId = conversationId ?? readConversationCache()[sessionId];
-  if (!wasParked && convId && hibernationStampCleared.get(sessionId) === convId) return;
-  const pending = pendingHibernationStamps.get(sessionId);
-  if (pending?.at === null && (!convId || !pending.conversationId || pending.conversationId === convId)) {
-    pending.conversationId ??= convId;
-    if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
-  } else queueHibernationStamp(sessionId, convId, null);
+  if (convId && syncServiceRef) {
+    // Through sendAgentStatus, not straight to the mutation: the map it writes
+    // is what the 30s heartbeat re-asserts, so a wake that skipped it would
+    // clear the stamp on the server and keep sending "hibernated" forever.
+    const status = wakeStatusAfterPark(lastSentAgentStatus.get(sessionId));
+    sendAgentStatus(syncServiceRef, convId, sessionId, status, Date.now(), undefined, undefined, { hibernatedAt: null });
+  }
+  // The log line reports a park ending. A first wake that only clears a stamp
+  // this daemon cannot remember setting is bookkeeping, and saying WOKE for it
+  // would put a park in the log for every session after every restart.
   if (wasParked) reaperLog(`WOKE session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)}`);
 }
 
@@ -19971,16 +18424,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
     } catch (err) {
-      if (err instanceof MachineInputBlockedError) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  // A native fork has no transcript of its own yet: the parent's stands in for
-  // cwd resolution and readiness timing, and its absence means the fork cannot
-  // run here (the client copies state it must be able to read).
-  const forkFromSessionId = opts?.forkFromSessionId;
-  let sessionFile = findSessionFile(forkFromSessionId ?? sessionId);
+  let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
   // cursor-agent and opencode each own their session store (SQLite: ~/.cursor,
   // ~/.local/share/opencode/opencode.db), and pi/grok own their JSONL trees under
@@ -19994,11 +18442,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const storeOwnedResumeType = agentTypeHint ?? sessionFile?.agentType;
   const isStoreOwnedResume = storeOwnedResumeType === "cursor" || storeOwnedResumeType === "opencode";
   const isCursorResume = agentTypeHint === "cursor";
-  // A store-owned client (opencode) never has a session file; its rebuild is
-  // needed only when the store lacks the session (cross-device, or a synthetic
-  // fork key) — an existing session resumes as-is.
-  const storeLacksSession = storeOwnedResumeType === "opencode" && !sessionExistsInOpencodeDb(sessionId);
-  if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && (!isStoreOwnedResume || storeLacksSession) && conversationId && config?.auth_token && config?.convex_url) {
+  if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -20008,48 +18452,22 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         return false;
       }
       const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
-      const reconCwd = regenerationCwd(data, cwdOverride);
-      if (!reconCwd) {
-        logDelivery(`Reconstitution refused for ${sessionId.slice(0, 8)}: no project path to regenerate under`);
-        await refuseResumeNoLocalCheckout(sessionId, conversationId, undefined);
-        return false;
-      }
-      let jsonl = "";
+      let jsonl: string;
       let reconId: string;
+      if (reconAgentType === "codex") {
+        ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId }));
+      } else {
+        const tailMessages = chooseClaudeAutoTrim(data);
+        ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId }));
+      }
       // Write under the same cwd the resume will run in (see localSessionDir):
       // a valid override wins, otherwise the locally-resolved repo path.
       const reconDir = (cwdOverride && fs.existsSync(cwdOverride))
         ? cwdOverride
         : localSessionDir(data.conversation.project_path || undefined);
-      let result: { sessionId: string; filePath: string };
-      if (reconAgentType === "codex") {
-        ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId, cwd: reconCwd }));
-        result = writeCodexSession(jsonl, reconId);
-      } else if (reconAgentType === "grok") {
-        // grok's bundle lives under the cwd's own directory; a synthetic
-        // `forked-…` key is not a UUID grok accepts, so the writer mints one.
-        const files = generateGrokSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconDir });
-        reconId = files.sessionId;
-        result = writeGrokSession(files);
-      } else if (reconAgentType === "pi") {
-        const pi = generatePiSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconDir });
-        reconId = pi.sessionId;
-        const piPath = piSessionFilePath(pi.cwd, pi.sessionId);
-        await writeRebuiltDeltaTranscript("pi", pi.jsonl, piPath, pi.sessionId);
-        result = { sessionId: pi.sessionId, filePath: piPath };
-      } else if (reconAgentType === "opencode") {
-        const sesId = await rebuildOpencodeSession(data, reconDir);
-        if (!sesId) {
-          logDelivery(`Cannot rebuild ${sessionId.slice(0, 8)} as opencode: serve sidecar unavailable`);
-          return false;
-        }
-        reconId = sesId;
-        result = { sessionId: sesId, filePath: "" };
-      } else {
-        const tailMessages = chooseClaudeAutoTrim(data);
-        ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId, cwd: reconCwd }));
-        result = writeClaudeCodeSession(jsonl, reconId, reconDir);
-      }
+      const result = reconAgentType === "codex"
+        ? writeCodexSession(jsonl, reconId)
+        : writeClaudeCodeSession(jsonl, reconId, reconDir);
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
         remapConversationSession(sessionId, reconId, conversationId);
@@ -20065,7 +18483,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
       sessionId = reconId;
       sessionFile = findSessionFile(reconId);
-      if (!sessionFile && !isStoreOwnedResume) {
+      if (!sessionFile) {
         logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
         return false;
       }
@@ -20074,9 +18492,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       return false;
     }
   } else if (!sessionFile && !isStoreOwnedResume) {
-    logDelivery(forkFromSessionId
-      ? `Cannot fork ${forkFromSessionId.slice(0, 8)} → ${sessionId.slice(0, 8)}: parent transcript not on this machine`
-      : `Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
+    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
     return false;
   }
 
@@ -20101,12 +18517,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     resumeFatalReasons.set(sessionId, "invalid_session_id");
     return false;
   }
-  if (forkFromSessionId && (!AGENT_CLIENTS[agentType].forkCmd || !isValidResumeSessionId(agentType, forkFromSessionId))) {
-    log(`[SECURITY] Refusing native fork for ${agentType}: ${AGENT_CLIENTS[agentType].forkCmd ? `malformed parent id ${JSON.stringify(forkFromSessionId.slice(0, 80))}` : "no forkCmd"}`);
-    return false;
-  }
   const jsonlPath = isStoreOwnedResume ? "" : sessionFile!.path;
-  const jsonlContent = isStoreOwnedResume ? "" : readFileHeadLines(jsonlPath);
+  const jsonlContent = isStoreOwnedResume ? "" : readFileHead(jsonlPath, 5000);
 
   let cwd: string;
   let resumeCmd: string;
@@ -20155,19 +18567,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // Per-session account twin of the effort fallback below: set from the
   // conversation row inside the claude branch, sourced on the resume line.
   let resumeAccountPrefix = "";
-  let stableRulesFile: string | undefined;
-  if (agentType === "grok") {
-    try {
-      stableRulesFile = await writeGrokStableRulesFile(config, cwd, undefined, sessionId, conversationId);
-    } catch (err) {
-      log(`grok stable rules skipped on resume: ${err instanceof Error ? err.message : String(err)}`, "warn");
-    }
-  }
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
     model: opts?.model,
     effort: opts?.effort,
-    forkFromSessionId,
-    stableRulesFile,
     codexArgs: getAgentArgs(config, "codex"),
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
     grokArgs: getAgentArgs(config, "grok"),
@@ -20304,8 +18706,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);
-    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
     // disclaimPrefix: resumed agents carry their own TCC identity, same as a
@@ -20363,9 +18764,6 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         await new Promise(resolve => setTimeout(resolve, 250));
         try {
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
-          if (isMachineDeliveredMessage(content) && parseInteractivePrompt(paneContent, true)) {
-            throw new MachineInputBlockedError("terminal is waiting for a human answer");
-          }
           // Scan only output below the echoed launch command — shell rc noise
           // above it must not read as an agent crash (see paneContentAfterLaunchEcho).
           const agentPane = paneContentAfterLaunchEcho(paneContent);
@@ -20406,9 +18804,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             ready = true;
             break;
           }
-      } catch (err) {
-        if (err instanceof MachineInputBlockedError) throw err;
-      }
+      } catch {}
     }
     if (!ready) {
       const alive = await isTmuxAgentAlive(tmuxSession).catch(() => false);
@@ -20440,8 +18836,6 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         const { stdout: preInjectPane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-15"]);
         const warningPatterns = /⚠|recorded with model|weekly limit|Update available|Press enter to continue/;
         if (warningPatterns.test(preInjectPane)) {
-          await machineInputGuard(content, async () =>
-            (await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-80"])).stdout)?.();
           logDelivery(`Clearing startup warnings for ${shortId} before injection`);
           await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
           await new Promise(resolve => setTimeout(resolve, 300));
@@ -20454,9 +18848,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             } catch {}
           }
         }
-      } catch (err) {
-        if (err instanceof MachineInputBlockedError) throw err;
-      }
+      } catch {}
     }
 
     // Inject the message (skip if empty — resume-only mode)
@@ -20469,7 +18861,6 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     return true;
   } catch (err) {
-    if (err instanceof MachineInputBlockedError) throw err;
     logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
@@ -20529,8 +18920,7 @@ export function isMissingAppServerThreadError(err: unknown): boolean {
 // THIS predicate, so a new client is excluded by default instead of silently
 // joining the claude fallback.
 export function mayReconstituteResumeTranscript(agentType: AgentClientId | undefined | null): boolean {
-  // `undefined` is the daemon's "claude / unspecified" spelling.
-  return agentType == null || agentReconstitutes(agentType);
+  return agentType == null || agentType === "claude" || agentType === "codex" || agentType === "gemini";
 }
 
 async function repairAndResumeSession(
@@ -20608,30 +18998,23 @@ async function repairAndResumeSession(
         const agentType = agentTypeHint || sessionFile?.agentType || "claude";
         const isCodexSession = agentType === "codex";
         const failureReason = !isCodexSession ? resumeFatalReasons.get(sessionId) ?? null : null;
-        const projectPath = regenerationCwd(exportData, cwdOverride);
-        if (!projectPath) {
-          // Writing the rollout anyway would stamp it with the daemon's own cwd
-          // (`/`) and overwrite whatever transcript is on disk with one that
-          // resumes into Codex's working-directory picker — the 2026-09-05 loop.
-          log(`Repair refused for ${sessionId.slice(0, 8)}: no project path to regenerate under (transcript left untouched)`);
-          return false;
-        }
+        const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
 
         let jsonl: string;
         let tailMessages: number | undefined;
         let targetSessionId = sessionId;
 
         if (isCodexSession) {
-          ({ jsonl } = generateCodexJsonl(exportData, { sessionId, cwd: projectPath }));
+          ({ jsonl } = generateCodexJsonl(exportData, { sessionId }));
         } else {
           const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
           tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
           if (shouldMaterializeFreshClaudeSession(failureReason)) {
-            const generated = generateClaudeCodeJsonl(exportData, { tailMessages, cwd: projectPath });
+            const generated = generateClaudeCodeJsonl(exportData, { tailMessages });
             jsonl = generated.jsonl;
             targetSessionId = generated.sessionId;
           } else {
-            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId, cwd: projectPath }));
+            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
           }
         }
 
@@ -21010,14 +19393,10 @@ async function materializeSession(
 
       const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      const projectPath = regenerationCwd(exportData);
-      if (!projectPath) {
-        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: no project path to regenerate under`);
-        return null;
-      }
       // Use the conversation's actual session_id so the JSONL matches Convex
       const convSessionId = exportData.conversation.session_id || undefined;
-      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId, cwd: projectPath });
+      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId });
+      const projectPath = exportData.conversation.project_path || undefined;
       const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, localSessionDir(projectPath));
       setPosition(matFilePath, fs.statSync(matFilePath).size);
 
@@ -21092,8 +19471,6 @@ async function deliverMessage(
   titleCache: TitleCache
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
-  const admit = createDeliveryAdmission(syncService, messageId, conversationId);
-  await admit();
   touchHostActivity();
 
   if (pendingAgentSwitches.has(conversationId)) {
@@ -21145,7 +19522,6 @@ async function deliverMessage(
     if (appServerThreadId) {
       try {
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
-        await admit();
         await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
         // Delivered input = a new turn: spend any declared settle verdict from
         // before it (codex settles key turnStartedAt by thread id — see
@@ -21167,12 +19543,6 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
-        if (err instanceof PendingDeliveryHeldError) throw err;
-        if (isCodexSafetyError(err as Parameters<typeof isCodexSafetyError>[0])) {
-          const errorMessage = codexTurnErrorMessage(messageId, err as Parameters<typeof codexTurnErrorMessage>[1], Date.now());
-          await syncService.setSessionError(conversationId, errorMessage.content, { force: true });
-          throw new PendingDeliveryHeldError();
-        }
         // Retire the binding ONLY when the thread is provably gone. A timed-out or
         // dropped turn/start leaves a live thread live, and unregistering it there
         // was what made a codex conversation look backend-less on the next delivery
@@ -21192,63 +19562,61 @@ async function deliverMessage(
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
 
-  if (!isMachineDeliveredMessage(content)) {
-    const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
-    pendingInteractivePrompts.delete(sessionId || conversationId);
+  const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
+  pendingInteractivePrompts.delete(sessionId || conversationId);
 
-    // If there's an active poll and the message is plain text (not already a poll response),
-    // check if it matches one of the poll options and convert to a poll response
-    if (pendingPrompt && !parsePollMessage(content)) {
-      const normalized = content.replace(/\s+/g, " ").trim().toLowerCase();
-      if (normalized && pendingPrompt.options.length > 0) {
-        if (pendingPrompt.isConfirmation) {
-          const isConfirm = /^(continue|enter|yes|ok|confirm|proceed|accept|y)$/i.test(normalized) ||
-            (pendingPrompt.options[0] && normalized.includes(pendingPrompt.options[0].label.toLowerCase().split(" (")[0]));
-          const isCancel = /^(cancel|escape|esc|no|quit|n)$/i.test(normalized) ||
-            (pendingPrompt.options[1] && normalized.includes(pendingPrompt.options[1].label.toLowerCase().split(" (")[0]));
-          if (isConfirm) {
-            content = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Continue" });
-            logDelivery(`Converted plain text to confirmation Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
-          } else if (isCancel) {
-            content = JSON.stringify({ __cc_poll: true, keys: ["Escape"], display: "Cancel" });
-            logDelivery(`Converted plain text to confirmation Escape for session=${(sessionId || conversationId).slice(0, 8)}`);
-          }
-        } else {
-          const matchIdx = pendingPrompt.options.findIndex(opt => {
-            const optNorm = opt.label.replace(/\s+/g, " ").trim().toLowerCase();
-            return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
-          });
-          if (matchIdx >= 0) {
-            const display = pendingPrompt.options[matchIdx].label;
-            const steps: Array<{ key: string }> = [];
-            for (let i = 0; i < matchIdx; i++) steps.push({ key: "Down" });
-            steps.push({ key: "Enter" });
-            content = JSON.stringify({ __cc_poll: true, steps, display });
-            logDelivery(`Converted plain text "${display}" to poll arrows=${matchIdx}+Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
-          }
+  // If there's an active poll and the message is plain text (not already a poll response),
+  // check if it matches one of the poll options and convert to a poll response
+  if (pendingPrompt && !parsePollMessage(content)) {
+    const normalized = content.replace(/\s+/g, " ").trim().toLowerCase();
+    if (normalized && pendingPrompt.options.length > 0) {
+      if (pendingPrompt.isConfirmation) {
+        const isConfirm = /^(continue|enter|yes|ok|confirm|proceed|accept|y)$/i.test(normalized) ||
+          (pendingPrompt.options[0] && normalized.includes(pendingPrompt.options[0].label.toLowerCase().split(" (")[0]));
+        const isCancel = /^(cancel|escape|esc|no|quit|n)$/i.test(normalized) ||
+          (pendingPrompt.options[1] && normalized.includes(pendingPrompt.options[1].label.toLowerCase().split(" (")[0]));
+        if (isConfirm) {
+          content = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Continue" });
+          logDelivery(`Converted plain text to confirmation Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
+        } else if (isCancel) {
+          content = JSON.stringify({ __cc_poll: true, keys: ["Escape"], display: "Cancel" });
+          logDelivery(`Converted plain text to confirmation Escape for session=${(sessionId || conversationId).slice(0, 8)}`);
+        }
+      } else {
+        const matchIdx = pendingPrompt.options.findIndex(opt => {
+          const optNorm = opt.label.replace(/\s+/g, " ").trim().toLowerCase();
+          return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
+        });
+        if (matchIdx >= 0) {
+          const display = pendingPrompt.options[matchIdx].label;
+          const steps: Array<{ key: string }> = [];
+          for (let i = 0; i < matchIdx; i++) steps.push({ key: "Down" });
+          steps.push({ key: "Enter" });
+          content = JSON.stringify({ __cc_poll: true, steps, display });
+          logDelivery(`Converted plain text "${display}" to poll arrows=${matchIdx}+Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
         }
       }
     }
+  }
 
-    // The answer to a scraped TUI menu resolves it: retire the synthetic card so
-    // no client keeps an open question for a dialog that is about to be gone
-    // (closeSyntheticPrompt also drops the re-emit record, so a genuine re-ask of
-    // the same menu later mints a fresh card). A plain-text delivery only clears
-    // the re-emit record, matching the old behavior — its card, if any, is
-    // retired by the heartbeat once the menu leaves the pane.
-    {
-      const outgoingPoll = parsePollMessage(content);
-      if (outgoingPoll) {
-        const display = outgoingPoll.display || outgoingPoll.text || "";
-        await closeSyntheticPrompt(
-          sessionId || conversationId,
-          conversationId,
-          syncService,
-          display ? `Answered from the app: ${display}` : "Answered from the app",
-        );
-      } else {
-        lastEmittedSyntheticPrompt.delete(sessionId || conversationId);
-      }
+  // The answer to a scraped TUI menu resolves it: retire the synthetic card so
+  // no client keeps an open question for a dialog that is about to be gone
+  // (closeSyntheticPrompt also drops the re-emit record, so a genuine re-ask of
+  // the same menu later mints a fresh card). A plain-text delivery only clears
+  // the re-emit record, matching the old behavior — its card, if any, is
+  // retired by the heartbeat once the menu leaves the pane.
+  {
+    const outgoingPoll = parsePollMessage(content);
+    if (outgoingPoll) {
+      const display = outgoingPoll.display || outgoingPoll.text || "";
+      await closeSyntheticPrompt(
+        sessionId || conversationId,
+        conversationId,
+        syncService,
+        display ? `Answered from the app: ${display}` : "Answered from the app",
+      );
+    } else {
+      lastEmittedSyntheticPrompt.delete(sessionId || conversationId);
     }
   }
 
@@ -21265,7 +19633,7 @@ async function deliverMessage(
         const startTime = Date.now();
         for (let i = 0; i < 60; i++) {
           await new Promise(resolve => setTimeout(resolve, 250));
-          const probe = await probeStartedPane(entry, isMachineDeliveredMessage(content) ? assertMachinePromptAbsent : undefined);
+          const probe = await probeStartedPane(entry);
           if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
           if (probe.state === "fatal") {
             log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
@@ -21296,7 +19664,6 @@ async function deliverMessage(
         // "delivered". If we marked after and the ack won the race it would find no row and the
         // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
-        await admit();
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
         await injectViaTmux(startedTmuxTarget, content, entry.agentType);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
@@ -21307,7 +19674,6 @@ async function deliverMessage(
         }
         return true;
       } catch (err) {
-        if (err instanceof PendingDeliveryHeldError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         // A deaf-but-painted composer (payload never rendered) or a paste that
         // provably never reached the agent are conditions of THIS healthy,
@@ -21426,7 +19792,6 @@ async function deliverMessage(
       // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
-      await admit();
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
       await injectViaTmux(injectTarget, content, detectedType);
       // A process-discovered pane can go stale between scan and inject — verify the agent
@@ -21446,7 +19811,6 @@ async function deliverMessage(
         return true;
       }
     } catch (err) {
-      if (err instanceof PendingDeliveryHeldError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       // Same reasoning as tryStartedTmux: these two mean a live pane exists
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
@@ -21474,40 +19838,18 @@ async function deliverMessage(
   // Kitty/WezTerm). Skipped when the agent was just detected dead — that goes to auto-resume.
   if (live.proc && !agentDetectedDead) {
     const termLabel = getTerminalLabel(live.proc.termProgram);
-    if (!live.proc.tty) {
-      // No terminal to address. The injectors below can only fail inside their
-      // capture, and for a machine message that failure reads as a held terminal
-      // (MachineInputBlockedError), not an unreachable process — which is how
-      // every wake to one session retried into an empty osascript for hours on
-      // 2026-09-07. Fall through to the resume paths instead.
-      logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
-    } else {
-      logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
-      try {
-        // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
-        // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
-        await admit();
-        markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-        await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
-          agentType: detectedType,
-        });
-        logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
-        return true;
-      } catch (err) {
-        if (err instanceof PendingDeliveryHeldError) throw err;
-        if (err instanceof MachineInputBlockedError) throw err;
-        logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    if (detectedType === "codex") {
-      // A live Codex TUI holds the rollout's writer lock, so `codex resume` of
-      // the same thread fails ("already has an active writer"): a tmux resume
-      // beside it can only die into a bare shell, and the auto-resume-failed →
-      // repair chain below would then regenerate the rollout over the live
-      // one. The tty lookup that failed here is transient (a slow ps snapshot
-      // drops the column); leave the message pending for the next scan.
-      logDelivery(`Live Codex process pid=${live.proc.pid} could not be reached; not auto-resuming beside it (message stays pending)`);
-      return false;
+    logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
+    try {
+      // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
+      // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
+      markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
+        agentType: detectedType,
+      });
+      logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
+      return true;
+    } catch (err) {
+      logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
     }
     logDelivery(`All injection methods failed for live process pid=${live.proc.pid}, falling back to auto-resume`);
   } else if (!live.tmuxTarget && !live.proc) {
@@ -21541,7 +19883,6 @@ async function deliverMessage(
   // to "delivered" when Claude echoes the message to JSONL, so this status write is not
   // load-bearing. Keeping it non-blocking ensures a slow/stalled Convex mark can't wedge the
   // resume+inject — the same failure mode fixed on the live-tmux path above.
-  await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {
@@ -21598,65 +19939,11 @@ function isSyncPaused(): boolean {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
 
-// The boot sweep used to send conversations:updateProjectPath for EVERY
-// transcript under ~/.claude/projects on every daemon start — 2250 mutations
-// on this machine, ~3/s for the first minutes after a restart, almost all of
-// them no-ops (the row already had that path). That is exactly the window in
-// which a restarted daemon should be delivering the user's queued messages, and
-// on 2026-09-04 it landed inside a backend brownout where every extra write
-// queued behind the ones that mattered. The server's answer is stable for a
-// given (session, path, git root), so remember what it confirmed and send only
-// what changed: a new transcript, a moved checkout, or a row the earlier boot
-// never reached.
-export function projectPathRepairKey(projectPath: string, gitRoot?: string): string {
-  return `${projectPath}\n${gitRoot ?? ""}`;
-}
-
-// Decide whether a transcript's path still needs to go to the server.
-// `confirmed` is the previous boot's session -> key map; a matching key means
-// the server already holds this exact path and git root for the session.
-export function projectPathRepairNeeded(
-  confirmed: Record<string, string>,
-  sessionId: string,
-  projectPath: string,
-  gitRoot?: string,
-): { key: string; send: boolean } {
-  const key = projectPathRepairKey(projectPath, gitRoot);
-  return { key, send: confirmed[sessionId] !== key };
-}
-
-function readProjectPathRepairs(): Record<string, string> {
-  try {
-    const raw = JSON.parse(fs.readFileSync(PROJECT_PATH_REPAIRS_FILE, "utf-8"));
-    return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function persistProjectPathRepairs(map: Record<string, string>): void {
-  try {
-    const temp = `${PROJECT_PATH_REPAIRS_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(map));
-    fs.renameSync(temp, PROJECT_PATH_REPAIRS_FILE);
-  } catch {}
-}
-
 async function repairProjectPaths(syncService: SyncService): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   if (!fs.existsSync(claudeProjectsDir)) return;
 
   log("Checking for project paths that need repair...");
-  const confirmed = readProjectPathRepairs();
-  // Rebuilt from this boot's transcripts only, so entries for deleted
-  // transcripts fall away instead of accumulating forever.
-  const nextConfirmed: Record<string, string> = {};
-  // Only sessions this daemon has a conversation for can be marked confirmed:
-  // for an unknown session the server answers { updated: false } whether the
-  // row is right or missing, and a row created later must still get swept.
-  const knownConversations = readConversationCache();
-  let skipped = 0;
-  let sent = 0;
 
   const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
@@ -21713,16 +20000,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const gitRoot = await resolveRepoRoot(projectPath);
-        const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot);
-        if (!plan.send) {
-          skipped++;
-          nextConfirmed[sessionId] = plan.key;
-          continue;
-        }
-        sent++;
-        const result = await syncService.updateProjectPath(sessionId, projectPath, gitRoot);
-        if (result && knownConversations[sessionId]) nextConfirmed[sessionId] = plan.key;
+        const result = await syncService.updateProjectPath(sessionId, projectPath, await resolveRepoRoot(projectPath));
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -21733,8 +20011,9 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     }
   }
 
-  persistProjectPathRepairs(nextConfirmed);
-  log(`Project path sweep: checked ${checked}, unchanged ${skipped}, sent ${sent}, repaired ${repaired}`);
+  if (repaired > 0) {
+    log(`Repaired ${repaired} project paths (checked ${checked})`);
+  }
 }
 
 async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void> {
@@ -22057,10 +20336,10 @@ function migrateDaemonPlistToStableLauncher(): void {
 
 /** What the supervision tick should do, from what it observed. Pure so the
  *  branches are testable without launchd. */
-export function watchdogSupervisionAction(input: { loaded: boolean; plistExists: boolean; heartbeat: string | null; now: number; scriptChanged?: boolean }): "bootstrap" | "plist_missing" | "kickstart" | "none" {
+export function watchdogSupervisionAction(input: { loaded: boolean; plistExists: boolean; heartbeat: string | null; now: number }): "bootstrap" | "plist_missing" | "kickstart" | "none" {
   if (!input.loaded) return input.plistExists ? "bootstrap" : "plist_missing";
   // Loaded. A stale heartbeat means the loop is wedged or dead.
-  return input.scriptChanged || watchdogHeartbeatStale(input.heartbeat, input.now) ? "kickstart" : "none";
+  return watchdogHeartbeatStale(input.heartbeat, input.now) ? "kickstart" : "none";
 }
 
 let lastWatchdogEnsureAt = 0;
@@ -22068,7 +20347,7 @@ let watchdogEnsureInFlight = false;
 // Async: three launchctl calls on the health tick held the loop for their
 // whole round trip. The throttle stamp is taken before the first await, and
 // the in flight flag keeps the boot call and the tick from overlapping.
-export async function ensureWatchdogSupervised(force = false): Promise<void> {
+async function ensureWatchdogSupervised(force = false): Promise<void> {
   if (platform !== "darwin" || !process.getuid) return;
   const now = Date.now();
   if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
@@ -22085,23 +20364,10 @@ export async function ensureWatchdogSupervised(force = false): Promise<void> {
       _execFileAsync("launchctl", args, { timeout: 10_000 }).then(() => true, () => false);
     const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
     const loaded = await launchctl(["print", `${domain}/${label}`]);
-    const scriptPath = path.join(CONFIG_DIR, "watchdog.sh");
-    const launcher = await fs.promises.readFile(path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME), "utf-8").catch(() => "");
-    const { executablePath, args } = getDaemonExecInfo();
-    const previousScript = await fs.promises.readFile(scriptPath, "utf-8").catch(() => null);
-    const script = buildWatchdogShellScript({
-      isBinary: args[0] === "--",
-      watchdogCommand: [executablePath, "--", "_watchdog"].map(shellEscapeForSh).join(" "),
-    });
-    const scriptChanged = daemonLauncherMatchesCommand(launcher, executablePath, args) && previousScript !== script;
-    if (scriptChanged) {
-      await fs.promises.writeFile(`${scriptPath}.${process.pid}.tmp`, script, { mode: 0o755 });
-      await fs.promises.rename(`${scriptPath}.${process.pid}.tmp`, scriptPath);
-    }
     const heartbeat = loaded
       ? await fs.promises.readFile(path.join(CONFIG_DIR, WATCHDOG_HEARTBEAT_FILENAME), "utf-8").catch(() => null)
       : null;
-    const action = watchdogSupervisionAction({ loaded, plistExists: fs.existsSync(plistPath), heartbeat, now, scriptChanged });
+    const action = watchdogSupervisionAction({ loaded, plistExists: fs.existsSync(plistPath), heartbeat, now });
     switch (action) {
       case "plist_missing":
         log(`Watchdog plist missing (${plistPath}): run 'cast setup' to restore supervision`);
@@ -22112,11 +20378,8 @@ export async function ensureWatchdogSupervised(force = false): Promise<void> {
         await launchctl(["kickstart", `${domain}/${label}`]);
         return;
       case "kickstart":
-        log(scriptChanged ? "Watchdog script updated: reloading resident loop" : "Watchdog loaded but heartbeat stale: kickstarting the wedged loop");
-        if (!(await launchctl(["kickstart", "-k", `${domain}/${label}`])) && scriptChanged) {
-          if (previousScript === null) await fs.promises.unlink(scriptPath);
-          else await fs.promises.writeFile(scriptPath, previousScript, { mode: 0o755 });
-        }
+        log("Watchdog loaded but heartbeat stale: kickstarting the wedged loop");
+        await launchctl(["kickstart", "-k", `${domain}/${label}`]);
         return;
       case "none":
         return;
@@ -22248,8 +20511,7 @@ export function shouldSelfHeal(
   monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  const recoveryThreshold = sawSuspend(staleMs, monoStaleMs) ? Math.min(thresholdMs, 90_000) : thresholdMs;
-  return Math.min(staleMs, monoStaleMs) > recoveryThreshold;
+  return Math.min(staleMs, monoStaleMs) > thresholdMs;
 }
 
 function selfHealIfTimersStalled(source: string): void {
@@ -22501,7 +20763,7 @@ async function sweepStaleTmuxServers(): Promise<void> {
     const livePid = await liveTmuxServerPid();
     const { kill: stale, selfHosted, refused } = staleTmuxServerKillPlan(procs, livePid, process.getuid?.());
     if (refused) {
-      log(`[TMUX-SWEEP] WARNING: ${refused} — skipping the sweep`);
+      log(`[TMUX-SWEEP] WARNING: tmux did not answer, so no server can be identified as live — skipping the sweep`);
       return;
     }
     for (const server of selfHosted) {
@@ -22548,10 +20810,10 @@ async function findStaleFiles(
 }
 
 // Top-level <project>/<session>.jsonl only.
-export function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".claude", "projects"),
-    { policy: { files: "jsonl" }, maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
+    { maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
     maxAgeMs,
     (f) => shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
   );
@@ -22577,12 +20839,12 @@ export { isAppServerManagedCodexSessionHead };
 
 // A codex transcript the app server manages is written by that server, not by
 // us, so a position behind its size is expected and not stale.
-export function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".codex", "sessions"),
-    { policy: { files: "jsonl" }, fileFilter: (rel) => rel.endsWith(".jsonl"), excludeCodexAppServer: true },
+    { fileFilter: (rel) => rel.endsWith(".jsonl") },
     maxAgeMs,
-    (f) => f.stat.size !== getPosition(f.path),
+    (f) => f.stat.size !== getPosition(f.path) && !isAppServerManagedCodexSessionHead(readFileHead(f.path, 2048)),
   );
 }
 
@@ -22669,21 +20931,64 @@ function getCursorMaxRowId(dbPath: string): number {
   }
 }
 
-export async function findWorkspacePathForCursorConversation(sessionId: string): Promise<string | null> {
-  const home = process.env.HOME || "";
-  const root = path.join(detectCursorPath(), "User", "workspaceStorage");
-  const job: Extract<ScanJob, { name: "cursorWorkspace" }> = { name: "cursorWorkspace", home, root, sessionId };
-  let workspacePath: string | null;
-  if (daemonWorkersEnabled()) {
-    const rows = await collectScan(job);
-    if (rows.length !== 1 || rows[0].type !== "cursorWorkspace") throw new Error("invalid Cursor workspace observation");
-    workspacePath = rows[0].workspacePath;
-  } else {
-    const { findCursorWorkspace } = await import("./workers/cursorObservation.js");
-    workspacePath = await findCursorWorkspace(job);
+interface CursorComposerData {
+  allComposers?: Array<{
+    composerId?: string;
+  }>;
+}
+
+function getCursorComposerData(dbPath: string): CursorComposerData | null {
+  let db: Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const row = db
+      .query<{ value: string }, []>(
+        "SELECT value FROM ItemTable WHERE key = 'composer.composerData' LIMIT 1"
+      )
+      .get();
+    if (!row?.value) {
+      return null;
+    }
+    return JSON.parse(row.value) as CursorComposerData;
+  } catch {
+    return null;
+  } finally {
+    if (db) {
+      db.close();
+    }
   }
-  if (home !== (process.env.HOME || "") || root !== path.join(detectCursorPath(), "User", "workspaceStorage")) throw new ScanCancelled("Cursor root changed");
-  return workspacePath;
+}
+
+function findWorkspacePathForCursorConversation(sessionId: string): string | null {
+  const workspaceStoragePath = getCursorWorkspaceStoragePath();
+  if (!workspaceStoragePath) {
+    return null;
+  }
+
+  let workspaceDirs: string[];
+  try {
+    workspaceDirs = fs.readdirSync(workspaceStoragePath);
+  } catch {
+    return null;
+  }
+
+  for (const workspaceHash of workspaceDirs) {
+    const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
+    if (!fs.existsSync(dbPath)) {
+      continue;
+    }
+
+    const composerData = getCursorComposerData(dbPath);
+    const composers = composerData?.allComposers || [];
+    if (!composers.some(c => c.composerId === sessionId)) {
+      continue;
+    }
+
+    const workspaceStorageDir = path.dirname(dbPath);
+    return getCursorWorkspaceFolderPath(workspaceStorageDir);
+  }
+
+  return null;
 }
 
 interface StaleCursorSession {
@@ -22698,7 +21003,7 @@ interface StaleCursorSession {
 // on checkpoint (the same rule cursorWatcher uses). The sqlite open is the
 // one sync step here, so it runs only for a db that changed since last time;
 // the position compare still runs every sweep, so a failed sync is retried.
-const cursorStaleSweepSeen = new Map<string, { mtimeMs: number; maxRowId: number; workspacePath?: string | null }>();
+const cursorStaleSweepSeen = new Map<string, { mtimeMs: number; maxRowId: number }>();
 export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<StaleCursorSession[]> {
   const workspaceStoragePath = getCursorWorkspaceStoragePath();
   if (!workspaceStoragePath) return [];
@@ -22706,42 +21011,19 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
   const newestByDb = new Map<string, number>();
   await walkFiles(
     workspaceStoragePath,
-    { policy: { files: "cursorDb" }, maxDepth: 2, fileFilter: (rel) => /state\.vscdb(-wal)?$/.test(rel) },
+    { maxDepth: 2, fileFilter: (rel) => /state\.vscdb(-wal)?$/.test(rel) },
     (f) => {
       const dbPath = f.path.endsWith("-wal") ? f.path.slice(0, -"-wal".length) : f.path;
       newestByDb.set(dbPath, Math.max(newestByDb.get(dbPath) ?? 0, f.stat.mtimeMs));
     },
   );
 
-  if (daemonWorkersEnabled()) {
-    const changed = [...newestByDb].filter(([file, mtimeMs]) => now - mtimeMs <= maxAgeMs && cursorStaleSweepSeen.get(file)?.mtimeMs !== mtimeMs).map(([file]) => file);
-    for (let i = 0; i < changed.length; i += 128) {
-      const paths = changed.slice(i, i + 128);
-      let rows: ScanRow[];
-      try { rows = await collectScan({name: 'cursorDatabases', paths}); }
-      catch (error) {
-        if (!scanCanFallback(error)) throw error;
-        const { observeCursorDatabase } = await import('./workers/cursorObservation.js');
-        rows = [];
-        for (const file of paths) rows.push(await observeCursorDatabase(file));
-      }
-      for (const row of rows) {
-        if (row.type === 'cursorError') continue;
-        if (row.type !== 'cursorDb') throw new Error('invalid cursor observation');
-        cursorStaleSweepSeen.set(row.path, {mtimeMs: newestByDb.get(row.path)!, maxRowId: row.maxRowId ?? 0, workspacePath: row.workspacePath});
-      }
-      await yieldScanBatch();
-    }
-  }
   const staleSessions: StaleCursorSession[] = [];
-  let applied = 0;
   for (const [dbPath, mtimeMs] of newestByDb) {
-    if (++applied % 128 === 0) await yieldScanBatch();
     if (now - mtimeMs > maxAgeMs) continue;
     try {
       let seen = cursorStaleSweepSeen.get(dbPath);
       if (!seen || seen.mtimeMs !== mtimeMs) {
-        if (daemonWorkersEnabled()) continue;
         seen = { mtimeMs, maxRowId: timeSyncFs("getCursorMaxRowId", dbPath, () => getCursorMaxRowId(dbPath)) };
         cursorStaleSweepSeen.set(dbPath, seen);
       }
@@ -22752,7 +21034,7 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
       const workspaceHash = path.basename(workspaceStorageDir);
       staleSessions.push({
         sessionId: workspaceHash,
-        workspacePath: (seen.workspacePath === undefined ? getCursorWorkspaceFolderPath(workspaceStorageDir) : seen.workspacePath) || workspaceHash,
+        workspacePath: getCursorWorkspaceFolderPath(workspaceStorageDir) || workspaceHash,
         dbPath,
         mtimeMs,
       });
@@ -22765,10 +21047,10 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
   return staleSessions;
 }
 
-export function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".cursor", "projects"),
-    { policy: { files: "cursorStale" }, fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
+    { fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
     maxAgeMs,
     (f) => f.stat.size !== getPosition(f.path),
   );
@@ -23133,7 +21415,7 @@ function startEventLoopMonitor(): NodeJS.Timeout {
     const cpuDelta = process.cpuUsage(lastTickCpu);
     lastTickCpu = process.cpuUsage();
 
-    saveDaemonState({ lastHeartbeatTick: now, loopFreeze: { ...loopFreezes.summary(now), at: now }, fleetCounts: countTrackedFleet(managedHeartbeatSessions, hibernatedSessions, now) });
+    saveDaemonState({ lastHeartbeatTick: now, loopFreeze: { ...loopFreezes.summary(now), at: now } });
     lastEventLoopTick = now;
     lastEventLoopTickMono = performance.now();
 
@@ -23205,9 +21487,8 @@ async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<
   const unsyncedFiles = await findUnsyncedFilesAsync(
     claudeProjectsDir,
     undefined,
-    (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
+    (filePath) => isTranscriptFileInSyncScope(filePath, config),
     watchDirFilter,
-    { dirs: "claudeWatch", files: "jsonl" },
   );
   const droppedCount = retryQueue.getDroppedOperationCount();
   const queueSize = retryQueue.getLogicalQueueSize();
@@ -23642,7 +21923,7 @@ function startWatchdog(
 
     await runBounded(staleCursorTranscriptFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const sessionId = path.basename(filePath, ".txt");
-      const workspacePath = await findWorkspacePathForCursorConversation(sessionId);
+      const workspacePath = findWorkspacePathForCursorConversation(sessionId);
 
       if (workspacePath) {
         if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
@@ -23727,7 +22008,6 @@ async function main(): Promise<void> {
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
   const underLaunchd = isManagedByLaunchd();
   process.on("exit", (code) => {
-    closeDaemonWorkers();
     // Reap the opencode serve sidecar on EVERY exit path (crash, self-update respawn,
     // fatal, hard-exit timer) — it isn't spawned detached, but process.exit doesn't
     // kill it either, so without this a dying daemon orphans a live unauthenticated
@@ -23872,7 +22152,6 @@ async function main(): Promise<void> {
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
-  configureDaemonWorkers(config.daemon_workers === true);
 
   log(`User ID: ${config.user_id}`);
   log(`Convex URL: ${convexUrl}`);
@@ -23919,7 +22198,7 @@ async function main(): Promise<void> {
   // Register this device early + on its own interval, so device presence never
   // depends on later (potentially slow) init steps.
   void sendHeartbeat().catch(() => {});
-  setInterval(() => { transcriptRetryOwners.drain(); sendHeartbeat().catch(() => {}); }, 30_000);
+  setInterval(() => { sendHeartbeat().catch(() => {}); }, 30_000);
 
   // Hourly re-assert of the settings-level transcript pin (asserted once at
   // boot already) — converges a settings.json rewritten out from under us.
@@ -23929,7 +22208,14 @@ async function main(): Promise<void> {
   // and the boot sweep only covers generations orphaned before we started.
   setInterval(() => { void sweepStaleTmuxServers(); }, 3_600_000);
 
-  void checkForForcedUpdate(syncService);
+  // Check for forced updates immediately on startup before anything else
+  // This allows recovery from broken versions by downloading a fix early
+  try {
+    const didUpdate = await checkForForcedUpdate(syncService);
+    if (didUpdate) return; // process.exit already called inside
+  } catch (err) {
+    log(`Startup update check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Repair any project paths that were stored incorrectly (one-time on startup)
   repairProjectPaths(syncService).catch(err => {
@@ -23970,13 +22256,6 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  // Home mirror (cloud/mirror) on the same cadence: verify each host's stamp
-  // at start and every 30 minutes (a re-provisioned host has no stamp), and a
-  // hash-gated fast tick that ships an edited skill or CLAUDE.md within ~a
-  // minute. Failed hosts back off until the hash changes or the periodic tick.
-  setTimeout(() => { pushMirrorToRemoteHosts("daemon start", { verifyRemote: true }).catch(() => {}); }, 64_000);
-  setInterval(() => { pushMirrorToRemoteHosts("mirror_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  setInterval(() => { pushMirrorToRemoteHosts("periodic", { verifyRemote: true }).catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   // Near-instant sync: when the local store file changes (a `cast keys set/rm`, or a
   // web edit the daemon applied), push immediately. fs.watch can double-fire, so the
   // in-flight lock + hash gate keep it to one real push.
@@ -24102,7 +22381,6 @@ async function main(): Promise<void> {
           if (sessionId) {
             resumeSessionCache.set(sessionId, recoveredTmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
-            clearHibernationPark(sessionId, convId || undefined);
             if (syncServiceRef) {
               syncServiceRef.registerManagedSession(sessionId, process.pid, recoveredTmuxSession, (convId || undefined) as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(sessionId);
@@ -24168,7 +22446,7 @@ async function main(): Promise<void> {
   // read here is async: the sweep stats a path per segment of every project
   // dir name, which is thousands of stats on a machine with hundreds of
   // projects, and it runs on the same loop the hook server answers from.
-  const syncStartupSkills = async () => {
+  {
     const globalSkills = await readAvailableSkills();
     if (globalSkills.length > 0) {
       const skillsJson = JSON.stringify(globalSkills);
@@ -24213,10 +22491,7 @@ async function main(): Promise<void> {
         }
       }
     } catch {}
-  };
-  setImmediate(() => {
-    void syncStartupSkills().catch((err) => logError("Startup skills scan failed", err instanceof Error ? err : new Error(String(err))));
-  });
+  }
 
   const retryQueue = new RetryQueue({
     initialDelayMs: 3000,
@@ -24250,7 +22525,33 @@ async function main(): Promise<void> {
 
   retryQueue.setExecutor(async (op: RetryOperation): Promise<boolean> => {
     if (op.type === "createConversation") {
-      return retryCreateTranscriptConversation(op.params as unknown as CreateConversationParams, conversationCache, pendingMessages, syncService, retryQueue, updateState);
+      // Ops carry the exact params the direct create attempted (including
+      // parentConversationId/isSubagent — dropping them minted flat,
+      // unparented subagent conversations, jx70pyh 2026-07-29).
+      const params = op.params as unknown as CreateConversationParams;
+      const conversationId = await syncService.createConversation(params);
+      conversationCache[params.sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
+
+      // Mirror the direct path's pending-subagent resolution so a child whose
+      // queued op predates full params (older daemon's persisted queue) still
+      // re-parents via linkSessions.
+      for (const link of resolvePendingSubagentLinks(params.sessionId, conversationId, pendingSubagentParents, conversationCache)) {
+        syncService.linkSessions(link.parentConvId, link.childConvId, subagentDescriptions.get(link.childSessionId)).then(() => {
+          log(`Retry: Linked pending subagent ${link.childSessionId.slice(0, 8)} -> parent ${link.parentSessionId.slice(0, 8)}`);
+        }).catch((linkErr) => {
+          log(`Retry: Failed to link subagent ${link.childSessionId.slice(0, 8)}: ${linkErr}`);
+        });
+        pendingSubagentParents.delete(link.childSessionId);
+      }
+
+      if (pendingMessages[params.sessionId]) {
+        await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService, retryQueue);
+        delete pendingMessages[params.sessionId];
+      }
+      updateState();
+      return true;
     }
 
     if (op.type === "updateSessionId") {
@@ -24565,7 +22866,7 @@ async function main(): Promise<void> {
 
     let sync = fileSyncs.get(filePath);
     if (!sync) {
-      sync = transcriptRetryOwners.create(fileSyncs, filePath, {client:"claude",file:path.resolve(filePath),sessionId:event.sessionId}, async () => {
+      sync = new InvalidateSync(async () => {
         await processSessionFile(
           filePath,
           event.sessionId,
@@ -24631,8 +22932,6 @@ async function main(): Promise<void> {
       const prev = lastHookStatus.get(sessionId);
       if (prev && prev.ts > data.ts) return;
       if (prev && prev.ts === data.ts && prev.status === data.status) return;
-
-      if (deferHibernationHookStop(sessionId, data.status, () => handleStatusData(sessionId, data, filePath, opts))) return;
 
       // A live hook (no filePath) primes at the front of the queue: after a
       // restart the boot replay queues every cold transcript, and a Stop
@@ -24769,9 +23068,25 @@ async function main(): Promise<void> {
         recentSessionInjections.delete(convId);
       }
 
-      publishHookStatus(syncService, convId, sessionId, data, statusChanged, !!modeChanged);
-      if (data.status === "stopped" && statusChanged && filePath) {
-        try { fs.unlinkSync(filePath); } catch {}
+      if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
+        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+        log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
+      } else {
+        // Nothing sent, so the open-task report the settle computed must not
+        // wait around to ride an unrelated later status.
+        pendingOpenTaskReports.delete(sessionId);
+      }
+
+      if (data.status === "stopped" && statusChanged) {
+        const restartTs = restartingSessionIds.get(sessionId);
+        if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
+          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
+          if (filePath) try { fs.unlinkSync(filePath); } catch {}
+        } else {
+          log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
+          syncService.markSessionCompleted(convId).catch(logConvexFailure);
+          if (filePath) try { fs.unlinkSync(filePath); } catch {}
+        }
       }
 
       if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
@@ -24911,7 +23226,7 @@ async function main(): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(transcriptPath, projectDirName);
 
         if (isProjectAllowedToSync(projectPath, config) && !isPathExcluded(projectPath, config.excluded_paths)) {
-          const sync = transcriptRetryOwners.create(fileSyncs, transcriptPath, {client:"claude",file:path.resolve(transcriptPath),sessionId}, async () => {
+          const sync = new InvalidateSync(async () => {
             await processSessionFile(
               transcriptPath,
               sessionId,
@@ -24965,7 +23280,6 @@ async function main(): Promise<void> {
   async function findMostRecentSessionId(): Promise<string | null> {
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
     const files = await listFilesByMtime(claudeProjectsDir, {
-      policy: { files: "plan" },
       maxDepth: 2,
       fileFilter: (rel) => rel.includes(path.sep) && rel.endsWith(".jsonl") && !rel.includes("sessions-index"),
     });
@@ -25040,9 +23354,8 @@ async function main(): Promise<void> {
       unsyncedFiles = await findUnsyncedFilesAsync(
         claudeProjectsDir,
         undefined,
-        (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
+        (filePath) => isTranscriptFileInSyncScope(filePath, config),
         watchDirFilter,
-        { dirs: "claudeWatch", files: "jsonl" },
       );
     } catch (err) {
       logError(`${reason} failed to find unsynced files`, err instanceof Error ? err : new Error(String(err)));
@@ -25299,7 +23612,7 @@ async function main(): Promise<void> {
 
     let sync = cursorSyncs.get(dbPath);
     if (!sync) {
-      sync = transcriptRetryOwners.create(cursorSyncs, dbPath, {client:"cursorDb",file:path.resolve(dbPath),sessionId:event.sessionId}, async () => {
+      sync = new InvalidateSync(async () => {
         await processCursorSession(
           dbPath,
           event.sessionId,
@@ -25365,10 +23678,6 @@ async function main(): Promise<void> {
   });
 
   cursorTranscriptWatcher.on("session", (event: CursorTranscriptEvent) => {
-    void handleCursorTranscriptEvent(event).catch(error => logError("Cursor transcript event failed", error));
-  });
-
-  async function handleCursorTranscriptEvent(event: CursorTranscriptEvent): Promise<void> {
     const filePath = event.filePath;
     lastWatcherEventTime = Date.now();
 
@@ -25382,7 +23691,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const workspacePath = await findWorkspacePathForCursorConversation(event.sessionId);
+    const workspacePath = findWorkspacePathForCursorConversation(event.sessionId);
     if (workspacePath) {
       if (isPathExcluded(workspacePath, config.excluded_paths)) {
         log(`Skipping sync for excluded path: ${workspacePath}`);
@@ -25400,7 +23709,7 @@ async function main(): Promise<void> {
 
     let sync = cursorTranscriptSyncs.get(filePath);
     if (!sync) {
-      sync = transcriptRetryOwners.create(cursorTranscriptSyncs, filePath, {client:"cursor",file:path.resolve(filePath),sessionId:event.sessionId}, async () => {
+      sync = new InvalidateSync(async () => {
         await processCursorTranscriptFile(
           filePath,
           event.sessionId,
@@ -25417,7 +23726,7 @@ async function main(): Promise<void> {
     }
 
     sync.invalidate();
-  }
+  });
 
   cursorTranscriptWatcher.on("error", (error: Error) => {
     logError("Cursor transcript watcher error", error);
@@ -25742,8 +24051,8 @@ async function main(): Promise<void> {
               defaultPermissions: () => resolveCodexPermissionDefaults(activeConfig),
               io: {
                 client: codexAppServerInstance,
-                registerThread({ conversationId, threadId, cwd, approvalPolicy, sandbox }) {
-                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy, sandbox, persist: true });
+                registerThread({ conversationId, threadId, cwd, approvalPolicy }) {
+                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy });
                 },
                 async inspectThread(threadId) {
                   if (!codexAppServerInstance?.running) return "unknown";
@@ -25806,7 +24115,7 @@ async function main(): Promise<void> {
 
       let sync = syncs.get(filePath);
       if (!sync) {
-        sync = transcriptRetryOwners.create(syncs, filePath, {client:label.toLowerCase(),file:label === "OpenCode" ? opencodeDbPath() : path.resolve(filePath),sessionId:event.sessionId}, async () => {
+        sync = new InvalidateSync(async () => {
           await process(event);
         }, MESSAGE_SYNC_DEBOUNCE);
         syncs.set(filePath, sync);
@@ -26127,9 +24436,7 @@ async function main(): Promise<void> {
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           injectedMessageTs.delete(msg._id);
-          if (err instanceof PendingDeliveryHeldError) {
-            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} no longer admitted; preserving it without retry`);
-          } else if (err instanceof UndeliverableMessageError) {
+          if (err instanceof UndeliverableMessageError) {
             // Terminal by construction: cancel (a status the server never
             // re-pends) instead of burning the retry ladder.
             logDelivery(`CANCELLED: msg=${msg._id.slice(0, 8)} can never be delivered: ${errMsg}`);
@@ -26351,53 +24658,6 @@ async function main(): Promise<void> {
 
   setupPermissionSubscription();
 
-  // On-demand repository reads: a page asked for a file, a deeper tree, an
-  // older history page, a blame, a compare or a commit's diff in a repository
-  // no GitHub App covers, and this machine publishes a checkout of it (see
-  // publishLocalRepos). The server hands the request here; the answer is the
-  // cache row GitHub would have produced, or the reason there is none. Each
-  // request is answered once per daemon; several machines may race, and the
-  // server keeps the first answer. Engine in repoMirror.ts.
-  const localReadsInFlight = new Set<string>();
-  const handleLocalReads = async (requests: unknown) => {
-    if (!Array.isArray(requests) || requests.length === 0) return;
-    for (const request of requests as LocalReadRequest[]) {
-      if (!request?._id || localReadsInFlight.has(request._id)) continue;
-      if (!fs.existsSync(request.root)) continue;
-      localReadsInFlight.add(request._id);
-      (async () => {
-        const answer = await answerLocalRead(request);
-        const result = await syncService.answerLocalRead({ request_id: request._id, ...answer });
-        const what = `${request.repository} ${request.kind} ${request.ref}${request.path ? `:${request.path}` : ""}`;
-        if ("error" in answer) log(`[REPOMIRROR] could not answer ${what}: ${answer.error}`);
-        else if (result?.ok) log(`[REPOMIRROR] answered ${what}`);
-        else if (result?.reason !== "gone") log(`[REPOMIRROR] answer for ${what} not accepted${result?.reason ? ` (${result.reason})` : ""}`);
-      })()
-        .catch((e) => log(`[REPOMIRROR] ${request.kind} ${request.ref} failed: ${(e as Error)?.message ?? e}`))
-        .finally(() => localReadsInFlight.delete(request._id));
-    }
-  };
-  let localReadsUnsubscribe: (() => void) | null = null;
-  const setupLocalReadSubscription = () => {
-    try {
-      localReadsUnsubscribe = subscriptionClient.onUpdate(
-        "repos:pendingLocalReads" as any,
-        { api_token: config.auth_token },
-        (requests: unknown) => { void handleLocalReads(requests); },
-        makeSubscriptionErrorHandler(
-          "Local repository reads",
-          () => { if (localReadsUnsubscribe) { localReadsUnsubscribe(); localReadsUnsubscribe = null; } },
-          () => setupLocalReadSubscription(),
-        ),
-      );
-    } catch (err) {
-      const delay = getReconnectDelay();
-      logWarn(`Local repository reads subscription lost, reconnecting in ${delay}ms`);
-      setTimeout(() => setupLocalReadSubscription(), delay);
-    }
-  };
-  setupLocalReadSubscription();
-
   const setupCommandSubscription = () => {
     try {
       log("Setting up daemon commands subscription");
@@ -26476,7 +24736,6 @@ async function main(): Promise<void> {
   }
 
   const shutdown = async () => {
-    closeDaemonWorkers();
     appServerShuttingDown = true;
     clearInterval(appServerRecoveryTimer);
     skipRespawn = true;
@@ -26567,7 +24826,6 @@ async function main(): Promise<void> {
     for (const sync of cursorTranscriptSyncs.values()) {
       sync.stop();
     }
-    transcriptRetryOwners.stop();
 
     if (releasePidFileIfOwned(PID_FILE, process.pid)) {
       log("PID file removed");
@@ -26619,13 +24877,6 @@ export async function runWatchdog(): Promise<void> {
   const logLine = (msg: string) => {
     try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
   };
-  const daemonPlist = path.join(process.env.HOME || "", "Library", "LaunchAgents", `${DAEMON_LAUNCHD_LABEL}.plist`);
-  const supervised = platform === "darwin" && fs.existsSync(daemonPlist);
-  const { executablePath, args } = getDaemonExecInfo();
-  const launcher = supervised
-    ? await fs.promises.readFile(path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME), "utf-8").catch(() => "")
-    : "";
-  const mayUpgradeDaemon = !supervised || daemonLauncherMatchesCommand(launcher, executablePath, args);
 
   // 1. Report crash loop info if crash file exists
   if (fs.existsSync(CRASH_FILE)) {
@@ -26634,7 +24885,6 @@ export async function runWatchdog(): Promise<void> {
       if (crashes.count > 3) {
         await fetch(`${siteUrl}/cli/log`, {
           method: "POST",
-          signal: AbortSignal.timeout(10_000),
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_token: config.auth_token,
@@ -26682,6 +24932,8 @@ export async function runWatchdog(): Promise<void> {
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
+        // A busy boot starves the tick stamper but keeps writing daemon.log; a
+        // truly wedged loop runs no JS and cannot log (see daemonTickStale).
         let logAgeMs: number | null = null;
         try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
         if (daemonTickStale(staleness, passGap, logAgeMs)) {
@@ -26704,7 +24956,6 @@ export async function runWatchdog(): Promise<void> {
   try {
     const response = await fetch(`${siteUrl}/cli/heartbeat`, {
       method: "POST",
-      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: config.auth_token,
@@ -26726,7 +24977,6 @@ export async function runWatchdog(): Promise<void> {
   const sendWatchdogLog = async (level: string, message: string) => {
     await fetch(`${siteUrl}/cli/log`, {
       method: "POST",
-      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: config.auth_token,
@@ -26738,7 +24988,7 @@ export async function runWatchdog(): Promise<void> {
     }).catch(() => {});
   };
 
-  if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
+  if (minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
     const result = await performUpdate();
@@ -26760,7 +25010,7 @@ export async function runWatchdog(): Promise<void> {
   }
 
   // 3c. If daemon is alive but running an older version than the binary, kill it
-  if (mayUpgradeDaemon && daemonAlive && daemonPid > 0) {
+  if (daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const daemonVersion = state.runtimeVersion;
@@ -26782,16 +25032,6 @@ export async function runWatchdog(): Promise<void> {
   if (!daemonAlive) {
     logLine("Daemon not running, restarting...");
 
-    if (supervised) {
-      const domain = `gui/${process.getuid!()}`;
-      const job = await readLaunchdDaemonJobAsync();
-      if (!job.loaded) {
-        await _execFileAsync("launchctl", ["bootstrap", domain, daemonPlist], { timeout: 5000 });
-      }
-      await _execFileAsync("launchctl", ["kickstart", `${domain}/${DAEMON_LAUNCHD_LABEL}`], { timeout: 5000 });
-      return;
-    }
-
     // Handle force_update before restart so daemon starts with new binary
     const updateCmd = commands.find(c => c.command === "force_update");
     if (updateCmd) {
@@ -26800,7 +25040,6 @@ export async function runWatchdog(): Promise<void> {
       // Report result
       await fetch(`${siteUrl}/cli/command-result`, {
         method: "POST",
-        signal: AbortSignal.timeout(10_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
@@ -26820,7 +25059,6 @@ export async function runWatchdog(): Promise<void> {
     for (const cmd of commands) {
       await fetch(`${siteUrl}/cli/command-result`, {
         method: "POST",
-        signal: AbortSignal.timeout(10_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
@@ -26832,6 +25070,7 @@ export async function runWatchdog(): Promise<void> {
 
     // Spawn daemon
     clearCrashCount();
+    const { executablePath, args } = getDaemonExecInfo();
     try {
       const child = spawn(executablePath, args, {
         detached: true,
@@ -26856,8 +25095,7 @@ function getDaemonExecInfo(): { executablePath: string; args: string[] } {
   if (isBinary) {
     return { executablePath: execPath, args: ["--", "_daemon"] };
   }
-  const source = path.resolve(__dirname, "daemon.ts");
-  return { executablePath: execPath, args: [fs.existsSync(source) ? source : path.resolve(__dirname, "daemon.js"), "_daemon"] };
+  return { executablePath: execPath, args: [path.resolve(__dirname, "daemon.js")] };
 }
 
 // Only run directly if executed as the main module (not when imported)

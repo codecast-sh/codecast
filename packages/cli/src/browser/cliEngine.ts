@@ -34,9 +34,7 @@ import {
   ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isRealSession,
   realSessionKey, runEngine, runEngineJson,
 } from "./engine.js";
-import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
-import { grantTab } from "./bridge/host.js";
-import { cdpHttpUrl } from "./cdp.js";
+import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags } from "./bridge/real.js";
 import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches } from "./snapshot.js";
@@ -58,7 +56,7 @@ import { ownerKey } from "./owner.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { uploadOne } from "../imageCommand.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
 
 const OK = `${fmt.success(icons.check)}`;
@@ -109,7 +107,8 @@ function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint:
 
 /**
  * Options every engine call carries: this session, and the browser it drives.
- * Real mode (bridge/real.ts isRealMode) is the default once paired: a
+ * The clone is the default: the one managed Chrome, whose port runEngine
+ * reads from the state file. Real mode (bridge/real.ts isRealMode) is a
  * second engine session, keyed `<session>-real`, on the bridge host's socket;
  * the daemon resets its tab when a session's flags change, so the two never
  * share a key. The human's Chrome is already running with its own logins;
@@ -522,8 +521,6 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     const url = args.find((a) => !a.startsWith("--"));
     const deny = url ? refuseNavigation(url, owner, "open") : null;
     if (deny) die(deny.message, deny.hint);
-    const wall = real && url ? walledOffFromExtension(url) : null;
-    if (wall) die(wall, "the human opens this page in their own Chrome; hand them the URL and the steps. The agent browser can drive it (--clone) only if they ask.");
     // The real Chrome is the human's, already running; its bridge came up in
     // ctx. The clone is ours to start.
     if (!real) await ensureBrowser();
@@ -558,22 +555,10 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     const ref = args[at];
     if (ref && !/^(list|new|close|switch|--.*|t\d+)$/.test(ref)) {
       const q = ref.toLowerCase();
-      const find = (tabs: ReturnType<typeof engineTabs>) =>
+      const tabs = engineTabs(o);
+      const hit =
         tabs.find((t) => t.targetId.toLowerCase().startsWith(q)) ??
         tabs.find((t) => (t.url ?? "").toLowerCase().includes(q));
-      let hit = find(engineTabs(o));
-      // Not one of this session's tabs. In real mode a session sees only its
-      // own; naming another agent's tab by id is the deliberate share, so ask
-      // the host to grant it (it refuses the human's tabs) and look again.
-      if (!hit && isRealSession(session) && /^[0-9a-f]{8}$/i.test(ref)) {
-        try {
-          await grantTab(await requireRealBridge(), session, ref.toUpperCase());
-          hit = find(engineTabs(o));
-          if (hit) console.log(fmt.muted(`  sharing tab ${ref.toUpperCase()} with this session`));
-        } catch (err) {
-          die((err as Error).message);
-        }
-      }
       if (hit) args = [...args.slice(0, at), hit.tabId || hit.targetId, ...args.slice(at + 1)];
     }
   }
@@ -750,7 +735,12 @@ async function loginAsPerson(url: string | undefined, waitSeconds: number, choic
       `${fmt.warning("!")} sign-in still pending on ${startHost} — the window was raised ${sinceRaise}s ago, not raising it again yet`,
     );
   } else {
-    const raised = await raiseTabForPerson(tab.targetId);
+    // Stamp before raising: the focus sentinel (focusSentinel.ts) reads this
+    // to tell a wanted raise from a theft, so it must be visible on disk
+    // before the window ever moves.
+    const fresh = readState();
+    if (fresh) writeState({ ...fresh, loginRaisedAt: Date.now() });
+    const raised = await focusBrowserTabBlocking(tab.targetId);
     if (raised.ok) console.log(`${OK} raised the agent browser on ${startHost} — a separate window from your Chrome`);
     else console.log(`${fmt.warning("!")} could not raise the window (${raised.reason}); it is the Chrome window titled by the page, behind your others`);
   }
@@ -774,38 +764,6 @@ async function loginAsPerson(url: string | undefined, waitSeconds: number, choic
   const still = currentTab(o)?.url ?? tab.url;
   console.log(`${fmt.warning("!")} still on a sign-in page after ${waitSeconds}s (${still}) — run \`cast browser login\` again once the person has signed in`);
   return 1;
-}
-
-/**
- * Bring a tab to the front of the human's screen, in whichever browser holds
- * it — the same route the web's "open tab" link uses (focusHttp.ts), so the
- * clone, an agent-browser Chrome and the human's own Chrome through the
- * bridge all answer. Stamps the raise before it happens: the focus sentinel
- * (focusSentinel.ts) reads InstanceState.loginRaisedAt to tell a wanted
- * raise from a theft, so it must be on disk before the window ever moves.
- */
-async function raiseTabForPerson(targetId: string): Promise<{ ok: boolean; reason?: string }> {
-  const fresh = readState();
-  if (fresh) writeState({ ...fresh, loginRaisedAt: Date.now() });
-  return focusBrowserTabBlocking(targetId);
-}
-
-/**
- * `show`: put this session's tab in front of the human. The one verb that
- * takes their screen on purpose, so it is for the moments they asked to see
- * the page or have to act in it themselves — never a way to check work.
- */
-async function showToPerson(choice: TargetChoice): Promise<number> {
-  const o = await ctx(choice);
-  await ensurePinnedTab(o.session);
-  const tab = currentTab(o);
-  if (!tab) die("this session has no tab to show", "open a page first: cast browser open <url>");
-  const raised = await raiseTabForPerson(tab.targetId);
-  const where = isRealSession(o.session) ? "your Chrome" : "the agent browser (a separate window from your Chrome)";
-  if (raised.ok) console.log(`${OK} brought the tab to the front in ${where}: ${tab.url}`);
-  else console.log(`${fmt.warning("!")} could not bring the tab to the front (${raised.reason}); it is ${tab.url} in ${where}`);
-  printFooter(o, "show", auditOwner());
-  return raised.ok ? 0 : 1;
 }
 
 /** Run a verb and exit with its status — the shape commander actions want. */
@@ -1104,17 +1062,12 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   grant                    camera/mic/clipboard permission for this origin — no prompt, no restart
   shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot)
 
-Your Chrome is the default once the extension is paired, including after restarts:
+The human's real Chrome instead of the clone (they want to watch, or a site fights the clone):
 
-  target                   show which browser this session uses and why
-  target clone             opt this session into the agent browser; target real switches back
-  --real / --clone         override the browser for one verb
-  show                     bring this session's tab to the front of the human's screen — only when
-                           they asked to see it or must act in it themselves (a sign-in, a prompt)
+  target real              sticky for this session; --real / --clone on any verb overrides it once
   open <url>               a tab of its own there, in the "Cast" tab group;
                            act only on tabs you opened. Needs the extension paired once by
                            the human: cast browser extension setup
-                           Commands wait for reconnect; --clone explicitly uses the agent browser.
 
 \`cast browser help <command>\` documents every flag; \`cast browser skills get core --full\` is the engine's full guide.`,
   );
@@ -1200,12 +1153,6 @@ frames are superseded before anyone reads them.`,
   // problem to absorb, not something to push onto agents by rewriting prose
   // they have already read into their context.
 
-  targetFlags(br.command("show"))
-    .description("Bring this session's tab to the front of the human's screen — only when they asked to see the page, or must act in it themselves")
-    .action(async (o: TargetChoice) => {
-      process.exit(await showToPerson(o));
-    });
-
   targetFlags(br.command("login [url]"))
     .description("A person signs in once: raises the agent browser on the page and waits until it leaves the sign-in page")
     .option("--wait <seconds>", "How long to wait for the sign-in; 0 returns at once", "300")
@@ -1232,35 +1179,13 @@ frames are superseded before anyone reads them.`,
     });
 
   targetFlags(br.command("tabs"))
-    .description("List this session's tabs; --all lists every agent's")
-    .option("--all", "Every agent session's tab in the browser, not only this session's")
-    .action(async (o: TargetChoice & { all?: boolean }) => {
+    .description("List open tabs")
+    .action(async (o: TargetChoice) => {
       const c = await ctx(o);
-      if (o.all && isRealSession(c.session)) {
-        // The host's HTTP face lists every tab with cast's own annotations;
-        // the engine's own list is scoped to this session on purpose.
-        let bridge;
-        try {
-          bridge = await requireRealBridge();
-        } catch (err) {
-          die((err as Error).message);
-        }
-        const res = await fetch(cdpHttpUrl({ port: bridge.port, token: bridge.token }, "/json/list"), { signal: AbortSignal.timeout(5000) });
-        if (!res.ok) die(`bridge host answered ${res.status}`);
-        const tabs = ((await res.json()) as Array<{ id: string; title: string; url: string; cast?: boolean; sessions?: string[] }>).filter((t) => t.cast);
-        if (!tabs.length) console.log(fmt.muted("  no agent tabs in your Chrome"));
-        for (const t of tabs) {
-          const mine = (t.sessions ?? []).includes(c.session);
-          const who = mine ? "this session" : (t.sessions ?? []).join(", ") || "no session";
-          console.log(`  ${mine ? "*" : "~"} [${t.id}] ${t.title || t.url} - ${t.url}  ${fmt.muted(who)}`);
-        }
-        console.log(fmt.muted("  * = this session's, ~ = another agent's — `cast browser tab switch <id>` shares one with this session; the human's own tabs are never listed"));
-        process.exit(0);
-      }
       const code = await runVerb("tab", ["list"], c);
       // Only this session's tabs are listed, and in real mode they sit among
       // the human's own: name where they are.
-      if (code === 0 && isRealSession(c.session)) console.log(fmt.muted(`  in your real Chrome, via the cast extension${ownerKey() ? " — the other tabs there are the human's; `--all` lists the other agents'" : ""}`));
+      if (code === 0 && isRealSession(c.session)) console.log(fmt.muted(`  in your real Chrome, via the cast extension${ownerKey() ? " — the other tabs there are the human's" : ""}`));
       process.exit(code);
     });
 

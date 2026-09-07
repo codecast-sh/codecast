@@ -30,10 +30,6 @@ export function runFastPath(argv: string[]): boolean {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(127);
   };
-  if (argv[2] === "_agent-prompt") {
-    import("./agentPrompt.js").then(({ runAgentPrompt }) => runAgentPrompt(argv.slice(3))).catch(fail);
-    return true;
-  }
   if (argv[2] === "_disclaimed") {
     // Agent-launch wrapper (see disclaim.ts): exec the rest of argv as a TCC
     // self-responsible process so privacy prompts name the agent, not codecast.

@@ -6,16 +6,6 @@ const record: PersistedCodexThread = { threadId: "thread", updatedAt: 1, activeT
 const thread = (status: TurnStatus) => ({ id: "thread", status: { type: "idle" }, turns: [{ id: "turn", status, items: [] }] });
 
 describe("Codex interrupted turn recovery", () => {
-  test.each(["read-only", "workspace-write", "danger-full-access"] as const)("preserves %s across restart", sandbox => {
-    const saved = JSON.parse(JSON.stringify({ ...record, sandbox }));
-    expect(codexResumeParams(saved, saved.approvalPolicy)).toEqual({ threadId: "thread", cwd: "/project", approvalPolicy: "on-request", sandbox });
-    expect(codexResumeParams(settledCodexRecord(saved, "turn"), "never").sandbox).toBe(sandbox);
-  });
-
-  test("does not infer unrestricted access from an old never-approve registration", () => {
-    expect(codexResumeParams({ ...record, approvalPolicy: "never" }, "never").sandbox).toBe("read-only");
-  });
-
   test("continues an interrupted turn with persisted intent", async () => {
     let saved = JSON.parse(JSON.stringify(record));
     const requests: unknown[] = [];
@@ -157,20 +147,7 @@ describe("Codex restart policy preservation", () => {
     expect((params as { config?: Record<string, unknown> }).config?.["sandbox_workspace_write.network_access"]).toBe(true);
   });
 
-  test("a recorded policy wins over a stale coarse mode", () => {
-    const saved: PersistedCodexThread = {
-      threadId: "t", updatedAt: 1, approvalPolicy: "never",
-      sandbox: "danger-full-access", sandboxPolicy: { type: "readOnly", networkAccess: false },
-    };
-    expect(codexResumeParams(saved, "never").sandbox).toBe("read-only");
-  });
 
-  test("a legacy record with only a coarse mode still replays that mode", () => {
-    const saved: PersistedCodexThread = { threadId: "t", updatedAt: 1, approvalPolicy: "never", sandbox: "read-only" };
-    const params = codexResumeParams(saved, "never");
-    expect(params.sandbox).toBe("read-only");
-    expect((params as { config?: unknown }).config).toBeUndefined();
-  });
 });
 
 // Daemon integration regression. A policy refresh must not replace the record:

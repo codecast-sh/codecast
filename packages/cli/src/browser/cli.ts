@@ -66,8 +66,9 @@ import { buildHostsCommand } from "../hosts/cli.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
+import { commandGroup } from "../commandGroups.js";
 
 // colors.ts exposes semantic helpers, not raw colour names.
 const OK = `${fmt.success(icons.check)}`;
@@ -211,7 +212,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // session and falls back to the last tab touched.
   const me = (): string | null => ownerKey(deps.detectCurrentSessionId);
   /**
-   * Dispatch on target: the managed clone or the user's real Chrome
+   * Dispatch on target: the managed clone (default) or the user's real Chrome
    * through the extension bridge. Both hand the callback a PageSession whose
    * conn speaks CdpClient, which is why one command body serves both.
    */
@@ -226,7 +227,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   const br = program
     .command("browser")
     .alias("br")
-    .description("Drive a real Chrome: snapshot pages, click, type, screenshot, read console");
+    .description(commandGroup("browser").description);
 
   // The host group is shared with the top-level `cast hosts`: same builder,
   // two mount points, so the documented `cast browser hosts ...` keeps working.
@@ -411,8 +412,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       } else {
         // Never navigate a tab this session does not own: the rest are the
         // human's. A fresh tab costs nothing and is visibly the agent's.
-        // In the background: the human is working in this Chrome.
-        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url, background: true })).targetId;
+        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url })).targetId;
         created = true;
       }
       const page = await attachToTarget(conn, targetId);

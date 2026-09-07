@@ -6,7 +6,6 @@ import { functionBlock } from "./sourceRegion.js";
 
 const names = [
   "collectHibernationCandidates", "hibernationRefusalReason", "hibernateSessionNow", "runHibernationPass",
-  "attemptHibernation", "hibernationLocalUnchanged",
   "trackSessionPaneForTests", "sessionParkStateForTests", "setSyncServiceForTests",
   "wakeStatusAfterPark", "clearHibernationPark", "forgetHibernationPark", "clearSessionTrackingForKill",
   "subagentParentSessionFromPath", "noteSubagentActivity", "subagentActiveAgoMs", "resetSubagentActivityForTests",
@@ -36,8 +35,6 @@ export function createHibernationHarness() {
   };
   const deps = {
     ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES,
-    isSupersededAppServerSession: () => false,
-    serializeSessionStatus: (_id: string, fn: () => Promise<unknown>) => fn(),
     hasTmux: () => true,
     log: record("log"), reaperLog: record("log"),
     stopCodexPermissionPoller: record("poller-stop"),
@@ -57,9 +54,8 @@ export function createHibernationHarness() {
     "resumeSessionCache", "lastSentAgentStatus", "lastResumeAt", "lastHeartbeatLogged", "subagentActivityByParent",
     "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
     "pendingOpenTaskReports", "lastOpenTasksSentAt", "lastOpenTasksSentJson", "tmuxTargetLocks",
-    "hibernationInFlight", "hibernationEvidenceJobs", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared",
   ].map((name) => `const ${name} = new Map();`).join("\n");
-  const sets = ["managedHeartbeatSessions", "hibernatedSessions", "restartingSessionIds"]
+  const sets = ["managedHeartbeatSessions", "hibernatedSessions", "hibernationStampCleared", "restartingSessionIds"]
     .map((name) => `const ${name} = new Set();`).join("\n");
   const body = names.map((name) => functionBlock(source, name).text.replace(/^export /, "")).join("\n");
   const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`
@@ -69,7 +65,6 @@ export function createHibernationHarness() {
     const SUBAGENT_ACTIVITY_MAX_ENTRIES = 500;
     const WORKING_STATUS_THROTTLE_MS = 10_000;
     const TMUX_LOCK_WAIT_MS = 60_000;
-    const HIBERNATION_ATTEMPT_TIMEOUT_MS = 15_000;
     const SETTLE_STATUSES_WITH_TASKS = new Set(["idle", "waiting", "dormant", "done"]);
     const stopManagedSessionHeartbeat = (id) => managedHeartbeatSessions.delete(id);
     ${body}

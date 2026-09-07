@@ -572,7 +572,7 @@ export class OpencodeServer extends EventEmitter {
    * (unlike a synthetic copy id).
    */
   async fork(sessionId: string, opts: OpencodeForkOptions = {}): Promise<OpencodeApiSession> {
-    const query = directoryQuery(opts.directory);
+    const query = opts.directory ? `?directory=${encodeURIComponent(opts.directory)}` : "";
     const body = opts.messageID ? { messageID: opts.messageID } : {};
     // Re-arm at the START too so the idle timer can't fire mid-fork (a fork is
     // bounded well under the idle window); the finally re-arms from completion.
@@ -592,34 +592,8 @@ export class OpencodeServer extends EventEmitter {
     return this.apiRequest<OpencodeApiSession[]>("GET", "/session");
   }
 
-  /** Create a session driven through this server (its turns WILL stream on /event).
-   *  `directory` scopes it to that project (the session's cwd); the sidecar's own
-   *  cwd otherwise. */
-  async createSession(body: { title?: string; parentID?: string } = {}, opts: { directory?: string } = {}): Promise<OpencodeApiSession> {
-    return this.apiRequest<OpencodeApiSession>("POST", `/session${directoryQuery(opts.directory)}`, body);
+  /** Create a session driven through this server (its turns WILL stream on /event). */
+  async createSession(body: { title?: string; parentID?: string } = {}): Promise<OpencodeApiSession> {
+    return this.apiRequest<OpencodeApiSession>("POST", "/session", body);
   }
-
-  /**
-   * Append a user message WITHOUT starting a model turn (`noReply`). This is the
-   * import channel: opencode exposes no history import, but a session's model
-   * context is its messages, so a rebuilt conversation lands as one user message
-   * the next turn reads (verified live 2026-09-06: the TUI resumes and renders
-   * it, and no assistant turn runs). Returns the stored message's id.
-   */
-  async appendUserMessage(sessionId: string, text: string, opts: { directory?: string } = {}): Promise<{ info: { id: string } }> {
-    this.armIdleTimer();
-    try {
-      return await this.apiRequest<{ info: { id: string } }>(
-        "POST",
-        `/session/${sessionId}/message${directoryQuery(opts.directory)}`,
-        { noReply: true, parts: [{ type: "text", text }] },
-      );
-    } finally {
-      this.armIdleTimer();
-    }
-  }
-}
-
-function directoryQuery(directory?: string): string {
-  return directory ? `?directory=${encodeURIComponent(directory)}` : "";
 }

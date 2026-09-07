@@ -55,14 +55,6 @@ export const BRIDGE_DEFAULT_PORT = 41729;
  */
 export const BRIDGE_EXTENSION_ID = "dfimhlggoaabdefnfhlpboehapdaakol";
 
-/**
- * Where the extension installs from once it is on the Chrome Web Store, or
- * null while it is loaded unpacked. `setup` prints this instead of the
- * developer-mode steps when set. The store is the only distribution Chrome
- * updates by itself; see packages/browser-extension/store/listing.md.
- */
-export const BRIDGE_STORE_URL: string | null = null;
-
 /** Chrome's rule for the ID of an extension whose manifest carries `key` (base64 DER). */
 export function extensionIdOfKey(keyBase64: string): string {
   const hex = createHash("sha256").update(Buffer.from(keyBase64, "base64")).digest("hex").slice(0, 32);
@@ -75,22 +67,6 @@ export function extensionIdOfKey(keyBase64: string): string {
  */
 export function bridgePairingUrl(state: { token: string; port: number }): string {
   return `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html#${new URLSearchParams({ token: state.token, port: String(state.port) })}`;
-}
-
-/**
- * A page that forwards to the pairing URL. `setup` writes it to a 0600 file
- * and starts Chrome on the file's path, so the token rides in a file only its
- * owner can read while the process table shows a path. The options page is
- * web-accessible to `file:` pages for exactly this hop; the redirect keeps
- * the fragment, and the options page clears it as it always did.
- */
-export function bridgePairingPage(pairingUrl: string): string {
-  // `<` cannot appear in a URL built by URLSearchParams, but a script body
-  // must never be able to close itself, so the escape is unconditional.
-  const js = JSON.stringify(pairingUrl).replace(/</g, "\\u003c");
-  return `<!doctype html><meta charset="utf-8"><title>Pairing with cast</title>` +
-    `<script>location.replace(${js})</script>` +
-    `<p>Opening the Codecast extension. If this page stays, the extension is not installed or needs a reload at chrome://extensions.</p>\n`;
 }
 
 /** WS close code the host uses for a bad or missing token. */
@@ -148,10 +124,7 @@ export type BridgeOp =
   | "tabs.activate"
   | "attach"
   | "detach"
-  | "cdp"
-  /** Reload the extension itself (chrome.runtime.reload): an unpacked load
-   *  never picks up an edited file otherwise. Answered before it happens. */
-  | "reload";
+  | "cdp";
 
 /** The colours Chrome accepts for a tab group (chrome.tabGroups.Color). */
 export type BridgeGroupColor = "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
@@ -210,8 +183,6 @@ export interface BridgeTab {
   active: boolean;
   windowId: number;
   attached: boolean;
-  /** Created by the extension for a session (background.js ownedTabs); absent from extensions before protocol 4.1. */
-  owned?: boolean;
   /** The tab's group with its plain title (never the animated one), absent when ungrouped. */
   group?: BridgeGroup;
 }

@@ -1,7 +1,6 @@
 export function sessionIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
   return (
     env.CLAUDE_CODE_SESSION_ID ||
-    env.CODEX_THREAD_ID ||
     env.CODEX_SESSION_ID ||
     env.CODECAST_SESSION_ID ||
     env.CODECAST_MANAGED_SESSION ||

@@ -376,18 +376,11 @@ export interface ProcessSessionClaim {
 }
 
 const ARGV_ID = "([A-Za-z0-9][A-Za-z0-9._-]{7,})(?=\\s|$)";
-// `--session-id <id>` names the session the process WRITES — an assigned id for a
-// fresh launch, or the child of a native fork (`--resume <parent> --fork-session
-// --session-id <child>`, claude and grok alike) — so it outranks `--resume`, which
-// in that shape names the parent being copied. Reading `--resume` first labelled
-// a grok fork pane as its parent, and the deferred resume then started a second
-// process on the child's session dir (2026-09-05). Then claude `--resume <id>` /
-// `-r <id>`; codex: `codex resume <id>` (bare `resume` is only trusted right
-// after the codex binary — it is an ordinary word inside a prompt argument
-// otherwise).
+// claude: `--resume <id>` / `-r <id>` / `--session-id <id>`; codex: `codex resume <id>`
+// (bare `resume` is only trusted right after the codex binary — it is an ordinary
+// word inside a prompt argument otherwise).
 const ARGV_SESSION_FLAG_RES = [
-  new RegExp(`(?:^|\\s)--session-id[\\s=]+${ARGV_ID}`),
-  new RegExp(`(?:^|\\s)(?:--resume|-r)[\\s=]+${ARGV_ID}`),
+  new RegExp(`(?:^|\\s)(?:--resume|--session-id|-r)[\\s=]+${ARGV_ID}`),
   new RegExp(`(?:^|\\s|/)codex\\s+resume\\s+${ARGV_ID}`),
 ];
 
@@ -445,23 +438,6 @@ export function judgeProcessIdentity(args: {
   const declared = processDeclaredSessionId(args);
   if (!declared) return { verdict: "unknown", declared };
   return { verdict: declared === args.sessionId ? "owned" : "foreign", declared };
-}
-
-/**
- * True when a binding written at `registeredAtSec` (epoch seconds: a registry
- * file's `ts`, a cache fill) cannot describe a process that started at
- * `processStartSec`: the pid it names was freed and handed to something else
- * after the write. This is the one check that convicts a reused pid when the
- * new process declares no session at all — exactly the case where
- * judgeProcessIdentity can only answer "unknown" and a lookup fails open.
- * Observed 2026-09-07: a daemon registration named pid 44685 at 01:58:32Z, the
- * agent died, a leaked test fixture (`bun fakeHelper.ts`, agent-shaped by comm)
- * took the pid at 02:03:34Z, and every delivery to that session for the next
- * fourteen hours was aimed at the fixture. An unknown start time proves nothing.
- */
-export function registrationPredatesProcess(registeredAtSec: unknown, processStartSec: number | null): boolean {
-  if (typeof registeredAtSec !== "number" || !Number.isFinite(registeredAtSec) || processStartSec === null) return false;
-  return registeredAtSec < processStartSec - CLAIM_START_SLACK_SEC;
 }
 
 // ── Registry supersession of a cached pid ───────────────────────────────────

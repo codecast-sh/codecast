@@ -12,7 +12,7 @@
  *
  * Every verb attaches to that page over CDP and reads the app's own handles
  * (window.__CODECAST_BUILD, __syncActivity, __syncReplication, __navLog, and
- * __inboxStore), so nothing here scrapes the DOM for state.
+ * the dev-only __inboxStore), so nothing here scrapes the DOM for state.
  */
 import { Command } from "commander";
 import * as fs from "node:fs";
@@ -32,7 +32,8 @@ import { runVerb } from "../browser/cliEngine.js";
 import { connectToTab, evaluateOn, type EvalOutcome, type PageCtx } from "../browser/pageEval.js";
 import { readState } from "../browser/instance.js";
 import { repoRootFor } from "../gitPlane.js";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
+import { commandGroup } from "../commandGroups.js";
 
 const OK = `${c.green}✓${c.reset}`;
 const BAD = `${c.red}✗${c.reset}`;
@@ -472,7 +473,7 @@ async function doctor(o: TargetOpts & { json?: boolean }, deps: PublishDeps): Pr
     }
   }
   add("handles", pr.devHandles ? "pass" : "warn",
-    pr.devHandles ? "store handle present (__inboxStore); store-level verbs available" : "no __inboxStore on the page (a bundle from before the handle shipped in prod); drive through the UI only");
+    pr.devHandles ? "dev handles present (__inboxStore); store-level verbs available" : "production bundle: no __inboxStore, drive through the UI only");
   add("signed in", pr.signedIn ? "pass" : "fail",
     pr.signedIn
       ? pr.user ? `${pr.user.email ?? pr.user.name ?? "?"} (${pr.user.id})` : "token present (identity unreadable without dev handles)"
@@ -824,7 +825,7 @@ function targetFlags<T extends Command>(cmd: T): T {
 export function registerAppCommand(program: Command, deps: PublishDeps): void {
   const app = program
     .command("app")
-    .description("Drive and verify the codecast app itself: doctor, goto, sweep, wait-settle, as-user")
+    .description(commandGroup("app").description)
     .addHelpText("after", `
 The loop: doctor (is this page worth driving?), goto a surface or conversation,
 wait-settle, then prove with cast browser (snapshot, get text, shot) or eval.

@@ -104,18 +104,18 @@ describe("clientOwnsSessionStore (ct-39178 opencode.db corruption guard)", () =>
 // predicate, so a store-owning client — grok included — falls to the honest
 // refuse / fresh-spawn branch instead of a fabricated `claude --resume`.
 describe("mayReconstituteResumeTranscript (missing-transcript resume guard)", () => {
-  test("clients with native import support and the unhinted default may reconstitute", () => {
+  test("claude/codex/gemini and the unhinted default may reconstitute", () => {
     expect(mayReconstituteResumeTranscript("claude")).toBe(true);
     expect(mayReconstituteResumeTranscript("codex")).toBe(true);
-    expect(mayReconstituteResumeTranscript("gemini")).toBe(true);
-    expect(mayReconstituteResumeTranscript("opencode")).toBe(true);
-    expect(mayReconstituteResumeTranscript("pi")).toBe(true);
-    expect(mayReconstituteResumeTranscript("grok")).toBe(true);
+    expect(mayReconstituteResumeTranscript("gemini")).toBe(true); // grandfathered
     expect(mayReconstituteResumeTranscript(undefined)).toBe(true);
     expect(mayReconstituteResumeTranscript(null)).toBe(true);
   });
 
-  test("cursor is refused because it has no native import support", () => {
+  test("cursor/opencode/pi/grok are refused — a missing transcript never becomes a Claude JSONL", () => {
     expect(mayReconstituteResumeTranscript("cursor")).toBe(false);
+    expect(mayReconstituteResumeTranscript("opencode")).toBe(false);
+    expect(mayReconstituteResumeTranscript("pi")).toBe(false);
+    expect(mayReconstituteResumeTranscript("grok")).toBe(false);
   });
 });

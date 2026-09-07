@@ -214,8 +214,7 @@ describe("continueSyncPass", () => {
     // Caught up: no continuation.
     await continueSyncPass(9, 1, size, 0, async () => { nexts++; });
     // At the cap: no continuation even with bytes left.
-    await expect(continueSyncPass(0, 1, size, MAX_SYNC_CONTINUATIONS, async () => { nexts++; }))
-      .rejects.toThrow("Transcript continuation budget retains unread data");
+    await continueSyncPass(0, 1, size, MAX_SYNC_CONTINUATIONS, async () => { nexts++; });
     expect(nexts).toBe(0);
     // Under the cap with bytes left: exactly one.
     await continueSyncPass(0, 1, size, MAX_SYNC_CONTINUATIONS - 1, async () => { nexts++; });

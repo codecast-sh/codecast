@@ -1,7 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { randomUUID } from "node:crypto";
 import {
   mkdtempSync,
   readFileSync,
@@ -11,17 +8,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PASTE_START, PASTE_END, prepareInjectedContent } from "./tmuxPaste";
-import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
-
-const source = readFileSync(join(import.meta.dir, "daemon.ts"), "utf8");
-const helpers = ["buildAppleScript", "writeKittyInjectionPayload", "writeTerminalInjectionScript", "pollDeclineText", "pollMenuSteps"]
-  .map(name => functionBlock(source, name).text).join("\n").replace(/^export /gm, "");
-const { buildAppleScript, writeKittyInjectionPayload, writeTerminalInjectionScript } = new Function(
-  "fs", "path", "randomUUID", "CONFIG_DIR", "prepareInjectedContent", "PASTE_START", "PASTE_END",
-  new Bun.Transpiler({ loader: "ts" }).transformSync(helpers) +
-    "; return { buildAppleScript, writeKittyInjectionPayload, writeTerminalInjectionScript };",
-)(fs, path, randomUUID, "", prepareInjectedContent, PASTE_START, PASTE_END);
+import {
+  buildAppleScript,
+  writeKittyInjectionPayload,
+  writeTerminalInjectionScript,
+} from "./daemon.js";
 
 const MULTILINE = 'first \\\\ path and "quotes"\nsecond line\nthird line';
 const MENU_WITH_TEXT_FIELD = { keys: ["4"], text: MULTILINE };
@@ -115,31 +106,21 @@ describe("writeKittyInjectionPayload", () => {
 
 describe("direct terminal message submission", () => {
   test("Kitty and WezTerm route normal text through paste-then-one-submit", () => {
-    const submission = (name: string) => {
-      const body = functionBlock(source, name).text;
-      const start = body.indexOf("await pasteAndSubmitText({");
-      expect(start).toBeGreaterThanOrEqual(0);
-      return blockAt(body, start).text;
-    };
-    const kitty = submission("injectViaKitty");
-    const wezterm = submission("injectViaWezTerm");
+    const source = readFileSync(join(import.meta.dir, "daemon.ts"), "utf8");
+    const kitty = source.slice(
+      source.indexOf("async function injectViaKitty("),
+      source.indexOf("// ── WezTerm injection"),
+    );
+    const wezterm = source.slice(
+      source.indexOf("async function injectViaWezTerm("),
+      source.indexOf("// ── Terminal injection router"),
+    );
 
-    expect(kitty).toContain("paste: () => kittySendText(match, content, bracketed, beforeInput)");
-    expect(kitty.match(/kittySendText\(/g)).toHaveLength(1);
-    expect(kitty.match(/kitty @ send-key/g)).toHaveLength(1);
-    expect(kitty).toContain("submit: async () => {");
-    expect(kitty).toContain("await beforeInput?.()");
-    expect(kitty.indexOf("await beforeInput?.()")).toBeLessThan(kitty.indexOf("kitty @ send-key"));
-    expect(kitty).toContain("await execAsync(`kitty @ send-key ${match} enter`)");
-    expect(wezterm).toContain("paste: async () => {");
-    expect(wezterm).toContain("await weztermSendText(paneId, content, { bracketed })");
-    expect(wezterm.match(/weztermSendText\(/g)).toHaveLength(1);
-    expect(wezterm.match(/weztermSendKeys\(/g)).toHaveLength(1);
-    expect(wezterm).toContain("await beforeInput?.()");
-    expect(wezterm.indexOf("await beforeInput?.()")).toBeLessThan(wezterm.indexOf("await weztermSendText("));
-    const submit = wezterm.slice(wezterm.indexOf("submit: async () => {"));
-    expect(submit).toContain("await beforeInput?.()");
-    expect(submit.indexOf("await beforeInput?.()")).toBeLessThan(submit.indexOf("await weztermSendKeys("));
-    expect(submit).toContain('await weztermSendKeys(paneId, "\\r")');
+    expect(kitty).toContain("await pasteAndSubmitText({");
+    expect(kitty).toContain("paste: () => kittySendText(match, content, bracketed)");
+    expect(kitty).toContain("submit: () => execAsync(`kitty @ send-key ${match} enter`)");
+    expect(wezterm).toContain("await pasteAndSubmitText({");
+    expect(wezterm).toContain("paste: () => weztermSendText(paneId, content, { bracketed })");
+    expect(wezterm).toContain('submit: () => weztermSendKeys(paneId, "\\r")');
   });
 });

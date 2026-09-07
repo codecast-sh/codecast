@@ -6,7 +6,6 @@ import {
   clearRepoScopeCache,
   isRepoVaultRoot,
   isVaultPathIgnored,
-  isVaultPathRepoIgnored,
   isVaultDocumentPath,
   normalizeVaultPath,
   probeProjectVault,
@@ -269,83 +268,6 @@ describe("repo scope", () => {
   test("resolveVaultPath refuses a path the scan would not list", () => {
     expect(resolveVaultPath(repo, "dist/bundle.md")).toBeNull();
     expect(resolveVaultPath(plain, "dist/bundle.md")).not.toBeNull();
-  });
-
-  test("includeIgnored lists the hidden half too, flagged, and never the always-ignored set", async () => {
-    fs.mkdirSync(path.join(repo, "node_modules", "pkg"), { recursive: true });
-    fs.writeFileSync(path.join(repo, "node_modules", "pkg", "readme.md"), "dep");
-    fs.writeFileSync(path.join(repo, ".gitignore"), "secrets\n");
-    fs.mkdirSync(path.join(repo, "secrets"), { recursive: true });
-    fs.writeFileSync(path.join(repo, "secrets", "keys.md"), "shh");
-    clearRepoScopeCache();
-
-    const files = await scanVault(repo, { includeIgnored: true });
-    const byPath = new Map(files.map((f) => [f.path, f]));
-    // What the default scan lists carries no flag at all.
-    expect(byPath.get("README.md")?.ignored).toBeUndefined();
-    expect(byPath.get("docs/guide.md")?.ignored).toBeUndefined();
-    expect(byPath.get(".github/CONTRIBUTING.md")?.ignored).toBeUndefined();
-    // Build output, tool dot-directories and .gitignore names all appear, flagged,
-    // directories included — the flag is inherited down the walk.
-    expect(byPath.get("dist")).toMatchObject({ dir: true, ignored: true });
-    expect(byPath.get("dist/bundle.md")).toMatchObject({ ignored: true });
-    expect(byPath.get(".next/page.md")).toMatchObject({ ignored: true });
-    expect(byPath.get("secrets/keys.md")).toMatchObject({ ignored: true });
-    // .git and node_modules are not "ignored files", they are not files anyone browses.
-    expect(byPath.has(".git")).toBe(false);
-    expect(byPath.has("node_modules")).toBe(false);
-    expect(byPath.has("node_modules/pkg/readme.md")).toBe(false);
-    // The default scan is exactly the unflagged subset.
-    const plainPaths = (await scanVault(repo)).map((f) => f.path).sort();
-    expect(files.filter((f) => !f.ignored).map((f) => f.path).sort()).toEqual(plainPaths);
-  });
-
-  test("ignored entries never displace the default scope, whatever the cap", async () => {
-    fs.mkdirSync(path.join(repo, ".cache"), { recursive: true });
-    for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(repo, ".cache", `blob-${i}.bin`), "x");
-    clearRepoScopeCache();
-    const plain = (await scanVault(repo)).map((f) => f.path).sort();
-    // A cap smaller than the ignored half alone. Every default entry survives;
-    // the ignored half is what gets cut.
-    const capped = await scanVault(repo, { includeIgnored: true, maxEntries: plain.length });
-    expect(capped.filter((f) => !f.ignored).map((f) => f.path).sort()).toEqual(plain);
-    expect(capped.filter((f) => f.ignored).length).toBe(plain.length);
-  });
-
-  test("a nested checkout is a folder, not a subtree: another vault lives there", async () => {
-    // What a worktree or an agent workspace looks like from the parent repo:
-    // an ignored directory holding a whole copy of the project.
-    const wt = path.join(repo, ".claude", "worktrees", "feature-x");
-    fs.mkdirSync(path.join(wt, "docs"), { recursive: true });
-    fs.writeFileSync(path.join(wt, ".git"), "gitdir: ../../../.git/worktrees/feature-x\n");
-    fs.writeFileSync(path.join(wt, "README.md"), "# copy");
-    fs.writeFileSync(path.join(wt, "docs", "guide.md"), "copy");
-    clearRepoScopeCache();
-
-    const paths = (await scanVault(repo, { includeIgnored: true })).map((f) => f.path);
-    expect(paths).toContain(".claude/worktrees");
-    expect(paths).toContain(".claude/worktrees/feature-x");
-    expect(paths).not.toContain(".claude/worktrees/feature-x/README.md");
-    expect(paths).not.toContain(".claude/worktrees/feature-x/docs");
-    // The default scan is untouched by the rule.
-    expect((await scanVault(repo)).map((f) => f.path)).not.toContain(".claude/worktrees");
-  });
-
-  test("a plain vault has nothing to lift: includeIgnored changes no entry", async () => {
-    const withFlag = await scanVault(plain, { includeIgnored: true });
-    expect(withFlag.some((f) => f.ignored)).toBe(false);
-    expect(withFlag.map((f) => f.path)).toEqual((await scanVault(plain)).map((f) => f.path));
-    expect(isVaultPathRepoIgnored(plain, "dist/bundle.md")).toBe(false);
-  });
-
-  test("allowIgnored admits an ignored path for a read, never the always-ignored set or an escape", () => {
-    expect(resolveVaultPath(repo, "dist/bundle.md", { allowIgnored: true })).toBe(
-      path.join(realVaultRoot(repo), "dist", "bundle.md"),
-    );
-    expect(resolveVaultPath(repo, ".next/page.md", { allowIgnored: true })).not.toBeNull();
-    expect(resolveVaultPath(repo, "node_modules/pkg/readme.md", { allowIgnored: true })).toBeNull();
-    expect(resolveVaultPath(repo, ".git/config", { allowIgnored: true })).toBeNull();
-    expect(resolveVaultPath(repo, "../outside.md", { allowIgnored: true })).toBeNull();
   });
 
   test("root .gitignore names are honored, negations are not guessed at", () => {

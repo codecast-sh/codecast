@@ -46,33 +46,22 @@ test("both walkers honor the includeFile filter and a missing baseDir", async ()
   expect(await findUnsyncedFilesAsync(path.join(root, "nope"))).toEqual([]);
 });
 
-async function observeYield(root: string, walk: typeof findUnsyncedFiles | typeof findUnsyncedFilesAsync) {
-  const seen = new Set<string>();
-  let filesSeenAtYield = 0;
-  let observer: ReturnType<typeof setImmediate> | undefined;
+test("async walker yields to the event loop mid-scan", async () => {
+  const root = makeTree(400);
+  let visited = 0;
+  let visitedAtYield = -1;
+  let probe: ReturnType<typeof setImmediate> | undefined;
   try {
-    const files = await walk(root, undefined, file => {
-      seen.add(file);
-      observer ??= setImmediate(() => { filesSeenAtYield = seen.size; });
+    const files = await findUnsyncedFilesAsync(root, undefined, () => {
+      if (++visited === 1) probe = setImmediate(() => { visitedAtYield = visited; });
       return true;
     });
-    return { files, filesSeenAtYield };
+    expect(files).toHaveLength(400);
+    expect(visitedAtYield).toBeGreaterThan(0);
+    expect(visitedAtYield).toBeLessThan(visited);
   } finally {
-    if (observer) clearImmediate(observer);
+    if (probe) clearImmediate(probe);
   }
-}
-
-test("async walker yields to another event-loop callback before finishing the scan", async () => {
-  const { files, filesSeenAtYield } = await observeYield(makeTree(400), findUnsyncedFilesAsync);
-  expect(files).toHaveLength(400);
-  expect(filesSeenAtYield).toBeGreaterThan(0);
-  expect(filesSeenAtYield).toBeLessThan(files.length);
-});
-
-test("the same event-loop observer rejects the old synchronous walker", async () => {
-  const { files, filesSeenAtYield } = await observeYield(makeTree(400), findUnsyncedFiles);
-  expect(files).toHaveLength(400);
-  expect(filesSeenAtYield).toBe(0);
 });
 
 test("async walker honors a dirFilter and skips the pruned subtrees entirely", async () => {

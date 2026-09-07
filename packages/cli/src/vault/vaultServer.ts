@@ -86,12 +86,12 @@ async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffe
 function scoped(
   vault: VaultInfo,
   rawPath: string | null,
-  opts: { writableOnly?: boolean; allowIgnored?: boolean } = {},
+  opts: { writableOnly?: boolean } = {},
 ): { rel: string; abs: string } | null {
   const rel = normalizeVaultPath(rawPath ?? "");
   if (rel === null || rel === "") return null;
   if (opts.writableOnly && !isVaultDocumentPath(rel)) return null;
-  const abs = resolveVaultPath(vault.root, rel, { allowIgnored: opts.allowIgnored });
+  const abs = resolveVaultPath(vault.root, rel);
   if (!abs) return null;
   return { rel, abs };
 }
@@ -107,14 +107,12 @@ async function handleScan(
   headers: Record<string, string>,
   vault: VaultInfo,
   configDir: string,
-  includeIgnored: boolean,
 ): Promise<void> {
-  const files = await scanVault(vault.root, { includeIgnored });
+  const files = await scanVault(vault.root);
   // Markdown only. The scan lists code and attachments too now, and "312 notes"
   // next to a vault has to mean notes — counting every file in a repo would
-  // turn the picker's one number into noise. Ignored markdown (a worktree's
-  // copy of the docs, a generated bundle) is not a note either.
-  const noteCount = files.filter((f) => !f.dir && !f.ignored && isVaultMarkdownPath(f.path)).length;
+  // turn the picker's one number into noise.
+  const noteCount = files.filter((f) => !f.dir && isVaultMarkdownPath(f.path)).length;
   try {
     setVaultNoteCount(configDir, vault.id, noteCount);
   } catch {}
@@ -134,10 +132,7 @@ async function handleGetFile(
   vault: VaultInfo,
   rawPath: string | null,
 ): Promise<void> {
-  // Reads admit ignored paths: the tree can list them (scan?ignored=1), and a
-  // row that 404s on click is worse than no row. Writes never do — see
-  // handlePutFile/handleOp, which keep the strict scope.
-  const target = scoped(vault, rawPath, { allowIgnored: true });
+  const target = scoped(vault, rawPath);
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
   let stat: fs.Stats;
   try {
@@ -360,7 +355,7 @@ export function handleVaultHttp(
     if (!vault) return sendJson(res, 404, headers, { error: "unknown vault" });
 
     if (req.method === "GET" && parsed.pathname === "/vault/scan") {
-      return handleScan(res, headers, vault, opts.configDir, params.get("ignored") === "1");
+      return handleScan(res, headers, vault, opts.configDir);
     }
     if (req.method === "GET" && parsed.pathname === "/vault/file") {
       return handleGetFile(res, headers, vault, params.get("path"));

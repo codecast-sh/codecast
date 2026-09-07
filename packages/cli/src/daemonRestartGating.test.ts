@@ -68,13 +68,6 @@ describe("daemon restart gating", () => {
     expect(body).toContain("startDaemon();");
   });
 
-  test("ordinary CLI use and automatic updates both respect the configured installation", () => {
-    expect(functionBody(index, "ensureDaemonRunning")).toContain("ownsDaemonInstallation()");
-    expect(functionBody(index, "bounceDaemonIfBuildChanged")).toContain("ownsDaemonInstallation()");
-    expect(functionBody(index, "bounceDaemonIfBuildChanged")).toContain("if (!ownsInstallation) return false;");
-    expect(functionBody(index, "ownsDaemonInstallation")).toContain("daemonLauncherMatchesCommand(");
-  });
-
   test("the update paths no longer stop the daemon before performUpdate", () => {
     // performUpdate renames the executable and the running daemon holds the old
     // inode. The stop that used to run before the update bought nothing and

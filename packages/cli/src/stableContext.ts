@@ -19,7 +19,6 @@ import {
   type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
-import { STABLE_FEED_HOOK_FILE } from "./codecastOwned.js";
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 
@@ -270,7 +269,7 @@ export const STABLE_FEED_HOOK = stableFeedHookScript("claude");
 export function installStableHook(): void {
   const home = process.env.HOME || "";
   const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, STABLE_FEED_HOOK_FILE);
+  const hookFile = path.join(hooksDir, "stable-feed.sh");
   const settingsFile = path.join(home, ".claude", "settings.json");
 
   try {
@@ -289,7 +288,7 @@ export function installStableHook(): void {
 
     const hookArray = settings.hooks.SessionStart as any[];
     const alreadyPresent = hookArray.some((matcher: any) =>
-      (matcher.hooks || []).some((h: any) => h.command?.includes(STABLE_FEED_HOOK_FILE))
+      (matcher.hooks || []).some((h: any) => h.command?.includes("stable-feed.sh"))
     );
 
     if (!alreadyPresent) {
@@ -547,7 +546,7 @@ export function ensureStableHookForLaunch(
 
 export function removeStableHook(): void {
   const home = process.env.HOME || "";
-  const hookFile = path.join(home, ".claude", "hooks", STABLE_FEED_HOOK_FILE);
+  const hookFile = path.join(home, ".claude", "hooks", "stable-feed.sh");
   const settingsFile = path.join(home, ".claude", "settings.json");
 
   // The script contains no user data and is owned solely by Codecast. Removing
