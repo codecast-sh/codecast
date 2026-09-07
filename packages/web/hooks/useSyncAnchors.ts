@@ -131,16 +131,25 @@ export function anchorScopeLabel(a: Pick<AnchorRow, "scope_type" | "team_name"> 
 /** The identity fields of ONE anchor, for hot paths (an inbox card): the
  *  subscription is a short string, so a heartbeat elsewhere never re-renders
  *  the row. Returns null when the id is empty or the row is not loaded. */
-export function useAnchorIdentity(anchorId: string | null | undefined): Pick<AnchorRow, "_id" | "bot_name" | "bot_avatar" | "scope_type" | "team_name"> | null {
-  const sig = useInboxStore((s) => {
-    if (!anchorId) return null;
-    const a = (s as any).anchors?.[anchorId];
-    if (!a) return null;
-    return JSON.stringify([a._id, a.bot_name ?? "", a.bot_avatar ?? "", a.scope_type, a.team_name ?? ""]);
-  });
-  return useMemo(() => {
-    if (!sig) return null;
-    const [_id, bot_name, bot_avatar, scope_type, team_name] = JSON.parse(sig) as string[];
-    return { _id, bot_name, bot_avatar: bot_avatar || null, scope_type: scope_type as "team" | "user", team_name: team_name || null };
-  }, [sig]);
+export function useAnchorIdentity(anchorId: string | null | undefined): AnchorIdentity | null {
+  const sig = useInboxStore((s) => anchorIdentitySig((s as any).anchors, anchorId));
+  return useMemo(() => anchorIdentityFromSig(sig), [sig]);
+}
+
+export type AnchorIdentity = Pick<AnchorRow, "_id" | "bot_name" | "bot_avatar" | "scope_type" | "team_name">;
+
+/** The two halves of useAnchorIdentity as pure functions, so a caller that
+ *  already holds one store subscription (an inbox card) reads the anchor
+ *  through it instead of opening a second one (ct-49746). */
+export function anchorIdentitySig(anchors: Record<string, any> | undefined, anchorId: string | null | undefined): string | null {
+  if (!anchorId) return null;
+  const a = anchors?.[anchorId];
+  if (!a) return null;
+  return JSON.stringify([a._id, a.bot_name ?? "", a.bot_avatar ?? "", a.scope_type, a.team_name ?? ""]);
+}
+
+export function anchorIdentityFromSig(sig: string | null): AnchorIdentity | null {
+  if (!sig) return null;
+  const [_id, bot_name, bot_avatar, scope_type, team_name] = JSON.parse(sig) as string[];
+  return { _id, bot_name, bot_avatar: bot_avatar || null, scope_type: scope_type as "team" | "user", team_name: team_name || null };
 }
