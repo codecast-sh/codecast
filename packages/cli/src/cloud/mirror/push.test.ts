@@ -419,7 +419,7 @@ test("gzip transport feeds the unchanged validated protocol to an injected recei
   const built = fakeBuild("repeated context ".repeat(10000));
   const received = await pushMirrorToHostAsync(host, built.bytes, { command: `${JSON.stringify(process.execPath)} ${JSON.stringify(receiver)}` });
   expect(received.pushed).toBe(true);
-  expect(received.hash).toBe(built.hash);
+  expect(received.hash).toBe((await parseMirrorBundle(built.bytes)).hash);
   expect(received.result?.applied).toEqual([".claude/CLAUDE.md"]);
   expect(fs.readFileSync(process.env.PUSH_TEST_STDIN!).equals(built.bytes)).toBe(true);
 });
