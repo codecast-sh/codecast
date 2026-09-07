@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type RefCallback } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { codeThreadRootKey } from "@codecast/shared/comments";
 import { useParams, useRouter } from "next/navigation";
 import { GitPullRequest, FileDiff, ListChecks, MessagesSquare } from "lucide-react";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
@@ -177,6 +178,8 @@ function PRContent({
       threadsFor: (filename) => threadsByFile.get(filename),
       render: (filename, anchor, items) => (
         <PRLineThread
+          repository={repository}
+          threadKey={codeThreadRootKey(repository, pr?.head_sha ?? "", { file_path: filename, line_number: anchor.lineNumber })}
           comments={items as CodeCommentRow[]}
           authed={isAuthenticated}
           lineNumber={anchor.lineNumber}
@@ -206,7 +209,7 @@ function PRContent({
         if (anchor) setComposing({ file: filename, anchor });
       },
     }),
-    [threadsByFile, isAuthenticated, post, setThreadResolved],
+    [threadsByFile, isAuthenticated, post, setThreadResolved, repository, pr?.head_sha],
   );
 
   // Tab shortcuts. Ignored while typing, so a comment can contain a digit, and

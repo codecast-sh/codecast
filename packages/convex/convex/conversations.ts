@@ -48,7 +48,7 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
@@ -2176,6 +2176,36 @@ export const getConversationGitDiff = query({
   },
 });
 
+// Hard cap on assistant rows this query may read. Assistant documents carry
+// full tool_calls (Write/Edit payloads), so a 1000-row newest-first walk
+// blows Convex's system-operation budget ("too many system operations") on
+// long live sessions — and this query used to stay subscribed for the whole
+// visit, re-running on every stream tick. Newest TodoWrite is almost always
+// in the first few rows; TaskCreate past this window drops off. Removing the
+// cap or raising it back toward four digits re-introduces the timeout.
+export const TOOL_STATS_SCAN_LIMIT = 32;
+
+export async function collectConversationToolStats(
+  db: { query: (table: "messages") => any },
+  conversationId: Id<"conversations">,
+) {
+  const rows: Array<{ role?: string; timestamp?: number; tool_calls?: Array<{ name: string; input: string }> | null }> = [];
+  let scanned = 0;
+  for await (const msg of db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "assistant"),
+    )
+    .order("desc")) {
+    if (++scanned > TOOL_STATS_SCAN_LIMIT) break;
+    rows.push(msg);
+    // Newest-first: the first TodoWrite is the panel. Stop so a session of
+    // huge Write rows behind it is never read.
+    if (msg.tool_calls?.some((tc: { name: string }) => isTodoStatTool(tc.name))) break;
+  }
+  return { taskStats: computeConversationTaskStats(rows) };
+}
+
 export const getConversationToolStats = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -2188,76 +2218,7 @@ export const getConversationToolStats = query({
 
     if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return null;
 
-    let latestTodos: any[] | null = null;
-    // Collect creates and updates separately since we iterate newest-first
-    const taskCreates: { subject: string }[] = [];
-    const taskStatusMap = new Map<string, string>(); // taskId -> latest status (first seen = newest)
-
-    // Bounded scan: this query stays subscribed for the whole visit and
-    // re-runs on every new assistant message, so its cost must not grow with
-    // session length. The newest TodoWrite (the common case) is found within
-    // a few rows; only the rare TaskCreate/TaskUpdate bookkeeping can reach
-    // deep history, and for a 1000+ assistant-message session losing the
-    // oldest task rows from the panel is an acceptable bound.
-    let scanned = 0;
-    for await (const msg of ctx.db
-      .query("messages")
-      .withIndex("by_conversation_role_timestamp", (q: any) =>
-        q.eq("conversation_id", args.conversation_id).eq("role", "assistant")
-      )
-      .order("desc")) {
-      if (++scanned > 1000) break;
-      if (!msg.tool_calls) continue;
-      for (const tc of msg.tool_calls) {
-        if (tc.name === "TodoWrite" && !latestTodos) {
-          try {
-            const input = JSON.parse(tc.input);
-            if (input.todos) latestTodos = input.todos;
-          } catch {}
-        }
-        if (tc.name === "TaskCreate") {
-          try {
-            const inp = JSON.parse(tc.input);
-            taskCreates.push({ subject: inp.subject || inp.title || inp.description || "" });
-          } catch {}
-        }
-        if (tc.name === "TaskUpdate") {
-          try {
-            const inp = JSON.parse(tc.input);
-            if (inp.taskId && inp.status && !taskStatusMap.has(inp.taskId)) {
-              taskStatusMap.set(inp.taskId, inp.status);
-            }
-          } catch {}
-        }
-      }
-    }
-
-    // Reverse creates to get chronological order (IDs are assigned 1, 2, 3, ...)
-    taskCreates.reverse();
-    const normalizeStatus = (s: string) => s === "completed" ? "done" : s === "in_progress" ? "in_progress" : "open";
-    const taskItems = taskCreates
-      .map((tc, i) => {
-        const id = String(i + 1);
-        const rawStatus = taskStatusMap.get(id) ?? "pending";
-        return { id, content: tc.subject, status: normalizeStatus(rawStatus) };
-      })
-      .filter(t => taskStatusMap.get(t.id) !== "deleted");
-
-    // Normalize todo items and merge with task items
-    const todoItems = (latestTodos ?? []).map((t: any, i: number) => ({
-      id: t.id || `todo-${i}`,
-      content: t.content || t.task || t.title || "",
-      status: normalizeStatus(t.status ?? "pending"),
-    }));
-    const items = [...todoItems, ...taskItems];
-    const total = items.length;
-    const done = items.filter(i => i.status === "done").length;
-    const in_progress = items.filter(i => i.status === "in_progress").length;
-    const open = total - done - in_progress;
-
-    return {
-      taskStats: total > 0 ? { total, done, in_progress, open, items } : null,
-    };
+    return collectConversationToolStats(ctx.db, args.conversation_id);
   },
 });
 

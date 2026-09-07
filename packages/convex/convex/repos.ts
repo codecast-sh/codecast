@@ -595,34 +595,62 @@ export const ingestLocal = mutation({
     }
 
     let created = 0;
-    const ownConversations = new Map<string, Id<"conversations"> | null>();
     for (const commit of args.commits ?? []) {
       const { conversation_id: claimed, ...fields } = commit;
-      let conversationId: Id<"conversations"> | undefined;
-      if (claimed) {
-        if (!ownConversations.has(claimed)) {
-          const id = ctx.db.normalizeId("conversations", claimed);
-          const conv = id ? await ctx.db.get(id) : null;
-          ownConversations.set(claimed, conv && conv.user_id === userId ? id : null);
-        }
-        conversationId = ownConversations.get(claimed) ?? undefined;
-      }
-      const dup = await ctx.db
-        .query("commits")
-        .withIndex("by_sha", (q: any) => q.eq("sha", commit.sha))
-        .first();
-      if (dup) {
-        // A row that arrived first (a webhook, another machine) may still learn
-        // which session made it; a session already named is never overwritten.
-        if (conversationId && !dup.conversation_id) await ctx.db.patch(dup._id, { conversation_id: conversationId });
-        continue;
-      }
-      await ctx.db.insert("commits", { ...fields, repository, team_id: teamId, ...(conversationId ? { conversation_id: conversationId } : {}) });
-      created++;
+      const result = await upsertLocalCommit(ctx, { userId, teamId, repository, commit: fields, claimedConversationId: claimed });
+      if (result.created) created++;
     }
     return { published: true, rows: args.rows.length, commits_created: created };
   },
 });
+
+/** A commit as the daemon describes it: the commits-table fields a checkout can supply. */
+export type LocalCommitFields = {
+  sha: string;
+  message: string;
+  author_name: string;
+  author_email: string;
+  timestamp: number;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  branch?: string;
+};
+
+/**
+ * One commit from a checkout into the commits table, once. The publish pass and
+ * the activity tailer both land here, so a commit reported twice (or by a
+ * webhook first) stays one row. A session claimed by the daemon is written only
+ * when it belongs to the caller; a row that had no session learns one, a row
+ * that has one keeps it.
+ */
+export async function upsertLocalCommit(
+  ctx: { db: any },
+  args: { userId: Id<"users">; teamId: Id<"teams">; repository: string; commit: LocalCommitFields; claimedConversationId?: string },
+): Promise<{ commit_id: Id<"commits">; created: boolean; conversation_id?: Id<"conversations"> }> {
+  const repository = normalizeRepository(args.repository);
+  let conversationId: Id<"conversations"> | undefined;
+  if (args.claimedConversationId) {
+    const id = ctx.db.normalizeId("conversations", args.claimedConversationId);
+    const conv = id ? await ctx.db.get(id) : null;
+    if (conv && conv.user_id === args.userId) conversationId = id;
+  }
+  const dup = await ctx.db
+    .query("commits")
+    .withIndex("by_sha", (q: any) => q.eq("sha", args.commit.sha))
+    .first();
+  if (dup) {
+    if (conversationId && !dup.conversation_id) await ctx.db.patch(dup._id, { conversation_id: conversationId });
+    return { commit_id: dup._id, created: false, conversation_id: dup.conversation_id ?? conversationId };
+  }
+  const commit_id = await ctx.db.insert("commits", {
+    ...args.commit,
+    repository,
+    team_id: args.teamId,
+    ...(conversationId ? { conversation_id: conversationId } : {}),
+  });
+  return { commit_id, created: true, conversation_id: conversationId };
+}
 
 /** Cached repository content is disposable: anything a week old is refetched. */
 export const pruneRepoCache = internalMutation({
