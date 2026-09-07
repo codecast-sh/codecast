@@ -273,6 +273,127 @@ range = 100
     const reused = await acquireWorkspace(repoRoot, "reuse", opts);
     expect(reused.workspace.ports).toEqual(first.workspace.ports);
   });
+
+  /**
+   * Hold an index without a worktree behind it. State "creating" is the one
+   * status the reclaimer leaves alone, so this stands in for the N sibling
+   * workspaces a busy repo really has, at no filesystem cost.
+   */
+  function holdIndex(root: string, name: string, index: number) {
+    writeState(root, {
+      name,
+      path: path.join(root, ".codecast/worktrees", name),
+      branch: `codecast/${name}`,
+      resourceIndex: index,
+      state: "creating",
+      manifest: {
+        setup: { copy: [], install: [], generate: [], migrate: [] },
+        ports: { web: { base: 41000, range: 100 }, api: { base: 41001, range: 100 } },
+        services: {},
+        env: {},
+        teardown: { run: [] },
+        browser: { enabled: false, headless: true, cdpPort: { base: 9222, range: 100 } },
+        backend: "local",
+      },
+      ports: { web: 41000 + index * 100, api: 41001 + index * 100 },
+      env: {},
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  test("reclaims the ports of a workspace whose worktree directory is gone", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "gone", opts);
+    fs.rmSync(first.workspace.path, { recursive: true, force: true });
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+    expect(reused.notices?.join("\n")).toContain("gone (worktree missing)");
+  });
+
+  test("reclaims the ports of a workspace whose branch was deleted", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "unbranched", opts);
+    execSync("git update-ref -d refs/heads/codecast/unbranched", { cwd: repoRoot });
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+    expect(reused.notices?.join("\n")).toContain("unbranched (branch gone)");
+  });
+
+  test("keeps the reservation of a workspace that is still being created", async () => {
+    manifest();
+    holdIndex(repoRoot, "in-flight", 0);
+    const next = await acquireWorkspace(repoRoot, "next", opts);
+    expect(next.workspace.resourceIndex).toBe(1);
+    expect(next.notices ?? []).toEqual([]);
+  });
+
+  test("extends the range by the pool's own size when every pooled index is taken", async () => {
+    manifest();
+    for (let index = 0; index < 10; index++) holdIndex(repoRoot, `held-${index}`, index);
+    const eleventh = await acquireWorkspace(repoRoot, "eleventh", opts);
+    expect(eleventh.workspace.resourceIndex).toBe(10);
+    expect(eleventh.workspace.ports).toEqual({ web: 42000, api: 42001 });
+    expect(eleventh.notices?.join("\n")).toContain(
+      "port pool of 10 indices exhausted; extended the range to indices 10-19 and took index 10",
+    );
+  });
+
+  test("names the workspaces holding the ports when even the extended range is full", async () => {
+    manifest();
+    for (let index = 0; index < 40; index++) holdIndex(repoRoot, `held-${index}`, index);
+    const failure = await acquireWorkspace(repoRoot, "late", opts).catch((error: Error) => error.message);
+    expect(failure).toContain("no free port for workspace 'late': every port for indices 0-39 is taken");
+    expect(failure).toContain("held by: held-0 (web=41000 api=41001)");
+    expect(failure).toContain("and 30 more");
+    expect(failure).toContain("cast ws acquire late --no-ports");
+  }, 15000);
+
+  test("--no-ports allocates nothing, records the choice, and leaves the pool alone", async () => {
+    manifest();
+    const worker = await acquireWorkspace(repoRoot, "worker", { ...opts, noPorts: true });
+    expect(worker.workspace.ports).toEqual({});
+    expect(worker.workspace.contract?.checks.some((check) => check.name.startsWith("port"))).toBe(false);
+    expect(readState(repoRoot, "worker")).toMatchObject({ noPorts: true, ports: {} });
+
+    const neighbour = await acquireWorkspace(repoRoot, "neighbour", opts);
+    expect(neighbour.workspace.ports).toEqual({ web: 41000, api: 41001 });
+
+    setState(repoRoot, "worker", "broken");
+    const reacquired = await acquireWorkspace(repoRoot, "worker", opts);
+    expect(reacquired.workspace.ports).toEqual({});
+    expect(reacquired.workspace.noPorts).toBe(true);
+  });
+});
+
+describe("cast ws acquire --no-ports (CLI)", () => {
+  test("takes no port and status says so", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      "[ports.web]\nbase = 41500\nrange = 100\n",
+    );
+    const cast = async (...args: string[]) => {
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { Command } from "commander";
+        import { registerWorkspaceCommand } from ${JSON.stringify(path.join(import.meta.dir, "cli.ts"))};
+        process.chdir(${JSON.stringify(repoRoot)});
+        const program = new Command();
+        registerWorkspaceCommand(program);
+        await program.parseAsync(["bun", "cast", "workspace", ...${JSON.stringify(args)}]);
+      `], { stdout: "pipe", stderr: "pipe", env: process.env });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      return stdout;
+    };
+    expect(await cast("acquire", "worker", "--no-ports", "--skip-setup", "--skip-hooks", "--skip-pool"))
+      .toContain("ports:   none (--no-ports)");
+    expect(await cast("status", "worker")).toContain("ports:   none (--no-ports)");
+    expect(await cast("acquire", "server", "--skip-setup", "--skip-hooks", "--skip-pool"))
+      .toContain("ports:   web=41500");
+  }, 20000);
 });
 
 describe("acquireWorkspace — minimal repo (no manifest, no package.json)", () => {

@@ -4,11 +4,75 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../atomicWrite.js";
+import { execFileSync } from "../proc.js";
 import { listStates, type PersistedWorkspaceState } from "./contract.js";
 
-interface PortReservation {
+export interface PortReservation {
   repoRoot: string;
   workspace: PersistedWorkspaceState;
+}
+
+/** A reservation whose worktree is gone, so its ports are free again. */
+export interface ReclaimedReservation {
+  reservation: PortReservation;
+  reason: "worktree missing" | "branch gone";
+}
+
+/**
+ * Split reservations into the ones a live worktree still backs and the ones
+ * whose worktree is gone — the directory was removed, or its branch was
+ * deleted. The second group's ports are reclaimed: a dead workspace must not
+ * keep a port out of the pool.
+ *
+ * A workspace mid-creation or mid-destruction keeps its reservation. Its
+ * directory may not exist yet, and another process is holding the port.
+ */
+export function partitionReservations(reservations: PortReservation[]): {
+  live: PortReservation[];
+  stale: ReclaimedReservation[];
+} {
+  const live: PortReservation[] = [];
+  const stale: ReclaimedReservation[] = [];
+  const branches = new Map<string, Set<string> | null>();
+  for (const reservation of reservations) {
+    const reason = staleReason(reservation, branches);
+    if (reason) stale.push({ reservation, reason });
+    else live.push(reservation);
+  }
+  return { live, stale };
+}
+
+function staleReason(
+  reservation: PortReservation,
+  branches: Map<string, Set<string> | null>,
+): ReclaimedReservation["reason"] | undefined {
+  const { workspace } = reservation;
+  if (workspace.state === "creating" || workspace.state === "destroying") return undefined;
+  if (!fs.existsSync(workspace.path)) return "worktree missing";
+  const known = repoBranches(reservation.repoRoot, branches);
+  if (known && workspace.branch && !known.has(workspace.branch)) return "branch gone";
+  return undefined;
+}
+
+/** Branch names in a repo, or null when git cannot answer for it. */
+function repoBranches(repoRoot: string, cache: Map<string, Set<string> | null>): Set<string> | null {
+  const cached = cache.get(repoRoot);
+  if (cached !== undefined) return cached;
+  let branches: Set<string> | null = null;
+  try {
+    // execFileSync, not a shell: the format string's parentheses are shell
+    // metacharacters and every branch would look deleted.
+    const out = execFileSync("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    branches = new Set(out.split("\n").map((line) => line.trim()).filter(Boolean));
+  } catch {
+    branches = null;
+  }
+  cache.set(repoRoot, branches);
+  return branches;
 }
 
 interface ReservationLockOwner {

@@ -162,7 +162,7 @@ describe("allocatePorts (live probe)", () => {
     await holdPort(34001);
     await holdPort(34002);
     await expect(
-      allocatePorts(m, { startIndex: 0, maxIndices: 3 }),
+      allocatePorts(m, { startIndex: 0, maxIndices: 3, maxExtensions: 0 }),
     ).rejects.toBeInstanceOf(PortAllocationError);
   });
 
@@ -173,13 +173,66 @@ describe("allocatePorts (live probe)", () => {
     };
     await holdPort(34100);
     try {
-      await allocatePorts(m, { startIndex: 0, maxIndices: 1 });
+      await allocatePorts(m, { startIndex: 0, maxIndices: 1, maxExtensions: 0 });
       throw new Error("expected throw");
     } catch (e) {
       expect(e).toBeInstanceOf(PortAllocationError);
       const pe = e as PortAllocationError;
       expect(pe.conflicts).toEqual([{ name: "web", port: 34100 }]);
+      expect(pe.searched).toEqual({ from: 0, to: 0 });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allocatePorts — extending the range when the declared pool is full
+// ---------------------------------------------------------------------------
+
+describe("allocatePorts (pool extension)", () => {
+  const pooled = (): WorkspaceManifest => ({
+    ...sampleManifest(),
+    ports: { web: { base: 35000, range: 10 } },
+  });
+
+  function block(from: number, count: number): Set<number> {
+    return new Set(Array.from({ length: count }, (_unused, i) => 35000 + (from + i) * 10));
+  }
+
+  test("extends upward by the pool's own size once every pooled index is taken", async () => {
+    const allocation = await allocatePorts(pooled(), {
+      maxIndices: 4,
+      noProbe: true,
+      reservedPorts: block(0, 4),
+    });
+    expect(allocation.resourceIndex).toBe(4);
+    expect(allocation.extendedRange).toEqual({ poolSize: 4, from: 4, to: 7 });
+  });
+
+  test("keeps extending, one pool-sized block at a time", async () => {
+    const allocation = await allocatePorts(pooled(), {
+      maxIndices: 4,
+      noProbe: true,
+      reservedPorts: block(0, 9),
+    });
+    expect(allocation.resourceIndex).toBe(9);
+    expect(allocation.extendedRange).toEqual({ poolSize: 4, from: 8, to: 11 });
+  });
+
+  test("an allocation inside the pool reports no extension", async () => {
+    const allocation = await allocatePorts(pooled(), { maxIndices: 4, noProbe: true });
+    expect(allocation.resourceIndex).toBe(0);
+    expect(allocation.extendedRange).toBeUndefined();
+  });
+
+  test("gives up after maxExtensions blocks and names the range it searched", async () => {
+    await expect(
+      allocatePorts(pooled(), {
+        maxIndices: 4,
+        maxExtensions: 2,
+        noProbe: true,
+        reservedPorts: block(0, 12),
+      }),
+    ).rejects.toThrow("indices 0-11 are all taken (pool of 4, extended 2 times)");
   });
 });
 
@@ -204,6 +257,7 @@ describe("allocatePorts (reservations)", () => {
   test("reports reserved conflicts when every candidate is claimed", async () => {
     await expect(allocatePorts(sampleManifest(), {
       maxIndices: 2,
+      maxExtensions: 0,
       reservedPorts: new Set([33000, 33101]),
     })).rejects.toMatchObject({
       name: "PortAllocationError",

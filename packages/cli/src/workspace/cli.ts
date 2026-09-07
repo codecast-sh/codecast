@@ -73,6 +73,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--skip-setup", "Skip install/generate/migrate commands")
     .option("--skip-hooks", "Skip before-create/after-create hooks")
     .option("--skip-pool", "Bypass warm pool — force fresh setup")
+    .option("--no-ports", "Allocate no ports: for a worker that runs no dev server")
     .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
     .action(
       async (
@@ -84,6 +85,7 @@ export function registerWorkspaceCommand(program: Command): void {
           skipSetup?: boolean;
           skipHooks?: boolean;
           skipPool?: boolean;
+          ports?: boolean;
           json?: boolean;
         },
       ) => {
@@ -102,13 +104,14 @@ export function registerWorkspaceCommand(program: Command): void {
             skipSetup: opts.skipSetup,
             skipHooks: opts.skipHooks,
             skipPool: opts.skipPool,
+            noPorts: opts.ports === false,
           });
           const ws = r.workspace;
           const tag = r.created ? "created" : "attached";
           if (opts.json) {
             console.log(JSON.stringify({
               name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
-              ports: ws.ports, created: r.created,
+              ports: ws.ports, created: r.created, notices: r.notices ?? [],
               contract: ws.contract ? {
                 ok: ws.contract.ok,
                 failures: ws.contract.checks.filter((c) => !c.ok && !c.name.startsWith("port-free:")),
@@ -122,12 +125,8 @@ export function registerWorkspaceCommand(program: Command): void {
           console.log(`  path:    ${ws.path}`);
           console.log(`  branch:  ${ws.branch}`);
           console.log(`  state:   ${ws.state}`);
-          if (Object.keys(ws.ports).length > 0) {
-            const ports = Object.entries(ws.ports)
-              .map(([n, p]) => `${n}=${p}`)
-              .join(" ");
-            console.log(`  ports:   ${ports}`);
-          }
+          console.log(`  ports:   ${describePorts(ws)}`);
+          for (const notice of r.notices ?? []) console.log(`  note:    ${notice}`);
           if (ws.contract && !ws.contract.ok) {
             console.error("\nContract failures:");
             for (const c of ws.contract.checks) {
@@ -159,6 +158,7 @@ export function registerWorkspaceCommand(program: Command): void {
       console.log(`  path:    ${state.path}`);
       console.log(`  branch:  ${state.branch}`);
       console.log(`  updated: ${state.updatedAt}`);
+      console.log(`  ports:   ${describePorts(state)}`);
       const r = await validateWorkspace(repoRoot, name);
       console.log(`  contract: ${r.ok ? "ok" : "FAIL"}`);
       for (const c of r.checks) {
@@ -238,6 +238,13 @@ export function registerWorkspaceCommand(program: Command): void {
         );
       }
     });
+}
+
+/** One line describing a workspace's ports, including the deliberate none. */
+function describePorts(ws: { ports: Record<string, number>; noPorts?: boolean }): string {
+  const entries = Object.entries(ws.ports);
+  if (entries.length > 0) return entries.map(([n, p]) => `${n}=${p}`).join(" ");
+  return ws.noPorts ? "none (--no-ports)" : "none";
 }
 
 /** Render a manifest back to TOML for `init` output. Hand-rolled (no dep). */

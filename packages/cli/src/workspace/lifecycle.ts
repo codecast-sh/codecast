@@ -39,8 +39,13 @@ import {
   type PersistedWorkspaceState,
 } from "./contract.js";
 import { buildHookEnv, runHook } from "./hooks.js";
-import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
-import { withPortReservations, withWorkspaceOperation } from "./portReservations.js";
+import { PortAllocationError, allocatePorts, computePorts, isPortFree, portsToEnv } from "./ports.js";
+import {
+  partitionReservations,
+  withPortReservations,
+  withWorkspaceOperation,
+  type PortReservation,
+} from "./portReservations.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { runSetup } from "./setup.js";
 import type {
@@ -61,6 +66,8 @@ export interface AcquireResult {
   workspace: Workspace;
   /** True if the workspace was created fresh; false if attached to existing. */
   created: boolean;
+  /** Things the operator should know about this acquire (port reclaim, pool extension). */
+  notices?: string[];
 }
 
 /**
@@ -86,6 +93,11 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
   const manifest = savedInputRoot ? previous!.manifest : resolveManifest(repoRoot, inputRoot);
   const cloudWorkspace = process.env.CODECAST_CLOUD_WORKSPACE === "1" || previous?.env.CODECAST_CLOUD_WORKSPACE === "1";
   if (cloudWorkspace) manifest.backend = "local";
+  // A workspace that runs no dev server takes no port. Emptying the manifest's
+  // port map is the whole implementation: allocation, the contract checks and
+  // the reservation set all read it.
+  const noPorts = opts.noPorts === true || previous?.noPorts === true;
+  if (noPorts) manifest.ports = {};
 
   // Dispatch to non-local backend if the manifest selected one.
   if (manifest.backend && manifest.backend !== "local") {
@@ -122,13 +134,35 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     }
 
     const root = fs.realpathSync(repoRoot);
-    const reservedPorts = new Set(reservations
-      .filter((reservation) => reservation.repoRoot !== root || reservation.workspace.name !== name)
-      .flatMap((reservation) => Object.values(reservation.workspace.ports)));
-    const portAlloc = await allocatePorts(manifest, {
-      startIndex: opts.resourceIndex ?? existing?.resourceIndex ?? 0,
-      reservedPorts,
-    });
+    const notices: string[] = [];
+    const { live: holders, stale } = partitionReservations(reservations.filter(
+      (reservation) => reservation.repoRoot !== root || reservation.workspace.name !== name,
+    ));
+    if (stale.length > 0) {
+      notices.push(
+        `reclaimed ${stale.length} port slot(s) from workspaces whose worktree is gone: ` +
+          stale.map((s) => `${s.reservation.workspace.name} (${s.reason})`).join(", "),
+      );
+    }
+    const reservedPorts = new Set(holders.flatMap((reservation) => Object.values(reservation.workspace.ports)));
+    const startIndex = opts.resourceIndex ?? existing?.resourceIndex ?? 0;
+    let portAlloc;
+    try {
+      portAlloc = await allocatePorts(manifest, { startIndex, reservedPorts });
+    } catch (err) {
+      if (err instanceof PortAllocationError) {
+        throw new Error(describePortExhaustion(name, manifest, err, holders, root));
+      }
+      throw err;
+    }
+    const extended = portAlloc.extendedRange;
+    if (extended) {
+      notices.push(
+        `port pool of ${extended.poolSize} indices exhausted; extended the range to indices ` +
+          `${extended.from}-${extended.to} and took index ${portAlloc.resourceIndex} ` +
+          `(${Object.entries(portAlloc.ports).map(([n, p]) => `${n}=${p}`).join(" ")})`,
+      );
+    }
     const initialEnv = buildWorkspaceEnv(manifest, portAlloc.ports);
     if (inputRoot) initialEnv.CODECAST_WORKSPACE_INPUT_ROOT = inputRoot;
     if (cloudWorkspace) {
@@ -148,11 +182,12 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       ports: portAlloc.ports,
       env: initialEnv,
       updatedAt: new Date().toISOString(),
+      ...(noPorts ? { noPorts: true } : {}),
     });
-    return { existing, portAlloc, initialEnv };
+    return { existing, portAlloc, initialEnv, notices };
   });
   if (prepared.result) return prepared.result;
-  const { existing, portAlloc, initialEnv } = prepared;
+  const { existing, portAlloc, initialEnv, notices } = prepared;
 
   try {
     // Hook context shared across before/after-create.
@@ -219,12 +254,13 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       env: initialEnv,
       state: "ready",
       chrome,
+      ...(noPorts ? { noPorts: true } : {}),
     };
     const contract = await validateContract(ws);
     ws.contract = contract;
     ws.state = contract.ok ? "ready" : "broken";
     writeState(repoRoot, workspaceToState(ws));
-    return { workspace: ws, created: !existing };
+    return { workspace: ws, created: !existing, notices };
   } catch (err) {
     // Mark broken on failure so subsequent heal can pick up.
     setState(repoRoot, name, "broken");
@@ -397,7 +433,46 @@ function workspaceToState(ws: Workspace): PersistedWorkspaceState {
     updatedAt: new Date().toISOString(),
     contract: ws.contract,
     chrome: ws.chrome,
+    noPorts: ws.noPorts,
   };
+}
+
+/**
+ * Explain an exhausted pool by naming who holds the ports. Without the holders
+ * the operator only learns that acquire failed, not which workspaces to free.
+ */
+function describePortExhaustion(
+  name: string,
+  manifest: WorkspaceManifest,
+  error: PortAllocationError,
+  holders: PortReservation[],
+  root: string,
+): string {
+  const searched = error.searched ?? { from: 0, to: 0 };
+  const candidates = new Set<number>();
+  for (let i = searched.from; i <= searched.to; i++) {
+    for (const port of Object.values(computePorts(manifest, i))) candidates.add(port);
+  }
+  const named = holders
+    .map((holder) => {
+      const ports = Object.entries(holder.workspace.ports).filter(([, port]) => candidates.has(port));
+      if (ports.length === 0) return null;
+      const where = holder.repoRoot === root ? "" : ` [${holder.repoRoot}]`;
+      return `${holder.workspace.name} (${ports.map(([n, p]) => `${n}=${p}`).join(" ")})${where}`;
+    })
+    .filter((line): line is string => line !== null)
+    .sort();
+  const shown = named.slice(0, 10);
+  const rest = named.length - shown.length;
+  const heldBy = named.length > 0
+    ? `held by: ${shown.join(", ")}${rest > 0 ? `, and ${rest} more` : ""}`
+    : `no workspace holds them, so another process on this machine is listening on them`;
+  return (
+    `no free port for workspace '${name}': every port for indices ${searched.from}-${searched.to} is taken. ` +
+    `${heldBy}. ` +
+    `Free one with \`cast ws destroy <name>\`, or run \`cast ws acquire ${name} --no-ports\` ` +
+    `if this workspace needs no dev server.`
+  );
 }
 
 /**

@@ -178,6 +178,8 @@ export interface Workspace {
   contract?: ContractResult;
   /** Chrome instance bound to this workspace, if browser.enabled. */
   chrome?: ChromeBinding;
+  /** Acquired with --no-ports: the workspace runs no server and holds no port. */
+  noPorts?: boolean;
 }
 
 /** Options accepted by acquire(). */
@@ -203,6 +205,11 @@ export interface AcquireOptions {
    * want to force fresh setup for whatever reason.
    */
   skipPool?: boolean;
+  /**
+   * Allocate no ports at all. For workers that run no dev server: they take
+   * nothing from the pool, and the contract makes no port claims about them.
+   */
+  noPorts?: boolean;
 }
 
 /**

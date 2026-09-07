@@ -46,6 +46,8 @@ export interface PersistedWorkspaceState {
   contract?: ContractResult;
   /** Chrome process bound to this workspace, when browser.enabled. */
   chrome?: ChromeBinding;
+  /** Acquired with --no-ports: no port was allocated, by request. */
+  noPorts?: boolean;
 }
 
 /** Canonical projection of persisted state back into a Workspace. */
@@ -61,6 +63,7 @@ export function stateToWorkspace(s: PersistedWorkspaceState): Workspace {
     state: s.state,
     contract: s.contract,
     chrome: s.chrome,
+    noPorts: s.noPorts,
   };
 }
 
