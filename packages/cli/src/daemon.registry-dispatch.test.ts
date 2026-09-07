@@ -21,11 +21,19 @@ import { classifyGlyphlessClientPaneState, classifyTranscriptTailFor, sessionPro
 //   agentType === "codex"  ? />\s*$/
 //   : agentType === "gemini" ? />\s*$|gemini/i
 //   : /❯|⏵/            (claude AND cursor fall here)
+//
+// Codex has since left the ternary. Its branch was WRONG, not merely different:
+// codex paints a footer below its composer, so the last non-space character of
+// its ready pane is never ">" and />\s*$/ never matched a live codex pane —
+// measured booting on every poll for the full discovery budget (ct-49754). The
+// byte-identical mandate held the registry to a value that had no correct pane
+// behind it, so codex now carries the glyph it really renders. Every other
+// client still reproduces its branch exactly.
 describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
   const oldTernary = (agentType: AgentClientId): RegExp =>
-    agentType === "codex" ? />\s*$/ : agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
+    agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
 
-  for (const id of ["claude", "codex", "cursor", "gemini"] as AgentClientId[]) {
+  for (const id of ["claude", "cursor", "gemini"] as AgentClientId[]) {
     test(`${id}: registry pattern === old ternary source+flags`, () => {
       const reg = AGENT_CLIENTS[id].promptReadyPattern;
       const old = oldTernary(id);
@@ -35,9 +43,9 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
   }
 
   // A few concrete pane samples to lock behavior, not just literals.
-  test("codex matches a trailing '>' but not the bare chevron", () => {
-    expect(AGENT_CLIENTS.codex.promptReadyPattern.test("some output\n> ")).toBe(true);
-    expect(AGENT_CLIENTS.codex.promptReadyPattern.test("›")).toBe(false);
+  test("codex matches the chevron it renders, and no longer a trailing '>'", () => {
+    expect(AGENT_CLIENTS.codex.promptReadyPattern.test("›")).toBe(true);
+    expect(AGENT_CLIENTS.codex.promptReadyPattern.test("some output\n> ")).toBe(false);
   });
   test("gemini matches a trailing '>' or the word gemini", () => {
     expect(AGENT_CLIENTS.gemini.promptReadyPattern.test("ready\n> ")).toBe(true);

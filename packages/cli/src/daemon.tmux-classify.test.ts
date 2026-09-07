@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, isResumeCwdPicker, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planResumeCwdPickerKeys, planTrustPromptStep } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planTrustPromptStep } from "./daemon.js";
+import { CODEX_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -517,6 +518,124 @@ describe("agent update menu", () => {
   });
 });
 
+// ── Codex first-launch trust dialog (ct-49609) ─────────────────────────────
+// The frame is shared with the started-pane suite (test-helpers), because the
+// launch path classifies the same screen (ct-49749).
+//
+// It looks like the update menu — a numbered option row carrying the '›'
+// cursor, footer "Press enter to continue" — so it classified update_menu and
+// the corrective sent Escape, which is this dialog's "No, quit". A cold codex
+// pane in a directory codex had not seen parked and delivery deferred until the
+// budget ran out.
+
+describe("codex trust dialog", () => {
+  test("the question itself is out of the live region — only the options are in view", () => {
+    // Why the classifier keys on the option wording rather than the question:
+    // codex renders the question five lines above the menu, and the live region
+    // is the tight tail (no box separators on this pane).
+    const region = extractTmuxLiveRegion(CODEX_TRUST_PANE);
+    expect(region).not.toContain("Do you trust the contents of this directory?");
+    expect(region.split("\n")).toEqual([
+      "",
+      "› 1. Yes, continue",
+      "  2. No, quit",
+      "",
+      "  Press enter to continue",
+    ]);
+  });
+
+  test("classifies as trust, not update_menu", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_TRUST_PANE))).toBe("trust");
+  });
+
+  test("the corrective answers Enter on the Yes row, never Escape", () => {
+    expect(planTrustPromptStep(CODEX_TRUST_PANE.split("\n"))).toEqual({
+      action: "confirm",
+      option: "› 1. Yes, continue",
+    });
+  });
+
+  test("'> You are in <cwd>' is not mistaken for the highlight", () => {
+    // That line carries a bare '>' five rows above the menu. Read as the
+    // highlight it sent Down keystrokes at a dialog already sitting on "Yes".
+    const onQuit = CODEX_TRUST_PANE.replace("› 1. Yes, continue", "  1. Yes, continue")
+      .replace("  2. No, quit", "› 2. No, quit");
+    expect(planTrustPromptStep(onQuit.split("\n"))).toEqual({ action: "move", key: "Up", times: 1 });
+  });
+
+  test("codex's update menu is untouched by the trust rule", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_UPDATE_MENU_PANE))).toBe("update_menu");
+  });
+});
+
+// ── A resuming codex pane is not idle (ct-49614) ───────────────────────────
+// Verbatim captures from `codex resume <id>` on codex-cli 0.153.4, taken by the
+// D0 matrix's resume cell at 1.65s and 2.9s after the pane was rebuilt. The TUI
+// paints its composer while the session still replays, so the ›-glyph rule read
+// both frames "idle" and the injection pre-flight pasted into a composer the
+// end-of-replay redraw then discarded — losing the message and leaving every
+// retry to stack another copy at the prompt.
+const CODEX_RESUMING_PANE = `
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)            │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+  Resuming session…
+
+› Ask Codex to do anything
+
+  ? for shortcuts`;
+
+// The same pane 1.3s later: codex has repainted its header, so the capture now
+// holds two frames. The marker read from the newest frame is still live.
+const CODEX_RESUMING_PANE_REPAINTED = `${CODEX_RESUMING_PANE}
+╭─────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)                              │
+│                                                         │
+│ model:       loading   /model to change                 │
+│ directory:   /private/var/folders/…/matrix-codex-NDqA2Z │
+│ permissions: YOLO mode                                  │
+╰─────────────────────────────────────────────────────────╯
+  Resuming session…
+
+› Ask Codex to do anything
+
+  ? for shortcuts`;
+
+// And once the replay is over: the "Resuming session…" lines are scrollback
+// above the newest header box, and the pane is genuinely ready.
+const CODEX_RESUMED_PANE = `${CODEX_RESUMING_PANE_REPAINTED}
+╭─────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)                              │
+│                                                         │
+│ model:       matrix   /model to change                  │
+│ directory:   /private/var/folders/…/matrix-codex-NDqA2Z │
+│ permissions: YOLO mode                                  │
+╰─────────────────────────────────────────────────────────╯
+
+› matrix-preresume-57a5e763: first turn
+
+
+› Ask Codex to do anything
+
+  matrix default · /tmp/matrix-codex-NDqA2Z`;
+
+describe("codex resume", () => {
+  test("a pane still replaying its session is 'starting', not idle", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_RESUMING_PANE))).toBe("starting");
+  });
+
+  test("a repaint that leaves the earlier frame in the capture still reads 'starting'", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_RESUMING_PANE_REPAINTED))).toBe("starting");
+  });
+
+  test("a finished replay reads idle — the marker above the newest frame is scrollback", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_RESUMED_PANE))).toBe("idle");
+  });
+});
+
 // ── Deferral is finite (ct-48187) ──────────────────────────────────────────
 describe("noteUnresolvablePane", () => {
   test("rebuilds only after the threshold, counting well-spaced failures", () => {
@@ -614,41 +733,5 @@ describe("planTrustPromptStep", () => {
   test("walks upward when the affirmative option is above the highlight", () => {
     expect(planTrustPromptStep(["   Yes, I trust this folder", " \u276f No, exit"]))
       .toEqual({ action: "move", key: "Up", times: 1 });
-  });
-});
-
-// Verbatim from a cx-resume-* pane on 2026-09-05: the daemon had launched
-// `codex resume` with cwd `/` (a rollout regenerated under launchd's cwd), so
-// Codex 0.153 asked which directory to open. Escape here quits the resume
-// into a bare shell; a scraped card asks the user to clear it on every resume.
-const CODEX_CWD_PICKER_PANE = `/:cast _disclaimed -- env -u CLAUDECODE codex resume 01a0732d-8365-7e31-898d-e598496afc73 --dangerously-bypass-approvals-and-sandbox
-Choose working directory to resume this session
-  Session = latest cwd recorded in the resumed session
-  Current = your current working directory
-› 1. Use session directory (/Users/ashot/src/codecast)
-  2. Use current directory (/)
-  3. Always use session directory
-  4. Always use current directory
-  Press enter to continue`;
-
-describe("codex resume working-directory picker", () => {
-  test("classifies as cwd_picker, not update_menu (Escape) and not idle (paste)", () => {
-    const region = extractTmuxLiveRegion(CODEX_CWD_PICKER_PANE);
-    expect(classifyTmuxLiveState(region)).toBe("cwd_picker");
-  });
-
-  test("the scraped prompt's question is recognised so it is never minted as a card", () => {
-    const prompt = parseInteractivePrompt(CODEX_CWD_PICKER_PANE);
-    expect(prompt).not.toBeNull();
-    expect(isResumeCwdPicker(prompt!.question)).toBe(true);
-    expect(isResumeCwdPicker("Which approach should I take?")).toBe(false);
-  });
-
-  test("takes the recorded session directory (preselected) when it exists here", () => {
-    expect(planResumeCwdPickerKeys(CODEX_CWD_PICKER_PANE, (p) => p === "/Users/ashot/src/codecast")).toEqual(["Enter"]);
-  });
-
-  test("falls to the current directory when the recorded one is not on this machine", () => {
-    expect(planResumeCwdPickerKeys(CODEX_CWD_PICKER_PANE, () => false)).toEqual(["Down", "Enter"]);
   });
 });
