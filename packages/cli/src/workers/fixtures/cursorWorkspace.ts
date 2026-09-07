@@ -13,7 +13,7 @@ const d=await import('../../daemon.js');
 const {CursorWatcher}=await import('../../cursorWatcher.js');
 const {isPathExcluded,isProjectAllowedToSync}=await import('../../syncScope.js');
 const main=path.resolve(import.meta.dir,'../../main.ts');
-configureDaemonWorkers(enabled,{}, {invocation:{command:process.execPath,args:[main,'_worker','scan']}});
+await configureDaemonWorkers(enabled,{}, {invocation:{command:process.execPath,args:[main,'_worker','scan']}});
 const storage=(h:string)=>path.join(h,process.platform==='darwin'?'Library/Application Support/Cursor':'.config/Cursor','User/workspaceStorage');
 const project=(h:string,name:string)=>path.join(h,'src',name);
 const make=(h:string,name:string,ids:string[],workspace=project(h,name))=>{

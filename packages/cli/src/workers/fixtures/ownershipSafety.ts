@@ -9,7 +9,7 @@ import {setSlowSyncFsThresholdForTests, setSlowSyncSink} from '../../slowSync.js
 const [enabled, name, id] = process.argv.slice(2);
 const root = process.env.HOME!;
 const main = path.resolve(import.meta.dir, '../../main.ts');
-configureDaemonWorkers(enabled === 'true', {invocation:{command:process.execPath,args:[main,'_worker','probe']}}, {invocation:{command:process.execPath,args:[main,'_worker','scan']}});
+await configureDaemonWorkers(enabled === 'true', {invocation:{command:process.execPath,args:[main,'_worker','probe']}}, {invocation:{command:process.execPath,args:[main,'_worker','scan']}});
 const write = (file: string, content: string) => {fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,content);};
 const meta = (source: unknown, sessionId = id) => JSON.stringify({type:'session_meta',payload:{id:sessionId,originator:'codex-tui',source}}) + '\n';
 const refuse = (ownership: ReturnType<typeof sessionProcessOwnership>) => assert.deepEqual(planSessionTeardown(ownership),{reapPidTree:false,killCachedResumeTmux:false});

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { ingestWorkerHost } from './bridge.js';
 import { WorkerUnavailable } from './host.js';
-import { yieldScanBatch } from './scanClient.js';
+import { yieldScanBatch } from '../scanBatch.js';
 import { IngestAssembler, ingestRetainedWeight } from './ingestTransport.js';
 import { readIngestJob, ingestIdentity, sameIngestFile, sameIngestSnapshot, ingestWalIdentity, sameIngestWal } from './ingestJobs.js';
 import { validIngestPage, type IngestJob, type IngestPage, type IngestResult } from './ingestTypes.js';

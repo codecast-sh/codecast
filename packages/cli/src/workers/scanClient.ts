@@ -1,8 +1,7 @@
 import { scanWorkerHost } from './bridge.js';
 import { WorkerUnavailable, WorkerOperationError } from './host.js';
+import { ScanCancelled, yieldScanBatch } from '../scanBatch.js';
 import type { ScanJob, ScanPage, ScanRow } from './scanTypes.js';
-export class ScanCancelled extends Error {}
-export const yieldScanBatch = () => new Promise<void>(resolve => setImmediate(resolve));
 export async function visitScan(job: ScanJob, visit: (rows: ScanRow[]) => void | Promise<void>, signal?: AbortSignal): Promise<void> {
   const host = scanWorkerHost();
   if (!host) throw new WorkerUnavailable('scan disabled');

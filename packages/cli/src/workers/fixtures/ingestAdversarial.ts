@@ -55,14 +55,14 @@ export async function adversarial(f:any) {
   const id='sameprefix-01a06e04-full-unregistered',history=meta(id,'before-history')+answer('imported-history '+ 'i'.repeat(2*1024*1024))+JSON.stringify({type:'turn_context',payload:{model:'after-history'}})+'\n'+answer('new native TUI tail');
   const historyFile=file(id,history);await codex(historyFile,id);assert.equal(getPosition(historyFile),Buffer.byteLength(history));
   assert.ok([...rows.values()].some((m:any)=>m.content==='new native TUI tail'&&m.model==='after-history'));
-  const offset=Buffer.byteLength(history);fs.appendFileSync(historyFile,answer('tail after worker restart'));reconfigure();measured();
+  const offset=Buffer.byteLength(history);fs.appendFileSync(historyFile,answer('tail after worker restart'));await reconfigure();measured();
   await codex(historyFile,id);assert.ok([...rows.values()].some((m:any)=>m.content==='tail after worker restart'&&m.model==='after-history'));
   const cold=await readTranscriptIngest({client:'codex',file:historyFile,sessionId:id,offset});assert.equal(cold.messages[0].model,'after-history');
   const sibling=file('sameprefix-other-full',meta('sameprefix-other-full','different-model')+answer('independent sibling'));
   await codex(sibling,'sameprefix-other-full');assert.ok([...rows.values()].some((m:any)=>m.content==='independent sibling'&&m.model==='different-model'));
   receipt.checks.push('unregistered full-ID TUI; large imported-like history; tail and model across passes/restart; prefix sibling');
   for (const fault of ['before','after','sequence','generation','replace','close'] as const) {
-    reconfigure();const host=measured(),request=host.request.bind(host);
+    await reconfigure();const host=measured(),request=host.request.bind(host);
     const id='fault-'+fault,p=file(id,claudeLine(id,'z'.repeat(400*1024))),start=sends.length;
     let injected=false;
     host.request=(async (...args:Parameters<typeof request>)=>{
@@ -80,15 +80,15 @@ export async function adversarial(f:any) {
       return page;
     }) as typeof host.request;
     await assert.rejects(claude(p,id));assert.equal(getPosition(p),0);assert.equal(sends.length,start);
-    reconfigure();await claude(p,id);assert.equal(getPosition(p),fs.statSync(p).size);assert.equal(sends.length,start+1);
+    await reconfigure();await claude(p,id);assert.equal(getPosition(p),fs.statSync(p).size);assert.equal(sends.length,start+1);
     receipt.checks.push('production retry '+fault);
   }
-  reconfigure();const timeoutHost=measured();await timeoutHost.request('ping',null);
+  await reconfigure();const timeoutHost=measured();await timeoutHost.request('ping',null);
   const timeoutRequest=timeoutHost.request.bind(timeoutHost),timeoutFile=file('timeout',claudeLine('timeout','r'.repeat(400*1024)));
   timeoutHost.request=((op:any,payload:any,opts:any)=>timeoutRequest(op,payload,{...opts,timeoutMs:1})) as typeof timeoutHost.request;
   await assert.rejects(claude(timeoutFile,'timeout'));assert.equal(getPosition(timeoutFile),0);
-  reconfigure();await claude(timeoutFile,'timeout');assert.equal(getPosition(timeoutFile),fs.statSync(timeoutFile).size);receipt.checks.push('production deadline then retry');
-  reconfigure();const cancelHost=measured(),cancelRequest=cancelHost.request.bind(cancelHost),abort=new AbortController();let cancelled=false,closes=0;
+  await reconfigure();await claude(timeoutFile,'timeout');assert.equal(getPosition(timeoutFile),fs.statSync(timeoutFile).size);receipt.checks.push('production deadline then retry');
+  await reconfigure();const cancelHost=measured(),cancelRequest=cancelHost.request.bind(cancelHost),abort=new AbortController();let cancelled=false,closes=0;
   cancelHost.request=(async (...args:Parameters<typeof cancelRequest>)=>{
     const page:any=await cancelRequest(...args);
     if ((args[1] as any)?.action==='close') closes++;
@@ -102,7 +102,7 @@ export async function adversarial(f:any) {
     await assert.rejects(cancelHost.request('ingest',{action:'open',job:{client:'claude',file:timeoutFile,sessionId:'overflow',generation:'overflow-generation',identity:ingestIdentity(fs.statSync(timeoutFile)),offset:0}}));
   } finally { for(const c of cursors) await cancelHost.request('ingest',{action:'close',cursor:c.cursor,generation:c.generation,sequence:1}); }
   receipt.checks.push('cancel after page explicitly closes cursor; four cursor bound');
-  reconfigure();const smallHost=measured(),smallRequest=smallHost.request.bind(smallHost),small=file('fallback-small',meta('fallback-small','fallback-model')+answer('bounded local fallback'));
+  await reconfigure();const smallHost=measured(),smallRequest=smallHost.request.bind(smallHost),small=file('fallback-small',meta('fallback-small','fallback-model')+answer('bounded local fallback'));
   let killed=false;
   smallHost.request=(async (...args:Parameters<typeof smallRequest>)=>{
     const pending=smallRequest(...args);
@@ -111,7 +111,7 @@ export async function adversarial(f:any) {
   }) as typeof smallHost.request;
   allowFallback(true);try {await codex(small,'fallback-small');} finally {allowFallback(false);}
   assert.equal(getPosition(small),fs.statSync(small).size);assert.ok([...rows.values()].some((m:any)=>m.content==='bounded local fallback'));receipt.checks.push('small transport failure bounded local fallback');
-  reconfigure();
+  await reconfigure();
   const modelLine=JSON.stringify({type:'turn_context',payload:{model:'model-🫠-split'}})+'\n';
   const modelBytes=Buffer.from(modelLine),splitAt=modelBytes.indexOf(Buffer.from('🫠'))+1;
   const suffixBytes=65536-(modelBytes.length-splitAt);

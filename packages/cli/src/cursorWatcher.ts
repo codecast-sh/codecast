@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { daemonWorkersEnabled } from "./workers/bridge.js";
-import { collectScan, yieldScanBatch } from "./workers/scanClient.js";
+import { yieldScanBatch } from "./scanBatch.js";
 import type { ScanJob, ScanRow } from "./workers/scanTypes.js";
 
 export interface CursorSessionEvent {
@@ -217,7 +217,10 @@ export class CursorWatcher extends EventEmitter {
   }
 
   private async readCursorRows(job: ScanJob): Promise<ScanRow[]> {
-    if (daemonWorkersEnabled()) return collectScan(job);
+    // Both halves load on demand: the worker client only when a worker is
+    // running, which is the daemon, and the in-process pages only when one is
+    // not. Neither belongs on the graph of a CLI that never scans (ct-49758).
+    if (daemonWorkersEnabled()) return (await import("./workers/scanClient.js")).collectScan(job);
     const { scanPages } = await import("./workers/scanJobs.js");
     const rows: ScanRow[] = [];
     for await (const page of scanPages(job)) { rows.push(...page); await yieldScanBatch(); }

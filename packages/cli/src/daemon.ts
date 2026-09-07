@@ -178,7 +178,8 @@ import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllow
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
-import { collectScan, visitScan, scanCanFallback, ScanCancelled, yieldScanBatch } from "./workers/scanClient.js";
+import { collectScan, visitScan, scanCanFallback } from "./workers/scanClient.js";
+import { ScanCancelled, yieldScanBatch } from "./scanBatch.js";
 import { recentScan } from "./workers/scanJobs.js";
 import type { ScanJob, ScanRow } from "./workers/scanTypes.js";
 import { SUSPEND_GAP_MIN_MS, clocksDisagree, sawSuspend } from "./suspendClock.js";
@@ -256,7 +257,7 @@ import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermi
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
-import { readThreadStateStamp } from "./stateCommand.js";
+import { readThreadStateStamp } from "./threadStateStamp.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -23872,7 +23873,7 @@ async function main(): Promise<void> {
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
-  configureDaemonWorkers(config.daemon_workers === true);
+  await configureDaemonWorkers(config.daemon_workers === true);
 
   log(`User ID: ${config.user_id}`);
   log(`Convex URL: ${convexUrl}`);
