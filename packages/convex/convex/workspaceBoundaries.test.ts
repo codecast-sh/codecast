@@ -267,12 +267,43 @@ describe("mentionSearch: workspace-scoped and membership-enforced", () => {
     directory_team_mappings: [],
   });
 
+  test("every entity carries its update timestamp and metadata through the query", async () => {
+    const tables = mentionTables();
+    tables.tasks[0].updated_at = 400;
+    tables.docs[0].updated_at = 300;
+    tables.plans[0].updated_at = 200;
+    const results = await (mentionSearch as any)._handler(ctx(OWNER, tables), {
+      query: "", teamId: TEAM, workspace: "team", types: ["task", "doc", "plan", "session"],
+    });
+    expect(results.find((r: any) => r.id === "t_team")).toMatchObject({ type: "task", status: "open", updatedAt: 400 });
+    expect(results.find((r: any) => r.id === "d_team")).toMatchObject({ type: "doc", docType: "note", updatedAt: 300 });
+    expect(results.find((r: any) => r.id === "p_team")).toMatchObject({ type: "plan", status: "active", updatedAt: 200 });
+    expect(results.find((r: any) => r.id === "c_team")).toMatchObject({ type: "session", updatedAt: 2 });
+  });
+
   test("a foreign team id is rejected, not searched", async () => {
     await expect((mentionSearch as any)._handler(ctx(STRANGER, mentionTables()), {
       query: "",
       teamId: TEAM,
       workspace: "team",
     })).rejects.toThrow("Forbidden");
+  });
+
+  test("recent updates survive the server's per-type limit even on older objects", async () => {
+    const tables = mentionTables();
+    for (const table of ["tasks", "docs", "plans", "conversations"]) {
+      const template = tables[table][0];
+      tables[table] = Array.from({ length: 12 }, (_, index) => ({
+        ...template, _id: `${table}_${index}`, _creationTime: index, updated_at: 100 - index,
+      }));
+    }
+    const results = await (mentionSearch as any)._handler(ctx(OWNER, tables), {
+      query: "", teamId: TEAM, workspace: "team", types: ["task", "doc", "plan", "session"],
+    });
+    for (const type of ["task", "doc", "plan", "session"]) {
+      expect(results.filter((row: any) => row.type === type).map((row: any) => row.updatedAt))
+        .toEqual(Array.from({ length: 10 }, (_, index) => 100 - index));
+    }
   });
 
   test("personal scope returns only effectively-personal items despite an active team", async () => {

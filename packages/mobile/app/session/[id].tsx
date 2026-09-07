@@ -15,7 +15,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isSessionUpdateBatch, parseSessionUpdateBatch, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isSessionUpdateBatch, parseSessionUpdateBatch, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -4932,7 +4932,7 @@ export default function SessionDetailScreen() {
             let prevNonToolResult: Message | null = null;
             for (let i = originalIndex - 1; i >= 0; i--) {
               const prev = allMessages[i];
-              if (prev.role === 'user' && prev.tool_results && prev.tool_results.length > 0) continue;
+              if (isToolResultCarrier(prev)) continue;
               if (prev.role === 'user' && prev.content && isCommandMessage(prev.content)) continue;
               prevNonToolResult = prev;
               break;
@@ -4943,7 +4943,7 @@ export default function SessionDetailScreen() {
             const directUser = item.role === 'user' ? parseUserMessage(item.content) : null;
 
             // Hide standalone tool result messages (they're shown inline with tool calls)
-            if (item.role === 'user' && item.tool_results && item.tool_results.length > 0 && !item.content?.trim()) {
+            if (isToolResultCarrier(item)) {
               return null;
             }
 

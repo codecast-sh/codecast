@@ -18,7 +18,25 @@ export function stripInjectionNoise(text: string): string {
   return text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
-    .replace(/^[\x00-\x1f\s]+/, "");
+    .replace(/^[\x00-\x1f\s]+/, "")
+    // The clearing keystrokes sometimes leak a PRINTABLE character instead of a
+    // control one, leaving "h<session-message from=…". Drop up to two such
+    // characters sitting directly in front of a wire tag, or every predicate
+    // below misses the tag and the message reads as something a person typed.
+    .replace(WIRE_TAG_JUNK_PREFIX, "");
+}
+
+const WIRE_TAG_JUNK_PREFIX =
+  /^[^<\s]{1,2}(?=<(?:session-message|agent-message|user-message|teammate-message|scheduled-task)[\s>])/;
+
+// A user-role row that carries tool results is the harness answering the agent's
+// tool calls, never something a person typed (typed input always lands as its own
+// row). Text on such a row — "Tool loaded." after a ToolSearch, a <fork-boilerplate>
+// directive after an Agent fork — is the harness's postscript to the result. The
+// daemon parser folds it into the result; rows synced before that still carry it
+// as content, so the check must not depend on content being empty.
+export function isToolResultCarrier(m: { role?: string; content?: string | null; tool_results?: readonly unknown[] | null }): boolean {
+  return m.role === "user" && !!m.tool_results?.length;
 }
 
 export function isTurnInterruptionNotice(rawContent: string | null | undefined): boolean {
@@ -32,6 +50,8 @@ export function isAgentContextMessage(rawContent: string | null | undefined): bo
   if (!rawContent) return false;
   const text = stripInjectionNoise(rawContent);
   return /^<(?:recommended_plugins|environment_context|INSTRUCTIONS|collaboration_mode|app-context)>/.test(text)
+    // Codex re-states the thread goal to itself between turns.
+    || /^<codex_internal_context[\s>]/.test(text)
     || /^<permissions(?:\s|>)/.test(text)
     // Codex opens a session (or a project without an AGENTS.md) with a
     // "# Project context\nWorking directory: <cwd>" user turn, unflagged.
@@ -45,6 +65,21 @@ export function isAgentContextMessage(rawContent: string | null | undefined): bo
 export function isSessionMessage(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
   return /^<session-message\s+from="/.test(stripInjectionNoise(rawContent));
+}
+
+// A subagent reporting back to the agent that launched it. The Claude Code
+// harness delivers the reply as a user-role turn wrapped the same way `cast
+// send` wraps a session message, with the subagent's name or id as `from`:
+//
+//   <agent-message from="review-ct-49528">
+//   the body
+//   </agent-message>
+//
+// Same opening-tag-only rule as isSessionMessage, so a truncated preview still
+// matches.
+export function isAgentMessage(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  return /^<agent-message\s+from="/.test(stripInjectionNoise(rawContent));
 }
 
 // A person typing into a session that is not their own — the dashboard's
@@ -128,11 +163,11 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
 }
 
 // Any user-role message delivered by machinery rather than typed by the human:
-// a cross-session `cast send` message, an inter-agent teammate broadcast, a
-// scheduled-task injection, a harness task notification, or a team-chat
-// mention waking the anchor.
+// a cross-session `cast send` message, a subagent's report to its parent, an
+// inter-agent teammate broadcast, a scheduled-task injection, a harness task
+// notification, or a team-chat mention waking the anchor.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionUpdateBatch(rawContent) || isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionUpdateBatch(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

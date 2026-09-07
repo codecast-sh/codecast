@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { isRefusalProse } from "./idleSummary";
+import { isToolResultCarrier } from "@codecast/shared/contracts";
 
 // Floor between generateTitle schedulings for one conversation. The
 // no-subtitle fallback fires on every sync batch of an untitled conversation;
@@ -365,8 +366,8 @@ export const getConversationForTitle = internalQuery({
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const isHumanText = (m: { content?: string | null; tool_results?: unknown[] | null }) =>
-      !!m.content && !m.tool_results?.length;
+    const isHumanText = (m: { role: string; content?: string | null; tool_results?: unknown[] | null }) =>
+      !!m.content && !isToolResultCarrier(m);
 
     const userPrompts = (dir: "asc" | "desc") =>
       ctx.db

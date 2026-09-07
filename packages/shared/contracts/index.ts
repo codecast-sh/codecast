@@ -13,6 +13,7 @@ export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./workState";
 export * from "./loopState";
+export * from "./taskStats";
 export * from "./threadState";
 export * from "./apiErrorBanner";
 export * from "./deviceName";

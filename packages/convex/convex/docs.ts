@@ -1684,6 +1684,7 @@ export const mentionSearch = query({
     }> = [];
 
     const perType = Math.max(10, Math.ceil(limit / types.length));
+    const byUpdated = (a: { updated_at?: number }, b: { updated_at?: number }) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
     if (types.includes("person") && teamId) {
       const memberships = await ctx.db
@@ -1741,7 +1742,7 @@ export const mentionSearch = query({
           .take(perType * 5);
       }
       if (!teamId) tasks = personalOnly(tasks);
-      for (const task of tasks.slice(0, perType)) {
+      for (const task of tasks.sort(byUpdated).slice(0, perType)) {
         results.push({
           id: String(task._id),
           type: "task",
@@ -1750,6 +1751,7 @@ export const mentionSearch = query({
           shortId: task.short_id,
           status: task.status,
           priority: (task as any).priority,
+          updatedAt: task.updated_at,
         });
       }
     }
@@ -1818,7 +1820,7 @@ export const mentionSearch = query({
         const convMap = await buildConvMapForPage(ctx, docs);
         docs = docs.filter((d: any) => !resolveEffectiveTeam(d, convMap));
       }
-      for (const doc of docs.filter((d: any) => !d.archived_at).slice(0, perType)) {
+      for (const doc of docs.filter((d: any) => !d.archived_at).sort(byUpdated).slice(0, perType)) {
         results.push({
           id: String(doc._id),
           type: "doc",
@@ -1827,6 +1829,7 @@ export const mentionSearch = query({
           // match is legible (the title may not contain what you typed).
           sublabel: doc.source_file ? (doc.source_file.split("/").pop() || doc.doc_type) : doc.doc_type,
           docType: doc.doc_type,
+          updatedAt: doc.updated_at,
         });
       }
     }
@@ -1849,7 +1852,7 @@ export const mentionSearch = query({
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
-      for (const plan of (teamId ? filtered : personalOnly(filtered)).slice(0, perType)) {
+      for (const plan of (teamId ? filtered : personalOnly(filtered)).sort(byUpdated).slice(0, perType)) {
         results.push({
           id: String(plan._id),
           type: "plan",
@@ -1858,6 +1861,7 @@ export const mentionSearch = query({
           shortId: plan.short_id,
           status: (plan as any).status,
           goal: (plan as any).goal,
+          updatedAt: plan.updated_at,
         });
       }
     }
@@ -1922,7 +1926,7 @@ export const mentionSearch = query({
         // still belongs here, while a team-visible one belongs to team scope.
         filtered = filtered.filter((c: any) => !teamVisibleConvTeam(c));
       }
-      for (const sess of filtered.slice(0, perType)) {
+      for (const sess of filtered.sort(byUpdated).slice(0, perType)) {
         results.push({
           id: String(sess._id),
           type: "session",
