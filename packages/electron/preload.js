@@ -69,6 +69,11 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getOsPermissions: () => ipcRenderer.invoke("get-os-permissions"),
   requestOsPermission: (kind) => ipcRenderer.invoke("request-os-permission", kind),
   openOsPermissionSettings: (kind) => ipcRenderer.invoke("open-os-permission-settings", kind),
+  // The two grants that belong to the codecast computer helper
+  // (computerPermissions.js): { computerAccessibility, computerScreen }, same
+  // vocabulary. Kept out of getOsPermissions because one read runs the CLI and
+  // takes seconds; `openOsPermissionSettings` covers both kinds too.
+  getComputerPermissions: () => ipcRenderer.invoke("get-computer-permissions"),
   // The people window: the floating buddy list (route /people). One per app —
   // openPeopleWindow focuses the existing one. `isPeopleWindow` tells this
   // renderer it IS that window, so it draws the panel and mounts the call and

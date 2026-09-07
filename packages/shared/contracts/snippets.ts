@@ -630,6 +630,88 @@ export const BROWSER_SECTION: SectionSpec = {
   endMarker: BROWSER_SNIPPET_END,
 };
 
+export const COMPUTER_SNIPPET_END = "<!-- /codecast-computer -->";
+export const COMPUTER_SNIPPET = `
+## Computer
+
+\`cast computer\` drives a native macOS app through its accessibility tree: it reads one visible window as a compact indexed tree of text, acts on a single element by its index, and hands back a fresh tree. Reach for it when the work is in a desktop app — Slack, Spotify, Mail, System Settings, an installer, a native dialog — or when a browser window needs something the page itself cannot reach: the address field, a file picker, a permission sheet. For anything inside a web page, \`cast browser\` is the tool and stays the default; it holds the human's logins and speaks the page's own structure.
+
+Accessibility and Screen Recording are granted by hand, once, to the codecast computer helper. Until the human does that, every verb fails saying so, and the fix takes three steps in this order. Read the grants with \`cast computer permissions\`: it reports and shows nothing on screen, so it is free to run at any time. If one is missing, tell the human which one and wait for them, because only \`--open-settings\` opens the pane they grant in and it takes the front of their screen. Then read the grants again to see what they did. Reading twice with no human in between changes nothing, and no amount of retrying grants anything.
+
+\`\`\`bash
+cast computer capabilities                        # what this machine supports; sets the helper up on first run
+cast computer permissions                         # read both grants; silent, nothing appears on screen
+cast computer permissions --open-settings --id accessibility   # or --id screenshots; takes the front, so ask first
+cast computer permissions --reset                 # clear both grants, for a stale deny that blocks a regrant
+cast computer list-apps                           # bundle ids and pids of what is running
+cast computer list-windows --app <app>            # the window id and index every other verb targets
+cast computer get-app-state --app <app>           # one window as an indexed tree, plus a screenshot
+cast computer click --app <app> --element-index 42
+cast computer set-value --app <app> --element-index 42 --value "hello"
+cast computer perform-secondary-action --app <app> --element-index 42 --action "open in new tab"
+cast computer scroll --app <app> --direction down --element-index 42
+cast computer type-text --app <app> --text "hello"
+cast computer press-key --app <app> --key Return
+cast computer hotkey --app <app> --key CmdOrCtrl+A
+cast computer paste-text --app <app> --text "a long body"
+\`\`\`
+
+\`--app\` takes a bundle id (\`com.apple.TextEdit\`), an app name (\`TextEdit\`) or \`pid:1234\`; prefer the bundle id, because names collide. Add \`--window-id\` or \`--window-index\` from \`list-windows\` when an app has several windows, and keep passing the same one until the target changes. Every verb takes \`--json\`, and every verb that touches a window also takes \`--no-screenshot\` and \`--restore-window\`. \`cast computer help <verb>\` prints that verb's flags from the binary that is about to run them — ask it rather than guessing, and rather than trusting a flag list you read anywhere else.
+
+**The loop is read, act, read.** Snapshot with \`get-app-state\`, act on one element by the index the tree gave it, then read the fresh tree the action returns. Every action returns a full new snapshot, so you never need a separate state call between two steps.
+
+**Indexes are sparse, and they go stale.** The tree drops noise, so the numbers have gaps: never infer an index from \`elementCount\`, and never count your way to one. An index is good only for the tree it came from. Navigation, scrolling, a focus change, a delay, or another agent driving the same window all invalidate it. A stale index fails as \`element_not_found\` rather than clicking whatever now sits at that number, so the failure is cheap and the fix is always the same: snapshot again.
+
+**Read the verification apart from the success.** Exit 0 means the helper delivered the action, not that the app took it. Each action reports its own verdict: \`verified\` means the change was read back, and every other verdict names why it could not be — synthetic input, a clipboard paste, an accessibility action nobody asserted, or metadata an older helper never sent. Human output opens with \`completed\` only for a verified action and \`attempted\` for the rest; in \`--json\` the verdict is \`action.verification\`. When it says unverified and the result matters, run \`get-app-state\` and look.
+
+**Prefer the verbs that leave the screen alone.** \`set-value\`, \`perform-secondary-action\`, and a click on an element that advertises a press all work on a window in the background: they take nothing from the human, and they are the ones that can be verified. Keyboard input is the opposite. \`type-text\`, \`press-key\`, \`hotkey\` and a click on a coordinate go to whatever is focused, so they need the target window frontmost already and otherwise fail with \`window_not_focused\`.
+
+**No verb raises a window on its own.** Two flags move the human's screen and nothing else does: \`--restore-window\` brings a target window forward, and \`--open-settings\` brings System Settings forward. Pass either when they asked for it, or when the work genuinely cannot proceed without it, and not otherwise: everything else you do here is invisible to them, which is the point.
+
+**Secrets never go on the command line.** \`--text-stdin\` for \`type-text\` and \`paste-text\`, \`--value-stdin\` for \`set-value\`. The payload arrives on stdin, so it stays out of shell history and out of every other user's \`ps\` output. Passing \`--text\` and \`--text-stdin\` together is an error, and so is asking for stdin when stdin is a terminal.
+
+\`\`\`bash
+printf '%s' "$TOKEN" | cast computer set-value --app <app> --element-index 42 --value-stdin
+\`\`\`
+
+**Password managers are refused.** 1Password, Bitwarden, Dashlane, LastPass, NordPass and Proton Pass answer \`app_blocked\` however you name them, and the helper enforces that, not the CLI. Any field that reads as a password, a passcode or a one time code renders as \`[redacted]\` in every tree; its real value never leaves the helper. When an app holds sensitive content, read only what you were asked to read.
+
+**Modifiers are one flag, never two commands.** \`click --modifiers CmdOrCtrl+Shift\` holds them for that click alone. Never send a modifier down and a modifier up around something else: an agent interrupted between the two leaves a key logically held for the human. \`press-key\` takes exactly one key, \`hotkey\` takes a modifier and one key, and each says so when you mix them up. A paste above 16 MiB is refused rather than delivered, and \`paste-text\` puts the human's clipboard back when it is done.
+
+**The behaviour rule.** Do not push, submit a form, send a message, buy anything, delete data, or change account settings unless the human asked for that action. Reading is yours to do; anything that leaves a mark is theirs to ask for.
+
+**Coordinates are measured inside the window, not on the screen.** A screenshot on a retina display has more pixels than the window has points, so convert before you click: \`action_x = screenshot_pixel_x / screenshot.scale\`, taking the scale from that same capture. The snapshot header prints the division. Prefer an element index whenever the tree offers one.
+
+**Every failure carries a code and its own recovery.** \`--json\` puts them in \`code\` and \`recovery\`; human output prints the recovery under the message. Read it and change something — never retry the same command unchanged.
+
+| code | what to do about it |
+| --- | --- |
+| \`app_not_found\` | Nothing is running under that selector. List the apps and use the exact bundle id. A website is not a selector: target the browser that holds it. |
+| \`app_blocked\` | A password manager, refused on purpose. Stop, and ask the human to do it. |
+| \`window_not_found\` | No window matches. List the windows and target a listed one; \`cast computer\` never opens a closed app. |
+| \`window_not_focused\` | Keyboard input needs the window frontmost. Ask once with \`--restore-window\`, or switch to \`set-value\`, which does not care. |
+| \`window_stale\` | The window went away between the snapshot and the action. List the windows again, then take a fresh snapshot. |
+| \`element_not_found\` | The index is stale, or was never in that tree. Take a fresh snapshot and use its numbers. |
+| \`element_not_clickable\` | The element has no frame to click. Use a parent or a child that has one, or a coordinate. |
+| \`action_not_supported\` | That name is not one this element advertises. Read its \`Secondary Actions\` in a fresh tree. |
+| \`value_not_settable\` | The element takes no written value. Choose one that does, or focus it and type. |
+| \`invalid_argument\` | The flags are wrong and the message says exactly how. Fix them; do not retry unchanged. |
+| \`permission_denied\` | Accessibility is not granted, or the helper belongs to another launch. Read \`cast computer permissions\`. If the grant is missing, ask the human, run \`cast computer permissions --open-settings --id accessibility\` once while they are there, then read again. A launch mismatch clears on a rerun. |
+| \`screenshot_failed\` | The pixels are missing; the tree is not. Rerun with \`--no-screenshot\`. If the message names Screen Recording, ask the human, run \`cast computer permissions --open-settings --id screenshots\` once while they are there, then read the grants again. |
+| \`action_timeout\` | The helper did not answer in time. Snapshot first to see what changed, then try a simpler action. |
+| \`unsupported_capability\` | This build or this platform cannot do it. Check \`capabilities\` and take another route. |
+| \`provider_incompatible\` | The CLI and its helper come from different releases. Update codecast. |
+| \`accessibility_error\` | The helper is missing, would not start, or died. Run \`cast computer capabilities\`. If the message names Accessibility, ask the human, run \`cast computer permissions --open-settings --id accessibility\` once while they are there, then read the grants again. If it names the helper app, run \`cast doctor\`. |
+
+Two conditions carry no code and still mean something. A tree that comes back empty with no screenshot usually means the app has no visible window, is minimized, or is missing a grant. And any message that mentions a permission means to read \`cast computer permissions\` before you try anything else — the read is silent and costs the human nothing, while granting is theirs alone and needs \`--open-settings\`.
+${COMPUTER_SNIPPET_END}
+`;
+
+export const COMPUTER_SECTION: SectionSpec = {
+  headings: ["## Computer"],
+  endMarker: COMPUTER_SNIPPET_END,
+};
+
 // One explanation of how agents name codecast objects in prose, shared by every
 // feature that introduces one (sessions, tasks, plans, triggers, docs). Each of
 // those snippets used to teach its own object's id in its own words — or not at
@@ -1078,6 +1160,25 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     section: { spec: BROWSER_SECTION, body: BROWSER_SNIPPET },
   },
   {
+    slug: "computer",
+    aliases: ["computer-use", "desktop", "mac", "native"],
+    name: "Computer",
+    desc: "Drive a native macOS app (cast computer)",
+    detail:
+      "Adds `cast computer` so agents can work in desktop apps the way they already work " +
+      "in a web page: read one window as an indexed tree of its buttons, fields and text, " +
+      "then click, scroll, type or write a value into a single element by its index. It " +
+      "runs through a small signed helper that you grant Accessibility and Screen " +
+      "Recording once, so no other codecast binary ever asks. Password managers are " +
+      "refused outright, password fields read as `[redacted]`, and no verb brings a " +
+      "window to the front unless the agent explicitly asks for it.",
+    writesTo: "CLAUDE.md — a ## Computer section with the command reference",
+    shipped: "2026-09-07",
+    enabledKey: "computer_enabled",
+    versionKey: "computer_version",
+    section: { spec: COMPUTER_SECTION, body: COMPUTER_SNIPPET },
+  },
+  {
     slug: "decide",
     aliases: ["decisions-queue", "queue"],
     name: "Decision queue",
@@ -1189,4 +1290,121 @@ export function snippetSection(slug: string): SnippetSection {
  */
 export function snippetContentHash(body: string): string {
   return manifestHash({ scripts: [body] });
+}
+
+// ------------------------------------------------------- version stamp + stubs
+//
+// Two problems this half solves, both of them "the file on disk and the binary
+// that will run the commands disagree".
+//
+//   1. An installed section named no version, so nothing could tell a CLAUDE.md
+//      written by last month's cast from one written by the binary in $PATH.
+//      Every install now writes a stamp line just above the section's end
+//      marker; `cast doctor` reads it, and `cast guide` prints the same version
+//      beside the body it serves.
+//   2. The full sections are long. `cast guide <slug>` serves the body from the
+//      binary, so a CLAUDE.md can carry a short stub instead — what the
+//      capability is, when to reach for it, and where the flags live.
+//
+// The stamp sits INSIDE the section window (between the heading and the end
+// marker), so the section engine rewrites it with the rest of the block and the
+// end marker keeps its exact bytes. A marker carrying the version instead would
+// stop matching the sections already installed on every machine.
+
+/** How much of a capability the installed section carries. */
+export type GuidanceMode = "full" | "stub";
+
+const STAMP_PREFIX = "<!-- cast ";
+const STAMP_SUFFIX = " -->";
+/** Anchored to its own line, so it can never match prose inside a body. */
+const STAMP_LINE = /^<!-- cast ([^\s>]+) -->\n/m;
+
+/** The stamp line an install writes: which cast produced these bytes. */
+export function snippetStamp(version: string): string {
+  return `${STAMP_PREFIX}${version}${STAMP_SUFFIX}`;
+}
+
+/** The cast version stamped in an installed section, or null for a section
+ *  written before stamps existed. */
+export function readSnippetStamp(text: string): string | null {
+  return STAMP_LINE.exec(text)?.[1] ?? null;
+}
+
+/** The same text without its stamp line — how two sections are compared for
+ *  real drift, so a version bump alone never reads as changed content. */
+export function stripSnippetStamp(text: string): string {
+  return text.replace(STAMP_LINE, "");
+}
+
+/**
+ * `body` with exactly one stamp line, immediately above its end marker.
+ *
+ * Idempotent: an existing stamp is dropped first, so stamping bytes this
+ * function already produced reproduces them and an update settles on its
+ * second run.
+ */
+export function stampSectionBody(body: string, endMarker: string, version: string): string {
+  const clean = stripSnippetStamp(body);
+  const at = clean.lastIndexOf(endMarker);
+  if (at === -1) return clean; // no marker to anchor to; leave the bytes alone
+  return clean.slice(0, at) + snippetStamp(version) + "\n" + clean.slice(at);
+}
+
+/**
+ * The short form of a section: what the capability is, when to reach for it,
+ * and the one command that serves the rest.
+ *
+ * Generated from the catalog's own display fields rather than written per
+ * snippet — the same `desc` and `detail` the install wizard and the web
+ * Settings page already show. A snippet added to the catalog therefore has a
+ * stub, a `cast guide` topic and a doctor check the moment it exists, with no
+ * second table to keep in step.
+ */
+export function stubSectionBody(descriptor: SnippetDescriptor): string {
+  const section = descriptor.section;
+  if (!section) throw new Error(`snippet "${descriptor.slug}" has no markdown section`);
+  return (
+    `\n${section.spec.headings[0]}\n\n` +
+    `${descriptor.desc}. ${descriptor.detail}\n\n` +
+    `Run \`cast guide ${descriptor.slug}\` for the commands and flags. The guide ships ` +
+    `inside the binary you run, so it always matches the \`cast\` that will execute them.\n` +
+    `${section.spec.endMarker}\n`
+  );
+}
+
+/**
+ * The markdown one install writes for `descriptor`: full body or stub, with
+ * this binary's version stamped in. The single place either mode is rendered,
+ * so the installer, the daemon's refresh pass and doctor's comparison agree.
+ *
+ * A stub only replaces a section it makes substantially smaller — under two
+ * thirds of it. `calls` (754 bytes) and `limits` (767) are short enough that
+ * their stub saves 30 bytes or 220, and paying a `cast guide` run to save that
+ * is a worse trade than keeping the guidance in the file. Stub mode exists to
+ * spend fewer tokens, not to replace prose with pointers wherever it can.
+ */
+export function renderSectionBody(
+  descriptor: SnippetDescriptor,
+  mode: GuidanceMode,
+  version: string,
+): string {
+  const section = descriptor.section;
+  if (!section) throw new Error(`snippet "${descriptor.slug}" has no markdown section`);
+  const stub = mode === "stub" ? stubSectionBody(descriptor) : null;
+  const worthIt = stub !== null && stub.length * 3 < section.body.length * 2;
+  const body = worthIt ? stub! : section.body;
+  return stampSectionBody(body, section.spec.endMarker, version);
+}
+
+/** The catalog entry that owns an end marker. The installer is handed specs,
+ *  not slugs, and the shared "Referencing objects" section belongs to no
+ *  snippet at all — it answers undefined for that one. */
+export function snippetByEndMarker(endMarker: string): SnippetDescriptor | undefined {
+  return SNIPPET_CATALOG.find((s) => s.section?.spec.endMarker === endMarker);
+}
+
+/** Every topic `cast guide` serves: the snippets that install markdown. A6's
+ *  `computer` section (ct-49522) joins the list by landing in the catalog. */
+export function guideTopics(): SnippetDescriptor[] {
+  return SNIPPET_CATALOG.filter((s) => s.section);
 }

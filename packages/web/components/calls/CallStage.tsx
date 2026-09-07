@@ -68,13 +68,13 @@ import {
 } from "../../lib/desktop";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
-import { permissionActionLabel, requestOsPermission, type OsPermissionKind } from "../../lib/osPermissions";
+import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
 // or System Settings). No button when the OS says it's granted — then the
 // trouble is the device itself, and the sentence already says so.
-function CallErrorNotice({ error, fix }: { error: string; fix: OsPermissionKind | null }) {
+function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind | null }) {
   const { permissions, refresh } = useOsPermissions();
   const readiness = fix ? permissions[fix] : null;
   const action = fix && readiness ? permissionActionLabel(readiness) : null;

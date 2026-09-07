@@ -16,7 +16,7 @@ import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } 
 import { applySyncTable, applySyncRecord, applySyncPatch, type PendingEntry } from "./syncProtocol";
 import { current, isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import type { OsPermissionKind } from "../lib/osPermissions";
+import type { AppPermissionKind } from "../lib/osPermissions";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, setUpgradeBlockedListener, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
@@ -5093,8 +5093,10 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
     speaking: string[];
     error: string | null;
     /** When `error` is a device that could not be opened, the OS permission
-     *  behind it — so the notice can carry the fix (lib/osPermissions). */
-    errorFix: OsPermissionKind | null;
+     *  behind it — so the notice can carry the fix (lib/osPermissions). It is
+     *  always a grant this app holds itself; the codecast computer grants have
+     *  no part in a call. */
+    errorFix: AppPermissionKind | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;
