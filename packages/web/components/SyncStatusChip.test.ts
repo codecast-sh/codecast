@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { selectColdLoad, selectSyncFlags, selectSyncing, selectSyncSummary } from "./SyncStatusChip";
+import { selectColdLoad, selectRosterScopes, selectSyncFlags, selectSyncing, selectSyncSummary } from "./SyncStatusChip";
 import { useInboxStore } from "../store/inboxStore";
 
 // Regression coverage for the header sync chip. The bug: the chip read
@@ -127,5 +127,63 @@ describe("selectSyncFlags", () => {
     expect(selectSyncFlags({ liveLoading: { sessions: true }, sessions: {} })).toBe(3);
     expect(selectSyncFlags({ liveLoading: { sessions: true }, sessions: { one: {} } })).toBe(0);
     expect(selectSyncFlags({ liveLoading: {}, syncLogLag: { "user:u": 1 } })).toBe(1);
+  });
+});
+
+describe("selectRosterScopes", () => {
+  const warm = { sessions: { a: {} }, tasks: { t: {} }, docs: { d: {} }, projects: { p: {} }, plans: { n: {} } };
+
+  it("hides leftover settled scopes on an idle panel", () => {
+    // The screenshot bug: projects stayed in liveLoading as false and was
+    // treated as cold, so the idle hover listed "Projects ✓ up to date".
+    expect(selectRosterScopes({
+      liveLoading: { sessions: false, tasks: false, docs: false, projects: false },
+    })).toEqual([]);
+    expect(selectRosterScopes({
+      ...warm,
+      liveLoading: { sessions: false, projects: false },
+    })).toEqual([]);
+  });
+
+  it("lists cold scopes only while a first-load wave is in flight", () => {
+    expect(selectRosterScopes({
+      liveLoading: { sessions: true, docs: false, projects: false },
+      sessions: {},
+      docs: {},
+      projects: {},
+    })).toEqual(["sessions", "docs", "projects"]);
+  });
+
+  it("drops a warm collection from the roster even during a wave", () => {
+    expect(selectRosterScopes({
+      ...warm,
+      sessions: {},
+      liveLoading: { sessions: true, projects: false, docs: false },
+    })).toEqual(["sessions"]);
+  });
+
+  it("ignores unlabeled liveLoading keys", () => {
+    expect(selectRosterScopes({
+      liveLoading: { sessions: true, capabilityState: true },
+      sessions: {},
+    })).toEqual(["sessions"]);
+  });
+});
+
+describe("cold collection scan reuse", () => {
+  it("scans an unchanged collection once across status and roster selectors", () => {
+    let scans = 0;
+    const tasks = new Proxy({ task: {} }, {
+      ownKeys(target) { scans++; return Reflect.ownKeys(target); },
+    });
+    const state = { liveLoading: { tasks: true }, tasks };
+    for (let i = 0; i < 25; i++) {
+      expect(selectSyncFlags(state)).toBe(0);
+      expect(selectSyncSummary(state)).toEqual({ settled: 0, total: 0 });
+      expect(selectRosterScopes(state)).toEqual([]);
+    }
+    expect(scans).toBe(1);
+    expect(selectSyncFlags({ ...state, tasks: {} })).toBe(3);
+    expect(selectSyncFlags({ ...state, tasks: { next: {} } })).toBe(0);
   });
 });

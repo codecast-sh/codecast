@@ -11,38 +11,37 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 // rather than an indefinite, identical-looking spin.
 const STALL_MS = 20_000;
 
-// Human names for the store scopes the panel lists. liveLoading uses the first
-// three; the reconcile crawl also reports the dismiss/stash sweeps.
+// Human names for the store scopes the panel lists. liveLoading uses the
+// collection scopes; the reconcile crawl also reports the dismiss/stash sweeps.
 const SCOPE_LABELS: Record<string, string> = {
   sessions: "Sessions",
   tasks: "Tasks",
   docs: "Docs",
   projects: "Projects",
+  plans: "Plans",
   dismissed: "Dismissed sessions",
   stashed: "Stashed sessions",
 };
 const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
 
 /**
- * Header status dot that lights while the app is pulling fresh data from the
- * server — the cold-open "data syncing in" phase you see right after the desktop
- * app has been closed for a while. It occupies a fixed slot in every state and
- * never renders text, so the header layout is identical whether it is idle,
- * syncing or stalled. Hovering it expands a panel that carries the detail: how
- * many scopes are caught up, the per-scope state, and the background
- * backfill's row counts.
+ * Header status LED. Occupies a fixed slot in every state and never renders
+ * text, so the header layout is identical whether it is idle, syncing or
+ * stalled. Hovering it expands a panel with the detail: how many scopes are
+ * caught up, the per-scope state, and the background backfill's row counts.
  *
- * Visibility: the dot lights for a cold first load (a live subscription still
- * owed its first payload into an empty collection) and for a stall (a sync log
- * catch-up that has dragged past STALL_MS). It deliberately stays dark for the
- * routine case — a warm cache replaying a handful of incoming changes, which
- * takes well under a second and happens several times a minute in a busy
+ * The LED is always painted — a quiet green when caught up, not a dim gray
+ * that reads as "unknown" or "offline". It pulses only for a cold first load
+ * (a live subscription still owed its first payload into an empty collection)
+ * and for a stall (a sync log catch-up that has dragged past STALL_MS). A warm
+ * cache replaying a handful of incoming changes stays green with no pulse:
+ * that takes well under a second and happens several times a minute in a busy
  * team. It never keys off `syncProgress` (the background reconcile crawl),
  * which pages every row at a throttled pace for minutes and kept the old pill
  * lit ~forever. The crawl only feeds the hover DETAIL.
  *
- * Color carries the health signal: cyan for a normal sync, amber once it drags
- * past STALL_MS so a genuinely slow backend looks different from a quick one.
+ * Color: green when caught up, cyan while a cold load is in flight, amber
+ * once a catch-up drags past STALL_MS.
  */
 // What the pill waits on, in order of what "not caught up" honestly means now
 // that the sync log owns catch-up (docs/architecture/sync-log-migration.md):
@@ -61,17 +60,28 @@ type SyncSelectorState = {
   sessions?: Record<string, unknown>;
   tasks?: Record<string, unknown>;
   docs?: Record<string, unknown>;
+  projects?: Record<string, unknown>;
+  plans?: Record<string, unknown>;
 };
 const LIVE_SCOPE_COLLECTION: Record<string, keyof SyncSelectorState> = {
   sessions: "sessions",
   tasks: "tasks",
   docs: "docs",
+  projects: "projects",
+  plans: "plans",
 };
+const coldByCollection = new WeakMap<object, boolean>();
 function collectionIsCold(s: SyncSelectorState, scope: string): boolean {
   const key = LIVE_SCOPE_COLLECTION[scope];
   if (!key) return true; // unknown scope: assume cold (fail toward showing)
   const coll = s[key] as Record<string, unknown> | undefined;
-  return !coll || Object.keys(coll).length === 0;
+  if (!coll) return true;
+  let cold = coldByCollection.get(coll);
+  if (cold === undefined) {
+    cold = Object.keys(coll).length === 0;
+    coldByCollection.set(coll, cold);
+  }
+  return cold;
 }
 // Exported for the regression test: { settled, total } over everything the
 // pill watches. total === 0 means idle.
@@ -100,7 +110,7 @@ export function selectSyncing(s: SyncSelectorState): boolean {
 }
 // The first-load case on its own: a live subscription still owed its first
 // payload into a collection with no cached rows. This is the only routine
-// state the dot shows — the screen is genuinely empty until it lands.
+// state the LED pulses for — the screen is genuinely empty until it lands.
 export function selectColdLoad(s: SyncSelectorState): boolean {
   for (const scope in s.liveLoading) {
     if (s.liveLoading[scope] && collectionIsCold(s, scope)) return true;
@@ -118,6 +128,24 @@ export function selectSyncFlags(s: SyncSelectorState): number {
     }
   }
   return 0;
+}
+
+const knownScopeRank = (scope: string) => {
+  const keys = Object.keys(SCOPE_LABELS);
+  const i = keys.indexOf(scope);
+  return i === -1 ? keys.length : i;
+};
+
+// Scopes the hover panel lists as a progress roster. Empty when nothing is in
+// a cold first-load — a settled leftover (Projects with liveLoading=false,
+// treated as cold because the collection was empty or unmapped) must not keep
+// a "✓ up to date" row on an otherwise idle panel.
+export function selectRosterScopes(s: SyncSelectorState): string[] {
+  const coldLabeled = Object.keys(s.liveLoading)
+    .filter((scope) => SCOPE_LABELS[scope] && collectionIsCold(s, scope));
+  const wave = coldLabeled.some((scope) => s.liveLoading[scope]);
+  if (!wave) return [];
+  return coldLabeled.sort((a, b) => knownScopeRank(a) - knownScopeRank(b) || a.localeCompare(b));
 }
 
 export function SyncStatusChip() {
@@ -153,18 +181,24 @@ export function SyncStatusChip() {
     return () => clearTimeout(t);
   }, [syncing]);
 
-  // A fixed 16px slot in every state. The dot never carries text, so nothing
+  // A fixed 20px slot in every state. The LED never carries text, so nothing
   // next to it shifts when sync starts, ticks through scopes, or settles: the
-  // only thing that changes is the dot's color and its pulse ring.
+  // only thing that changes is the color and its pulse ring.
   const active = mounted && (coldLoad || stalled);
-  const color = !active ? "var(--sol-text-dim)" : stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
+  const color = !mounted
+    ? "var(--sol-text-dim)"
+    : stalled
+      ? "var(--sol-yellow)"
+      : active
+        ? "var(--sol-cyan)"
+        : "var(--sol-green)";
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
-            className="relative hidden md:flex h-7 w-4 flex-shrink-0 items-center justify-center rounded cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
+            className="relative hidden md:flex h-7 w-5 flex-shrink-0 items-center justify-center rounded cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
             aria-label={`Sync status: ${!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing"}`}
           >
             <span aria-hidden="true" className="relative flex h-2 w-2">
@@ -175,13 +209,13 @@ export function SyncStatusChip() {
                 />
               )}
               <span
-                className="relative inline-flex h-2 w-2 rounded-full transition-colors duration-300"
-                style={{ background: color, opacity: active ? 1 : 0.3 }}
+                className="relative inline-flex h-2 w-2 rounded-full transition-[background-color,opacity] duration-300"
+                style={{ background: color, opacity: active ? 1 : 0.85 }}
               />
             </span>
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" sideOffset={6} collisionPadding={8} className="w-[300px] max-w-[calc(100vw-16px)] border bg-popover p-0 text-popover-foreground shadow-md">
+        <TooltipContent side="bottom" align="end" sideOffset={6} collisionPadding={8} className="w-[280px] max-w-[calc(100vw-16px)] overflow-hidden border bg-popover p-0 text-popover-foreground shadow-md">
           {mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} />}
         </TooltipContent>
       </Tooltip>
@@ -199,99 +233,90 @@ function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalle
   const syncProgress = useInboxStore((s) => s.syncProgress);
   const syncLogLag = useInboxStore((s) => s.syncLogLag);
   const applyStats = useInboxStore((s) => s.syncLogApplyStats);
-  const coldScopes = useInboxStore((s) =>
-    Object.keys(s.liveLoading).filter((scope) => collectionIsCold(s, scope)).join(","));
-  const known = Object.keys(SCOPE_LABELS);
-  const rank = (s: string) => {
-    const i = known.indexOf(s);
-    return i === -1 ? known.length : i;
-  };
-  const cold = new Set(coldScopes ? coldScopes.split(",") : []);
-  const scopes = Object.keys(liveLoading)
-    .filter((scope) => cold.has(scope))
-    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const rosterKey = useInboxStore((s) => selectRosterScopes(s).join(","));
+  const scopes = rosterKey ? rosterKey.split(",") : [];
   const behind = Object.entries(syncLogLag).filter(([, lag]) => lag > 0);
   const logScopeLabel = (scope: string) =>
     scope.startsWith("user:") ? "Your workspace" : scope.startsWith("team:") ? "Team workspace" : scope;
   const crawls = Object.entries(syncProgress)
     .filter(([, p]) => p.loading)
-    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+    .sort(([a], [b]) => knownScopeRank(a) - knownScopeRank(b) || a.localeCompare(b));
+  const headline = !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing the latest data";
+  const hasBody = !syncing || applyStats.direct > 0 || applyStats.refetch > 0 || behind.length > 0 || scopes.length > 0;
   return (
-    <div>
-        <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">Sync status</div>
-        <div className="flex items-center gap-2 border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
-          <span className="whitespace-nowrap">
-            {!syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing the latest data"}
+    <div className="min-w-0">
+      <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">Sync status</div>
+      <div className="flex items-center gap-2 border-b border-sol-border/60 px-3 py-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />
+        <span className="min-w-0 text-xs font-semibold text-sol-text">{headline}</span>
+        {syncing && total > 1 && (
+          <span className="ml-auto shrink-0 tabular-nums text-[11px] font-normal text-sol-text-dim">
+            {settled}/{total}
           </span>
-          {syncing && total > 1 && (
-            <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums font-normal text-sol-text-dim">
-              {settled}/{total} caught up
-            </span>
-          )}
-        </div>
-        <div className="px-3 py-2 space-y-1.5">
-          {!syncing && <p className="text-xs text-sol-text-dim">New changes arrive automatically.</p>}
+        )}
+      </div>
+      {hasBody && (
+        <div className="space-y-1.5 px-3 py-2">
+          {!syncing && <p className="text-xs leading-snug text-sol-text-dim">New changes arrive automatically.</p>}
           {(applyStats.direct > 0 || applyStats.refetch > 0) && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="whitespace-nowrap text-sol-text">Log applied</span>
-              <span className="ml-auto whitespace-nowrap tabular-nums text-sol-text-dim">
-                {applyStats.direct.toLocaleString()} direct · {applyStats.refetch.toLocaleString()} refetched
-              </span>
-            </div>
+            <p className="text-[11px] leading-snug tabular-nums text-sol-text-dim">
+              {applyStats.direct.toLocaleString()} applied
+              {applyStats.refetch > 0 && <> · {applyStats.refetch.toLocaleString()} refetched</>}
+            </p>
           )}
           {behind.map(([scope, lag]) => (
-                <div key={scope} className="flex items-center gap-2 text-xs">
-                  <span className="whitespace-nowrap text-sol-text">{logScopeLabel(scope)}</span>
-                  <span className="ml-auto flex items-center gap-1.5 whitespace-nowrap tabular-nums text-sol-text-dim">
-                    <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
-                    {lag.toLocaleString()} change{lag === 1 ? "" : "s"} behind
-                  </span>
-                </div>
-              ))}
-          {scopes.map((scope) => (
-                <div key={scope} className="flex items-center gap-2 text-xs">
-                  <span className="text-sol-text">{scopeLabel(scope)}</span>
-                  {liveLoading[scope] ? (
-                    <span className="ml-auto flex items-center gap-1.5 text-sol-text-dim">
-                      <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
-                      loading…
-                    </span>
-                  ) : (
-                    <span className="ml-auto flex items-center gap-1.5 text-sol-text-dim">
-                      <Check className="w-3 h-3 text-sol-green" />
-                      up to date
-                    </span>
-                  )}
-                </div>
-              ))}
+            <div key={scope} className="flex min-w-0 items-center gap-2 text-xs">
+              <span className="min-w-0 truncate text-sol-text">{logScopeLabel(scope)}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums text-sol-text-dim">
+                <Loader2 className="h-3 w-3 animate-spin" style={{ color }} />
+                {lag.toLocaleString()} behind
+              </span>
             </div>
-            {crawls.length > 0 && (
-              <div className="border-t border-sol-border/60 px-3 py-2">
-                <div className="pb-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
-                  Background backfill
-                </div>
-                <div className="space-y-1.5">
-                  {crawls.map(([scope, p]) => (
-                    <div key={scope} className="flex items-center gap-2 text-xs">
-                      <span className="text-sol-text">{scopeLabel(scope)}</span>
-                      <span className="ml-auto flex items-center gap-1.5 tabular-nums text-sol-text-dim">
-                        <Loader2 className="w-3 h-3 animate-spin opacity-60" />
-                        {p.loaded > 0 ? `${p.loaded.toLocaleString()} rows…` : "starting…"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                <div className="pt-1.5 text-[10px] leading-snug text-sol-text-dim">
-                  Streams older items in at a throttled pace — the app is fully usable meanwhile.
-                </div>
-              </div>
-            )}
-        {stalled && (
-          <div className="border-t border-sol-border/60 px-3 py-2 text-[10px] leading-snug text-sol-yellow">
-            Still waiting on the server — it may be under load. Recent data can be incomplete
-            until this settles.
+          ))}
+          {scopes.map((scope) => (
+            <div key={scope} className="flex min-w-0 items-center gap-2 text-xs">
+              <span className="min-w-0 truncate text-sol-text">{scopeLabel(scope)}</span>
+              {liveLoading[scope] ? (
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 text-sol-text-dim">
+                  <Loader2 className="h-3 w-3 animate-spin" style={{ color }} />
+                  loading
+                </span>
+              ) : (
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 text-sol-text-dim">
+                  <Check className="h-3 w-3 text-sol-green" />
+                  caught up
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {crawls.length > 0 && (
+        <div className="border-t border-sol-border/60 px-3 py-2">
+          <div className="pb-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
+            Background backfill
           </div>
-        )}
+          <div className="space-y-1.5">
+            {crawls.map(([scope, p]) => (
+              <div key={scope} className="flex min-w-0 items-center gap-2 text-xs">
+                <span className="min-w-0 truncate text-sol-text">{scopeLabel(scope)}</span>
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums text-sol-text-dim">
+                  <Loader2 className="h-3 w-3 animate-spin opacity-60" />
+                  {p.loaded > 0 ? `${p.loaded.toLocaleString()} rows` : "starting"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="pt-1.5 text-[10px] leading-snug text-sol-text-dim">
+            Older items stream in at a throttled pace. The app is usable meanwhile.
+          </div>
+        </div>
+      )}
+      {stalled && (
+        <div className="border-t border-sol-border/60 px-3 py-2 text-[10px] leading-snug text-sol-yellow">
+          Still waiting on the server. Recent data can be incomplete until this settles.
+        </div>
+      )}
     </div>
   );
 }
