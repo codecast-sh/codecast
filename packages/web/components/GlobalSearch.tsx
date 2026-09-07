@@ -95,18 +95,19 @@ export function GlobalSearch() {
   // it. As the slot tightens the field sheds the ⌘/ hint first, then folds
   // into the icon.
   const rootRef = useRef<HTMLDivElement>(null);
-  const [slotW, setSlotW] = useState(Infinity);
+  const [slotSize, setSlotSize] = useState<"wide" | "medium" | "compact">("wide");
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const measure = () => setSlotW(el.getBoundingClientRect().width);
-    measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      setSlotSize(width < 140 ? "compact" : width < 210 ? "medium" : "wide");
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const hideCaps = slotW < 210;
-  const compact = slotW < 140;
+  const hideCaps = slotSize !== "wide";
+  const compact = slotSize === "compact";
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchIsSlow, setSearchIsSlow] = useState(false);

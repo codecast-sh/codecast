@@ -57,9 +57,10 @@ export function AuthorAvatar({
 }: {
   name?: string | null;
   avatar?: string | null;
-  size?: number;
+  size?: number | string;
 }) {
   const dim = { width: size, height: size };
+  const fallbackSize = typeof size === "number" ? Math.round(size * 0.55) : "0.55em";
   return (
     <AvatarImg
       src={avatar}
@@ -69,7 +70,7 @@ export function AuthorAvatar({
       fallback={
         <span
           className="inline-flex items-center justify-center rounded-full bg-sol-blue/20 text-sol-blue font-semibold leading-none ring-1 ring-sol-border/60"
-          style={{ ...dim, fontSize: Math.round(size * 0.55) }}
+          style={{ ...dim, fontSize: fallbackSize }}
         >
           {(name?.charAt(0) || "?").toUpperCase()}
         </span>

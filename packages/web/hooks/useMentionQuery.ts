@@ -7,6 +7,11 @@ import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
+import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
+
+// score/matchScore moved to lib/mentionRanking, which owns ranking and must not
+// import this module back. Re-exported so every existing caller is unchanged.
+export { score, matchScore, mentionMatchRank } from "../lib/mentionRanking";
 
 export type MentionScope =
   | { kind: "team"; teamId: string }
@@ -129,44 +134,6 @@ export function labelMentionItems(s: {
     });
 }
 
-export function score(label: string, q: string): number {
-  const l = label.toLowerCase();
-  if (l === q) return 0;
-  if (l.startsWith(q)) return 1;
-  const idx = l.indexOf(q);
-  return idx === -1 ? Infinity : 2 + idx;
-}
-
-// Multi-word query support. A single-word query falls straight through to
-// score() so existing ranking is byte-for-byte unchanged. A query with spaces
-// is split into words, and EVERY word must match some word in the text (as an
-// exact/prefix/substring hit), order-independent — so "plain road" finds
-// "...The Roadmap, in Plain Language". Returns Infinity when any required word
-// is absent, so callers drop the candidate exactly as they do for score().
-export function matchScore(text: string, query: string): number {
-  const q = query.trim().toLowerCase();
-  if (!q) return 0;
-  const tokens = q.split(/\s+/).filter(Boolean);
-  if (tokens.length <= 1) return score(text, q);
-  const lower = text.toLowerCase();
-  const words = lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
-  let total = 0;
-  for (const tok of tokens) {
-    let best = Infinity;
-    for (const w of words) {
-      if (w === tok) { best = 0; break; }
-      if (w.startsWith(tok)) best = Math.min(best, 1);
-      else if (w.includes(tok)) best = Math.min(best, 2);
-    }
-    if (best === Infinity) {
-      if (lower.includes(tok)) best = 3; // spans a word boundary; still a hit
-      else return Infinity; // a required word is absent → not a match
-    }
-    total += best;
-  }
-  return total;
-}
-
 // The one predicate every mention surface filters by: a query hits an item
 // through its label, its sublabel (handle, path, project), its short id, or a
 // session's idle summary. Empty query matches everything.
@@ -177,172 +144,64 @@ export function mentionItemMatches(m: MentionItem, query: string): boolean {
     matchScore(m.label, q) !== Infinity ||
     (!!m.shortId && m.shortId.toLowerCase().includes(q)) ||
     (!!m.sublabel && matchScore(m.sublabel, q) !== Infinity) ||
-    (!!m.idleSummary && matchScore(m.idleSummary, q) !== Infinity)
+    (!!m.idleSummary && matchScore(m.idleSummary, q) !== Infinity) ||
+    (!!m.goal && matchScore(m.goal, q) !== Infinity) ||
+    (!!m.projectPath && matchScore(m.projectPath, q) !== Infinity)
   );
 }
 
-export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
-  const getStore = useInboxStore.getState;
-  const scopeKey = scope.kind === "team"
-    ? `team:${scope.teamId}`
-    : scope.kind === "personal"
-      ? `personal:${scope.userId}`
-      : "any";
-
-  return useCallback(async (rawQ: string): Promise<MentionItem[]> => {
-    const q = rawQ.trim().toLowerCase();
-    const s = getStore();
-    const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
-
-    // The index is a 50-row cross-team window (webMentionList caps 25 per team
-    // and stops at 50, so a third team can miss it entirely). The store's own
-    // collections hold the ACTIVE workspace in full — the same source the
-    // session rows below already read. Union them, store row winning: it is
-    // fresher and carries local-first edits.
-    const merged = (windowRows: Record<string, any>, storeRows: Record<string, any> | undefined) => {
-      const out = new Map<string, any>();
-      for (const r of Object.values(windowRows)) if (r?._id) out.set(String(r._id), r);
-      for (const r of Object.values(storeRows || {})) if (r?._id && r?.title) out.set(String(r._id), r);
-      return out.values();
-    };
-
-    const taskItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const t of merged(idx.tasks, s.tasks)) {
-      if (!inScope(t, scope)) continue;
-      const r = q ? matchScore(t.title || "", q) : 0;
-      if (q && r === Infinity) {
-        if (!t.short_id?.toLowerCase().includes(q)) continue;
-      }
-      taskItems.push({
-        item: {
-          id: t._id,
-          type: "task",
-          label: t.title,
-          sublabel: t.short_id,
-          shortId: t.short_id,
-          status: t.status,
-          priority: t.priority,
-        },
-        rank: r === Infinity ? 99 : r,
-        updated: t.updated_at || 0,
-      });
-    }
-
-    const docItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const d of merged(idx.docs, s.docs)) {
-      if (!inScope(d, scope)) continue;
-      const r = q ? matchScore(d.title || "", q) : 0;
-      if (q && r === Infinity) continue;
-      docItems.push({
-        item: {
-          id: d._id,
-          type: "doc",
-          label: d.title,
-          sublabel: d.doc_type || "note",
-          docType: d.doc_type,
-        },
-        rank: r === Infinity ? 99 : r,
-        updated: d.updated_at || 0,
-      });
-    }
-
-    const planItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const p of merged(idx.plans, s.plans)) {
-      if (!inScope(p, scope)) continue;
-      const labelHit = q ? matchScore(p.title || "", q) : 0;
-      const goalHit = q && p.goal ? matchScore(p.goal, q) : Infinity;
-      const r = Math.min(labelHit, goalHit);
-      if (q && r === Infinity) {
-        if (!p.short_id?.toLowerCase().includes(q)) continue;
-      }
-      planItems.push({
-        item: {
-          id: p._id,
-          type: "plan",
-          label: p.title,
-          sublabel: p.short_id,
-          shortId: p.short_id,
-          status: p.status,
-          goal: p.goal,
-        },
-        rank: r === Infinity ? 99 : r,
-        updated: p.updated_at || 0,
-      });
-    }
-
-    const sessionItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const sess of Object.values(s.sessions)) {
-      if (!inScope(sess, scope)) continue;
-      const titleHit = q ? matchScore(sess.title || "", q) : 0;
-      const summaryHit = q && sess.idle_summary ? matchScore(sess.idle_summary, q) : Infinity;
-      const r = Math.min(titleHit, summaryHit);
-      if (q && r === Infinity) continue;
-      sessionItems.push({
-        item: {
-          id: sess._id,
-          type: "session",
-          label: sess.title || "Untitled Session",
-          sublabel: sess.idle_summary?.slice(0, 80) || undefined,
-          // cc id (`jx…`), the 7-char prefix of _id — see ConversationView mention builder.
-          shortId: sess._id.slice(0, 7).toLowerCase(),
-          messageCount: sess.message_count,
-          projectPath: sess.project_path,
-          status: sess.agent_status,
-          agentType: sess.agent_type,
-          updatedAt: sess.updated_at,
-          idleSummary: sess.idle_summary,
-        },
-        rank: r === Infinity ? 99 : r,
-        updated: sess.updated_at || 0,
-      });
-    }
-
-    const labelItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const item of labelMentionItems(s)) {
-      const r = q ? matchScore(item.label, q) : 0;
-      if (q && r === Infinity) continue;
-      labelItems.push({ item, rank: r, updated: item.updatedAt || 0 });
-    }
-
-    const personItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const m of s.teamMembers || []) {
-      const name = (m.name || "").toLowerCase();
-      const username = (m.github_username || "").toLowerCase();
-      // The handle chat's server resolves (github → email local → bot name
-      // slug). Carried on the item so a chat composer can insert something a
-      // send will actually honour — the display label is not addressable.
+export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, scope: MentionScope): MentionItem[] {
+  const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
+  const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) => {
+    const rows = new Map<string, any>();
+    for (const row of Object.values(windowRows)) if (row?._id) rows.set(String(row._id), row);
+    for (const row of Object.values(storeRows)) if (row?._id && row.title) rows.set(String(row._id), row);
+    return [...rows.values()].filter((row) => inScope(row, scope));
+  };
+  const items: MentionItem[] = [
+    ...(s.teamMembers || []).map((m) => {
       const handle = memberHandle(m) ?? undefined;
-      if (q && !name.includes(q) && !username.includes(q) && !(handle ?? "").includes(q)) continue;
-      personItems.push({
-        item: {
-          id: String(m._id),
-          type: "person",
-          label: m.name || m.github_username || "Unknown",
-          sublabel: m.github_username ? `@${m.github_username}` : handle ? `@${handle}` : m.email,
-          image: m.image || m.github_avatar_url,
-          shortId: m.github_username ? `@${m.github_username}` : undefined,
-          handle,
-          isBot: !!m.is_bot,
-        },
-        rank: 0,
-        updated: 0,
-      });
-    }
+      return {
+        id: String(m._id), type: "person", label: m.name || m.github_username || "Unknown",
+        sublabel: handle ? `@${handle}` : m.email,
+        image: m.image || m.github_avatar_url,
+        shortId: m.github_username ? `@${m.github_username}` : undefined,
+        handle, isBot: !!m.is_bot,
+      };
+    }),
+    ...labelMentionItems(s),
+    ...merged(idx.tasks, s.tasks).map((t) => ({
+      id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id,
+      status: t.status, priority: t.priority, updatedAt: t.updated_at,
+    })),
+    ...merged(idx.docs, s.docs).map((d) => ({
+      id: d._id, type: "doc", label: d.title, sublabel: d.doc_type,
+      docType: d.doc_type, updatedAt: d.updated_at,
+    })),
+    ...merged(idx.plans, s.plans).map((p) => ({
+      id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id,
+      status: p.status, goal: p.goal, updatedAt: p.updated_at,
+    })),
+    ...Object.values(s.sessions).filter((sess) => !sess.is_subagent && inScope(sess, scope)).map((sess) => ({
+      id: sess._id, type: "session", label: sess.title || "Untitled Session",
+      sublabel: sess.idle_summary || undefined, shortId: sess._id.slice(0, 7).toLowerCase(),
+      messageCount: sess.message_count, projectPath: sess.git_root || sess.project_path,
+      status: sess.agent_status ?? undefined, agentType: sess.agent_type,
+      model: sess.model ?? undefined, updatedAt: sess.updated_at, idleSummary: sess.idle_summary,
+    })),
+  ];
+  return mergeMentionSuggestions(items, [], mentionViewTimes(s));
+}
 
-    const limit = q ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE;
-    const sortAndTake = (arr: typeof taskItems) =>
-      arr
-        .sort((a, b) => a.rank - b.rank || b.updated - a.updated)
-        .slice(0, limit)
-        .map((x) => x.item);
-
-    return [
-      ...sortAndTake(personItems),
-      ...sortAndTake(labelItems),
-      ...sortAndTake(sessionItems),
-      ...sortAndTake(taskItems),
-      ...sortAndTake(docItems),
-      ...sortAndTake(planItems),
-    ];
-  }, [getStore, scopeKey]);
+export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
+  const kind = scope.kind;
+  const teamId = scope.kind === "team" ? scope.teamId : "";
+  const userId = scope.kind === "personal" ? scope.userId : "";
+  return useCallback(async (rawQ: string): Promise<MentionItem[]> => {
+    const s = useInboxStore.getState();
+    return mergeMentionSuggestions(
+      buildMentionItems(s, kind === "team" ? { kind, teamId } : kind === "personal" ? { kind, userId } : { kind }).filter((item) => mentionItemMatches(item, rawQ)),
+      [], mentionViewTimes(s), rawQ.trim() ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE, rawQ,
+    );
+  }, [kind, teamId, userId]);
 }
