@@ -1176,3 +1176,41 @@ describe("parser - multi-block tool results", () => {
     expect(msg.images?.[0]).toMatchObject({ mediaType: "image/jpeg", toolUseId: "toolu_batch" });
   });
 });
+
+describe("parser - harness text riding a tool_result row", () => {
+  const carrierRow = (text: string, resultText: string) => JSON.stringify({
+    type: "user",
+    uuid: "u-carrier",
+    timestamp: "2026-09-07T15:36:46.786Z",
+    message: {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "toolu_1", content: [{ type: "text", text: resultText }] },
+        { type: "text", text },
+      ],
+    },
+  });
+
+  test("folds the ToolSearch postscript into the result instead of emitting a user prompt", () => {
+    const [msg] = parseSessionFile(carrierRow("Tool loaded.", "schemas…"));
+    expect(msg.role).toBe("user");
+    expect(msg.content).toBe("");
+    expect(msg.toolResults).toEqual([{ toolUseId: "toolu_1", content: "schemas…\n\nTool loaded.", isError: undefined }]);
+  });
+
+  test("keeps the fork directive with the Agent result it followed", () => {
+    const directive = "<fork-boilerplate>\nYou are a worker fork.\n</fork-boilerplate>\n\nYour directive: say ok.";
+    const [msg] = parseSessionFile(carrierRow(directive, "Fork started — processing in background"));
+    expect(msg.content).toBe("");
+    expect(msg.toolResults?.[0].content).toBe(`Fork started — processing in background\n\n${directive}`);
+  });
+
+  test("a typed prompt in its own row is untouched", () => {
+    const [msg] = parseSessionFile(JSON.stringify({
+      type: "user", uuid: "u-typed", timestamp: "2026-09-07T15:36:46.786Z",
+      message: { role: "user", content: [{ type: "text", text: "Tool loaded." }] },
+    }));
+    expect(msg.content).toBe("Tool loaded.");
+    expect(msg.toolResults).toBeUndefined();
+  });
+});

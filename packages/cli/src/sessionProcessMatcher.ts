@@ -447,6 +447,23 @@ export function judgeProcessIdentity(args: {
   return { verdict: declared === args.sessionId ? "owned" : "foreign", declared };
 }
 
+/**
+ * True when a binding written at `registeredAtSec` (epoch seconds: a registry
+ * file's `ts`, a cache fill) cannot describe a process that started at
+ * `processStartSec`: the pid it names was freed and handed to something else
+ * after the write. This is the one check that convicts a reused pid when the
+ * new process declares no session at all — exactly the case where
+ * judgeProcessIdentity can only answer "unknown" and a lookup fails open.
+ * Observed 2026-09-07: a daemon registration named pid 44685 at 01:58:32Z, the
+ * agent died, a leaked test fixture (`bun fakeHelper.ts`, agent-shaped by comm)
+ * took the pid at 02:03:34Z, and every delivery to that session for the next
+ * fourteen hours was aimed at the fixture. An unknown start time proves nothing.
+ */
+export function registrationPredatesProcess(registeredAtSec: unknown, processStartSec: number | null): boolean {
+  if (typeof registeredAtSec !== "number" || !Number.isFinite(registeredAtSec) || processStartSec === null) return false;
+  return registeredAtSec < processStartSec - CLAIM_START_SLACK_SEC;
+}
+
 // ── Registry supersession of a cached pid ───────────────────────────────────
 // The daemon caches session→pid once and revalidates only that the pid is
 // alive and agent-shaped. That check cannot CONVICT a stale mapping: the old
