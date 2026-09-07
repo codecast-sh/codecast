@@ -326,6 +326,8 @@ export interface ProvisionReport {
   claude: string;
   services: string;
   device: string;
+  /** What the home mirror (instruction files + agent config) did. */
+  mirror: string;
 }
 
 /**
@@ -382,6 +384,19 @@ export async function provisionLinuxHost(
   const cred = copyCredentialToRemote(host);
   if (!cred.pushed) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
 
+  // The host-home steps (cloud/prepare.ts readyHostHome), forced: a freshly
+  // provisioned box has nothing, whatever the laptop's stamps say. Each step
+  // is non-fatal; the mirror needs the `cast` just installed above.
+  onProgress("mirroring instruction files and agent config…");
+  let mirror = "config mirror skipped";
+  try {
+    const { readyHostHome } = await import("../cloud/prepare.js");
+    mirror = (await readyHostHome(host, { onProgress: (m) => onProgress(`  ${m}`), force: true })).mirror;
+  } catch (err) {
+    mirror = `config mirror skipped: ${err instanceof Error ? err.message : String(err)}`;
+    onProgress(`  (${mirror})`);
+  }
+
   // Accept claude's bypass-permissions dialog ONCE, so a moved session's
   // resume never parks on it. The acceptance is not a config flag any more
   // (verified on 2.1.246: the documented ~/.claude.json flag was set and the
@@ -431,6 +446,7 @@ export async function provisionLinuxHost(
       20_000,
     ),
     device,
+    mirror,
   };
 }
 
