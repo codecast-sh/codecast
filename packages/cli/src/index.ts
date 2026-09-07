@@ -11,6 +11,7 @@ import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerCloudCommand } from "./cloud/cli.js";
+import { ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
 import { registerHostsCommand } from "./hosts/cli.js";
 import { registerPublishCommand, missingRouteError } from "./publish.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
@@ -153,7 +154,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import { type Config, getAgentArgs } from "./config/types.js";
+import { type Config, getAgentArgs, isCloudMirrorEnabled } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 import { addVault, findVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
 import {
@@ -2312,7 +2313,7 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
 
   // Copy skill
   const skillSrc = path.join(orchSrc, "skills", "orchestrate", "SKILL.md");
-  const skillDest = path.join(claudeDir, "skills", "codecast-orchestrate", "SKILL.md");
+  const skillDest = path.join(os.homedir(), ORCH_SKILL_REL, "SKILL.md");
   if (fs.existsSync(skillSrc)) {
     fs.mkdirSync(path.dirname(skillDest), { recursive: true });
     const srcContent = fs.readFileSync(skillSrc, "utf-8");
@@ -2368,7 +2369,6 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
     if (!settings.hooks) settings.hooks = {};
 
     const orchHooks = JSON.parse(fs.readFileSync(hooksSrc, "utf-8")).hooks;
-    const ORCH_MARKER = "/.codecast/orchestration/";
 
     for (const [event, handlers] of Object.entries(orchHooks) as [string, any][]) {
       if (!settings.hooks[event]) settings.hooks[event] = [];
@@ -2419,12 +2419,11 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
 
 function uninstallOrchestration(): void {
   const claudeDir = path.join(os.homedir(), ".claude");
-  const ORCH_MARKER = "/.codecast/orchestration/";
 
-  const skillDir = path.join(claudeDir, "skills", "codecast-orchestrate");
+  const skillDir = path.join(os.homedir(), ORCH_SKILL_REL);
   if (fs.existsSync(skillDir)) fs.rmSync(skillDir, { recursive: true });
 
-  for (const name of ["implementer.md", "reviewer.md", "critic.md"]) {
+  for (const name of ORCH_AGENT_FILES) {
     const agentPath = path.join(claudeDir, "agents", name);
     if (fs.existsSync(agentPath)) fs.unlinkSync(agentPath);
   }
@@ -5453,7 +5452,7 @@ program
     "  cast config excluded_paths     # View specific setting\n" +
     "  cast config excluded_paths \"**/node_modules/**\"  # Set value"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .action(async (key, value) => {
@@ -5470,6 +5469,9 @@ program
         console.log(`  web_url: ${config.web_url || WEB_URL}`);
         if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
         if (config.browser_capture) console.log(`  browser_capture: ${config.browser_capture}`);
+        console.log(`  cloud_mirror_enabled: ${isCloudMirrorEnabled(config)}`);
+        if (config.cloud_mirror_exclude) console.log(`  cloud_mirror_exclude: ${config.cloud_mirror_exclude}`);
+        if (config.cloud_mirror_include) console.log(`  cloud_mirror_include: ${config.cloud_mirror_include}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.agent_args) {
@@ -5599,8 +5601,10 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include"] as const;
     const sensitiveKeys = ["auth_token"];
+    // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -5614,17 +5618,27 @@ program
 
     if (value === undefined) {
       const displayValue = sensitiveKeys.includes(configKey)
-        ? maskToken(currentValue)
-        : currentValue || "(not set)";
+        ? maskToken(currentValue as string | undefined)
+        : currentValue === undefined || currentValue === "" ? "(not set)" : String(currentValue);
       console.log(`${configKey}: ${displayValue}`);
       return;
     }
 
     const newConfig: Config = config || {};
-    newConfig[configKey] = value;
+    let stored: string | boolean = value;
+    if (BOOLEAN_CONFIG_KEYS.has(configKey)) {
+      const v = String(value).trim().toLowerCase();
+      if (v === "true" || v === "1") stored = true;
+      else if (v === "false" || v === "0") stored = false;
+      else {
+        console.error(`${configKey} takes true or false`);
+        process.exit(1);
+      }
+    }
+    (newConfig as Record<string, unknown>)[configKey] = stored;
     writeConfig(newConfig);
 
-    const displayValue = sensitiveKeys.includes(configKey) ? maskToken(value) : value;
+    const displayValue = sensitiveKeys.includes(configKey) ? maskToken(value) : String(stored);
     console.log(`Updated ${configKey}: ${displayValue}`);
   });
 

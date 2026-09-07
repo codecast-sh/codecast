@@ -9,10 +9,10 @@
 // zeros) are attributed by content: the newest edit/write whose new_content
 // contains the line verbatim.
 
+import { MIN_LINE_MATCH_LEN } from "@codecast/shared/blame";
+
 export const MIN_SHA_PREFIX = 7;
-// Lines shorter than this (trimmed) — `}`, `});`, `end` — appear in too many
-// edits to attribute safely; leave them unresolved.
-export const MIN_LINE_MATCH_LEN = 8;
+export { MIN_LINE_MATCH_LEN };
 
 export type CommitRowLite = {
   commit_hash?: string;

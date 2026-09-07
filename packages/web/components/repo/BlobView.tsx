@@ -1,8 +1,8 @@
 // One file, line by line.
 //
 // Every line is its own row so three things can hang off it: a line number that
-// is also an anchor, a blame note in front of it, and a comment thread under
-// it. The code itself is highlighted once for the whole file and split per line
+// is also an anchor, a blame note in front of it (the commit, or the session
+// that wrote the line), and a comment thread under it. The code itself is highlighted once for the whole file and split per line
 // (lib/codeLanguage), so a block comment keeps its colour across the break.
 import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
@@ -13,11 +13,14 @@ import {
   HIGHLIGHT_LINE_LIMIT,
   indexBlameRanges,
   startsBlameRange,
+  type BlameMode,
   type RepoBlameRange,
+  type SessionBlameRange,
 } from "../../lib/repoView";
 import { relTimeShort } from "../../lib/utils";
 import { commitPageHref } from "../../lib/repoView";
 import { useRepoFamily } from "./useRepoFamily";
+import { SessionBlameCell } from "./SessionBlame";
 
 export function BlobView({
   repository,
@@ -26,7 +29,10 @@ export function BlobView({
   selection,
   onSelectLine,
   blameRanges,
-  blameOn,
+  blameMode,
+  sessionRanges,
+  sessionColors,
+  focusSession,
   threadsByLine,
   renderThread,
   onComment,
@@ -38,7 +44,12 @@ export function BlobView({
   /** A plain click selects one line; shift extends from where the selection started. */
   onSelectLine: (line: number, extend: boolean) => void;
   blameRanges?: readonly RepoBlameRange[];
-  blameOn: boolean;
+  blameMode: BlameMode;
+  /** Session blame folded onto the lines; drawn in place of the git gutter in session mode. */
+  sessionRanges?: readonly SessionBlameRange[];
+  sessionColors?: ReadonlyMap<string, string>;
+  /** A session in focus dims every line that is not its own. */
+  focusSession?: string | null;
   threadsByLine?: ReadonlyMap<number, unknown[]>;
   renderThread?: (line: number, items: unknown[]) => ReactNode;
   onComment?: (line: number) => void;
@@ -52,15 +63,23 @@ export function BlobView({
     [content, path, tooBigToColour],
   );
 
+  const blameOn = blameMode === "git";
+  const sessionsOn = blameMode === "session";
   const blameAt = useMemo(() => indexBlameRanges(blameRanges), [blameRanges]);
+  const sessionAt = useMemo(() => indexBlameRanges(sessionRanges), [sessionRanges]);
   const gutterWidth = `${Math.max(2, String(lines.length).length)}ch`;
 
   return (
-    <div className="repo-code h-full overflow-auto text-[12px] leading-[20px]">
+    <div
+      className="repo-code h-full overflow-auto text-[12px] leading-[20px]"
+      data-focus-session={sessionsOn && focusSession ? focusSession : undefined}
+    >
       <div className="min-w-max pb-24">
         {lines.map((line, index) => {
           const number = index + 1;
           const range = blameOn ? blameAt(number) : undefined;
+          const sessionRange = sessionsOn ? sessionAt(number) : undefined;
+          const sessionId = sessionRange?.session?.conversation_id;
           const selected = isLineSelected(selection, number);
           const thread = threadsByLine?.get(number);
 
@@ -69,7 +88,15 @@ export function BlobView({
               <div
                 id={`L${number}`}
                 className={`repo-line flex items-start ${selected ? "repo-line-selected" : ""}`}
+                data-session-focus={sessionsOn && focusSession && sessionId === focusSession ? "" : undefined}
               >
+                {sessionsOn && (
+                  <SessionBlameCell
+                    range={sessionRange}
+                    line={number}
+                    color={sessionId ? sessionColors?.get(sessionId) : undefined}
+                  />
+                )}
                 {blameOn && (
                   <div
                     className={`repo-blame w-[15rem] shrink-0 px-2 truncate text-[10px] ${

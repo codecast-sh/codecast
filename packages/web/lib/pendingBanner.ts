@@ -55,8 +55,17 @@ export const isAliveIdleStatus = (s?: LiveAgentStatus): boolean =>
 
 export type PendingBannerState = "none" | "queued" | "stuck";
 
+export function pendingMessageCanRetry(content: string): boolean {
+  return !/^(?:\[Request (?:interrupted|cancelled)|<turn_aborted>)/.test(content.trimStart());
+}
+
 export function pendingRetryClientId(messageId: string): string | undefined {
   return messageId.startsWith("serverpending_") ? undefined : messageId;
+}
+
+export function pendingMessageReachedSession(messageId: string, pending?: { message_id: string; client_id?: string; status: string } | null): boolean {
+  return !!pending && (pending.status === "injected" || pending.status === "delivered")
+    && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);
 }
 
 // - "queued": session still booting/resuming/connecting → brief "starting up"
