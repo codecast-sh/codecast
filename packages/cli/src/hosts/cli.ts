@@ -27,6 +27,7 @@ import {
   ensureUp, hostState, inspectHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
+import { deviceId } from "../remote/device.js";
 import { ssh } from "../remote/session-move.js";
 
 const OK = fmt.success(icons.check);
@@ -218,6 +219,54 @@ export interface HostReport {
   worktrees: Array<RemoteWorktree & { hasSession: boolean }>;
   worktreesNote?: string;
   cost: HostCost & { instanceType: string | null; volumeGiB: number | null };
+  /** The host's home-mirror stamp (~/.codecast/mirror.json), when it is awake and has one. */
+  mirror?: HostMirrorStamp | null;
+  mirrorNote?: string;
+}
+
+export interface HostMirrorStamp {
+  hash: string;
+  applied_at: string;
+  files: number;
+  source_device_id: string;
+}
+
+/** The host's ~/.codecast/mirror.json as `cat` returned it, or null when it has none. */
+export function parseHostMirrorStamp(out: string): HostMirrorStamp | null {
+  const line = out.trim();
+  if (!line) return null;
+  try {
+    const parsed = JSON.parse(line);
+    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string") return null;
+    return {
+      hash: parsed.hash,
+      applied_at: typeof parsed.applied_at === "string" ? parsed.applied_at : "",
+      files: parsed.files && typeof parsed.files === "object" ? Object.keys(parsed.files).length : 0,
+      source_device_id: typeof parsed.source_device_id === "string" ? parsed.source_device_id : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The `config mirror` line of a host block: never, or "<age> ago (hash8,
+ * N files)", with a suffix when another laptop owns the host's config.
+ */
+export function mirrorStatusLine(
+  mirror: HostMirrorStamp | null | undefined,
+  localDeviceId: string,
+  now = Date.now(),
+  note?: string,
+): string {
+  if (note) return `unknown (${note})`;
+  if (!mirror) return "never — cast hosts sync";
+  const at = Date.parse(mirror.applied_at);
+  const age = Number.isFinite(at) ? `${formatAgeShort(now - at)} ago` : "at an unknown time";
+  const owner = mirror.source_device_id && mirror.source_device_id !== localDeviceId
+    ? "  (owned by another device — cast hosts sync --take-over)"
+    : "";
+  return `${age} (${mirror.hash.slice(0, 8)}, ${mirror.files} file${mirror.files === 1 ? "" : "s"})${owner}`;
 }
 
 /**
@@ -324,6 +373,17 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
       : "asleep, and no session names one — wake it to list them";
   }
 
+  let mirror: HostMirrorStamp | null | undefined;
+  let mirrorNote: string | undefined;
+  if (live && address) {
+    // A short cap: a hung sshd must not stall the whole listing.
+    const stamp = await guard(() => parseHostMirrorStamp(ssh(toRemoteHost(current), "cat ~/.codecast/mirror.json 2>/dev/null", 5_000)));
+    if (stamp.error) mirrorNote = stamp.error;
+    else mirror = stamp.value ?? null;
+  } else {
+    mirrorNote = "asleep";
+  }
+
   const cost = facts.error
     ? { hourlyUsd: null, diskMonthlyUsd: null, line: `unknown (${facts.error})` }
     : estimateHostCost({
@@ -344,6 +404,8 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(sessionsError ? { sessionsError } : {}),
     worktrees,
     ...(worktreesNote ? { worktreesNote } : {}),
+    ...(mirror !== undefined ? { mirror } : {}),
+    ...(mirrorNote ? { mirrorNote } : {}),
     cost: {
       ...cost,
       instanceType: facts.value?.instanceType ?? null,
@@ -396,6 +458,8 @@ function printHostReport(r: HostReport): void {
     console.log(`    ${cols.join("  ")}${orphan}`);
   }
 
+  const mirror = mirrorStatusLine(r.mirror, deviceId(), Date.now(), r.mirrorNote);
+  console.log(`  config mirror  ${mirror.startsWith("never") || mirror.startsWith("unknown") ? fmt.muted(mirror) : mirror}`);
   console.log(`  cost       ${r.cost.line}`);
 }
 
@@ -506,16 +570,91 @@ export function buildHostsCommand(parent: Command): Command {
       try {
         const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
         console.log(`${OK} ${up.id} is awake at ${fmt.highlight(up.address ?? "(no address)")}`);
-        const { learnHostDeviceId } = await import("../cloud/prepare.js");
-        const deviceId = await learnHostDeviceId(up, toRemoteHost(up));
+        const { learnHostDeviceId, readyHostHome } = await import("../cloud/prepare.js");
+        const hostDevice = await learnHostDeviceId(up, toRemoteHost(up));
         console.log(
-          deviceId
-            ? `  device: ${fmt.muted(deviceId)}`
+          hostDevice
+            ? `  device: ${fmt.muted(hostDevice)}`
             : fmt.muted("  no codecast daemon answered — `cast hosts provision` if sessions should run there"),
         );
+        await readyHostHome(toRemoteHost(up), { cloudId: up.id, onProgress: (m) => console.log(fmt.muted(`  ${m}`)) });
       } catch (err) {
         die((err as Error).message);
       }
+    });
+
+  hosts
+    .command("sync [id]")
+    .description("Mirror this laptop's instruction files and agent config (~/.claude, ~/.codex, …) to a host, or to every reachable one")
+    .option("--dry-run", "Show what would ship — files, kinds, what was skipped or scrubbed — without pushing")
+    .option("--json", "Machine-readable output")
+    .option("--bundle-out <file>", "Also write the bundle to this file (0600)")
+    .option("--take-over", "Take ownership of a host another laptop last mirrored")
+    .action(async (id: string | undefined, o: { dryRun?: boolean; json?: boolean; bundleOut?: string; takeOver?: boolean }) => {
+      const { buildHomeMirror, mirrorHomeToHost, writeBundleFile } = await import("../cloud/mirror/push.js");
+      const { isCloudMirrorEnabled } = await import("../config/types.js");
+      const { listScalewayHosts } = await import("../remote/session-move.js");
+      const { listCloudRemoteHosts, sshReachable } = await import("../browser/cloudHost.js");
+      const config = (await import("../config/readLocalConfig.js")).readLocalConfig();
+      if (!isCloudMirrorEnabled(config) && !o.dryRun) {
+        die("the home mirror is off", "`cast config cloud_mirror_enabled true` to turn it on");
+      }
+      // The dry run describes the bundle for the default Linux home.
+      const previewHost = id ? pick(id, "no host registered") : readHosts().find((r) => r.provider === "aws");
+      const previewHome = previewHost ? `/home/${previewHost.user}` : "/home/ubuntu";
+      let preview;
+      try {
+        preview = await buildHomeMirror({ config, hostHome: previewHome, takeOver: o.takeOver });
+      } catch (err) {
+        die((err as Error).message);
+      }
+      if (o.bundleOut) {
+        writeBundleFile(path.resolve(o.bundleOut), preview.bytes);
+        if (!o.json) console.log(fmt.muted(`  bundle written to ${o.bundleOut}`));
+      }
+      const s = preview.summary;
+      if (o.dryRun) {
+        if (o.json) {
+          console.log(JSON.stringify({ hash: preview.hash, target_home: previewHome, ...s }, null, 2));
+          return;
+        }
+        console.log(`${fmt.highlight("home mirror")}  ${fmt.muted(`${s.files.length} files, ${(s.totalBytes / 1024).toFixed(0)} KiB, ${preview.hash.slice(0, 8)} → ${previewHome}`)}`);
+        for (const f of s.files) console.log(`  ${f.path.padEnd(56)} ${fmt.muted(`${f.kind.padEnd(16)} ${f.mode} ${String(f.size).padStart(8)}`)}`);
+        if (s.skipped.length) {
+          console.log(`  ${fmt.warning("skipped")}`);
+          for (const k of s.skipped) console.log(`    ${k.path}  ${fmt.muted(k.reason)}`);
+        }
+        if (s.scrubbed.length) {
+          console.log(`  ${fmt.warning("scrubbed")}`);
+          for (const k of s.scrubbed) console.log(`    ${k}`);
+        }
+        if (s.excludesApplied.length) console.log(`  ${fmt.muted(`excludes applied: ${s.excludesApplied.join(", ")}`)}`);
+        console.log(`  git identity: ${s.gitIdentity.email ? `${s.gitIdentity.name ?? ""} <${s.gitIdentity.email}>`.trim() + fmt.muted(" (shipped by the host git setup, not the mirror)") : fmt.muted("none found")}`);
+        if (!isCloudMirrorEnabled(config)) console.log(fmt.muted("  (the mirror is off: cloud_mirror_enabled=false)"));
+        return;
+      }
+      const results: Array<{ host: string; outcome: string; ok: boolean }> = [];
+      const say = (m: string) => { if (!o.json) console.log(fmt.muted(`  ${m}`)); };
+      if (id) {
+        const h = pick(id, "no host registered");
+        const up = await ensureUp(h, say);
+        const r = await mirrorHomeToHost(toRemoteHost(up), { onProgress: say, force: true, takeOver: o.takeOver, config }).catch((err) => ({ pushed: false, reason: (err as Error).message, changed: 0, skipped: undefined, result: undefined, hash: undefined }));
+        results.push({ host: up.id, outcome: describeOutcome(r), ok: r.pushed });
+      } else {
+        const candidates = [...listScalewayHosts(), ...listCloudRemoteHosts()];
+        const probes = await Promise.all(candidates.map((h) => sshReachable(h)));
+        const reachable = candidates.filter((_, i) => probes[i]);
+        if (!reachable.length) {
+          if (o.json) { console.log("[]"); return; }
+          die("no host is reachable right now", "`cast hosts sync <id>` wakes one; a sleeping host gets the mirror on its next wake");
+        }
+        for (const h of reachable) {
+          const r = await mirrorHomeToHost(h, { onProgress: say, force: true, takeOver: o.takeOver, config }).catch((err) => ({ pushed: false, reason: (err as Error).message, changed: 0, skipped: undefined, result: undefined, hash: undefined }));
+          results.push({ host: `${h.user}@${h.address}`, outcome: describeOutcome(r), ok: r.pushed });
+        }
+      }
+      if (o.json) { console.log(JSON.stringify(results, null, 2)); return; }
+      for (const r of results) console.log(`${r.ok ? OK : fmt.warning(icons.cross)} ${r.host}  ${r.outcome}`);
     });
 
   hosts
@@ -616,6 +755,19 @@ export function buildHostsCommand(parent: Command): Command {
     });
 
   return hosts;
+}
+
+function describeOutcome(r: { pushed: boolean; changed?: number; hash?: string; reason?: string; skipped?: string; result?: { host_edited: string[]; pruned: string[]; errors: unknown[] } | undefined }): string {
+  if (r.pushed) {
+    const extra = [
+      r.result?.host_edited.length ? `${r.result.host_edited.length} host-edited kept` : "",
+      r.result?.pruned.length ? `${r.result.pruned.length} pruned` : "",
+      r.result?.errors.length ? `${r.result.errors.length} error(s)` : "",
+    ].filter(Boolean).join(", ");
+    return `mirrored ${r.changed ?? 0} changed file(s) (${(r.hash ?? "").slice(0, 8)})${extra ? ` — ${extra}` : ""}`;
+  }
+  if (r.skipped === "in step") return `in step (${(r.hash ?? "").slice(0, 8)})`;
+  return `skipped: ${r.reason}`;
 }
 
 /** Mount the group at the top level as `cast hosts`. */

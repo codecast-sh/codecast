@@ -13,6 +13,10 @@
  * `.codecast/workspace.toml`, so install runs there and ports are probed on
  * the machine that will bind them — several spawns in one command get
  * distinct worktrees and non-colliding ports because the host allocates them.
+ *
+ * Before the checkout is touched, `readyHostHome` brings the host's HOME up
+ * to date: the home mirror (cloud/mirror) ships this laptop's instruction
+ * files and agent config there, stamp-gated so an in-step host costs no ssh.
  */
 
 import { spawnSync } from "node:child_process";
@@ -24,6 +28,8 @@ import {
   upsertHost,
   type CloudHost,
 } from "../browser/cloudHost.js";
+import { readLocalConfig } from "../config/readLocalConfig.js";
+import { isCloudMirrorEnabled, type Config } from "../config/types.js";
 import {
   shq,
   ssh,
@@ -80,6 +86,89 @@ export async function learnHostDeviceId(cloud: CloudHost, host: RemoteHost): Pro
   return deviceId;
 }
 
+export interface MirrorForPrepareOptions {
+  /** Push even when the local stamp says the host is in step (provisioning). */
+  force?: boolean;
+  config?: Config | null;
+  /** The laptop repo being prepared, so `includeIf gitdir:` git config resolves. */
+  localGitRoot?: string;
+  /** Injection for tests: the push itself. */
+  mirror?: typeof import("./mirror/push.js").mirrorHomeToHost;
+}
+
+/**
+ * The home mirror step of readyHostHome: ship this laptop's instruction
+ * files and agent config to the host, stamp-gated. Never throws — instruction
+ * drift is a quality problem, not a reason to lose a session — and reports
+ * through the caller's progress log. Returns a one-line summary.
+ */
+export async function mirrorForPrepare(
+  host: RemoteHost,
+  cloudId: string,
+  log: Progress,
+  opts: MirrorForPrepareOptions = {},
+): Promise<string> {
+  const config = opts.config === undefined ? readLocalConfig() : opts.config;
+  if (!isCloudMirrorEnabled(config)) return "config mirror disabled";
+  try {
+    const mirror = opts.mirror ?? (await import("./mirror/push.js")).mirrorHomeToHost;
+    const r = await mirror(host, { onProgress: log, force: opts.force, config, localGitRoot: opts.localGitRoot });
+    let line: string;
+    if (r.result?.errors.length || r.result?.host_edited.length) throw new Error([
+      ...r.result.errors.map((e) => `${e.path}: ${e.error}`),
+      ...r.result.host_edited.map((p) => `${p}: remote edit conflict`),
+    ].join("; "));
+    if (r.skipped === "in step") line = `config mirror in step (${(r.hash ?? "").slice(0, 8)})`;
+    else if (r.pushed) {
+      const extra = [
+        r.result?.host_edited.length ? `${r.result.host_edited.length} host-edited kept` : "",
+        r.result?.pruned.length ? `${r.result.pruned.length} pruned` : "",
+        r.result?.errors.length ? `${r.result.errors.length} error(s)` : "",
+      ].filter(Boolean).join(", ");
+      line = `mirrored ${r.changed} changed config file(s) (${(r.hash ?? "").slice(0, 8)})${extra ? ` — ${extra}` : ""}`;
+    } else {
+      const hint = r.reason === "unprovisioned" ? ` — cast hosts provision ${cloudId}`
+        : r.reason === "other_device" ? " — cast hosts sync --take-over to take it over"
+        : r.reason === "other_home" ? " — the bundle was built for a different home directory than the host's"
+        : r.reason?.startsWith("host cast older") ? ` ${cloudId}` : "";
+      throw new Error(`${r.reason ?? "incomplete mirror"}${hint}`);
+    }
+    log(line);
+    return line;
+  } catch (err) {
+    const line = `config mirror failed: ${err instanceof Error ? err.message : String(err)}`;
+    log(line);
+    throw new Error(line);
+  }
+}
+
+export interface ReadyHostHomeOptions {
+  localGitRoot?: string;
+  repoPath?: string;
+  /** The registry id, for hints in progress lines. */
+  cloudId?: string;
+  onProgress?: Progress;
+  /** Provisioning: push everything regardless of stamps. */
+  force?: boolean;
+}
+
+export interface ReadyHostHomeReport {
+  mirror: string;
+}
+
+/**
+ * The host-home steps every wake/prepare runs, in a fixed order, each
+ * non-fatal and logged: (1) agent logins, (2) host git readiness, (3) the
+ * home mirror. Steps 1 and 2 are wired by their own features; this is the
+ * hook point they extend. Callers: prepareCloudHost, `cast cloud wake`,
+ * `cast hosts wake`, provisionLinuxHost (with force), performMoveToRemote.
+ */
+export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions = {}): Promise<ReadyHostHomeReport> {
+  const log = opts.onProgress ?? (() => {});
+  const mirror = await mirrorForPrepare(host, opts.cloudId ?? host.address, log, { force: opts.force, localGitRoot: opts.localGitRoot });
+  return { mirror };
+}
+
 /**
  * Everything a session needs before it can be placed on the host.
  */
@@ -98,7 +187,13 @@ export async function prepareCloudHost(opts: {
     throw new Error(`${up.id} runs no codecast daemon — provision it first: cast hosts provision ${up.id}`);
   }
   const repoPath = remoteRepoPath(host, opts.localGitRoot);
+  await readyHostHome(host, { localGitRoot: opts.localGitRoot, repoPath, cloudId: up.id, onProgress: log });
   refreshRemoteCheckout(host, opts.localGitRoot, repoPath, log);
+  if (isCloudMirrorEnabled(readLocalConfig())) {
+    const { registerProjectContext } = await import("./mirror/projectRefresh.js");
+    await registerProjectContext(host, opts.localGitRoot, repoPath);
+    await mirrorForPrepare(host, up.id, log, { localGitRoot: opts.localGitRoot });
+  }
   return { cloud: { ...up, deviceId }, host, deviceId, repoPath, localGitRoot: opts.localGitRoot };
 }
 
@@ -106,8 +201,8 @@ export async function prepareCloudHost(opts: {
  * Acquire a worktree on the host with ITS `cast ws acquire --json`. Install
  * runs there (minutes on a cold node_modules), so the timeout is generous.
  */
-export function acquireRemoteWorkspace(host: RemoteHost, repoPath: string, name: string, localGitRoot: string): RemoteWorkspace {
-  const inputRoot = stageCloudInputs(host, localGitRoot, repoPath, name);
+export function acquireRemoteWorkspace(host: RemoteHost, repoPath: string, name: string, localGitRoot: string, opts: { onProgress?: Progress } = {}): RemoteWorkspace {
+  const inputRoot = stageCloudInputs(host, localGitRoot, repoPath, name, { warn: opts.onProgress });
   const result = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
       `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; export CODECAST_CLOUD_WORKSPACE=1; cd ${shq(repoPath)} && cast ws acquire ${shq(name)} --input-root ${shq(inputRoot)} --skip-pool --json`,
   ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });

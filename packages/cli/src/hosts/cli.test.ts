@@ -159,3 +159,31 @@ describe("briefError", () => {
     expect(briefError({})).toBe("failed");
   });
 });
+
+import { mirrorStatusLine, parseHostMirrorStamp } from "./cli.js";
+
+describe("config mirror line", () => {
+  const now = Date.parse("2026-09-06T12:00:00Z");
+  test("never, when the host has no stamp", () => {
+    expect(mirrorStatusLine(null, "dev-local", now)).toBe("never — cast hosts sync");
+    expect(mirrorStatusLine(undefined, "dev-local", now)).toBe("never — cast hosts sync");
+  });
+  test("a stamped host shows its relative age, hash8 and file count", () => {
+    const mirror = { hash: "a1b2c3d4e5f6", applied_at: "2026-09-06T11:46:00Z", files: 112, source_device_id: "dev-local" };
+    expect(mirrorStatusLine(mirror, "dev-local", now)).toBe("14m ago (a1b2c3d4, 112 files)");
+    expect(mirrorStatusLine({ ...mirror, files: 1 }, "dev-local", now)).toBe("14m ago (a1b2c3d4, 1 file)");
+  });
+  test("another device's stamp carries the take-over hint", () => {
+    const mirror = { hash: "a1b2c3d4e5f6", applied_at: "2026-09-06T11:46:00Z", files: 3, source_device_id: "dev-other" };
+    expect(mirrorStatusLine(mirror, "dev-local", now)).toBe("14m ago (a1b2c3d4, 3 files)  (owned by another device — cast hosts sync --take-over)");
+  });
+  test("a note (asleep, ssh error) wins over everything", () => {
+    expect(mirrorStatusLine(null, "dev-local", now, "asleep")).toBe("unknown (asleep)");
+  });
+  test("parseHostMirrorStamp reads the stamp and tolerates an absent or garbled one", () => {
+    expect(parseHostMirrorStamp("")).toBeNull();
+    expect(parseHostMirrorStamp("cat: no such file")).toBeNull();
+    expect(parseHostMirrorStamp(JSON.stringify({ version: 1, hash: "abc", applied_at: "t", source_device_id: "d", files: { a: {}, b: {} } })))
+      .toEqual({ hash: "abc", applied_at: "t", files: 2, source_device_id: "d" });
+  });
+});
