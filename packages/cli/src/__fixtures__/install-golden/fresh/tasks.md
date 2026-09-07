@@ -108,6 +108,7 @@ cast doc delete <id> --yes                  # permanently delete a doc you creat
 ```
 
 A task can be backed by a Linear or GitHub issue. `cast task show` prints that issue's identifier (`LIN-123`, `owner/repo#482`) and its link, and `cast task ls` prints the identifier beside the title. The sync runs both ways: your `cast task comment` posts to the issue and `cast task done` closes it, so working the task in codecast is working the issue.
+<!-- cast @VERSION@ -->
 <!-- /codecast-work -->
 
 ## Referencing objects
@@ -125,4 +126,5 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
 
 Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+<!-- cast @VERSION@ -->
 <!-- /codecast-references -->

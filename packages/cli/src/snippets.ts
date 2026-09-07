@@ -20,7 +20,9 @@
 // CLAUDE.md autonomously after a self-update — without a `cast` command running.
 
 import * as os from "os";
+import { readFileSync as fsReadFileSync } from "node:fs";
 import {
+  type GuidanceMode,
   type SectionSpec,
   BROWSER_SECTION,
   BROWSER_SNIPPET,
@@ -32,9 +34,15 @@ import {
   PUBLISH_SNIPPET,
   REFERENCES_SECTION,
   REFERENCES_SNIPPET,
+  readSnippetStamp,
+  renderSectionBody,
+  snippetByEndMarker,
   snippetBySlug,
   snippetContentHash,
+  stampSectionBody,
+  stripSnippetStamp,
   AGENT_CLIENTS,
+  SNIPPET_CATALOG,
 } from "@codecast/shared/contracts";
 import {
   applySnippet,
@@ -50,7 +58,9 @@ import {
   type SnippetInstallResult,
   type TargetCandidate,
 } from "@platform/snippets";
-import { getMessagingVersion } from "./update.js";
+import { defaultConfigDir } from "./config/readAuthConfig.js";
+import { sharedConfigFile } from "./config/sharedConfig.js";
+import { getMessagingVersion, getVersion } from "./update.js";
 
 export {
   BROWSER_SECTION,
@@ -135,7 +145,7 @@ export function installSectionToFile(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  return installSectionToFileWith(nodeFs, { filePath, dirPath }, spec, snippet, update);
+  return installSectionToFileWith(nodeFs, { filePath, dirPath }, spec, renderSection(spec, snippet), update);
 }
 
 /** Write `spec`'s section into every agent instruction file on this machine.
@@ -146,7 +156,113 @@ export function installSectionToTargets(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  return installSectionToTargetsWith(nodeFs, getSnippetTargets(), spec, snippet, update);
+  return installSectionToTargetsWith(nodeFs, getSnippetTargets(), spec, renderSection(spec, snippet), update);
+}
+
+// ------------------------------------------------------- what actually lands
+//
+// Both writers pass their body through here, so every install path on the
+// machine — `cast install`, the wizard, the daemon's refresh after a self
+// update, limitsGuidance, the capability driver — writes the same two things
+// without knowing about either: this binary's version stamped above the end
+// marker, and the stub form when the machine is in stub mode.
+//
+// Keyed off the end marker rather than a slug because the writers are handed
+// specs. The shared "Referencing objects" section belongs to no catalog entry;
+// it gets the stamp and stays full, which is right — it is nineteen lines and
+// serves no `cast guide` topic of its own.
+
+/**
+ * The body one write puts on disk: full or stub per `guidanceMode()`, with the
+ * running cast version stamped in.
+ */
+export function renderSection(spec: SectionSpec, snippet: string): string {
+  const descriptor = snippetByEndMarker(spec.endMarker);
+  if (descriptor && guidanceMode() === "stub") {
+    // Through renderSectionBody, not stubSectionBody, so the rule that refuses
+    // a stub longer than its own section is applied in one place.
+    return renderSectionBody(descriptor, "stub", getVersion());
+  }
+  return stampSectionBody(snippet, spec.endMarker, getVersion());
+}
+
+/**
+ * Full sections or stubs on this machine.
+ *
+ * Read from config.json directly — not through `readAuthConfig` — because a
+ * token this machine can no longer decrypt would answer null and silently flip
+ * a stub machine back to full sections on the next refresh. The mode is a
+ * plain preference; it does not need the token.
+ *
+ * Default is `full` until `cast decide` settles it (ct-49544).
+ */
+export function guidanceMode(): GuidanceMode {
+  try {
+    const raw = JSON.parse(
+      fsReadFileSync(sharedConfigFile(defaultConfigDir()), "utf-8"),
+    ) as { guidance_mode?: string };
+    return raw.guidance_mode === "stub" ? "stub" : "full";
+  } catch {
+    return "full";
+  }
+}
+
+// ---------------------------------------------- is the installed text current
+//
+// The stamp makes a CLAUDE.md self-describing, so `cast doctor` can answer a
+// question it could not before: does the guidance an agent reads on this
+// machine still match the binary that will run the commands? Drift is decided
+// on the text; the stamp is what names the release that wrote the drifted copy,
+// which is the part a bare comparison could never report.
+//
+// The comparison ignores the stamp line itself. The refresh gate is keyed on
+// content (snippetStale), so a version bump with no body change rewrites
+// nothing, and a section that is merely unstamped — every section installed
+// before this shipped — is current text that will pick up its stamp with the
+// next real body change. Flagging either would be a warning with no action
+// behind it.
+
+export interface GuidanceSectionStatus {
+  slug: string;
+  /** Which instruction file this row is about. */
+  file: string;
+  state: "current" | "stale" | "missing";
+  /** The cast version stamped in the installed section; null before stamps. */
+  stamp: string | null;
+}
+
+/** One row per enabled snippet per instruction file. Pure: doctor reads the
+ *  files and hands them in, so this is testable without a HOME. */
+export function guidanceSectionStatus(input: {
+  files: Array<{ label: string; text: string }>;
+  config: object | null | undefined;
+  version: string;
+  mode: GuidanceMode;
+}): GuidanceSectionStatus[] {
+  const bag = (input.config ?? {}) as Record<string, unknown>;
+  const rows: GuidanceSectionStatus[] = [];
+  for (const descriptor of SNIPPET_CATALOG) {
+    const section = descriptor.section;
+    if (!section || bag[descriptor.enabledKey] !== true) continue;
+    const expected = stripSnippetStamp(
+      renderSectionBody(descriptor, input.mode, input.version),
+    ).trim();
+    for (const file of input.files) {
+      const blocks = findOwnedSections(file.text, section.spec);
+      if (blocks.length === 0) {
+        rows.push({ slug: descriptor.slug, file: file.label, state: "missing", stamp: null });
+        continue;
+      }
+      const installed = file.text.slice(blocks[0]!.start, blocks[0]!.end);
+      rows.push({
+        slug: descriptor.slug,
+        file: file.label,
+        state: stripSnippetStamp(installed).trim() === expected ? "current" : "stale",
+        stamp: readSnippetStamp(installed),
+      });
+    }
+  }
+  return rows;
 }
 
 export function installBrowserSnippet(update = false): SnippetInstallResult {

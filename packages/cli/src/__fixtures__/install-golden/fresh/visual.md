@@ -26,4 +26,5 @@ Interactivity is declarative; codecast supplies the behavior:
 - Chart: `<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>`
 
 **Charts get every Observable Plot mark and transform by name** — fit the form to the data: `dot`, `boxY`, `density`, `cell` heatmaps, stacked `areaY`, `arrow`, `vector`, and on. Multi-series: `fill`/`stroke` as a field plus `"color":{"legend":true}`; facet with `fx`/`fy`; aggregate declaratively — `"transform":{"kind":"binX","out":{"y":"count"}}`, likewise `groupX`, `hexbin`, `dodgeX`, `windowY` — rather than pre-summing.
+<!-- cast @VERSION@ -->
 <!-- /codecast-visual -->

@@ -36,6 +36,7 @@ import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
 import { ensureClaudeSettingsPersistence, leakedTmuxGlobalMarkers } from "./agentEnv.js";
 import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
+import { getSnippetTargets, guidanceMode, guidanceSectionStatus } from "./snippets.js";
 import { c, fmt } from "./colors.js";
 import type { Config } from "./config/types.js";
 import { getMachineKey, hardwareId } from "./machineKey.js";
@@ -441,6 +442,54 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
     });
   }
 
+  // ── the guidance an agent actually reads ──
+  // Every install stamps the cast version above the section's end marker, so a
+  // CLAUDE.md says which binary wrote it. A section whose text no longer
+  // matches what this cast renders is guidance for another release — the agent
+  // reads flags from one version and runs another.
+  passive.push({
+    name: "guidance",
+    run: () => {
+      const files: Array<{ label: string; text: string }> = [];
+      for (const target of getSnippetTargets()) {
+        try {
+          files.push({
+            label: target.label ?? target.filePath,
+            text: fs.readFileSync(target.filePath, "utf-8"),
+          });
+        } catch {
+          // A target that does not exist yet is reported by the missing rows
+          // its enabled snippets produce, not as a file-level failure.
+          files.push({ label: target.label ?? target.filePath, text: "" });
+        }
+      }
+      const rows = guidanceSectionStatus({
+        files,
+        config: deps.config,
+        version: deps.version,
+        mode: guidanceMode(),
+      });
+      if (rows.length === 0) return { ok: true, detail: "no snippets enabled" };
+      const slugsOf = (subset: typeof rows) => [...new Set(subset.map((r) => r.slug))].join(", ");
+      const stale = rows.filter((r) => r.state === "stale");
+      const missing = rows.filter((r) => r.state === "missing");
+      if (stale.length === 0 && missing.length === 0) {
+        return {
+          ok: true,
+          detail: `${rows.length} section(s) in ${files.length} file(s) match cast v${deps.version} (${guidanceMode()})`,
+        };
+      }
+      // Which release wrote the drifted copy is the part the stamp adds; a
+      // section installed before stamps shipped can only say it has none.
+      const stamps = [...new Set(stale.map((r) => r.stamp ?? "an unstamped cast"))].join(", ");
+      const parts = [
+        stale.length ? `${slugsOf(stale)} written by ${stamps}, not v${deps.version}` : "",
+        missing.length ? `${slugsOf(missing)} enabled but absent` : "",
+      ].filter(Boolean);
+      return { ok: false, warn: true, detail: `${parts.join("; ")} — run \`cast install --all\`` };
+    },
+  });
+
   // Settings-level backstop for the same class: ~/.claude/settings.json pins
   // CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 for every claude on the machine,
   // so an inherited CLAUDE_CODE_CHILD_SESSION can never silence a transcript
@@ -501,6 +550,55 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
           return { ok: false, warn: true, detail: "Cursor detected but not synced — run `cast cursor on` (macOS asks to allow access once)" };
         }
         return { ok: true, skip: true, detail: "Cursor not installed" };
+      },
+    });
+
+    // The computer helper's whole scheme is one signed app at one path that
+    // never moves, because macOS keys a TCC grant to the resolved path AND the
+    // signing identity together. Every branch below names a way that scheme can
+    // break, and the fixed-path assertion is what stops a hashed or versioned
+    // directory creeping back in and costing every user a regrant.
+    passive.push({
+      name: "computer helper",
+      run: async () => {
+        // Imported here, not at the top: doctor.ts is on `index.ts`'s static
+        // graph, so a top-level import would put the computer client, the
+        // permission probe and the embedded helper bundle on the startup cost
+        // of `cast --help` and of every unrelated verb.
+        const [{ helperAvailability, HELPER_BUNDLE_ID }, { getPermissionStatus }] = await Promise.all([
+          import("./computer/helperApp.js"),
+          import("./computer/permissions.js"),
+        ]);
+        const helper = helperAvailability();
+        if (!helper.embedded) return { ok: true, skip: true, detail: "not built into this CLI" };
+        if (helper.pendingSwap) {
+          return { ok: false, warn: true, detail: "an interrupted bundle swap is pending repair — run `cast computer capabilities`" };
+        }
+        if (!helper.materialized) {
+          return { ok: true, skip: true, detail: "not set up yet (`cast computer capabilities` materializes it)" };
+        }
+        if (!helper.atFixedPath) {
+          return { ok: false, detail: `helper is not at its fixed path (${helper.appPath}); TCC grants will not survive updates` };
+        }
+        if (helper.signature === "invalid") {
+          return { ok: false, detail: `helper failed signature verification (${helper.signatureDetail}); reinstall codecast` };
+        }
+        if (helper.signature === "adhoc") {
+          return { ok: false, warn: true, detail: "ad-hoc signed (from-source build); TCC grants reset on every rebuild" };
+        }
+        const status = await getPermissionStatus().catch(() => null);
+        const missing = status?.permissions.filter((p) => p.status !== "granted") ?? [];
+        if (!status) return { ok: false, warn: true, detail: "Developer ID signed; could not read its permissions — run `cast computer permissions`" };
+        if (missing.length) {
+          const names = missing.map((p) => (p.id === "accessibility" ? "Accessibility" : "Screen Recording")).join(" and ");
+          // Bare `permissions` reads and shows nothing (ct-49667), so naming it
+          // here sent a human to a command that could not fix the line they
+          // came to fix. `--open-settings` is what opens the pane; with no
+          // `--id` the helper shows both, which is right when both are missing.
+          const which = missing.length === 1 ? ` --id ${missing[0]!.id}` : "";
+          return { ok: false, warn: true, detail: `${names} not granted; run \`cast computer permissions --open-settings${which}\` to open System Settings and grant` };
+        }
+        return { ok: true, detail: `${HELPER_BUNDLE_ID}, Developer ID signed, Accessibility and Screen Recording granted` };
       },
     });
 

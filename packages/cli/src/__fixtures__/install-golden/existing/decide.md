@@ -92,4 +92,5 @@ reversing the default would cost more than waiting, block.
 
 Ask sparingly. Every decision spends your human's attention; a question you could have resolved
 by reading more code is noise in their queue.
+<!-- cast @VERSION@ -->
 <!-- /codecast-decide -->

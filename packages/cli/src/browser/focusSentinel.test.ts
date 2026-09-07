@@ -12,6 +12,7 @@ import {
   isAppSwitchChord,
   isAgentChromeCommand,
   shouldRestoreFocus,
+  stampAt,
 } from "./focusSentinel.js";
 
 describe("isAgentChromeCommand", () => {
@@ -82,5 +83,41 @@ describe("isAppSwitchChord", () => {
     expect(isAppSwitchChord(true, 1n << 19n)).toBe(true);
     expect(isAppSwitchChord(false, 1n << 20n)).toBe(false);
     expect(isAppSwitchChord(true, 1n << 18n)).toBe(false);
+  });
+});
+
+/** The stamps a CLI process leaves for the sentinel: `loginRaisedAt` from
+ *  `cast browser login`, `computerRaisedAt` from `cast computer
+ *  --restore-window`. Neither runs in the daemon, so neither can call
+ *  noteDeliberateRaise. */
+describe("stampAt", () => {
+  test("passes a real stamp through", () => {
+    const now = Date.now();
+    expect(stampAt(now)).toBe(now);
+    expect(stampAt(now - DELIBERATE_RAISE_GRACE_MS * 10)).toBe(now - DELIBERATE_RAISE_GRACE_MS * 10);
+  });
+
+  test("a missing or malformed field reads as no stamp", () => {
+    for (const value of [undefined, null, "1788800000000", NaN, Infinity, -1, {}]) {
+      expect(stampAt(value)).toBe(0);
+    }
+  });
+
+  test("a stamp from the future reads as no stamp", () => {
+    // Left alone, a future stamp makes `now - stamp` negative, which is under
+    // every grace — the sentinel would go quietly dead for agent-Chrome raises
+    // and never bounce one again.
+    expect(stampAt(Date.now() + 60_000)).toBe(0);
+    // A small skew between two writers is not a future stamp.
+    const nearly = Date.now() + 1_000;
+    expect(stampAt(nearly)).toBe(nearly);
+  });
+
+  test("a stale stamp still reads as a stamp; the grace is what expires it", () => {
+    const old = Date.now() - DELIBERATE_RAISE_GRACE_MS - 1;
+    expect(stampAt(old)).toBe(old);
+    expect(
+      shouldRestoreFocus({ agentChrome: true, msSinceDeliberateRaise: Date.now() - old, msSinceAppSwitch: 60_000, secondsSinceClick: 60 }),
+    ).toBe(true);
   });
 });

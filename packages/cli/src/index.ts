@@ -26,7 +26,9 @@ import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import { registerBrowserCommand } from "./browser/cli.js";
 import { registerAppCommand } from "./app/cli.js";
+import { registerComputerCommand } from "./computer/cli.js";
 import { registerExecCommand } from "./execCommand.js";
+import { registerGuideCommand } from "./guide.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -87,7 +89,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
@@ -2234,6 +2236,7 @@ const SNIPPET_SECTIONS = {
   decide: snippetSection("decide"),
   calls: snippetSection("calls"),
   limits: snippetSection("limits"),
+  computer: snippetSection("computer"),
 } satisfies Record<string, SnippetSection>;
 
 // Every feature that introduces an object the agent names in prose (a session, a
@@ -2419,6 +2422,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   // than one saved Claude account (never re-enabled after an explicit off).
   if (ensureLimitsGuidanceForMultiAccount(config)) writeConfig(config);
   if (config.limits_enabled) installSnippetSection("limits", true);
+  if (config.computer_enabled) installSnippetSection("computer", true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -2617,6 +2621,18 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   } else if (config.limits_enabled && config.limits_version !== getLimitsVersion()) {
     stampSnippet(config, "limits", getLimitsVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+  if (config.computer_enabled && snippetStale(config, "computer")) {
+    const result = installSnippetSection("computer", true);
+    stampSnippet(config, "computer", getComputerVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Computer snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.computer_enabled && config.computer_version !== getComputerVersion()) {
+    stampSnippet(config, "computer", getComputerVersion()); // shadow only, no file write
     writeConfig(config);
   }
 
@@ -2993,7 +3009,9 @@ registerPrCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerComputerCommand(program);
 registerExecCommand(program);
+registerGuideCommand(program);
 
 program
   .command("auth")
@@ -9743,12 +9761,24 @@ program
     "  cast install --all                Install everything, no prompts\n" +
     "  cast install workflows            Install just the Workflows snippet\n" +
     "  cast install workflows --disable  Turn the Workflows snippet off\n" +
-    "  cast install --disable            Turn all snippets off"
+    "  cast install --disable            Turn all snippets off\n" +
+    "  cast install --all --stubs        Install short stubs; agents read `cast guide <topic>`"
   )
   .option("--all", "Enable all snippets without prompting")
   .option("--disable", "Disable the named snippet (or all snippets when none is named)")
+  .option("--stubs", "Write short sections (what the capability is, when to use it) and leave the flags to `cast guide <topic>`")
+  .option("--full", "Write the complete sections (the default)")
   .action(async (snippetArg: string | undefined, options) => {
     const config = readConfig() || {};
+
+    // Full sections or stubs, for this run AND every later refresh: the section
+    // writers read `guidance_mode` back off config.json (snippets.ts), so the
+    // choice has to be on disk before the first install runs. Full stays the
+    // default until a `cast decide` settles it (ct-49544).
+    if (options.stubs || options.full) {
+      (config as any).guidance_mode = options.stubs ? "stub" : "full";
+      writeConfig(config);
+    }
     const targets = getSnippetTargets();
     const targetList = targets.map(t => t.label).join(", ");
 
@@ -9774,6 +9804,7 @@ program
       decide: { getVersion: getDecideVersion, install: (update = false) => installSnippetSection("decide", update), reEnable: "cast install decide" },
       calls: { getVersion: getCallsVersion, install: (update = false) => installSnippetSection("calls", update), reEnable: "cast install calls" },
       limits: { getVersion: getLimitsVersion, install: (update = false) => installSnippetSection("limits", update), reEnable: "cast install limits" },
+      computer: { getVersion: getComputerVersion, install: (update = false) => installSnippetSection("computer", update), reEnable: "cast install computer" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
     // Single-snippet path: `cast install workflows` (+ --disable to turn off).

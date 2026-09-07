@@ -59,4 +59,5 @@ line is clearly for you. You can also start conversations yourself: `cast anchor
 Post to chat when the TEAM should see it (a release landed, a deploy finished, a decision is
 needed); use `cast send` for a message to one specific session. Don't narrate routine work into
 a channel — a channel full of agent noise trains people to mute it.
+<!-- cast @VERSION@ -->
 <!-- /codecast-chat -->

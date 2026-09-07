@@ -29,6 +29,7 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
 
 Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+<!-- cast @VERSION@ -->
 <!-- /codecast-references -->
 
 ## Deploy notes
@@ -88,4 +89,5 @@ Options:
 - `--max-runtime <duration>`: override max runtime (default: 10m)
 
 Every trigger has a short ID (`tr-42`) — printed when you create one and listed by `cast trigger ls`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call `cast trigger complete tr-42 --summary "..."` when done to report results back.
+<!-- cast @VERSION@ -->
 <!-- /codecast-tasks -->

@@ -16,7 +16,7 @@
  * in __fixtures__/install-golden/BASELINE.md. Read it before concluding
  * anything from a failure.
  *
- * Three scenarios per slug, because the writers take three different paths:
+ * Four scenarios per slug, because the writers take four different paths:
  *   fresh/    — no CLAUDE.md at all; the section lands in an empty file.
  *   existing/ — __fixtures__/install-golden/seed.md, which already carries two
  *               codecast blocks (## Messaging and ## Referencing objects) with
@@ -30,6 +30,11 @@
  *               the path every upgrade takes, and the one the shipped CLI got
  *               wrong (see snippets.ts:104 — it stacked one extra blank line per
  *               snippet per run, so a CLAUDE.md grew forever).
+ *   stub/     — `cast install <slug> --stubs` on a fresh HOME: the short form
+ *               that says what the capability is and leaves the flags to
+ *               `cast guide <slug>` (ct-49544). Recorded because the stub is
+ *               GENERATED from the catalog's display fields, so a reworded
+ *               `detail` silently rewrites what every stub machine reads.
  *
  * `help.txt` holds `cast install -h`, the one screen where a user reads the slug
  * list. It is recorded once, not per slug.
@@ -60,9 +65,15 @@
  *   3. A slug that writes no CLAUDE.md at all — `orchestration` writes skills,
  *      agents, and hooks instead — goldens the sentinel @ABSENT@ rather than a
  *      missing file, so "wrote nothing" is asserted rather than skipped.
- * The snippet bodies carry no version number or timestamp of their own: the
- * version lives only in config.json, and manifest.json records its exact value,
- * so a body edit that forgets its version bump shows as a one-sided diff.
+ *   4. Every install stamps the running cast version above the section's end
+ *      marker (ct-49544). That one token is replaced with @VERSION@, so the
+ *      fixtures still say a stamp was written and in which line, without
+ *      churning on every release. The check below that no live fixture carries
+ *      the package version is what keeps this normalization honest.
+ * The snippet BODIES carry no version number or timestamp of their own: the
+ * version lives in config.json and in that one stamp line, and manifest.json
+ * records its exact value, so a body edit that forgets its version bump shows
+ * as a one-sided diff.
  *
  * RE-RECORDING (all three env knobs exist for this, and only this):
  *   UPDATE_GOLDEN=1      write the fixtures instead of comparing them
@@ -179,7 +190,7 @@ function runCli(home: string, args: string[], attempt = ""): string {
  * itself. Only ~/.claude and ~/.codecast are inspected: bun writes its own
  * cache under a scratch HOME, and that is not part of the install.
  */
-function runInstall(slug: string, seed?: string, runs = 1): InstallRun {
+function runInstall(slug: string, seed?: string, runs = 1, extraArgs: string[] = []): InstallRun {
   const home = scratchHome();
   const claudePath = path.join(home, ".claude", "CLAUDE.md");
   if (seed !== undefined) {
@@ -189,7 +200,7 @@ function runInstall(slug: string, seed?: string, runs = 1): InstallRun {
 
   let stdout = "";
   for (let i = 0; i < runs; i++) {
-    stdout = runCli(home, ["install", slug], ` on run ${i + 1} of ${runs}`);
+    stdout = runCli(home, ["install", slug, ...extraArgs], ` on run ${i + 1} of ${runs}`);
   }
 
   const rawConfig = JSON.parse(
@@ -215,11 +226,24 @@ function runInstall(slug: string, seed?: string, runs = 1): InstallRun {
 
   return {
     stdout,
-    claudeMd: fs.existsSync(claudePath) ? fs.readFileSync(claudePath, "utf8") : ABSENT,
+    claudeMd: fs.existsSync(claudePath)
+      ? maskVersion(fs.readFileSync(claudePath, "utf8"))
+      : ABSENT,
     config: rawConfig,
     files,
   };
 }
+
+/** The one token in a written section that moves on every release: the version
+ *  stamp above the end marker. Masked so the fixtures pin that a stamp was
+ *  written, not which release wrote it. */
+function maskVersion(text: string): string {
+  return text.split(pkgVersion).join("@VERSION@");
+}
+
+const pkgVersion = JSON.parse(
+  fs.readFileSync(path.join(import.meta.dir, "..", "package.json"), "utf8"),
+).version as string;
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -368,10 +392,11 @@ describe("cast install — golden output per catalog slug", () => {
   for (const descriptor of slugs) {
     const slug = descriptor.slug;
 
-    test(`${slug} — fresh HOME, seeded CLAUDE.md, and a second run over its own output`, () => {
+    test(`${slug} — fresh HOME, seeded CLAUDE.md, a stub install, and a second run over its own output`, () => {
       const fresh = runInstall(slug);
       const existing = runInstall(slug, seed);
       const settled = runInstall(slug, seed, 2);
+      const stub = runInstall(slug, undefined, 1, ["--stubs"]);
 
       // The config assertions come first: a remapped config key is a worse
       // regression than a reworded paragraph, and it should be the failure a
@@ -405,7 +430,12 @@ describe("cast install — golden output per catalog slug", () => {
 
       expectGolden(path.join("fresh", `${slug}.md`), fresh.claudeMd, slug);
       expectGolden(path.join("existing", `${slug}.md`), existing.claudeMd, slug);
-    }, 120_000);
+      expectGolden(path.join("stub", `${slug}.md`), stub.claudeMd, slug);
+      // Five CLI subprocesses per slug (fresh, seeded, the seeded run twice,
+      // and the stub run), each a cold bun start. Generous, because the wall
+      // clock here is process startup under whatever else the suite is running
+      // in parallel, not the work being measured.
+    }, 240_000);
   }
 
   // Runs last: bun executes tests in declaration order, so every slug has filed
@@ -447,6 +477,25 @@ describe("cast install — golden output per catalog slug", () => {
   // surface that names a snippet the catalog does not: `stable` is a
   // SessionStart hook, printed by a hand-written line under a generated one
   // (index.ts:9532). That line is what goes stale when the catalog moves.
+  // One slug, both directions: the mode is a preference on disk, so switching
+  // it has to rewrite the sections rather than leave the machine half stubbed.
+  // Recorded fixtures are the comparison, so this cannot pass by agreeing with
+  // whatever the writer just did.
+  test("a machine can move between stub and full sections", () => {
+    const home = scratchHome();
+    runCli(home, ["install", "browser", "--stubs"]);
+    const stubbed = maskVersion(
+      fs.readFileSync(path.join(home, ".claude", "CLAUDE.md"), "utf8"),
+    );
+    expect(stubbed).toBe(fs.readFileSync(path.join(goldenDir, "stub", "browser.md"), "utf8"));
+
+    runCli(home, ["install", "browser", "--full"]);
+    const restored = maskVersion(
+      fs.readFileSync(path.join(home, ".claude", "CLAUDE.md"), "utf8"),
+    );
+    expect(restored).toBe(fs.readFileSync(path.join(goldenDir, "fresh", "browser.md"), "utf8"));
+  }, 120_000);
+
   test("cast install -h is unchanged", () => {
     expectGolden("help.txt", runCli(scratchHome(), ["install", "-h"]));
     // If `stable` ever became a catalog slug, the generated rows and the
@@ -455,16 +504,15 @@ describe("cast install — golden output per catalog slug", () => {
   }, 60_000);
 
   test("no live fixture carries the CLI package version", () => {
-    // The one thing that would make this golden churn on every release. If a
-    // snippet body or the help screen ever interpolates the version, catch it
-    // here rather than discovering it as a mystery failure the day after a
-    // version bump. pre-rewrite/ is excluded: it is frozen, so a hit there
-    // could never be fixed, only tolerated.
-    const pkgVersion = JSON.parse(
-      fs.readFileSync(path.join(import.meta.dir, "..", "package.json"), "utf8"),
-    ).version as string;
+    // The one thing that would make this golden churn on every release. The
+    // version stamp each section now carries is masked to @VERSION@ when a run
+    // is recorded, so this check also proves that masking still covers every
+    // place the version reaches a file. If a snippet body or the help screen
+    // ever interpolates the version somewhere the mask misses, catch it here
+    // rather than as a mystery failure the day after a release. pre-rewrite/ is
+    // excluded: it is frozen, so a hit there could never be fixed.
     const live = ["help.txt"];
-    for (const dir of ["fresh", "existing"]) {
+    for (const dir of ["fresh", "existing", "stub"]) {
       const abs = path.join(goldenDir, dir);
       if (!fs.existsSync(abs)) continue;
       for (const name of fs.readdirSync(abs)) live.push(path.join(dir, name));

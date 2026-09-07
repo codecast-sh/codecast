@@ -29,6 +29,7 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
 
 Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+<!-- cast @VERSION@ -->
 <!-- /codecast-references -->
 
 ## Deploy notes
@@ -71,4 +72,5 @@ Write it for someone who has been away: what is happening now, what it is waitin
 Update it at the moments that change the answer: you finish a phase, you get blocked, you hand work to another session, you are about to go quiet. A message from the human takes the pin down on its own: your declaration of who acts next has been answered, so declare again when you end that turn (a send from another session or a trigger wake leaves it standing). Clear the state yourself only when it stops being true or useful. A state claiming you are waiting on something that already arrived is worse than none — the dashboard shows how far the thread has run since you wrote it, so a line you stopped maintaining reads as abandoned rather than current.
 
 Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. The status declaration alone is worth making even on a short thread: a one-line `--status done` at the end costs nothing and files the session where it belongs.
+<!-- cast @VERSION@ -->
 <!-- /codecast-state -->

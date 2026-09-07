@@ -110,6 +110,15 @@
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
+  "computer": {
+    "config": {
+      "computer_enabled": true,
+      "computer_version": "1"
+    },
+    "stdout": "* Computer — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
   "decide": {
     "config": {
       "decide_enabled": true,

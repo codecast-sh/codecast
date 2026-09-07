@@ -41,4 +41,5 @@ cast call <id> --json             # machine-readable (includes segments)
 
 Reach for a transcript when a task or thread refers to something "we discussed on the call",
 and quote the exact line rather than paraphrasing from memory.
+<!-- cast @VERSION@ -->
 <!-- /codecast-calls -->
