@@ -633,6 +633,20 @@ export default defineSchema({
     // no checkout, and a laptop would claim it for itself. Cleared by
     // cloud.placeConversation together with the real start.
     cloud_placement: v.optional(v.literal("pending")),
+    // A bulk migration (sessionMigrations.ts) is moving this row between
+    // machines. Present = FENCED: no daemon may deliver into it (the source is
+    // being quiesced and its transcript transferred; the destination does not
+    // own it yet), so messages sent meanwhile wait as pending and ride the
+    // resume on the destination. Set by sessionMigrations.beginSession and
+    // cleared — in the same transaction as the ownership flip — by
+    // finishSession / failSession, so a stale fence can only outlive a crashed
+    // runner, and the batch's reaper clears those.
+    migration: v.optional(v.object({
+      batch_id: v.string(),
+      migration_id: v.id("session_migrations"),
+      to_device_id: v.string(),
+      started_at: v.number(),
+    })),
     worktree_path: v.optional(v.string()),
     worktree_status: v.optional(v.union(
       v.literal("active"),
@@ -818,6 +832,78 @@ export default defineSchema({
   // record here and createConversation / updateSessionId consume it (patching
   // conversations.stable_context, deleting the row). Rows are transient — any
   // consumer also lazily prunes leftovers older than a day for its user.
+  // ── Bulk session migration (sessionMigrations.ts) ────────────────────────
+  // One batch = one gesture ("move these N sessions to <device>"). The rows
+  // under it are the unit of progress the web narrates and the runner
+  // advances; a batch's status is derived from its rows, never stored.
+  migration_batches: defineTable({
+    user_id: v.id("users"),
+    // Short public id (mg-xxxxxxxx): what the daemon command, the CLI and the
+    // web all name the batch by.
+    batch_id: v.string(),
+    to_device_id: v.string(),
+    created_at: v.number(),
+    updated_at: v.number(),
+    // Human-cancelled: queued rows were cancelled; running ones finish.
+    cancelled_at: v.optional(v.number()),
+    // How long the runner waits for a mid-turn session to go idle before it
+    // interrupts the turn and moves anyway. 0 = interrupt immediately.
+    wait_for_idle_ms: v.number(),
+    // Sessions transferred in parallel per executor (SSH transfers).
+    concurrency: v.number(),
+    // The local daemons that run this batch, one command each.
+    executor_device_ids: v.array(v.string()),
+  })
+    .index("by_batch_id", ["batch_id"])
+    .index("by_user_created", ["user_id", "created_at"]),
+
+  session_migrations: defineTable({
+    user_id: v.id("users"),
+    batch_id: v.string(),
+    conversation_id: v.id("conversations"),
+    session_id: v.optional(v.string()),
+    // Snapshot for the progress list (the row must read on its own).
+    title: v.optional(v.string()),
+    short_id: v.optional(v.string()),
+    direction: v.union(v.literal("to_cloud"), v.literal("to_local")),
+    from_device_id: v.optional(v.string()),
+    to_device_id: v.string(),
+    // The online local daemon that performs this row's transfer.
+    executor_device_id: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("waiting_idle"),
+      v.literal("quiescing"),
+      v.literal("transferring"),
+      v.literal("switching"),
+      v.literal("resuming"),
+      v.literal("done"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    // One line of narration for the current status ("pushing worktree…").
+    stage: v.optional(v.string()),
+    error: v.optional(v.string()),
+    // Sequence in the batch (the order the executor works through rows).
+    position: v.number(),
+    attempt: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+    started_at: v.optional(v.number()),
+    finished_at: v.optional(v.number()),
+    // Where the files went, so a later batch can bring the session back
+    // without the executor's local remote-moves.json.
+    source_path: v.optional(v.string()),
+    destination_path: v.optional(v.string()),
+    verification: v.optional(v.string()),
+    // The resume the flip enqueued on the destination — polled to confirm the
+    // session actually came up there.
+    resume_command_id: v.optional(v.id("daemon_commands")),
+  })
+    .index("by_batch", ["batch_id", "position"])
+    .index("by_conversation", ["conversation_id"])
+    .index("by_user_created", ["user_id", "created_at"]),
+
   stable_context_spool: defineTable({
     user_id: v.id("users"),
     session_id: v.string(),

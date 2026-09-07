@@ -2666,6 +2666,7 @@ export const listConversations = query({
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
+            migration_batch_id: c.migration?.batch_id || null,
           };
         }
 
@@ -2696,6 +2697,7 @@ export const listConversations = query({
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
+            migration_batch_id: c.migration?.batch_id || null,
           };
         }
 
@@ -2760,6 +2762,7 @@ export const listConversations = query({
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
+            migration_batch_id: c.migration?.batch_id || null,
           };
         }
 
@@ -2916,6 +2919,7 @@ export const listConversations = query({
           worktree_name: c.worktree_name || null,
           worktree_branch: c.worktree_branch || null,
           cloud_placement: c.cloud_placement || null,
+          migration_batch_id: c.migration?.batch_id || null,
         };
       })
     );
@@ -8346,6 +8350,7 @@ async function enrichInboxSessionRow(
     worktree_name: conv.worktree_name,
     worktree_branch: conv.worktree_branch,
     cloud_placement: (conv as any).cloud_placement ?? null,
+    migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
@@ -8485,6 +8490,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     agent_name: child.agent_name ?? null,
     owner_device_id: child.owner_device_id ?? null,
     cloud_placement: child.cloud_placement ?? null,
+    migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
     workflow_run_id: null,

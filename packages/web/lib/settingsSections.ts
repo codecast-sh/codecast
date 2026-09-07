@@ -25,6 +25,7 @@ export type SettingsSectionId =
   | "claude-accounts"
   | "cli"
   | "devices"
+  | "migrate"
   | "desktop";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "general";
@@ -46,6 +47,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/claude-accounts": "claude-accounts",
   "/settings/cli": "cli",
   "/settings/devices": "devices",
+  "/settings/migrate": "migrate",
   "/settings/desktop": "desktop",
 };
 

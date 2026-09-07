@@ -19,6 +19,8 @@ import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
 import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
+import { useDevices, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
+import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
@@ -121,6 +123,8 @@ import {
   RefreshCw,
   EyeOff,
   PanelBottom,
+  Cloud,
+  Laptop,
 } from "lucide-react";
 import { AnchorGlyph } from "./anchor/AnchorIdentity";
 import { isTriageBarCompact } from "./triage/graduation";
@@ -131,7 +135,7 @@ const api = _api as any;
 
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 
-type ActionMode = "snooze" | "rename" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "snooze" | "rename" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -204,6 +208,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth", secondary: true },
   { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private", secondary: true },
   { label: "Devices", path: "/settings/devices", icon: "cpu", keywords: "machines daemons keys cli hosts", secondary: true },
+  { label: "Migrate Sessions", path: "/settings/migrate", icon: "cpu", keywords: "move bulk cloud host laptop transfer batch", secondary: true },
   { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "slack github linear google gmail notion connect oauth apps webhooks issues sync", secondary: true },
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
   { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
@@ -349,6 +354,10 @@ export function ActionSubmenu({
   // Two-step state for the "Start agent run" mode: pick an agent, then compose
   // the initial message before launching a run per selected task.
   const [agentStep, setAgentStep] = useState<"pick" | "message">("pick");
+  // "Move to machine": the roster and the mover (batch rail for laptop↔cloud,
+  // re-home for laptop→laptop — see components/BulkMoveSessions).
+  const { devices: rosterDevices, locals: rosterLocals, remotes: rosterRemotes } = useDevices();
+  const bulkMove = useBulkMoveSessions();
   const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
   const messageRef = useRef<HTMLTextAreaElement>(null);
@@ -608,6 +617,18 @@ export function ActionSubmenu({
           active: target?.status === o.key,
         }));
     }
+    if (mode === "device") {
+      const everyOwner = targets.length && targets.every((t: any) => t.owner_device_id === targets[0]?.owner_device_id) ? targets[0]?.owner_device_id : null;
+      return [...rosterLocals, ...rosterRemotes]
+        .map((d: any) => {
+          const usable = d.online || (d.is_remote && deviceWakesOnUse(d));
+          const state = d.is_remote
+            ? (d.online ? "cloud host" : usable ? "cloud host · asleep, wakes on move" : "cloud host · offline")
+            : (d.online ? "laptop" : "laptop · offline");
+          return { key: d.device_id, label: `${deviceDisplayName(d)} — ${state}${d.device_id === everyOwner ? " · running here" : ""}`, active: d.device_id === everyOwner, icon: d.is_remote ? Cloud : Laptop, usable: usable && d.device_id !== everyOwner };
+        })
+        .filter((row) => row.label.toLowerCase().includes(q));
+    }
     if (mode === "bucket") {
       const convId = target?._id as string | undefined;
       const currentBucketId = convId
@@ -680,7 +701,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -823,6 +844,13 @@ export function ActionSubmenu({
       return;
     }
 
+    if (mode === "device") {
+      if (item.usable === false) { toast.error(item.label.includes("running here") ? "Already running there" : "That machine is offline"); return; }
+      const device = rosterDevices.find((d: any) => d.device_id === item.key);
+      if (device) void bulkMove(targets, device);
+      onClose();
+      return;
+    }
     if (mode === "bucket") {
       const store = useInboxStore.getState();
       // Sessions mid-create carry stub ids the server can't act on — resolve to
@@ -930,7 +958,7 @@ export function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, onClose, updateTask, updatePlan, updateDoc, teamMembers, search, taskStatuses, pathname, renameId]);
+  }, [items, target, targets, targetType, mode, onClose, updateTask, updatePlan, updateDoc, teamMembers, search, taskStatuses, pathname, renameId, rosterDevices, bulkMove]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
@@ -1032,6 +1060,7 @@ export function ActionSubmenu({
     mode === "agent_switch" ? "Switch agent..." :
     mode === "agent_fork" ? "Fork session as…" :
     mode === "bucket" ? "Label session — type to filter or create..." :
+    mode === "device" ? "Move to machine — pick where these sessions run…" :
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
     mode === "parent" ? "Set parent — search tasks..." :
@@ -1848,7 +1877,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
+    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);

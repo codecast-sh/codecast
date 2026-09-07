@@ -91,4 +91,18 @@ cast switch --agent codex --fork       # optional: a new session instead
 ```
 
 A divider lands in the thread ("now using Codex"). The conversation id does not change. A provider switch replaces this process — do not keep talking as if you are still the old agent. A model switch on the same provider usually does not.
+
+### Moving sessions between machines
+
+Sessions run on one machine each — a laptop or a cloud host — and `cast migrate` moves MANY of them at once, in either direction, without losing anything: a session mid-turn finishes its turn first, messages sent during the move wait and arrive on the destination, and the agent gets a note saying which machine it is on now. Use it when the human asks to move work ("send everything labeled x to the linux box", "bring my sessions back to the laptop"); when moving is your own idea, propose it first — it interrupts nothing, but it changes where the human's terminals are.
+
+```bash
+cast migrate start --to linux --label rollout            # every session filed under "rollout" → the cloud host
+cast migrate start --to macbook --from linux             # everything on the cloud host → the laptop
+cast migrate start --to linux jx7c6zk jx7dhfh            # named sessions (short ids)
+cast migrate start --to linux --project platform --dry-run   # preview: what would move, what would not, and why
+cast migrate ls | show <batch> | cancel <batch> | retry <batch>
+```
+
+`--to` and `--from` take a device id prefix or a label substring (`cast remote hosts` lists them). Selectors combine: `--label`, `--from`, `--project <path or name>`, `--all`, plus explicit short ids. Always `--dry-run` first when the selector is broad — the preview names each session it would skip and why (already there, not a Claude Code session, its machine is offline). `--wait <minutes>` bounds how long a mid-turn session may finish before it is interrupted (default 10; 0 interrupts at once). A batch runs on the machine that holds the files and reports per session; `cast migrate show <batch>` is how you tell the human what moved.
 <!-- /codecast-forks -->

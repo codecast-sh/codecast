@@ -401,10 +401,13 @@ export function SessionMenuItems({
   onStash,
   onDefer,
   onRename,
+  extra,
 }: {
   session: InboxSession;
   /** Teammate's session — read-only row, so triage verbs hide. */
   isForeign?: boolean;
+  /** Items the surface adds after Label (the inbox: "Move to machine"). */
+  extra?: React.ReactNode;
   onOpen?: () => void;
   /** Overrides so cards keep their slide-out animations and trigger notices. */
   onKill?: () => void;
@@ -504,6 +507,7 @@ export function SessionMenuItems({
           </CtxItem>
         </CtxSubContent>
       </CtxSub>
+      {extra}
       {canControlModel(session.agent_type, (session.message_count ?? 0) === 0) && (
         <CtxItem icon={Cpu} onSelect={() => openPaletteMode([session], "session", "model")}>
           Change model &amp; effort…
