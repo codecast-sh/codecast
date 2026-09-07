@@ -99,7 +99,7 @@ export async function custodyReview(f:any) {
   let timer:ReturnType<typeof setInterval>|undefined;
   try{
     new Function('setInterval','transcriptRetryOwners','sendHeartbeat',heartbeat[0])((callback:()=>void)=>{timer=setInterval(()=>{now+=30_001;callback();},5);},owner,async()=>{});
-    await until(()=>internal.geminiSyncedCounts.get(many)===2500&&getPosition(empty)===fs.statSync(empty).size);await tick();
+    await until(()=>internal.geminiSyncedCounts.get(many)===2500&&getPosition(empty)===fs.statSync(empty).size);await scheduled.awaitQueue();await emptyOwner.awaitQueue();
     const manyRows=sent.slice(manyBefore).filter(p=>p.conversationId===cache[manyId]).flatMap(p=>p.messages);assert.equal(manyRows.length,2500);assert.ok(manyRows.every(m=>!m.messageUuid));assert.equal(receipts(manyId).length,0);assert.equal(pending[manyId],undefined);assert.equal(fs.statSync(many).mtimeMs,mtime);
   }finally{if(timer)clearInterval(timer);owner.stop();internal.injectedMessageTs.clear();}
   return {lateAcceptance:6,readGeneration:6,countMapping:true,legacyFreshAppend:true,mismatchCold:true,evictedReplacement:true,countReplacement:true,receiptCapacity:2048,healthyProgress:true,oversizedPendingBypass:true,scheduledOccurrences:2500,continuationWake:true};
