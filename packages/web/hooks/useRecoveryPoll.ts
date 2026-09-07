@@ -49,7 +49,7 @@ export const WAKE_GRACE_MS = 5_000;
 // staleness up to `maxStaleMs`; any live push resets it.
 export function createRecoveryController(opts: {
   getLastSync: () => number;
-  fetchAndApply: () => Promise<void>;
+  fetchAndApply: (signal: AbortSignal) => Promise<void>;
   staleMs: number;
   maxStaleMs?: number;
   wakeGraceMs?: number;
@@ -66,45 +66,51 @@ export function createRecoveryController(opts: {
   let misses = 0;
   let probeStamp: number | null = null;
   let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+  let active: AbortController | null = null;
+  let nextAttemptAt = 0;
+  let disposed = false;
 
   function requiredStaleMs(): number {
     return Math.min(maxStaleMs, opts.staleMs * 2 ** misses);
   }
 
   async function tick(): Promise<void> {
+    if (disposed) return;
     if (probeStamp !== null && opts.getLastSync() !== probeStamp) {
       // A live push moved the value since our last probe — back to base cadence.
       misses = 0;
       probeStamp = null;
+      nextAttemptAt = 0;
     }
+    if (now() < nextAttemptAt) return;
     if (!shouldRecover(now(), opts.getLastSync(), requiredStaleMs(), inFlight)) return;
     inFlight = true;
-    let settled = false;
+    const controller = new AbortController();
+    active = controller;
     // The digest compare's quiescence gate sees every recovery fetch.
     const releaseActivity = beginSyncInflight("poll");
-    const release = () => {
-      if (!settled) {
-        settled = true;
-        inFlight = false;
-        releaseActivity();
-      }
-    };
-    const timer = setTimeout(release, timeoutMs);
+    const aborted = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      await opts.fetchAndApply();
+      await Promise.race([opts.fetchAndApply(controller.signal), aborted]);
     } catch (err) {
-      onError(err);
+      if (!controller.signal.aborted) onError(err);
     } finally {
       clearTimeout(timer);
-      release();
+      active = null;
+      inFlight = false;
+      releaseActivity();
       if (probeStamp !== null) misses++;
       probeStamp = opts.getLastSync();
+      nextAttemptAt = now() + requiredStaleMs();
     }
   }
 
   // Wake-event entry: defer past the resubscribe window instead of racing it.
   function wake(): void {
-    if (wakeTimer) return;
+    if (disposed || wakeTimer) return;
     wakeTimer = setTimeout(() => {
       wakeTimer = null;
       void tick();
@@ -112,6 +118,8 @@ export function createRecoveryController(opts: {
   }
 
   function dispose(): void {
+    disposed = true;
+    active?.abort();
     if (wakeTimer) clearTimeout(wakeTimer);
     wakeTimer = null;
   }
@@ -139,7 +147,7 @@ export function createRecoveryController(opts: {
 // eslint-disable-next-line no-restricted-syntax -- polled recovery; the effect manages its own interval
 export function useRecoveryPoll(
   lastSyncRef: MutableRefObject<number>,
-  fetchAndApply: () => Promise<void>,
+  fetchAndApply: (signal: AbortSignal) => Promise<void>,
   staleMs: number,
   pollMs = 10_000,
 ) {
@@ -149,7 +157,7 @@ export function useRecoveryPoll(
   useWatchEffect(() => {
     const controller = createRecoveryController({
       getLastSync: () => lastSyncRef.current,
-      fetchAndApply: () => fnRef.current(),
+      fetchAndApply: (signal) => fnRef.current(signal),
       staleMs,
     });
     const tick = () => {

@@ -5,6 +5,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, InboxSession, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
+import { queryWithSignal } from "../lib/queryWithSignal";
 import { warmVisibleSessions } from "./inboxWarm";
 
 import { useWatchEffect } from "./useWatchEffect";
@@ -97,13 +98,14 @@ export function useSyncTeamInboxSessions() {
   // team mode is active, probe a novel-token round-trip to re-sync the list and
   // active set (same pattern as the personal inbox recovery poll). The `_probe`
   // arg dodges the stalled live cache. No-op when not in team mode.
-  useRecoveryPoll(lastSyncRef, useCallback(async () => {
+  useRecoveryPoll(lastSyncRef, useCallback(async (signal: AbortSignal) => {
     if (!active) return;
-    const fresh: any = await convex.query(api.conversations.listTeamInboxSessions, {
+    const fresh: any = await queryWithSignal(convex, api.conversations.listTeamInboxSessions, {
       activeTeamId: activeTeamId as Id<"teams"> | undefined,
       include_liveness: false,
       _probe: Date.now(),
-    });
+    }, signal);
+    if (signal.aborted) return;
     const sessions = fresh?.sessions ?? [];
     if (!Array.isArray(sessions)) return;
     syncTable("sessions", sessions as unknown as InboxSession[]);
@@ -112,12 +114,13 @@ export function useSyncTeamInboxSessions() {
     lastSyncRef.current = Date.now();
   }, [convex, active, activeTeamId, syncTable]), 15_000);
 
-  useRecoveryPoll(lastLivenessRef, useCallback(async () => {
+  useRecoveryPoll(lastLivenessRef, useCallback(async (signal: AbortSignal) => {
     if (!active) return;
-    const fresh: any = await convex.query(api.conversations.teamSessionsLiveness, {
+    const fresh: any = await queryWithSignal(convex, api.conversations.teamSessionsLiveness, {
       activeTeamId: activeTeamId as Id<"teams"> | undefined,
       _probe: Date.now(),
-    });
+    }, signal);
+    if (signal.aborted) return;
     const liveness = fresh?.liveness;
     if (!liveness) return;
     // Same applier as the subscription — a recovery pass must not fork shapes.
