@@ -49,8 +49,8 @@ for (const fixture of [
 test("CLI test script roots the same source tree and preserves Node build splitting", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   expect(pkg.scripts.test).toBe("bun test ./src/");
-  expect(pkg.scripts.build).toBe("bun scripts/stamp-daemon-build-id.ts && bun build src/main.ts src/daemon.ts --outdir dist --target node --splitting");
-  expect(pkg.scripts["build:binary"]).toBe("bash scripts/guard-no-src-shadow.sh && bun build src/main.ts --compile --outfile codecast");
+  expect(pkg.scripts.build).toBe("bun scripts/stamp-daemon-build-id.ts && bun scripts/build-with-native.ts src/main.ts src/daemon.ts --outdir dist --target=node --splitting");
+  expect(pkg.scripts["build:binary"]).toBe("bash scripts/guard-no-src-shadow.sh && bun scripts/build-with-native.ts src/main.ts --compile --outfile codecast");
   expect(pkg.scripts.dev).toBe("bun run src/main.ts");
   expect(pkg.scripts.typecheck).toBe("tsc --noEmit -p tsconfig.typecheck.json");
 });
