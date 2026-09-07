@@ -24,13 +24,14 @@ function conversationTable(): Dexie.Table {
   return (Dexie.connections.find((db) => db.name === "codecast-store") as any).conversationMessages;
 }
 
-function holdWrites() {
+function holdWrites(ids: string[]) {
   const table = conversationTable();
   const put = table.put;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const writes: any[] = [];
   table.put = function (row: any) {
+    if (!ids.includes(row.convId)) return put.call(table, row);
     writes.push(row);
     return Dexie.Promise.resolve(gate).then(() => put.call(table, row));
   };
@@ -41,8 +42,8 @@ const message = (n: number) => ({ _id: `message-${n}`, timestamp: Date.now(), co
 
 describe("conversation cache backpressure", () => {
   it("keeps only the newest waiting snapshot while a write is stalled", async () => {
-    const held = holdWrites();
     const id = `backpressure-${crypto.randomUUID()}`;
+    const held = holdWrites([id]);
     try {
       for (let n = 0; n < 25; n++) {
         writeConversationMessages(id, [message(n)], { page: n });
@@ -60,8 +61,8 @@ describe("conversation cache backpressure", () => {
   });
 
   it("serves the in-flight snapshot before its disk commit", async () => {
-    const held = holdWrites();
     const id = `in-flight-${crypto.randomUUID()}`;
+    const held = holdWrites([id]);
     try {
       writeConversationMessages(id, [message(1)], { page: 1 });
       flushConversationMessages();
@@ -75,9 +76,9 @@ describe("conversation cache backpressure", () => {
   });
 
   it("does not lose another conversation while coalescing a busy one", async () => {
-    const held = holdWrites();
     const first = `first-${crypto.randomUUID()}`;
     const second = `second-${crypto.randomUUID()}`;
+    const held = holdWrites([first, second]);
     try {
       writeConversationMessages(first, [message(0)], { page: 0 });
       writeConversationMessages(second, [message(1)], { page: 1 });
@@ -100,6 +101,7 @@ describe("conversation cache backpressure", () => {
     const id = `failed-${crypto.randomUUID()}`;
     let attempts = 0;
     table.put = function (row: any) {
+      if (row.convId !== id) return put.call(table, row);
       attempts++;
       return attempts === 1
         ? Dexie.Promise.reject(new Error("Storage temporarily unavailable"))

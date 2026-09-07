@@ -17,7 +17,7 @@ function fixture() {
     policy: () => ({ maxLive: 1, idleMs: 1, maxPerPass: 5 }),
     tmuxSessions: async () => new Map([["pane", 0]]),
     terminal: async () => ({ stdout: "" }),
-    inspectTarget: async (id) => ({ session: "$1", pane: "%1", pid: 100, start: "start", stamp: id, conversationStamp: "" }),
+    inspectTarget: async () => null,
     awakeIdleMs: () => 100_000,
     subagentActiveAgoMs: () => Infinity,
     conversationIds: () => ({ session: "conversation" }),
@@ -35,7 +35,7 @@ function fixture() {
   return { h, io, calls };
 }
 
-const unavailable = { result: "skipped_parking-safety-unavailable", error: "not parked: parking-safety-unavailable" };
+const unavailable = { result: "skipped_target-unverified", error: "not parked: target-unverified" };
 const nonLogEffects = (h: ReturnType<typeof createHibernationHarness>) => h.effects.filter((effect) => effect.kind !== "log");
 
 describe("parking fallback executes production bodies without daemon initialization", () => {
@@ -46,10 +46,12 @@ describe("parking fallback executes production bodies without daemon initializat
         const before = h.sessionParkStateForTests("session");
         if (lifecycle === "unavailable") io.lifecycle = async () => { calls.push("lifecycle"); return null; };
         if (lifecycle === "unknown") io.lifecycle = async () => { calls.push("lifecycle"); throw new Error("unavailable evidence"); };
+        if (lifecycle === "optimistic") io.lifecycle = async () => { calls.push("lifecycle"); return { status: "active", hideStateKnown: false, source: "status" } as any; };
         io.canReapPidTree = () => { calls.push("ownership"); return ownership === "owned"; };
-        expect(await h.hibernateSessionNow("session", "conversation", io)).toEqual(unavailable);
+        const reason = lifecycle === "unavailable" ? "lifecycle-unknown" : lifecycle === "unknown" ? "evidence-unavailable" : "lifecycle-degraded";
+        expect(await h.hibernateSessionNow("session", "conversation", io)).toEqual({ result: `skipped_${reason}`, error: `not parked: ${reason}` });
         expect(await h.runHibernationPass(io)).toBe(0);
-        expect(calls).toEqual([]);
+        expect(calls).toEqual(["sidecar", "lifecycle", "sidecar", "lifecycle"]);
         expect(h.sessionParkStateForTests("session")).toEqual(before);
         expect(nonLogEffects(h)).toEqual([]);
       });
@@ -60,7 +62,7 @@ describe("parking fallback executes production bodies without daemon initializat
     const { h, io, calls } = fixture();
     io.policy = () => ({ maxLive: 0, idleMs: 0, maxPerPass: 5 });
     expect(await h.hibernateSessionNow("session", undefined, io)).toEqual(unavailable);
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["sidecar", "lifecycle", "ownership"]);
     expect(nonLogEffects(h)).toEqual([]);
   });
 
@@ -85,15 +87,16 @@ describe("parking fallback executes production bodies without daemon initializat
     });
   }
 
-  test("concurrent commands and passes all refuse without creating a park reservation", async () => {
+  test("concurrent commands and passes release their reservations after refusing unverified targets", async () => {
     const { h, io, calls } = fixture();
     const results = await Promise.all(Array.from({ length: 20 }, (_, i) => i % 2
       ? h.hibernateSessionNow("session", undefined, io)
       : h.runHibernationPass(io)));
     expect(results.filter((r) => r === 0)).toHaveLength(10);
-    expect(results.filter((r) => typeof r === "object")).toEqual(Array(10).fill(unavailable));
+    expect(results.filter((r) => typeof r === "object").every((r) => r.result?.startsWith("skipped_"))).toBe(true);
     expect(h.state.resumeInFlight.size).toBe(0);
-    expect(calls).toEqual([]);
+    expect(h.state.tmuxTargetLocks.size).toBe(0);
+    expect(calls).not.toContain("park");
     expect(nonLogEffects(h)).toEqual([]);
   });
 
