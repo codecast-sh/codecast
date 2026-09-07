@@ -103,27 +103,29 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     // dialog if the build shows one, then wait for the input prompt.
     const paneReady = async (pattern: RegExp, budgetMs: number): Promise<boolean> => {
       const until = Date.now() + budgetMs;
+      const dismissed = new Set<string>();
       while (Date.now() < until) {
         const pane = tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]).stdout;
+        const dialog = pane.match(/trust (the )?(contents|files)|Do you trust|Do you want to use this API key/i)?.[0];
+        if (dialog && !dismissed.has(dialog)) {
+          dismissed.add(dialog);
+          tmux(["send-keys", "-t", target, "Enter"]);
+          await sleep(250);
+          continue;
+        }
         if (pattern.test(pane)) return true;
         await sleep(250);
       }
       return false;
     };
-    if (await paneReady(/trust (the )?(contents|files)|Do you trust/i, 8_000)) {
-      tmux(["send-keys", "-t", target, "Enter"]);
-    }
     // An unrecognized ANTHROPIC_API_KEY makes current builds ask for approval
     // before showing the composer; decline it (the highlighted row) and carry on
     // — the test only needs the input box, never a model call.
-    if (await paneReady(/Do you want to use this API key/i, 8_000)) {
-      tmux(["send-keys", "-t", target, "Enter"]);
-    }
     // Wait for the input box's own ❯ — NOT the footer's ⏵⏵ mode indicator, which
     // paints while the TUI is still drawing and left this wait passing on a pane
     // the daemon can't classify yet.
-    if (!(await paneReady(/❯/, 25_000))) {
-      throw new Error(`Claude Code never rendered an input prompt in ${target}`);
+    if (!(await paneReady(/❯/, 45_000))) {
+      throw new Error(`Claude Code never rendered an input prompt: ${tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]).stdout}`);
     }
 
     // Painting the input box does NOT mean stdin is being read: Claude Code
@@ -151,7 +153,7 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     }
     tmux(["send-keys", "-t", target, "BSpace"]);
     await sleep(300);
-  }, 60_000);
+  }, 90_000);
 
   afterAll(async () => {
     tmuxRun(["kill-session", "-t", tmuxSession]);
@@ -198,6 +200,15 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     let userMessages = await waitForMessages(1);
     expect(userMessages).toEqual(["first prompt that will be recalled"]);
 
+    tmux(["send-keys", "-t", target, "Escape"]);
+    const idleDeadline = Date.now() + 10_000;
+    while (true) {
+      const pane = tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]).stdout;
+      if (!/esc to interrupt|Retrying in/i.test(pane)) break;
+      if (Date.now() >= idleDeadline) throw new Error(`Claude did not stop its invalid-key retry: ${pane}`);
+      await sleep(250);
+    }
+
     // 2. Simulate the user (or any path that puts stale text in the box):
     //    press Up arrow. Claude Code recalls the previous prompt into the
     //    input box — this is the state the bug report observed.
@@ -211,7 +222,7 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     await injectViaTmux(target, "follow-up content");
 
     userMessages = await waitForMessages(2);
-    expect(userMessages.length).toBeGreaterThanOrEqual(2);
+    expect(userMessages.length, tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-50"]).stdout).toBeGreaterThanOrEqual(2);
     const second = userMessages[1];
 
     // The assertion that proves the fix: the second message must be exactly
