@@ -17,11 +17,16 @@ function scratchHome(): string {
   return home;
 }
 
-async function runCli(home: string, args: string[], stdin: Buffer = Buffer.alloc(0)): Promise<{ code: number | null; stdout: string; stderr: string }> {
+async function runCli(home: string, args: string[], stdin: Buffer = Buffer.alloc(0), transport: "buffer" | "pipe" = "buffer"): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, processEntry, ...args], {
     env: { ...process.env, HOME: home, NO_COLOR: "1", CODECAST_DIR: path.join(home, ".codecast") },
-    stdin, stdout: "pipe", stderr: "pipe",
+    stdin: transport === "pipe" ? "pipe" : stdin, stdout: "pipe", stderr: "pipe",
   });
+  if (transport === "pipe") {
+    const input = child.stdin as import("bun").FileSink;
+    input.write(stdin);
+    input.end();
+  }
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { code, stdout, stderr };
 }
@@ -102,16 +107,18 @@ describe("cast cloud mirror-apply --stdin", () => {
     expect(JSON.parse(unprov.stdout.trim().split("\n").pop()!).refused).toBe("unprovisioned");
   }, 60_000);
 
-  test("--into stages files verbatim under the directory and refuses a relative one", async () => {
+  test.each(["buffer", "pipe"] as const)("--into stages files verbatim from %s stdin and refuses a relative directory", async (transport) => {
     const home = scratchHome();
     const into = path.join(home, "repo", ".codecast", "workspaces", "cloud-1", "inputs");
     fs.mkdirSync(into, { recursive: true });
     const r = await runCli(home, ["cloud", "mirror-apply", "--stdin", "--into", into], bundle(home, [
       { path: ".env", kind: "verbatim", mode: "0600", bytes: Buffer.from("A=1\n") },
       { path: ".claude/skills/a/SKILL.md", kind: "verbatim", mode: "0600", bytes: Buffer.from("a\n") },
-    ]));
+      { path: "binary.dat", kind: "verbatim", mode: "0600", bytes: Buffer.from([0, 255, 128, 10]) },
+    ]), transport);
     expect(r.code, JSON.stringify(r)).toBe(0);
-    expect(JSON.parse(r.stdout.trim().split("\n").pop()!)).toEqual({ copied: [".claude/skills/a/SKILL.md", ".env"], errors: [] });
+    expect(fs.readFileSync(path.join(into, "binary.dat"))).toEqual(Buffer.from([0, 255, 128, 10]));
+    expect(JSON.parse(r.stdout.trim().split("\n").pop()!)).toEqual({ copied: [".claude/skills/a/SKILL.md", ".env", "binary.dat"], errors: [] });
     expect(fs.readFileSync(path.join(into, ".env"), "utf-8")).toBe("A=1\n");
     expect(fs.existsSync(path.join(home, ".codecast", "mirror.json"))).toBe(false);
     const rel = await runCli(home, ["cloud", "mirror-apply", "--stdin", "--into", "relative/dir"], bundle(home, []));

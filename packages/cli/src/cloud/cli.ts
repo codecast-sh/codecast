@@ -74,7 +74,7 @@ export function registerCloudCommand(program: Command): void {
       }
       let bundle;
       try {
-        bundle = await parseMirrorBundle(process.stdin);
+        bundle = await parseMirrorBundle(fs.createReadStream("", { fd: 0, autoClose: false }));
       } catch (err) {
         console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
         process.exit(1);
