@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, drainTmuxComposer, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
+import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, drainTmuxComposer, tmuxComposerHoldsPayload, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
 
 // ct-40212 / ct-47277: a painted composer does not prove stdin is being read,
 // and a foreign probe character typed to prove it can outrace any screen-based
@@ -210,6 +210,141 @@ describe("awaitTmuxComposerPayload", () => {
       exec: exec as any,
     });
     expect(out).toBe("matched");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-client composer shapes (the D0 matrix's CI half, ct-49536)
+//
+// The real-client matrix in messaging.e2e.test.ts needs the binaries installed,
+// so it skips on every CI runner. These frames were captured from live panes of
+// each client (2026-09-06) with the same multi-line payload pasted and not yet
+// submitted, so the gate's per-client behaviour is pinned everywhere — a
+// renamed paste chip or a lost prompt glyph fails here without a binary.
+// ---------------------------------------------------------------------------
+
+const MULTILINE = "matrix payload first line\nsecond line\n\nfourth after a blank line";
+
+const CLAUDE_PASTED = `
+ ▐▛███▛█   Claude Code v2.1.263
+▝▜██████▀  Fable 5.1 with high effort · API Usage Billing
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+                                                       ● high · /effort
+────────────────────────────────────────────────────────────────────────
+❯ [Pasted text #1 +3 lines]
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`;
+
+const CODEX_PASTED = `
+╭─────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)              │
+│                                         │
+│ model:       matrix   /model to change  │
+│ directory:   /private/tmp/matrix-codex  │
+│ permissions: YOLO mode                  │
+╰─────────────────────────────────────────╯
+› matrix payload first line
+  second line
+  fourth after a blank line
+  matrix default · /private/tmp/matrix-codex
+`;
+
+const GROK_PASTED = `
+  /private/tmp/matrix-grok                                    1.5K / 200K
+                          ╭──────────────────────────────────────────────╮
+                          │matrix payload first line                     │
+                          │second line                                   │
+                          │                                              │
+                          │fourth after a blank line                     │
+                          ╰─ paste again or double-click to expand ──────╯
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 4 lines]                                                │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`;
+
+const OPENCODE_PASTED = `
+                    ┃
+                    ┃  [Pasted ~4 lines]
+                    ┃
+                    ┃  Build · matrix-model matrix
+                    ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`;
+
+describe("awaitTmuxComposerPayload — real client composers", () => {
+  const gate = async (pane: string, payload: string): Promise<string> => {
+    const exec = async (args: Args): Promise<{ stdout: string }> => {
+      if (args[0] === "capture-pane") return { stdout: pane };
+      if (args[0] === "send-keys") throw new Error(`must not type into a settled composer: ${args.join(" ")}`);
+      return { stdout: "" };
+    };
+    return awaitTmuxComposerPayload("t:0.0", payload, {
+      multiline: payload.includes("\n"),
+      rePaste: async () => { throw new Error("must not re-paste a composer that holds the payload"); },
+      budgetMs: 2_000,
+      exec: exec as any,
+    });
+  };
+
+  test("claude collapses the paste to a chip and the gate accepts it", async () => {
+    expect(await gate(CLAUDE_PASTED, MULTILINE)).toBe("matched");
+  });
+
+  test("codex renders the lines at its › prompt (the blank line is not drawn)", async () => {
+    // The composer drops the empty line; the gate compares whitespace-free, so
+    // the prefix still matches what was pasted.
+    expect(await gate(CODEX_PASTED, MULTILINE)).toBe("matched");
+  });
+
+  test("grok's own chip wording is accepted too", async () => {
+    // "[Pasted: 4 lines]" — a different string from claude's, matched by shape.
+    expect(await gate(GROK_PASTED, MULTILINE)).toBe("matched");
+  });
+
+  test("opencode has no prompt glyph, so the gate hands back to legacy timing", async () => {
+    // Nothing is typed and nothing is re-pasted: the post-submit verifier is
+    // the safety net for glyphless clients.
+    expect(await gate(OPENCODE_PASTED, MULTILINE)).toBe("unwatchable");
+  });
+});
+
+// ct-49614: the same test, asked BEFORE the paste rather than after it. A retry
+// whose earlier attempt pasted but failed to submit must submit what is at the
+// prompt, never paste a second copy — nine stacked copies of one message reached
+// a resumed codex composer this way, all of which would have submitted together.
+describe("tmuxComposerHoldsPayload", () => {
+  test("the payload at the prompt is recognized across the soft-wrapped lines", () => {
+    expect(tmuxComposerHoldsPayload(CODEX_PASTED, MULTILINE)).toBe(true);
+    expect(tmuxComposerHoldsPayload(BOX(PAYLOAD), PAYLOAD)).toBe(true);
+  });
+
+  test("an empty composer or a foreign draft is not the payload", () => {
+    expect(tmuxComposerHoldsPayload(BOX(""), PAYLOAD)).toBe(false);
+    expect(tmuxComposerHoldsPayload(BOX("something the human typed"), PAYLOAD)).toBe(false);
+  });
+
+  test("the same text as transcript above the prompt does not count", () => {
+    // A redelivery of a message the agent already took: the text is on screen,
+    // but it is history, and the composer below it is empty. Submitting there
+    // would send a blank line and ack a message that was never re-sent.
+    expect(tmuxComposerHoldsPayload(`❯ ${PAYLOAD}\n───────\n❯ \n`, PAYLOAD)).toBe(false);
+  });
+
+  test("a collapsed paste chip is NOT accepted", () => {
+    // The chip carries no text, so it could be anyone's draft — the Enter gate
+    // may trust it a beat after its own paste, but a retry that has pasted
+    // nothing yet cannot. Falling through to the drain and paste is the safe
+    // answer here, not submitting a stranger's message under our id.
+    expect(tmuxComposerHoldsPayload(CLAUDE_PASTED, MULTILINE)).toBe(false);
+    expect(tmuxComposerHoldsPayload(GROK_PASTED, MULTILINE)).toBe(false);
+  });
+
+  test("a glyphless pane and an unwatchable payload answer no", () => {
+    expect(tmuxComposerHoldsPayload(OPENCODE_PASTED, MULTILINE)).toBe(false);
+    expect(tmuxComposerHoldsPayload(BOX("anything"), " ")).toBe(false);
   });
 });
 

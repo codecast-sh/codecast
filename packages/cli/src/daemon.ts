@@ -12292,9 +12292,36 @@ async function answerResumeCwdPicker(target: string, paneText: string): Promise<
   await new Promise(resolve => setTimeout(resolve, 800));
 }
 
+// Codex's first-launch trust dialog, recognised from what it renders (verified
+// against codex 0.153.4 in an untrusted directory):
+//
+//   > You are in /private/tmp/…/untrusted-project
+//     Do you trust the contents of this directory? …
+//   › 1. Yes, continue
+//     2. No, quit
+//     Press enter to continue
+//
+// Matched on the OPTION WORDING, not on the question: the injection path only
+// ever sees the live region, the last few lines below the box separators, and
+// codex renders the question five lines above the options. The
+// "Yes, continue"/"No, quit" pair is codex's own trust wording — the update
+// menu offers "Update now"/"Skip", and an AskUserQuestion menu the agent raised
+// does not offer to quit — so the pair cannot claim another menu.
+//
+// Why one function and not a regex per caller: the two paths that meet this
+// dialog (classifyTmuxLiveState mid-delivery, classifyStartedPane at launch)
+// each carried their own trust patterns, and the launch one knew only claude's
+// wording, so a cold codex pane in an untrusted directory classified "booting"
+// for its whole 120s budget and never bound (ct-49609, ct-49749).
+export function isCodexTrustDialog(text: string): boolean {
+  return /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Yes,\s*continue\b/im.test(text)
+    && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*No,\s*quit\b/im.test(text);
+}
+
 export type TmuxLiveState =
   | "idle"          // empty input prompt — safe to paste
   | "busy"          // spinner / "esc to interrupt" — wait
+  | "starting"      // composer painted but the TUI is still booting — wait, send nothing
   | "interrupted"   // "What should Claude do instead?" dialog — Escape to clear
   | "rewind"        // Rewind/Restore modal — Escape to cancel (NEVER Enter, that rewinds)
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
@@ -12304,6 +12331,20 @@ export type TmuxLiveState =
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
+// The part of the region below its newest box-drawing separator — the last frame
+// the TUI painted. A TUI that redraws its whole header (codex repaints it three
+// times while a resume replays) leaves the earlier frames in the same capture, so
+// a boot marker read from the whole region can belong to a frame that is already
+// over. Everything else in this classifier is about the CURRENT screen, so only
+// the boot marker needs this narrowing.
+function newestPaintedFrame(region: string): string {
+  const lines = region.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/[─━]{20,}/.test(lines[i])) return lines.slice(i + 1).join("\n");
+  }
+  return region;
+}
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -12311,6 +12352,15 @@ export type TmuxLiveState =
 export function classifyTmuxLiveState(region: string): TmuxLiveState {
   if (/Resume this session with:/i.test(region)) return "exited";
   if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(region)) return "exited";
+  // Why: a painted composer is not proof the TUI reads stdin. codex paints
+  // "› Ask Codex to do anything" while it is still replaying a resumed session
+  // ("Resuming session…", header still "model: loading"), the ›-glyph rule below
+  // reads that as idle, and the redraw that ends the replay throws the pasted
+  // text away — so the message is lost and every retry pastes another copy at
+  // the prompt (ct-49614: nine stacked copies, none submitted). Checked before
+  // busy: "not reading input yet" is a stronger statement than "a turn is
+  // running", and the type-ahead paste busy allows is exactly what is unsafe here.
+  if (/^\s*Resuming session[.…]/mi.test(newestPaintedFrame(region))) return "starting";
   if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
@@ -12321,6 +12371,11 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // "No, exit": the agent quits, the resume loops, and the message never lands
   // (17 panes found dead on this on 2026-08-21).
   if (/Quick safety check|trust this folder|Is this a project you created/i.test(region)) return "trust";
+  // Codex asks the same question with a numbered menu. Without this rule the
+  // shape fell through to update_menu below — a numbered cursor row plus a
+  // "Press enter to continue" footer — and the corrective sent Escape, which is
+  // this dialog's "No, quit" (ct-49609).
+  if (isCodexTrustDialog(region)) return "trust";
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -13911,11 +13966,24 @@ export type TrustPromptStep =
  * option. Everything uncertain returns "none", which presses nothing.
  */
 export function planTrustPromptStep(lines: string[]): TrustPromptStep {
-  const CURSOR = /^\s*[❯>]\s*\S/;
-  const AFFIRMATIVE = /^\s*[❯>]?\s*Yes\b/i;
+  // › is codex's cursor glyph, and its options are numbered ("› 1. Yes,
+  // continue"), so both patterns have to tolerate a number between the cursor
+  // and the option text or the codex dialog reads as "no affirmative option"
+  // and we press nothing forever (ct-49609). Claude numbers its options too on
+  // some builds ("❯ 1. Yes, I trust this folder").
+  const CURSOR = /^\s*[❯›>]\s*\S/;
+  const AFFIRMATIVE = /^\s*[❯›>]?\s*(?:\d+[.)]\s*)?Yes\b/i;
   const yesIdx = lines.findIndex(l => AFFIRMATIVE.test(l));
   if (yesIdx < 0) return { action: "none", reason: "no affirmative option on the pane" };
-  const cursorIdx = lines.findIndex(l => CURSOR.test(l));
+  // The cursor NEAREST the affirmative option, not the first one on the pane:
+  // codex prints "> You are in <cwd>" five lines above the menu, and reading
+  // that as the highlight sent Down keystrokes at a dialog whose cursor was
+  // already on "Yes". The menu's cursor is inside the option list, and the
+  // affirmative option is in that list, so proximity picks it (ct-49609).
+  const cursorIdx = lines.reduce(
+    (best, line, i) => (CURSOR.test(line) && (best < 0 || Math.abs(i - yesIdx) < Math.abs(best - yesIdx)) ? i : best),
+    -1,
+  );
   if (cursorIdx < 0) return { action: "none", reason: "cannot see which option is highlighted" };
   if (cursorIdx === yesIdx) return { action: "confirm", option: lines[yesIdx].trim() };
   const delta = yesIdx - cursorIdx;
@@ -13987,6 +14055,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
   const startedAt = Date.now();
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
+  let loggedStarting = false;
 
   // Glyph-less clients (opencode/pi/grok) are classified from the WHOLE pane via
   // their registry readiness pattern, not the ❯/›-glyph whitelist (see
@@ -14029,6 +14098,20 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // booting/redrawing), so poll again until it does or the budget above trips.
     // There are no keys to send.
     if (glyphlessPattern) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      continue;
+    }
+
+    // Why: a TUI still booting has no key to press at — only a composer that is
+    // painted but deaf. Poll until it goes live, bounded by the budget above,
+    // which reports AGENT_NOT_READY for the delivery layer to retry. Returning
+    // here instead would paste into a composer the boot redraw is about to
+    // discard, and the retry would stack a second copy (ct-49614).
+    if (state === "starting") {
+      if (!loggedStarting) {
+        loggedStarting = true;
+        log(`${target} is still starting up, waiting for a live composer before pasting`);
+      }
       await new Promise(resolve => setTimeout(resolve, 300));
       continue;
     }
@@ -14369,6 +14452,18 @@ export function tmuxWatchablePrefix(payload: string): string | null {
   return stripComposerWs(payload).slice(0, 40) || null;
 }
 
+// Does the composer at the LAST prompt glyph hold this payload, with nothing
+// before it? The Enter gate's per-tick test, lifted so the paste path can ask
+// the same question BEFORE it pastes. Text above the last glyph is transcript,
+// so a message the agent already received can never match.
+export function tmuxComposerHoldsPayload(pane: string, payload: string): boolean {
+  const prefix = tmuxWatchablePrefix(payload);
+  if (prefix === null) return false;
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return false;
+  return stripComposerWs(pane.slice(glyphAt + 1)).startsWith(prefix);
+}
+
 export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
@@ -14381,8 +14476,7 @@ export async function awaitTmuxComposerPayload(
   },
 ): Promise<"matched" | "unwatchable"> {
   const exec = opts.exec ?? tmuxExec;
-  const prefix = tmuxWatchablePrefix(payload);
-  if (prefix === null) return "unwatchable";
+  if (tmuxWatchablePrefix(payload) === null) return "unwatchable";
   const deadline = Date.now() + (opts.budgetMs ?? 20_000);
   const tick = () => new Promise(resolve => setTimeout(resolve, 150));
 
@@ -14423,7 +14517,7 @@ export async function awaitTmuxComposerPayload(
     const chip = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/i) : null;
     const matched = chip
       ? !glyphLine.slice(0, chip.index).trim()
-      : stripComposerWs(afterGlyph).startsWith(prefix);
+      : tmuxComposerHoldsPayload(pane, payload);
     if (matched) return "matched";
 
     if (!glyphLine.trim()) {
@@ -14560,43 +14654,66 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const contentPrefix = sanitized.slice(0, 40);
 
   const doPaste = () => pasteTextIntoPaneWith(exec, target, sanitized, bracketed);
+  const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
 
-  // Clear any stale input before pasting to prevent draft text from being
-  // prepended to the injected message or submitted by the trailing Enter —
-  // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
-  // the Enter gate below refuses to submit over anything it missed.
-  //
-  // Escape is the one key here that doubles as "interrupt the current turn", so
-  // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
-  // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
-  // pasted message then rides Claude Code's native queue until the turn ends.
-  if (!busy && agentType !== "codex") {
-    await exec(["send-keys", "-t", target, "Escape"]);
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  await drainTmuxComposer(target, exec);
-
-  // Capture pane before paste for before/after comparison
-  let prePaste = "";
+  // Why: a retry must never paste a second copy. An earlier attempt can leave
+  // the payload sitting in the composer — it pasted, then failed to submit —
+  // and pasting again stacks copies at the prompt that all submit as one
+  // message the moment anything presses Enter (ct-49614: nine copies of a
+  // multi-line message in a resumed codex pane). The Enter gate's own test
+  // answers "is my payload already at the prompt", so ask it before the drain
+  // and submit what is there rather than adding to it. Only the payload's own
+  // text counts: a collapsed "[Pasted text #1]" chip could be anyone's draft,
+  // and submitting that would ack a message the agent never saw.
+  let alreadyAtPrompt = false;
   try {
     const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-    prePaste = stdout;
+    alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
   } catch {}
 
-  // Paste once
-  await doPaste();
+  // The pane before the paste, for the post-submit verifier's before/after
+  // comparison; empty when nothing was pasted, which is honest — every frame it
+  // then sees counts as a change.
+  let prePaste = "";
+  let gate: "matched" | "unwatchable" = "matched";
 
-  // The payload is its own readiness probe: Enter is only sent once the
-  // composer visibly holds it and nothing else — see awaitTmuxComposerPayload
-  // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
-  // match doubles as paste confirmation for the post-submit verifier.
-  const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
-  const gate = await awaitTmuxComposerPayload(target, sanitized, {
-    multiline: bracketed && sanitized.includes("\n"),
-    prePaste,
-    rePaste: doPaste,
-    exec,
-  });
+  if (alreadyAtPrompt) {
+    log(`Composer in ${target} already holds this payload from an earlier attempt; submitting it instead of pasting again`);
+  } else {
+    // Clear any stale input before pasting to prevent draft text from being
+    // prepended to the injected message or submitted by the trailing Enter —
+    // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
+    // the Enter gate below refuses to submit over anything it missed.
+    //
+    // Escape is the one key here that doubles as "interrupt the current turn", so
+    // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
+    // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
+    // pasted message then rides Claude Code's native queue until the turn ends.
+    if (!busy && agentType !== "codex") {
+      await exec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    await drainTmuxComposer(target, exec);
+
+    try {
+      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+      prePaste = stdout;
+    } catch {}
+
+    // Paste once
+    await doPaste();
+
+    // The payload is its own readiness probe: Enter is only sent once the
+    // composer visibly holds it and nothing else — see awaitTmuxComposerPayload
+    // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
+    // match doubles as paste confirmation for the post-submit verifier.
+    gate = await awaitTmuxComposerPayload(target, sanitized, {
+      multiline: bracketed && sanitized.includes("\n"),
+      prePaste,
+      rePaste: doPaste,
+      exec,
+    });
+  }
   let pasteConfirmed = gate === "matched";
   if (gate === "matched") {
     await exec(["send-keys", "-t", target, "Enter"]);
@@ -18858,7 +18975,16 @@ const TRUST_PROMPT_RE = /trust this folder|safety check|Is this a project/i;
 export function classifyStartedPane(paneContent: string, promptPattern: RegExp): StartedPaneState {
   const agentPane = paneContentAfterLaunchEcho(paneContent);
   if (STARTED_PANE_FATAL_ERRORS.some(e => agentPane.includes(e))) return "fatal";
-  if (TRUST_PROMPT_RE.test(paneContent)) return "trust";
+  // TRUST_PROMPT_RE knows claude's wording only. Codex asks the same question
+  // with a numbered menu, and its trust screen paints no prompt glyph, so
+  // without the shared codex rule the pane read "booting" for the whole
+  // discovery budget and the session never bound (ct-49749). Same rule the
+  // injection classifier uses, so the two paths cannot drift apart — and read
+  // over the same live region, because codex scrolls the answered dialog into
+  // scrollback instead of clearing it: matched over the whole capture the
+  // verdict stays "trust" after the corrective ran, and every 2s poll presses
+  // Enter again at a composer that is already up.
+  if (TRUST_PROMPT_RE.test(paneContent) || isCodexTrustDialog(extractTmuxLiveRegion(paneContent))) return "trust";
   return promptPattern.test(agentPane) ? "ready" : "booting";
 }
 
