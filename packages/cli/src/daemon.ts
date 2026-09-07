@@ -85,6 +85,7 @@ import {
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
+import { resolveCastInvocation } from "./castInvocation.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames } from "./codexAccounts.js";
@@ -3676,33 +3677,12 @@ async function sendHeartbeat(): Promise<void> {
   }
 }
 
-/**
- * Resolve how to invoke this CLI's own `cast` entrypoint as a child process,
- * coping with the three ways the daemon itself can be running:
- *   - from source   (`bun .../daemon.ts`)  -> bun + .../main.ts
- *   - compiled bin   (`cast _daemon`)       -> the cast binary itself
- *   - on PATH        (fallback)             -> `cast`
- * Returns argv parts so callers can spawn without shell-quoting hazards.
- */
 /** Shell prefix routing an agent launch through `cast _disclaimed --` so the
  *  agent becomes TCC self-responsible (see disclaim.ts). "" off-macOS or when
  *  CODECAST_NO_DISCLAIM=1. */
 function disclaimPrefix(): string {
   const { cmd, prefixArgs } = resolveCastInvocation();
   return buildDisclaimShellPrefix([cmd, ...prefixArgs].join(" "));
-}
-
-function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
-  const argv1 = process.argv[1] || "";
-  if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
-    const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
-    const entryPath = path.join(path.dirname(argv1), `main${ext}`);
-    return { cmd: process.argv[0], prefixArgs: [entryPath] };
-  }
-  if (argv1 === "_daemon" || !argv1.includes("/")) {
-    return { cmd: process.execPath, prefixArgs: [] };
-  }
-  return { cmd: "cast", prefixArgs: [] };
 }
 
 /**

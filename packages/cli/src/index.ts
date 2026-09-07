@@ -26,6 +26,7 @@ import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import { registerBrowserCommand } from "./browser/cli.js";
 import { registerAppCommand } from "./app/cli.js";
+import { registerComputerCommand } from "./computer/cli.js";
 import { registerExecCommand } from "./execCommand.js";
 import open from "open";
 import * as fs from "fs";
@@ -2993,6 +2994,7 @@ registerPrCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerComputerCommand(program);
 registerExecCommand(program);
 
 program
