@@ -53,20 +53,6 @@ export function noteDeliberateRaise(): void {
 }
 
 /**
- * A raise stamp written by a CLI process, or 0 when there is nothing to trust.
- *
- * A stamp in the FUTURE is the case that must not fall through: a clock jump
- * or a bad write makes `Date.now() - stamp` negative, which is under every
- * grace, which would make the sentinel go quietly dead for agent-Chrome raises
- * forever. So anything more than 5 seconds ahead of now reads as no stamp at
- * all, as does a missing, non-finite or negative value. Exported for its test.
- */
-export function stampAt(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
-  return value > Date.now() + 5_000 ? 0 : value;
-}
-
-/**
  * A Chrome an agent is driving: headed, listening for CDP, on its own profile
  * dir. The human's real Chrome runs with none of these; a headless one cannot
  * take focus in the first place.
@@ -168,14 +154,10 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
         lastHumanPid = pid;
         return;
       }
-      // One read, both CLI-written stamps: `cast browser login` and
-      // `cast computer --restore-window` are equally deliberate raises, and
-      // neither runs in this process, so neither can call noteDeliberateRaise.
-      const st = readState();
-      const cliRaisedAt = Math.max(stampAt(st?.loginRaisedAt), stampAt(st?.computerRaisedAt));
+      const loginRaisedAt = readState()?.loginRaisedAt ?? 0;
       const restore = shouldRestoreFocus({
         agentChrome: true,
-        msSinceDeliberateRaise: Date.now() - Math.max(lastDeliberateRaiseAt, cliRaisedAt),
+        msSinceDeliberateRaise: Date.now() - Math.max(lastDeliberateRaiseAt, loginRaisedAt),
         msSinceAppSwitch: input.appSwitchAge(),
         secondsSinceClick: input.clickAge(),
       });
