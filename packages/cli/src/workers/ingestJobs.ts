@@ -189,7 +189,12 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
         result.messages = recoverImagesFromBackup(result.messages,job.file+'.bak',message => meta.warnings.push(message));
         meta.backupAttempted = true;
       }
-      const headWindow = await withMetadataSource(job,before,checkpoint,fd => readCompleteMetadataHead(fd,before.size,16384,METADATA_MAX_BYTES,checkpoint));
+      const headWindow = await withMetadataSource(job,before,checkpoint,async fd => {
+        const initial = await readCompleteMetadataHead(fd,before.size,16384,METADATA_MAX_BYTES,checkpoint);
+        return !initial.content.trim() && initial.exhausted
+          ? readCompleteMetadataHead(fd,before.size,METADATA_MAX_BYTES,INGEST_MAX_BYTES,checkpoint)
+          : initial;
+      });
       const head = headWindow.content;
       if (before.size > 0 && !head.trim()) throw new Error(headWindow.exhausted ? 'ingest head resource limit: no complete native prefix' : 'ingest head incomplete: no complete native prefix');
       if (headWindow.exhausted) meta.warnings.push(`head: metadata read allowance exhausted (${METADATA_MAX_BYTES} bytes)`);

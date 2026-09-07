@@ -54,7 +54,7 @@ test('first large head record retains native scalar and first-three user semanti
   });
 });
 
-test('unknown required heads refuse at either offset while exact-cap and empty heads remain distinct', async () => {
+test('required heads grow for complete large records at either offset while incomplete heads refuse', async () => {
   const empty = assistant('', 'giant-first');
   const exact = assistant('x'.repeat(limit - Buffer.byteLength(empty)), 'giant-first');
   await fixture(exact + assistant('tail'), async job => {
@@ -63,8 +63,9 @@ test('unknown required heads refuse at either offset while exact-cap and empty h
   const tooLarge = assistant('x'.repeat(limit - Buffer.byteLength(empty) + 1), 'giant-first');
   await fixture(tooLarge + assistant('tail'), async job => {
     for (const offset of [0, Buffer.byteLength(tooLarge)]) {
-      const result = await outcome(readIngestJob({ ...job, offset }));
-      expect('error' in result && result.error.message).toBe('ingest head resource limit: no complete native prefix');
+      const result = await readIngestJob({ ...job, offset });
+      expect(result.bytesConsumed).toBe(job.identity.size - offset);
+      expect(result.messages.at(-1)?.content).toBe('tail');
     }
   });
   await fixture(assistant('unfinished').slice(0, -1), async job => {
@@ -79,6 +80,16 @@ test('unknown required heads refuse at either offset while exact-cap and empty h
     expect(result.bytesConsumed).toBe(0);
     expect(result.metadata.headMessages).toEqual([]);
     expect(result.metadata.warnings).toEqual([]);
+  });
+});
+
+test('leading blank records cannot hide the first native metadata record', async () => {
+  const first = row({ type: 'user', uuid: 'after-blanks', cwd: '/known', parentUuid: 'parent', timestamp: '2026-09-05T12:00:00Z', message: { content: 'first native record' } });
+  await fixture((' '.repeat(limit) + '\n').repeat(4) + first, async job => {
+    const result = await readIngestJob(job);
+    expect(result.metadata.cwd).toBe('/known');
+    expect(result.metadata.parentUuid).toBe('parent');
+    expect(result.metadata.headMessages?.map(message => message.uuid)).toEqual(['after-blanks']);
   });
 });
 
