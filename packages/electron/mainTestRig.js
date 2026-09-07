@@ -11,6 +11,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { EventEmitter } = require("node:events");
 
 const MAIN = require.resolve("./main.js");
 const ELECTRON = require.resolve("electron");
@@ -35,10 +36,10 @@ class FakeWindow {
     // Real windows are born hidden when `show: false` and only appear on
     // show()/showInactive(); the faces overlay's yield depends on this.
     this.visible = options.show !== false;
-    this.webContents = {
+    this.webContents = Object.assign(new EventEmitter(), {
       id: FakeWindow.nextId++,
-      isDestroyed: () => false,
-      on: () => {},
+      isDestroyed: () => this.destroyed,
+      isCrashed: () => false,
       send: () => {},
       setZoomFactor: (z) => {
         this.zoom = z;
@@ -50,7 +51,7 @@ class FakeWindow {
       reloadIgnoringCache: () => {},
       openDevTools: () => {},
       session: { clearCache: () => Promise.resolve() },
-    };
+    });
   }
   record(name, ...args) {
     this.calls.push([name, ...args]);
@@ -64,6 +65,11 @@ class FakeWindow {
   }
   isDestroyed() {
     return this.destroyed;
+  }
+  destroy() {
+    this.destroyed = true;
+    this.webContents.emit("destroyed");
+    this.emit("closed");
   }
   isMinimized() {
     return false;
