@@ -66,6 +66,7 @@ export async function scheduledReview(f:any){
     const authBeat=beats;await until(()=>beats>=authBeat+3);assert.deepEqual(attempts,attemptsBefore);assert.equal(rows.length,0);
     d.fixtureRetry.saveDaemonState({authExpired:false});
     await until(()=>new Set(rows.map(r=>r.conversationId)).size===8);
+    await until(()=>getPosition(claude)===fs.statSync(claude).size&&getPosition(cursor)===fs.statSync(cursor).size&&getPosition(dbPath)===1);
     assert.ok(beats>0);assert.equal(getPosition(claude),fs.statSync(claude).size);assert.equal(getPosition(cursor),fs.statSync(cursor).size);assert.equal(getPosition(dbPath),1);
     assert.deepEqual(registered.map(r=>[r.descriptor.file,fs.statSync(r.descriptor.file).mtimeMs]),sourceStats);
     assert.ok(registered.every(r=>attempts.get(cache[r.descriptor.sessionId])===(attemptsBefore.get(cache[r.descriptor.sessionId])??0)+1));

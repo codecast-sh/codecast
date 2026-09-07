@@ -83,7 +83,7 @@ try {
  const processed:string[]=[];
  const common:any={path,config,findWorkspacePathForCursorConversation:d.findWorkspacePathForCursorConversation,isPathExcluded,isProjectAllowedToSync,log:()=>{},processCursorTranscriptFile:async(_file:string,id:string)=>{processed.push(id);},syncService:{},conversationCache:{},retryQueue:{},pendingMessages:{},updateState:()=>{}};
  const eventCode=transpiler.transformSync(`let lastWatcherEventTime=0;${eventSource}\nreturn handleCursorTranscriptEvent;`);
- const event=new Function(...Object.keys(common),'readDaemonState','isSyncPaused','cursorTranscriptSyncs','InvalidateSync','MESSAGE_SYNC_DEBOUNCE',eventCode)(...Object.values(common),()=>({}),()=>false,new Map(),class {constructor(private run:()=>Promise<void>){}invalidate(){pending.push(this.run());}},0);
+ const event=new Function(...Object.keys(common),'readDaemonState','isSyncPaused','cursorTranscriptSyncs','transcriptRetryOwners','MESSAGE_SYNC_DEBOUNCE',eventCode)(...Object.values(common),()=>({}),()=>false,new Map(),{create:(_map:unknown,_key:unknown,_descriptor:unknown,run:()=>Promise<void>)=>({invalidate(){pending.push(run());}})},0);
  const pending:Promise<void>[]=[];
  const watchdogBody=watchdogBlock.slice(watchdogBlock.indexOf('async (filePath) => {')+'async (filePath) => {'.length,watchdogBlock.lastIndexOf('    },'));
  const watchdog=new Function(...Object.keys(common),'deps',transpiler.transformSync(`return async function(filePath:string){${watchdogBody}\n};`))(...Object.values(common),{...common,updateState:()=>{}});
