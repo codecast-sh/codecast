@@ -186,6 +186,7 @@ import type * as syncCursors from "../syncCursors.js";
 import type * as syncLog from "../syncLog.js";
 import type * as syncLogPrune from "../syncLogPrune.js";
 import type * as systemConfig from "../systemConfig.js";
+import type * as taskCommentRepair from "../taskCommentRepair.js";
 import type * as taskMining from "../taskMining.js";
 import type * as tasks from "../tasks.js";
 import type * as teamActivity from "../teamActivity.js";
@@ -392,6 +393,7 @@ declare const fullApi: ApiFromModules<{
   syncLog: typeof syncLog;
   syncLogPrune: typeof syncLogPrune;
   systemConfig: typeof systemConfig;
+  taskCommentRepair: typeof taskCommentRepair;
   taskMining: typeof taskMining;
   tasks: typeof tasks;
   teamActivity: typeof teamActivity;

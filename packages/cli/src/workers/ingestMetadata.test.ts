@@ -20,6 +20,21 @@ async function fixture(content: string, run: (job: IngestJob) => Promise<void>) 
 }
 const outcome = <T>(value: Promise<T>) => value.then(result => ({ result }), error => ({ error }));
 
+test('Codex project metadata survives long session headers on initial and incremental reads', async () => {
+  for (const bytes of [22 * 1024, 96 * 1024]) {
+    const head = row({ type: 'session_meta', payload: { id: 'codex-thread', cwd: '/Users/ashot/src/codecast', originator: 'codex-tui', source: 'cli', base_instructions: { text: 'x'.repeat(bytes) } } });
+    const message = row({ type: 'response_item', timestamp: '2026-09-07T22:42:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Check browser routing' }] } });
+    await fixture(head + message, async job => {
+      for (const offset of [0, Buffer.byteLength(head)]) {
+        const result = await readIngestJob({ ...job, client: 'codex', offset });
+        expect(result.metadata.cwd).toBe('/Users/ashot/src/codecast');
+        expect(result.metadata.codex?.originator).toBe('codex-tui');
+        expect(result.messages[0].content).toBe('Check browser routing');
+      }
+    });
+  }
+});
+
 test('production metadata finds a summary beyond the original tail behind a large native row', async () => {
   const primary = prefix();
   await fixture(primary + row({ type: 'summary', summary: 'recovered title' }) + assistant('😀'.repeat(5000)), async job => {

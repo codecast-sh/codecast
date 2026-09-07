@@ -1370,10 +1370,10 @@ export const get = query({
     if (!task) return null;
     if (!(await canAccessTask(ctx, auth.userId, task))) return null;
 
-    const comments = await ctx.db
+    const comments = await attachCommentSessionInfo(ctx, await ctx.db
       .query("task_comments")
       .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
-      .collect();
+      .collect(), auth.userId);
 
     // Nesting context, so `cast task show` answers both "what larger work is
     // this part of" and "what did I break this into". Children come off the
@@ -1777,18 +1777,12 @@ export const addComment = mutation({
 
     const user = await ctx.db.get(auth.userId);
 
-    let conversation_id: Id<"conversations"> | undefined;
-    if (args.conversation_id) {
-      // A stale or unresolvable session ref drops the back-link, exactly like
-      // the cross-workspace case below — the comment text must always land
-      // (see resolveSessionConversation).
-      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
-      // Cross-workspace commenters still get their text recorded; only the
-      // conversation back-link is dropped (relationships stay within one domain).
-      if (conv && workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))) {
-        conversation_id = conv._id;
-      }
-    }
+    const conv = args.conversation_id
+      ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
+      : null;
+    const conversation_id = conv?._id;
+    const notificationConversationId = conv && workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))
+      ? conv._id : undefined;
 
     // A post from inside a session is an agent's: no actor, so the owner's
     // thread lights up. A person running the CLI by hand is the actor.
@@ -1800,7 +1794,7 @@ export const addComment = mutation({
     }, args.conversation_id ? undefined : auth.userId);
 
     await subscribeUser(ctx, auth.userId, task._id, "commenter", cliVia(args));
-    await notifySubscribers(ctx, "task_commented", auth.userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`, conversation_id);
+    await notifySubscribers(ctx, "task_commented", auth.userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`, notificationConversationId);
     await schedulePushComment(ctx, task, id);
 
     return { id };
@@ -1951,10 +1945,10 @@ export const context = query({
       .first();
     if (!task || !(await canAccessTask(ctx, auth.userId, task))) return null;
 
-    const comments = await ctx.db
+    const comments = await attachCommentSessionInfo(ctx, await ctx.db
       .query("task_comments")
       .withIndex("by_task_id", (q) => q.eq("task_id", task._id))
-      .collect();
+      .collect(), auth.userId);
 
     // Linked sessions (short id + title), each with its insight summary when
     // one exists. `sessionSummaries` stays as the flat list of summaries for
@@ -2414,7 +2408,7 @@ export const webGetByIds = query({
       task.comments = await attachCommentSessionInfo(ctx, await ctx.db
         .query("task_comments")
         .withIndex("by_task_id", (q: any) => q.eq("task_id", task._id))
-        .collect());
+        .collect(), userId);
     }
     return { items: result };
   },
@@ -2749,7 +2743,7 @@ export const webGet = query({
     const comments = await attachCommentSessionInfo(ctx, await ctx.db
       .query("task_comments")
       .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
-      .collect());
+      .collect(), userId);
 
     let plan = null;
     if (task.plan_id) {

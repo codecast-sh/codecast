@@ -1412,7 +1412,7 @@ export const webGetTaskDetail = query({
       if (u.image) nameToImage.set(u.name, u.image);
     }
     if (creator?.image) nameToImage.set(creator.name, creator.image);
-    const enrichedComments = (await attachCommentSessionInfo(ctx, comments)).map(c => ({
+    const enrichedComments = (await attachCommentSessionInfo(ctx, comments, userId)).map(c => ({
       ...c,
       author_image: nameToImage.get(c.author) || null,
     }));
