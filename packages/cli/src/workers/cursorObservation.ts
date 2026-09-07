@@ -40,7 +40,11 @@ const fileIdentity = (s: fs.Stats) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:
 async function composerIdentity(file: string): Promise<string> {
   const parts: string[] = [];
   for (const candidate of [file, `${file}-wal`, path.join(path.dirname(file), 'workspace.json')]) {
-    try { await fs.promises.access(candidate, fs.constants.R_OK); parts.push(fileIdentity(await fs.promises.stat(candidate))); }
+    try {
+      await fs.promises.access(candidate, fs.constants.R_OK);
+      const stat = await fs.promises.stat(candidate);
+      parts.push(candidate === `${file}-wal` && stat.size === 0 ? 'absent' : fileIdentity(stat));
+    }
     catch (error) {
       if (candidate === file || (error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
       parts.push('absent');
