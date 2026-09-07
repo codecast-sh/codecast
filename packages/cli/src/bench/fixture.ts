@@ -271,7 +271,7 @@ export class BenchFixture {
     } finally { await file.close(); }
   }
   private async processPresent(f: Fixture, signal: AbortSignal) {
-    try { await childProcess("ps", ["-p", String(f.pid), "-o", "pid="], signal); return true; }
+    try { return !(await childProcess("ps", ["-p", String(f.pid), "-o", "stat="], signal)).trim().startsWith("Z"); }
     catch (error) {
       const e = error as { code?: number; stdout?: string; stderr?: string };
       if (e.code === 1 && !e.stdout?.trim() && !e.stderr?.trim()) return false;
