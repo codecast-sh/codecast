@@ -120,6 +120,7 @@ import {
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
+  daemonLauncherMatchesCommand,
   DAEMON_LAUNCHER_FILENAME,
   shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
@@ -1131,6 +1132,12 @@ function ensureDaemonRunning(): void {
           // that could START a restart would let a worktree bounce the main
           // daemon into its own tree on every edit.
           if (daemonBuildUnchanged(readRunningBuildId(), DAEMON_BUILD_ID)) return;
+          const supervised = getMacLaunchdDaemonStatus();
+          if (supervised?.configured) {
+            const { executablePath, args } = getExecutableInfo();
+            const launcher = fs.readFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, "utf-8");
+            if (!daemonLauncherMatchesCommand(launcher, executablePath, args)) return;
+          }
           const pid = getDaemonPid();
           if (pid) {
             try { process.kill(pid, "SIGTERM"); } catch { return; }
@@ -1287,6 +1294,7 @@ function getStuckSyncs(): StuckSync[] {
     // already skips them; without the same skip here they always read as stuck
     // (file grows past lastSyncedPosition) even though every message is synced.
     if (filePath.includes("/.codex/sessions/") && isAppServerManagedRollout(filePath)) continue;
+    if (filePath.includes("/.codex/sessions/") && stats.size <= getPosition(filePath)) continue;
     const unsynced = stats.size - record.lastSyncedPosition;
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
