@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, drainTmuxComposer, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
+import { awaitTmuxComposerPayload, drainTmuxComposer, tmuxWatchablePrefix } from "./daemon.js";
 
 // ct-40212 / ct-47277: a painted composer does not prove stdin is being read,
 // and a foreign probe character typed to prove it can outrace any screen-based
@@ -213,59 +213,112 @@ describe("awaitTmuxComposerPayload", () => {
   });
 });
 
-describe("drainTmuxComposer", () => {
-  const CYCLE = ["C-a", "C-k", "BSpace"];
-  // Pane whose composer shows `draft` (multi-line drafts render as
-  // continuation lines under the glyph, then the box rule).
-  const paneWith = (draft: string) =>
-    `⏺ done\n${"─".repeat(20)}\n❯ ${draft.split("\n").join("\n  ")}\n${"─".repeat(20)}\n  ⏵⏵ bypass permissions on`;
-  const fakeExec = (captures: string[]) => {
-    const sends: string[] = [];
-    let captureCount = 0;
+// ---------------------------------------------------------------------------
+// Per-client composer shapes (the D0 matrix's CI half, ct-49536)
+//
+// The real-client matrix in messaging.e2e.test.ts needs the binaries installed,
+// so it skips on every CI runner. These frames were captured from live panes of
+// each client (2026-09-06) with the same multi-line payload pasted and not yet
+// submitted, so the gate's per-client behaviour is pinned everywhere — a
+// renamed paste chip or a lost prompt glyph fails here without a binary.
+// ---------------------------------------------------------------------------
+
+const MULTILINE = "matrix payload first line\nsecond line\n\nfourth after a blank line";
+
+const CLAUDE_PASTED = `
+ ▐▛███▛█   Claude Code v2.1.263
+▝▜██████▀  Fable 5.1 with high effort · API Usage Billing
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+                                                       ● high · /effort
+────────────────────────────────────────────────────────────────────────
+❯ [Pasted text #1 +3 lines]
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`;
+
+const CODEX_PASTED = `
+╭─────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)              │
+│                                         │
+│ model:       matrix   /model to change  │
+│ directory:   /private/tmp/matrix-codex  │
+│ permissions: YOLO mode                  │
+╰─────────────────────────────────────────╯
+› matrix payload first line
+  second line
+  fourth after a blank line
+  matrix default · /private/tmp/matrix-codex
+`;
+
+const GROK_PASTED = `
+  /private/tmp/matrix-grok                                    1.5K / 200K
+                          ╭──────────────────────────────────────────────╮
+                          │matrix payload first line                     │
+                          │second line                                   │
+                          │                                              │
+                          │fourth after a blank line                     │
+                          ╰─ paste again or double-click to expand ──────╯
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 4 lines]                                                │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`;
+
+const OPENCODE_PASTED = `
+                    ┃
+                    ┃  [Pasted ~4 lines]
+                    ┃
+                    ┃  Build · matrix-model matrix
+                    ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`;
+
+describe("awaitTmuxComposerPayload — real client composers", () => {
+  const gate = async (pane: string, payload: string): Promise<string> => {
     const exec = async (args: Args): Promise<{ stdout: string }> => {
-      if (args[0] === "send-keys") sends.push(args[args.length - 1]);
-      if (args[0] === "capture-pane") return { stdout: captures[Math.min(captureCount++, captures.length - 1)] };
+      if (args[0] === "capture-pane") return { stdout: pane };
+      if (args[0] === "send-keys") throw new Error(`must not type into a settled composer: ${args.join(" ")}`);
       return { stdout: "" };
     };
-    return { exec, sends, captured: () => captureCount };
+    return awaitTmuxComposerPayload("t:0.0", payload, {
+      multiline: payload.includes("\n"),
+      rePaste: async () => { throw new Error("must not re-paste a composer that holds the payload"); },
+      budgetMs: 2_000,
+      exec: exec as any,
+    });
   };
 
-  test("three cycles of C-a/C-k/BSpace, then stops once the prompt reads empty", async () => {
-    const f = fakeExec([paneWith("")]);
-    await drainTmuxComposer("t:0.0", f.exec as any);
-    expect(f.sends).toEqual([...CYCLE, ...CYCLE, ...CYCLE]);
-    expect(f.captured()).toBe(1);
+  test("claude collapses the paste to a chip and the gate accepts it", async () => {
+    expect(await gate(CLAUDE_PASTED, MULTILINE)).toBe("matched");
   });
 
-  test("keeps cycling while a multi-line draft is still visible", async () => {
-    // A 7-line <session-message> draft: the first two checks still show text.
-    const f = fakeExec([paneWith("<session-message>\nline\nline\nline"), paneWith("<session-message>"), paneWith("")]);
-    await drainTmuxComposer("t:0.0", f.exec as any);
-    expect(f.sends.length).toBe(9 * CYCLE.length);
-    expect(f.sends.filter(k => k === "BSpace").length).toBe(9);
-    expect(f.captured()).toBe(3);
+  test("codex renders the lines at its › prompt (the blank line is not drawn)", async () => {
+    // The composer drops the empty line; the gate compares whitespace-free, so
+    // the prefix still matches what was pasted.
+    expect(await gate(CODEX_PASTED, MULTILINE)).toBe("matched");
   });
 
-  test("gives up after DRAIN_MAX_CYCLES when the prompt never empties", async () => {
-    const f = fakeExec([paneWith("stuck")]);
-    await drainTmuxComposer("t:0.0", f.exec as any);
-    expect(f.sends.length).toBe(DRAIN_MAX_CYCLES * CYCLE.length);
+  test("grok's own chip wording is accepted too", async () => {
+    // "[Pasted: 4 lines]" — a different string from claude's, matched by shape.
+    expect(await gate(GROK_PASTED, MULTILINE)).toBe("matched");
   });
 
-  test("a glyphless pane ends the drain after the first check", async () => {
-    const f = fakeExec(["no prompt here"]);
-    await drainTmuxComposer("t:0.0", f.exec as any);
-    expect(f.sends.length).toBe(3 * CYCLE.length);
+  test("opencode has no prompt glyph, so the gate hands back to legacy timing", async () => {
+    // Nothing is typed and nothing is re-pasted: the post-submit verifier is
+    // the safety net for glyphless clients.
+    expect(await gate(OPENCODE_PASTED, MULTILINE)).toBe("unwatchable");
   });
 });
 
-describe("tmuxComposerText", () => {
-  test("returns the prompt line plus continuation lines up to the box rule", () => {
-    const pane = `⏺ done\n${"─".repeat(20)}\n❯ first\n  second\n${"─".repeat(20)}\n  status`;
-    expect(tmuxComposerText(pane)).toBe(" first\n  second");
-  });
-  test("empty composer reads blank; glyphless pane reads null", () => {
-    expect(tmuxComposerText(`❯ \n${"─".repeat(20)}`)?.trim()).toBe("");
-    expect(tmuxComposerText("nothing")).toBeNull();
+describe("drainTmuxComposer", () => {
+  test("sends three blind C-a/C-k cycles", async () => {
+    const sends: string[] = [];
+    const exec = async (args: Args): Promise<{ stdout: string }> => {
+      if (args[0] === "send-keys") sends.push(args[args.length - 1]);
+      return { stdout: "" };
+    };
+    await drainTmuxComposer("t:0.0", exec as any);
+    expect(sends).toEqual(["C-a", "C-k", "C-a", "C-k", "C-a", "C-k"]);
   });
 });
