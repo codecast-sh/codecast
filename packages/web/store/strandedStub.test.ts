@@ -237,7 +237,7 @@ describe("healStrandedStub", () => {
     expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(1);
   });
 
-  it("redrives a persisted real-id pending message after hydration", () => {
+  it("redrives a persisted real-id pending message after hydration", async () => {
     const { calls } = installFakeDispatch();
     useInboxStore.setState({
       sessions: {
@@ -266,7 +266,7 @@ describe("healStrandedStub", () => {
       pendingSessionCreates: {},
     } as any);
 
-    useInboxStore.getState().redrivePendingMessages();
+    await useInboxStore.getState().redrivePendingMessages();
 
     expect(calls.find((c) => c.action === "sendMessage")?.args)
       .toEqual([REAL_ID, "survived the crash", null, "client-hydrated"]);
@@ -278,7 +278,7 @@ describe("healStrandedStub", () => {
   // from `content` was refused as COMMAND_ID_REUSED and the delivered message
   // toasted "Send message didn't go through". The dispatched bytes are stamped
   // on the row (_dispatchContent) and every redrive must replay them verbatim.
-  it("redrives the stamped dispatch bytes, not the row's raw content", () => {
+  it("redrives the stamped dispatch bytes, not the row's raw content", async () => {
     const { calls } = installFakeDispatch();
     const raw = "look at @[My Doc doc:abc123]";
     const expanded = raw + "\n\n<doc-context>…expanded…</doc-context>";
@@ -301,7 +301,7 @@ describe("healStrandedStub", () => {
     useInboxStore.getState().stampPendingDispatchContent(REAL_ID, "client-mention", expanded);
     expect(useInboxStore.getState().pendingMessages[REAL_ID][0]._dispatchContent).toBe(expanded);
 
-    useInboxStore.getState().redrivePendingMessages();
+    await useInboxStore.getState().redrivePendingMessages();
 
     expect(calls.find((c) => c.action === "sendMessage")?.args)
       .toEqual([REAL_ID, expanded, null, "client-mention"]);

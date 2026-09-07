@@ -130,3 +130,38 @@ describe("live fields re-derive from facts at the replica's clock", () => {
     expect(INBOX_PROJECTION_VERSION).toBeGreaterThan(0);
   });
 });
+
+describe("placement deadline memo", () => {
+  it("does not rescan an unchanged collection between actual deadlines", () => {
+    let scans = 0;
+    const sessions = new Proxy({ [A]: row(A, {
+      agent_status: "idle", agent_status_updated_at: NOW - 30 * S, updated_at: NOW - 30 * S,
+      last_heartbeat: NOW - 5 * S, daemon_alive_until: NOW + 85 * S, last_role_is_user: false,
+    }) }, {
+      ownKeys(target) { scans++; return Reflect.ownKeys(target); },
+    });
+    const s = state(sessions);
+    const first = placeInboxRows(s, { now: NOW });
+    scans = 0;
+    for (let delta = 1; delta <= 20; delta++) {
+      expect(placeInboxRows(s, { now: NOW + delta })).toBe(first);
+    }
+    expect(scans).toBe(0);
+    const deadline = NOW - 30 * S + AGENT_IDLE_GRACE_MS;
+    expect(bucketAt(s, A, deadline - 1)).toBe("working");
+    expect(bucketAt(s, A, deadline)).toBe("needs_input");
+    expect(bucketAt(s, A, deadline + 1)).toBe("needs_input");
+    expect(scans).toBeGreaterThan(0);
+    expect(bucketAt(s, A, NOW)).toBe("working");
+  });
+
+  it("invalidates the deadline memo when a row's deadline changes", () => {
+    const s = state({ [A]: row(A, {
+      agent_status: null as any, last_role_is_user: true,
+      updated_at: NOW - 2 * MIN, daemon_alive_until: NOW + 30 * S,
+    }) });
+    expect(bucketAt(s, A, NOW)).toBe("working");
+    const changed = { ...s, sessions: { [A]: { ...s.sessions[A], daemon_alive_until: NOW - S } } };
+    expect(bucketAt(changed, A, NOW + 1)).toBe("needs_input");
+  });
+});

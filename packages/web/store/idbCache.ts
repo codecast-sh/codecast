@@ -379,7 +379,7 @@ function _latestTs(messages: any[]): number {
   return latest;
 }
 
-function _flushMessageWrites() {
+function _flushMessageWrites(immediate = false) {
   if (_msgWriteTimer) {
     clearTimeout(_msgWriteTimer);
     _msgWriteTimer = null;
@@ -388,6 +388,10 @@ function _flushMessageWrites() {
   for (const [convId, snapshot] of _pendingMsgWrites) {
     if (_inFlightMsgWrites.has(convId)) continue;
     void _writeMessageSnapshot(convId, snapshot);
+    if (!immediate) {
+      if (_pendingMsgWrites.size > _inFlightMsgWrites.size) _scheduleMessageWrites(0);
+      break;
+    }
   }
   _maybePruneConversations();
 }
@@ -407,8 +411,8 @@ async function _writeMessageSnapshot(convId: string, snapshot: MessageSnapshot) 
   }
 }
 
-function _scheduleMessageWrites() {
-  if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, MSG_WRITE_DEBOUNCE_MS);
+function _scheduleMessageWrites(delay = MSG_WRITE_DEBOUNCE_MS) {
+  if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, delay);
 }
 
 // Drop conversationMessages rows beyond the cap (oldest by latestTimestamp) and
@@ -457,13 +461,13 @@ function _maybePruneConversations() {
 
 // Flush any buffered conversation writes immediately (e.g. on page hide).
 export function flushConversationMessages() {
-  _flushMessageWrites();
+  _flushMessageWrites(true);
 }
 
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", _flushMessageWrites);
+  window.addEventListener("pagehide", flushConversationMessages);
   window.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") _flushMessageWrites();
+    if (document.visibilityState === "hidden") flushConversationMessages();
   });
 }
 

@@ -11,6 +11,7 @@ import {
   createFollowerInbox,
   extractReplicationUpdates,
   snapshotEntries,
+  snapshotBatches,
   type ReplicationMessage,
   type ReplicationUpdate,
 } from "./replication";
@@ -70,6 +71,27 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
   };
   refreshShadows(opts.getState());
 
+  const snapshots = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const sendSnapshot = (to: string, request: string) => {
+    const pending = snapshots.get(to);
+    if (pending) clearTimeout(pending);
+    snapshots.delete(to);
+    const position = seq;
+    const batches = snapshotBatches(opts.getState(), opts.replicatedKeys, opts.isCollectionKey);
+    let next = batches.next();
+    let index = 0;
+    const send = () => {
+      snapshots.delete(to);
+      if (stopped) return;
+      const updates = next.value ?? [];
+      next = batches.next();
+      channel.post({ type: "snapshotChunk", hostId, seq: position, to, request, index: index++, done: !!next.done, updates });
+      if (!next.done) snapshots.set(to, setTimeout(send, 0));
+    };
+    send();
+  };
+
   const broadcast = (updates: ReplicationUpdate[], origin: string) => {
     if (updates.length === 0) return;
     channel.post({ type: "update", hostId, seq: ++seq, origin, updates });
@@ -78,6 +100,10 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
   const unsubscribe = channel.onMessage((msg) => {
     if (stopped) return;
     if (msg.type === "hello") {
+      if (msg.snapshotRequest) {
+        sendSnapshot(msg.from, msg.snapshotRequest);
+        return;
+      }
       channel.post({
         type: "snapshot",
         hostId,
@@ -114,6 +140,8 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
     seq: () => seq,
     stop() {
       stopped = true;
+      for (const timer of snapshots.values()) clearTimeout(timer);
+      snapshots.clear();
       unsubscribe();
     },
   };
@@ -148,6 +176,9 @@ export function createReplicationFollower(opts: ReplicationFollowerOptions): Rep
   let stopped = false;
   let helloTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSynced = false;
+  let requestNumber = 0;
+  let snapshotRequest: string | null = null;
+  let snapshot: { hostId: string; seq: number; nextIndex: number } | null = null;
 
   const isReplicated = (key: string) => opts.replicatedKeys.includes(key);
 
@@ -159,13 +190,29 @@ export function createReplicationFollower(opts: ReplicationFollowerOptions): Rep
     }
   };
 
-  const requestSnapshot = () => {
-    if (stopped) return;
-    channel.post({ type: "hello", from: selfId });
+  const armHelloRetry = () => {
     if (helloTimer) clearTimeout(helloTimer);
     helloTimer = setTimeout(() => {
       if (!stopped && !inbox.synced()) requestSnapshot();
     }, helloRetryMs);
+  };
+
+  const requestSnapshot = () => {
+    if (stopped) return;
+    inbox.reset();
+    snapshot = null;
+    snapshotRequest = `${selfId}:${++requestNumber}`;
+    publishSynced();
+    armHelloRetry();
+    channel.post({ type: "hello", from: selfId, snapshotRequest });
+  };
+
+  const finishSnapshot = () => {
+    snapshot = null;
+    snapshotRequest = null;
+    if (helloTimer) clearTimeout(helloTimer);
+    helloTimer = null;
+    publishSynced();
   };
 
   const applyMessages = (messages: Array<Extract<ReplicationMessage, { type: "update" }>>) => {
@@ -182,6 +229,10 @@ export function createReplicationFollower(opts: ReplicationFollowerOptions): Rep
   const unsubscribe = channel.onMessage((msg) => {
     if (stopped) return;
     if (msg.type === "update") {
+      if (snapshot && msg.hostId !== snapshot.hostId) {
+        requestSnapshot();
+        return;
+      }
       const res = inbox.onUpdate(msg);
       if (res.action === "resync") {
         publishSynced();
@@ -192,8 +243,29 @@ export function createReplicationFollower(opts: ReplicationFollowerOptions): Rep
       publishSynced();
       return;
     }
+    if (msg.type === "snapshotChunk") {
+      if (msg.to !== selfId || msg.request !== snapshotRequest) return;
+      if (!snapshot) snapshot = { hostId: msg.hostId, seq: msg.seq, nextIndex: 0 };
+      if (msg.hostId !== snapshot.hostId || msg.seq !== snapshot.seq || msg.index !== snapshot.nextIndex) {
+        requestSnapshot();
+        return;
+      }
+      snapshot.nextIndex++;
+      armHelloRetry();
+      opts.applyUpdates(msg.updates.filter((u) => isReplicated(u.key)), msg.hostId);
+      if (msg.done) {
+        const res = inbox.onSnapshot(msg);
+        if (res.action === "resync") {
+          requestSnapshot();
+          return;
+        }
+        applyMessages(res.messages);
+        finishSnapshot();
+      }
+      return;
+    }
     if (msg.type === "snapshot") {
-      if (msg.to !== selfId) return;
+      if (msg.to !== selfId || snapshotRequest === null) return;
       const res = inbox.onSnapshot(msg);
       if (res.action === "resync") {
         requestSnapshot();
@@ -212,11 +284,7 @@ export function createReplicationFollower(opts: ReplicationFollowerOptions): Rep
       }
       opts.applyUpdates(updates, msg.hostId);
       applyMessages(res.messages);
-      if (helloTimer) {
-        clearTimeout(helloTimer);
-        helloTimer = null;
-      }
-      publishSynced();
+      finishSnapshot();
     }
   });
 

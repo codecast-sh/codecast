@@ -3,7 +3,7 @@
 // streams — as threads.listMine returns them. The shape mirrors the server's
 // ThreadInboxEntry (convex/threads.ts); keep the two in step.
 
-export type ThreadKind = "chat" | "comment" | "task" | "page";
+export type ThreadKind = "chat" | "comment" | "task" | "page" | "code";
 
 /** The newest counted reply of a thread, for the collapsed card's preview. */
 export type ThreadLastReply = {
@@ -27,7 +27,7 @@ export type ThreadInboxRow = {
   _id: string;
   kind: ThreadKind;
   /** chat: root chat_messages id. comment: `${conversation_id}:${anchorKey}`.
-   *  task: task id. page: artifact id. */
+   *  task: task id. page: artifact id. code: `${repository}@${ref}#${anchorKey}`. */
   root_key: string;
   /** The entity's routing team; absent in the personal workspace. */
   team_id?: string;
@@ -38,6 +38,11 @@ export type ThreadInboxRow = {
   message_id?: string;
   file_path?: string;
   line_number?: number;
+  /** Code kind: the repository and ref the thread hangs on, and the pull
+   *  request when the ref is one's head. */
+  repository?: string;
+  ref?: string;
+  pull_request_id?: string;
   last_activity_at: number;
   last_read_at: number;
   updated_at: number;
