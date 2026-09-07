@@ -14,6 +14,7 @@ import {
 import { ChatExpanded, ChatGlyph, ChatLabel, ChatRoot } from "../components/threads/kinds/ChatThreadKind";
 import { DmExpanded, DmGlyph, DmLabel, DmRoot } from "../components/threads/kinds/DmKind";
 import { CommentExpanded, CommentLabel, CommentRoot } from "../components/threads/kinds/CommentKind";
+import { CodeExpanded, CodeLabel, CodeRoot } from "../components/threads/kinds/CodeKind";
 import { TaskExpanded, TaskLabel, TaskRoot } from "../components/threads/kinds/TaskKind";
 import { SessionExpanded, SessionLabel, SessionRoot } from "../components/threads/kinds/SessionKind";
 import { PageExpanded, PageLabel, PageRoot } from "../components/threads/kinds/PageKind";
@@ -68,6 +69,7 @@ export const THREAD_KIND_SPECS: Record<ThreadCardKind, ThreadKindSpec> = {
   chat: { ...THREAD_KIND_META.chat, Glyph: ChatGlyph, Label: ChatLabel, Root: ChatRoot, Expanded: ChatExpanded, markRead: markServerRead },
   dm: { ...THREAD_KIND_META.dm, Glyph: DmGlyph, Label: DmLabel, Root: DmRoot, Expanded: DmExpanded, markRead: markDmRead },
   comment: { ...THREAD_KIND_META.comment, Label: CommentLabel, Root: CommentRoot, Expanded: CommentExpanded, markRead: markServerRead },
+  code: { ...THREAD_KIND_META.code, Label: CodeLabel, Root: CodeRoot, Expanded: CodeExpanded, markRead: markServerRead },
   task: { ...THREAD_KIND_META.task, Label: TaskLabel, Root: TaskRoot, Expanded: TaskExpanded, markRead: markServerRead },
   session: { ...THREAD_KIND_META.session, Label: SessionLabel, Root: SessionRoot, Expanded: SessionExpanded, markRead: markSessionSeen },
   page: { ...THREAD_KIND_META.page, Label: PageLabel, Root: PageRoot, Expanded: PageExpanded, markRead: markServerRead },
