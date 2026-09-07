@@ -255,7 +255,7 @@ import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPre
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
-import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
   FENCED_TMUX_TAG_NAMES,
@@ -2800,6 +2800,33 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
     log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     remoteKeysPushInFlight = false;
+  }
+}
+
+// Home mirror fan-out (cloud/mirror): this laptop's instruction files and
+// agent config to every reachable host, on the credential loop's cadence.
+// Hash-gated on the fast tick, stamp-verified on the periodic one, and a
+// host whose push failed is left alone until the local hash changes or the
+// periodic tick — a push that retried every minute would keep a broken box
+// awake (its idle watchdog counts inbound ssh as activity).
+let remoteMirrorPushInFlight = false;
+
+async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean; verifyRemote?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice() || remoteMirrorPushInFlight) return;
+  const config = readConfig();
+  if (!config || !isCloudMirrorEnabled(config)) return;
+  remoteMirrorPushInFlight = true;
+  try {
+    const { runMirrorTick } = await import("./cloud/mirror/push.js");
+    await runMirrorTick({ reason, onlyIfChanged: opts.onlyIfChanged, verifyRemote: opts.verifyRemote }, {
+      listHosts: reachableTransferHosts,
+      readConfig: () => config,
+      log: (m) => log(`[MIRROR] ${m}`),
+    });
+  } catch (err) {
+    log(`[MIRROR] mirror push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteMirrorPushInFlight = false;
   }
 }
 
@@ -23782,6 +23809,13 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  // Home mirror (cloud/mirror) on the same cadence: verify each host's stamp
+  // at start and every 30 minutes (a re-provisioned host has no stamp), and a
+  // hash-gated fast tick that ships an edited skill or CLAUDE.md within ~a
+  // minute. Failed hosts back off until the hash changes or the periodic tick.
+  setTimeout(() => { pushMirrorToRemoteHosts("daemon start", { verifyRemote: true }).catch(() => {}); }, 64_000);
+  setInterval(() => { pushMirrorToRemoteHosts("mirror_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  setInterval(() => { pushMirrorToRemoteHosts("periodic", { verifyRemote: true }).catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   // Near-instant sync: when the local store file changes (a `cast keys set/rm`, or a
   // web edit the daemon applied), push immediately. fs.watch can double-fire, so the
   // in-flight lock + hash gate keep it to one real push.
