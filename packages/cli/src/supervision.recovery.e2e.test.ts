@@ -194,6 +194,26 @@ describe.skipIf(process.platform !== "darwin")("production watchdog process", ()
     }
   }, 30_000);
 
+  test("ordinary CLI use from a foreign installation leaves the managed daemon running", async () => {
+    const home = fixture();
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({}) });
+    const incumbent = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    try {
+      await prepare(home, `http://127.0.0.1:${server.port}`);
+      fs.writeFileSync(path.join(home, ".codecast", "daemon.pid"), String(incumbent.pid));
+      fs.writeFileSync(path.join(home, ".codecast", "daemon.version"), "0.0.1");
+      const result = await run(process.execPath, [path.join(import.meta.dir, "main.ts"), "config", "web_url"], home);
+      expect(result, result.stderr).toMatchObject({ code: 0 });
+      expect(incumbent.exitCode).toBeNull();
+      expect(incumbent.signalCode).toBeNull();
+      expect(fs.readFileSync(path.join(home, ".codecast", "daemon.pid"), "utf-8")).toBe(String(incumbent.pid));
+      expect(fs.readFileSync(path.join(home, "calls"), "utf-8")).not.toContain("kickstart");
+    } finally {
+      incumbent.kill("SIGKILL");
+      server.stop(true);
+    }
+  }, 30_000);
+
   test("a dead managed daemon recovers through its supervisor without consuming pending commands", async () => {
     const home = fixture();
     const requests: string[] = [];
