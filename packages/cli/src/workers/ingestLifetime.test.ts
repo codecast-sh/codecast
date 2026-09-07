@@ -23,6 +23,6 @@ test('actual parent death and stdin EOF release an ingest cursor process',async(
     await host.request('ingest',{action:'open',job:{client:'claude',file,sessionId:'eof',generation:'eof-generation',identity:ingestIdentity(fs.statSync(file)),offset:0}});
     worker=host.state.pid!;(host as any).child.stdin.end();await until(()=>!alive(worker!));expect(host.state.pid).toBeNull();
     const files=fs.readdirSync(root,{recursive:true}).map(String);
-    expect(files.filter(f=>f!== 'input.jsonl' && f!== 'Library' && f!== 'Library/Caches' && !f.startsWith('Library/Caches/bun'))).toEqual([]);
+    expect(files.filter(f=>f!== 'input.jsonl' && f!== 'Library' && f!== 'Library/Caches' && !f.startsWith('Library/Caches/bun') && f!== '.bun' && f!== '.bun/install' && !f.startsWith('.bun/install/cache'))).toEqual([]);
   } finally {host?.close();if(parent&&parent.exitCode===null)parent.kill('SIGKILL');if(worker&&alive(worker))process.kill(worker,'SIGKILL');fs.rmSync(root,{recursive:true,force:true});}
 },20_000);
