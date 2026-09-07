@@ -7,6 +7,7 @@ import { useCallback } from "react";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { usePathname, useRouter } from "next/navigation";
 import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
+import { useInboxSelection } from "../lib/inboxSelection";
 import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
@@ -60,6 +61,15 @@ export function useGlobalShortcutActions() {
     const target = resolvePaletteTarget(state, pathname);
     if (target) { state.openPalette(target); return; }
     if (isInboxRoute(pathname)) {
+      // A ticked multi-selection (lib/inboxSelection) is the target when there
+      // is one — bulk verbs (move, label, stash, kill) act on all of it.
+      const picked = useInboxSelection.getState().ids
+        .map((id) => state.sessions[id] ?? state.conversations[id])
+        .filter(Boolean);
+      if (picked.length > 1) {
+        state.openPalette({ targets: picked, targetType: 'session' });
+        return;
+      }
       const focusedId = focusedActionSessionId(state, true);
       const session = focusedId ? state.sessions[focusedId] ?? state.conversations[focusedId] : null;
       if (session) {

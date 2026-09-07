@@ -11,6 +11,9 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
+import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu } from "./BulkMoveSessions";
+import { selectionGesture, useInboxSelection } from "../lib/inboxSelection";
+import { useEventListener } from "../hooks/useEventListener";
 import { copyToClipboard, formatRelative, formatDateFull, formatShortDate } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
@@ -64,7 +67,7 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
 };
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff } from "lucide-react";
+import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -2179,12 +2182,16 @@ export const SessionCard = memo(function SessionCard({
   sessionLabel,
   isFavorite,
   subRow,
+  isSelected = false,
 }: {
   session: InboxSession;
   isActive: boolean;
   isParentActive?: boolean;
   globalIndex: number;
-  onSelect: (session: InboxSession) => void;
+  /** A plain click opens; the panel reads the event for ⌘/shift selection gestures. */
+  onSelect: (session: InboxSession, e?: React.MouseEvent) => void;
+  /** Ticked in the inbox multi-selection (lib/inboxSelection). Scalar, so memo stays cheap. */
+  isSelected?: boolean;
   onDismiss?: (id: string) => void;
   onStash?: (id: string) => void;
   onDefer?: (id: string) => void;
@@ -2505,11 +2512,12 @@ export const SessionCard = memo(function SessionCard({
   }, [session._id, displayTitle, project]);
   const handleCardDragEnd = useCallback(() => setIsDraggingCard(false), []);
 
-  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending") ? (
+  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.migration_batch_id) ? (
     <SessionWorktreeChip
       name={session.worktree_name}
       branch={session.worktree_branch}
       preparing={session.cloud_placement === "pending"}
+      moving={!!session.migration_batch_id}
       hostName={runHost ? deviceDisplayName(runHost) : undefined}
       hostIcon={runHost ? <DeviceIcon d={runHost} className="w-2.5 h-2.5 shrink-0" /> : undefined}
     />
@@ -2528,7 +2536,7 @@ export const SessionCard = memo(function SessionCard({
         onDragLeave={handleFileDragLeave}
         onDrop={handleFileDrop}
         onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-        className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
+        className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${isSelected ? "ring-1 ring-inset ring-sol-cyan/60 bg-sol-cyan/[0.08]" : ""} ${
           isActive
             ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
             : isParentActive
@@ -2543,10 +2551,11 @@ export const SessionCard = memo(function SessionCard({
         }`}
       >
         {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
+      {isSelected && <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
         <div
           role="button"
           tabIndex={0}
-          onClick={() => onSelect(session)}
+          onClick={(e) => onSelect(session, e)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
           className="w-full text-left cursor-pointer px-2 py-1"
         >
@@ -2682,7 +2691,7 @@ export const SessionCard = memo(function SessionCard({
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-      className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
+      className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${isSelected ? "ring-1 ring-inset ring-sol-cyan/60 bg-sol-cyan/[0.08]" : ""} ${
         // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
         // unacked handoff must never read as "this is the session you have open".
         session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
@@ -2705,10 +2714,11 @@ export const SessionCard = memo(function SessionCard({
       }`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
+      {isSelected && <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
       <div
         role="button"
         tabIndex={0}
-        onClick={() => onSelect(session)}
+        onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
@@ -3516,11 +3526,37 @@ function SessionListPanelImpl({
     useInboxStore.getState().markKilling(id);
   }, []);
 
-  const handleSelect = useCallback((session: InboxSession) => {
+  const handleSelect = useCallback((session: InboxSession, e?: React.MouseEvent) => {
+    // ⌘/ctrl-click ticks the card, shift-click ticks the run since the last
+    // tick (in screen order); neither opens it. A plain click opens and
+    // becomes the anchor a later shift-click ranges from.
+    const gesture = e ? selectionGesture(e) : null;
+    if (gesture) {
+      e!.preventDefault();
+      const sel = useInboxSelection.getState();
+      if (gesture === "toggle") sel.toggle(session._id);
+      else sel.range(session._id, useInboxStore.getState().visualOrder().map((row) => row._id));
+      return;
+    }
+    useInboxSelection.setState({ anchorId: session._id });
     if (onSessionSelect) {
       onSessionSelect(session._id);
     }
   }, [onSessionSelect]);
+
+  // The multi-selection (lib/inboxSelection): ids that still have a row here.
+  const selectedIdsRaw = useInboxSelection((sel) => sel.ids);
+  const selectedSet = useMemo(() => new Set(selectedIdsRaw), [selectedIdsRaw]);
+  const selectedSessions = useMemo(
+    () => selectedIdsRaw.map((id) => s.sessions[id]).filter((row): row is InboxSession => !!row),
+    [selectedIdsRaw, s.sessions],
+  );
+  const clearSelection = useCallback(() => useInboxSelection.getState().clear(), []);
+  useEventListener("keydown", (e) => {
+    if (e.key === "Escape" && useInboxSelection.getState().ids.length > 0 && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
+      useInboxSelection.getState().clear();
+    }
+  });
 
   // One-shot queries (the schedule-row click's run-list lookup) — not a
   // subscription, so a resting panel costs nothing.
@@ -4230,13 +4266,20 @@ function SessionListPanelImpl({
   // Right-click menu: ONE cursor-anchored instance serves every card in the
   // panel; cards only report the click. Verbs reuse the exact handlers the
   // hover toolbar uses, so animations and trigger notices stay identical.
-  const sessionCtxMenu = useContextMenu<{ session: InboxSession; isForeign: boolean }>();
+  const sessionCtxMenu = useContextMenu<{ session: InboxSession; isForeign: boolean; sessions: InboxSession[] }>();
   // Depends on the stable `open`, not the menu object: every SessionCard takes
   // this prop, so a new function here re-renders the whole list.
   const openSessionCtxMenu = sessionCtxMenu.open;
   const handleCardContextMenu = useCallback(
     (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => {
-      openSessionCtxMenu(e, { session, isForeign });
+      // The selection travels with the right-click when the clicked card is
+      // part of it — the same targeting a ⌘K on the selection uses.
+      const picked = useInboxSelection.getState().ids;
+      const rows = useInboxStore.getState().sessions;
+      const sessions = picked.includes(session._id)
+        ? picked.map((id) => (id === session._id ? session : rows[id])).filter((row): row is InboxSession => !!row)
+        : [session];
+      openSessionCtxMenu(e, { session, isForeign, sessions });
     },
     [openSessionCtxMenu],
   );
@@ -4419,6 +4462,7 @@ function SessionListPanelImpl({
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
+                  isSelected={selectedSet.has(session._id)}
                   isActive={session._id === activeSessionId}
                   globalIndex={-1}
                   onSelect={handleSelect}
@@ -4446,6 +4490,7 @@ function SessionListPanelImpl({
                   <SessionCard
                     key={sub._id}
                     session={sub}
+                    isSelected={selectedSet.has(sub._id)}
                     isActive={sub._id === activeSessionId}
                     isParentActive={session._id === activeSessionId}
                     globalIndex={-1}
@@ -4628,6 +4673,7 @@ function SessionListPanelImpl({
                 )}
                 <SessionCard
                   session={session}
+                  isSelected={selectedSet.has(session._id)}
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={opts?.onSelect ?? handleSelect}
@@ -4665,6 +4711,7 @@ function SessionListPanelImpl({
                   <SessionCard
                     key={sub._id}
                     session={sub}
+                    isSelected={selectedSet.has(sub._id)}
                     isActive={sub._id === activeSessionId}
                     isParentActive={session._id === activeSessionId}
                     globalIndex={0}
@@ -4712,6 +4759,14 @@ function SessionListPanelImpl({
 
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
+      {selectedSessions.length > 0 && (
+        <InboxSelectionBar
+          sessions={selectedSessions}
+          onStash={handleAnimatedStash}
+          onKill={handleAnimatedDismiss}
+          onClear={clearSelection}
+        />
+      )}
       <div ref={titlebarRef} className="cc-panel__head min-w-0">
         {favoritesView && (
           <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
@@ -5042,6 +5097,7 @@ function SessionListPanelImpl({
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
+                  isSelected={selectedSet.has(session._id)}
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={handleSelect}
@@ -5175,7 +5231,14 @@ function SessionListPanelImpl({
         />
       )}
       <ContextMenu state={sessionCtxMenu}>
-        {({ session, isForeign }) => (
+        {({ session, isForeign, sessions }) => sessions.length > 1 ? (
+          <BulkSessionMenuItems
+            sessions={sessions}
+            onStash={handleAnimatedStash}
+            onKill={handleAnimatedDismiss}
+            onClear={clearSelection}
+          />
+        ) : (
           <SessionMenuItems
             session={session}
             isForeign={isForeign}
@@ -5186,6 +5249,7 @@ function SessionListPanelImpl({
               handleSelect(session);
               useInboxStore.setState({ renamingSessionId: session._id });
             }}
+            extra={!isForeign ? <MoveToDeviceSubmenu sessions={[session]} /> : null}
           />
         )}
       </ContextMenu>

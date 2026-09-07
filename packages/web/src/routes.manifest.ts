@@ -202,6 +202,7 @@ const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
 const SettingsAgents = lazy(() => import("@/app/settings/agents/page"));
 const SettingsDevices = lazy(() => import("@/app/settings/devices/page"));
+const SettingsMigrate = lazy(() => import("@/app/settings/migrate/page"));
 const SettingsSync = lazy(() => import("@/app/settings/sync/page"));
 const SettingsProfile = lazy(() => import("@/app/settings/profile/page"));
 const SettingsAccounts = lazy(() => import("@/app/settings/accounts/page"));
@@ -387,6 +388,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/cli", component: cast(SettingsCli), layout: "settings" },
   { path: "settings/agents", component: cast(SettingsAgents), layout: "settings" },
   { path: "settings/devices", component: cast(SettingsDevices), layout: "settings" },
+  { path: "settings/migrate", component: cast(SettingsMigrate), layout: "settings" },
   { path: "settings/sync", component: cast(SettingsSync), layout: "settings" },
   { path: "settings/profile", component: cast(SettingsProfile), layout: "settings" },
   { path: "settings/accounts", component: cast(SettingsAccounts), layout: "settings" },

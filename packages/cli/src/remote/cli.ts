@@ -89,11 +89,11 @@ interface ScalewayHostMeta {
   stopped?: boolean;
 }
 
-function readMoves(): Record<string, MoveResult> {
+export function readMoves(): Record<string, MoveResult> {
   if (!fs.existsSync(MOVES_FILE)) return {};
   try { return JSON.parse(fs.readFileSync(MOVES_FILE, "utf-8")); } catch { return {}; }
 }
-function writeMoves(m: Record<string, MoveResult>): void {
+export function writeMoves(m: Record<string, MoveResult>): void {
   fs.mkdirSync(path.dirname(MOVES_FILE), { recursive: true });
   fs.writeFileSync(MOVES_FILE, JSON.stringify(m, null, 2));
 }
@@ -103,7 +103,7 @@ function parseJson(out: string): { result?: string; session_id?: string } {
 }
 
 /** One line stating what the transfer verification proved (or couldn't). */
-function describeVerification(v: SyncVerification | undefined): string {
+export function describeVerification(v: SyncVerification | undefined): string {
   if (!v) return "no git verification available (non-git directory, synced via rsync)";
   if (!v.headsMatch) {
     return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
@@ -124,7 +124,7 @@ function describeVerification(v: SyncVerification | undefined): string {
  * knows what the transfer proved; see sessionMoveNotice.ts for why a notice
  * only ever states what the composing machine checked itself.
  */
-function moveNotice(opts: {
+export function moveNotice(opts: {
   destination: string;   // "m1@51.159.120.28" or the local hostname
   newCwd: string;
   oldCwd: string;
@@ -152,7 +152,7 @@ function moveNotice(opts: {
  * so a dirty remote is the expected outcome, not a warning about the machine we
  * just left. What matters here is only that the commits match.
  */
-function describeBackSync(v: SyncVerification, backupRef?: string): string {
+export function describeBackSync(v: SyncVerification, backupRef?: string): string {
   const saved = backupRef ? `; local tree before the pull saved at ${backupRef}` : "";
   if (!v.headsMatch) {
     return `WARNING: this machine is at ${v.localHead.slice(0, 8)} but the Mac is at ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} on branch ${v.branch} — the pull may be incomplete${saved}`;
@@ -162,7 +162,7 @@ function describeBackSync(v: SyncVerification, backupRef?: string): string {
 
 /** Queue the notice onto the conversation's normal delivery rail (it arrives
  * after the resume lands, since delivery waits for a live session). */
-async function sendMoveNotice(
+export async function sendMoveNotice(
   client: any, api: any, token: string,
   conversationId: string, notice: string | null,
 ): Promise<void> {

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { Archive, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus } from "lucide-react";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { isForeignSession } from "./liveEntities";
@@ -41,6 +41,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("session_pin", target.is_pinned ? "Unpin session" : "Pin session", target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? "Remove from favorites" : "Add to favorites", Star, "v", "conv.favorite"),
       row("bucket", "Label session…", Tag, "l", "session.moveToBucket"),
+      row("device", single ? "Move to machine…" : `Move ${targets.length} sessions to machine…`, ArrowRightLeft, "e"),
       ...(!target.inbox_killed_at ? [row("snooze", "Snooze session…", Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
       ...((target.dismissed || target.inbox_stashed_at || target.inbox_killed_at || target.inbox_dismissed_at) ? [row("session_restore", "Restore session to inbox", RefreshCw, "u")] : [

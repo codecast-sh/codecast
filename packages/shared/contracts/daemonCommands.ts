@@ -95,6 +95,21 @@ export const DAEMON_COMMANDS = [
   // command" (the session just stays live). There is no wake_session: waking is
   // a resume, so `cast wake` sends resume_session.
   "hibernate_session",
+  // Bulk local<->cloud migration (sessionMigrations.ts). Targeted at the
+  // batch's EXECUTOR daemon — an online local machine: the source for a move
+  // to the cloud, the destination for a move back. The daemon starts a
+  // detached `cast migrate run <batch_id>` child and answers immediately, so
+  // a batch that transfers for an hour never blocks the command loop. args:
+  // { batch_id }. Old daemons: "Unknown command" (the batch row reports it).
+  "migrate_sessions",
+  // Stop a session's local backends so its transcript is final before a
+  // migration transfers it. Targeted at the CURRENT owner; runs the same
+  // teardown as move_to_device/release_session but leaves ownership alone —
+  // the flip is a separate, later mutation. args: { conversation_id,
+  // session_id, mode: "idle" | "force" }. "idle" refuses (quiesced: false,
+  // reason) while a turn is in progress; "force" interrupts it. Old daemons:
+  // "Unknown command" (the runner reports the source must be upgraded).
+  "quiesce_session",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

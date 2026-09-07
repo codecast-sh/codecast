@@ -69,6 +69,7 @@ export const APP_SURFACES: AppSurface[] = [
   settings("settings/cli", "CLI settings"),
   settings("settings/agents", "agent settings"),
   settings("settings/devices", "devices"),
+  settings("settings/migrate", "bulk session migration between machines"),
   settings("settings/sync", "sync settings"),
   settings("settings/profile", "profile"),
   settings("settings/accounts", "linked accounts"),

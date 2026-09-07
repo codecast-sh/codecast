@@ -247,4 +247,14 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // A bulk-migration runner that died mid-row leaves its conversation fenced
+  // (no daemon delivers). Lift stale fences so the session is served again
+  // where it still lives; the row fails with a reason a human can act on.
+  "reap stale session migrations",
+  { minutes: 5 },
+  (internal as any).sessionMigrations.reapStale,
+  {}
+);
+
 export default crons;

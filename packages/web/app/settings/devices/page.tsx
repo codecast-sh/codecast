@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { MonitorSmartphone, Terminal } from "lucide-react";
+import { ArrowRightLeft, MonitorSmartphone, Terminal } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -402,6 +402,12 @@ export default function DevicesSettingsPage() {
           label="Connect a machine"
           description="Install the cast CLI and sign a machine in"
           onClick={openCliSection}
+        />
+        <SettingsLinkRow
+          icon={ArrowRightLeft}
+          label="Migrate sessions between machines"
+          description="Move many sessions to a cloud host, or bring them back, in one batch"
+          onClick={() => useInboxStore.getState().openSettingsModal("migrate")}
         />
       </SettingsSection>
       <AgentBoxesSection />

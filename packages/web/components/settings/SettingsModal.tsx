@@ -2,8 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Video,
-} from "lucide-react";
+  Search, Volume2, Video, ArrowRightLeft } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -26,6 +25,7 @@ import ProviderKeysPanel from "../../app/settings/provider-keys/page";
 import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
 import CliPanel from "../../app/settings/cli/page";
 import DevicesPanel from "../../app/settings/devices/page";
+import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
 
 const PANELS: Record<SettingsSectionId, React.ComponentType> = {
@@ -43,6 +43,7 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "claude-accounts": ClaudeAccountsPanel,
   "cli": CliPanel,
   "devices": DevicesPanel,
+  "migrate": MigratePanel,
   "desktop": DesktopPanel,
 };
 
@@ -85,6 +86,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins and auto-switching", keywords: "usage limits switch profiles anthropic" },
       { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online" },
+      { id: "migrate", label: "Migration", icon: ArrowRightLeft, desc: "Move many sessions to a cloud host or back, in one go", keywords: "migrate move bulk cloud host laptop transfer sessions batch" },
       { id: "desktop", label: "Desktop", icon: Monitor, desc: "The desktop app: shortcuts and meeting detection", keywords: "shortcuts hotkeys meetings version updates", desktopOnly: true },
     ],
   },

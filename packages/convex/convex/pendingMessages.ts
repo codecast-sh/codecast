@@ -190,6 +190,11 @@ export function canDaemonSeePendingMessage(
   // daemon has prepared the host and placed it (cloud.placeConversation). The
   // message waits as pending and rides the real start.
   if ((conversation as any).cloud_placement === "pending") return false;
+  // A bulk migration is moving the row between machines (sessionMigrations):
+  // the source is being quiesced and its transcript transferred, and the
+  // destination does not own it yet. Nobody delivers; the message waits as
+  // pending and rides the resume on the destination once the fence clears.
+  if ((conversation as any).migration) return false;
   // Delivery is the TARGET owner's job, not the sender's — a teammate's message is delivered by
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;

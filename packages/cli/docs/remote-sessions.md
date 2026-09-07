@@ -76,6 +76,60 @@ clean and its commits are on origin; otherwise it is kept and logged
 | `cast remote move <sid>` | **Atomic live handoff**: push + prep + flip ownership + resume on Mac |
 | `cast remote back <sid>` | **Reverse**: pull + flip ownership back + resume locally |
 
+## Bulk migration (many sessions, either direction)
+
+`cast remote move` / `back` move one session at a time from the machine that
+runs it. To move a whole set — the laptop's sessions to the cloud host before
+closing the lid, or the host's sessions back — use the batch rail:
+
+| Where | How |
+|---|---|
+| Web | Settings → **Migration**: pick a destination, tick sessions, go. Progress narrates row by row. |
+| CLI | `cast migrate start --to <device> [<short-id…>] [--label x] [--from <device>] [--project <path\|name>] [--all] [--dry-run]` · `cast migrate ls` · `cast migrate show <batch>` · `cast migrate cancel\|retry <batch>` |
+| Inbox | ⌘-click / shift-click cards to select several; right-click → "Move N sessions to…", or ⌘K → "Move to machine…". A single card's menu has "Move to machine" too. |
+
+Selectors AND together and resolve on the server (`sessionMigrations.createBatch`
+`selector`): `--label` is your personal filing (buckets), `--from` a device,
+`--project` a path prefix or a substring of the repo name (a worktree counts as
+its repo), `--all` every movable session. `--dry-run` plans without writing and
+names each skip and its reason — agents should run it first when the selector
+is broad. The agent-facing recipe ships in the `forks` CLAUDE.md snippet
+("Moving sessions between machines").
+
+What happens per session (`packages/cli/src/migrate/runner.ts`, server side
+`convex/sessionMigrations.ts`):
+
+1. **Fence.** The conversation is marked `migration` — no daemon delivers into
+   it; messages sent meanwhile wait as pending. A session queued deep in the
+   batch is NOT fenced until its turn comes, so it keeps working normally.
+2. **Wait for the turn to end.** A session that is producing (`working`,
+   `thinking`, `compacting`) finishes its turn first, up to the batch's
+   wait window (default 10 min; "Interrupt right away" is 0). A session stopped
+   at a permission prompt moves at once — its answer could never arrive through
+   the fence — and the prompt re-asks on the destination.
+3. **Quiesce.** `quiesce_session` at the current owner stops the agent so the
+   transcript on disk is final (mode `idle` refuses while a turn is running;
+   `force` interrupts it once the window is spent).
+4. **Transfer.** To the cloud: the same push as `cast remote move` (worktree
+   snapshot over git-SSH, gitignored secrets, transcript rsync, credential);
+   sessions sharing one worktree push it once. Back to a laptop: the laptop
+   pulls the transcript and fast-forwards the worktree with the host's
+   uncommitted work restored as uncommitted; a cloud-born worktree is created
+   locally under the checkout of the same origin.
+5. **Flip.** One mutation: owner + project path move, a targeted
+   `resume_session` goes to the destination, `release_session` to the old
+   owner, and the fence comes off — the queued messages belong to the
+   destination the instant it owns the row. The agent gets the usual
+   reorientation notice.
+
+The work runs on an online LOCAL daemon (it holds the host registry and SSH
+key): the source laptop for a move to the cloud, the destination laptop for a
+move back. The daemon starts a detached `cast migrate run <batch>` and logs to
+`~/.codecast/migrations/<batch>.log`. A runner that dies mid-row leaves a
+fenced conversation; the server lifts fences nobody has reported on for 30
+minutes and marks the row failed, so the session is served again where it
+still lives.
+
 ## How it works
 
 **Transfer**: git-over-SSH. The worktree branch is pushed to a clone on the
