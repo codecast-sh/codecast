@@ -1,6 +1,6 @@
-import { getApplyPatchInput, parseApplyPatchSections } from "./applyPatchParser";
+import { parseApplyPatchSections } from "./applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "./unifiedDiffParser";
-import { embeddedApplyPatches, shellApplyPatches } from "./embeddedPatch";
+import { getToolPatchInputs, SHELL_TOOL_NAMES } from "./embeddedPatch";
 
 export interface FileChange {
   id: string;
@@ -29,7 +29,6 @@ export interface ExtractableMessage {
   tool_results?: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | null;
 }
 
-const SHELL_TOOL_NAMES = new Set(["bash", "shell", "shell_command", "exec_command", "commandexecution", "run_shell_command"]);
 const EDIT_TOOL_NAMES = new Set([
   "edit",
   "write",
@@ -78,19 +77,7 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
       }
 
       if (name === "apply_patch" || name === "exec" || SHELL_TOOL_NAMES.has(name)) {
-        let patchInputs: string[] = [];
-        if (name === "apply_patch") patchInputs = [getApplyPatchInput(toolCall.input)];
-        else {
-          try {
-            const params = JSON.parse(toolCall.input);
-            const source = typeof params === "string" ? params : params?.input ?? params?.command ?? params?.cmd;
-            if (typeof source === "string") patchInputs = name === "exec" ? embeddedApplyPatches(source) : shellApplyPatches(source);
-          } catch {
-            if (name === "exec") patchInputs = embeddedApplyPatches(toolCall.input);
-          }
-        }
-
-        const sections = result?.is_error ? [] : patchInputs.flatMap(parseApplyPatchSections);
+        const sections = result?.is_error ? [] : getToolPatchInputs(toolCall).flatMap(parseApplyPatchSections);
 
         sections.forEach((section, sectionIndex) => {
           const isAdd = section.operation === "Add";

@@ -20,6 +20,29 @@ async function ingest(ctx: any, message: ExtractableMessage, previous?: Extracta
 }
 
 describe("session file changes persist as agent messages stream", () => {
+  test.each(["input", "code", "script"])("ingests a Codex %s envelope into reviewable file changes", async (field) => {
+    const ctx = setup();
+    const patch = "*** Begin Patch\n*** Update File: a.ts\n@@\n-before\n+after\n*** Add File: b.ts\n+created\n*** End Patch";
+    const tool = { id: "nested-patch", name: "functions.exec", input: JSON.stringify({
+      [field]: `text(await tools.apply_patch(${JSON.stringify(patch)}));`,
+    }) };
+    ctx.db._tables.messages = [{
+      _id: "message", message_uuid: "streamed", conversation_id: "conversation", role: "assistant",
+      timestamp: 10, tool_calls: [tool],
+    }];
+    const args = {
+      conversation_id: "conversation", message_uuid: "streamed", role: "assistant",
+      tool_calls: [tool], tool_results: [{ tool_use_id: tool.id, content: "Success. Updated a.ts and b.ts" }],
+    };
+    await (addMessage as any)._handler(ctx, args);
+    await (addMessage as any)._handler(ctx, args);
+    const rows = await (getConversationFileChanges as any)._handler(ctx, { conversation_id: "conversation" });
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row: any) => [row.toolCallId, row.filePath, row.oldContent, row.newContent])).toEqual([
+      [tool.id, "a.ts", "before", "after"], [tool.id, "b.ts", undefined, "created"],
+    ]);
+  });
+
   test("the message ingest endpoint refreshes a streamed Codex file change", async () => {
     const ctx = setup();
     ctx.db._tables.messages = [{
