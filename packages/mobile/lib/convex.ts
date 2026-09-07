@@ -1,4 +1,5 @@
 import { ConvexReactClient } from "convex/react";
+import { recoveringWebSocket } from "@codecast/shared/network";
 
 // Fall back to production, never to "": build 28 shipped with a stale
 // EXPO_PUBLIC_CONVEX_URL (the pre-migration Convex Cloud deployment) and every
@@ -22,4 +23,5 @@ export function isTrustedImageSrc(src: string): boolean {
 
 export const convex = new ConvexReactClient(CONVEX_URL, {
   unsavedChangesWarning: false,
+  webSocketConstructor: recoveringWebSocket(),
 });

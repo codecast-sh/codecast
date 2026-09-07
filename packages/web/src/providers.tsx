@@ -1,4 +1,5 @@
 import { ConvexReactClient } from "convex/react";
+import { recoveringWebSocket } from "@codecast/shared/network";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ReactNode, useRef } from "react";
 import { toast } from "sonner";
@@ -113,6 +114,7 @@ const convex: ConvexReactClient =
   import.meta.hot?.data?.convexClient ??
   new ConvexReactClient(CONVEX_URL, {
     unsavedChangesWarning: false,
+    webSocketConstructor: recoveringWebSocket(),
   });
 
 if (import.meta.hot) {

@@ -10,6 +10,7 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
+    "./network": "./network/index.ts",
     "./encryption": "./encryption/index.ts",
     "./contracts": "./contracts/index.ts",
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
