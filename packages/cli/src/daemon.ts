@@ -256,7 +256,7 @@ import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermi
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
-import { readThreadStateStamp } from "./stateCommand.js";
+import { readThreadStateStamp } from "./threadStateStamp.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,

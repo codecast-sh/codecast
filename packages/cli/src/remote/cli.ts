@@ -34,6 +34,7 @@ import { decryptToken } from "../tokenEncryption.js";
 import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 import { learnHostDeviceId } from "../cloud/prepare.js";
+import { commandGroup } from "../commandGroups.js";
 
 /**
  * Find the machine a session should move to, whichever registry it lives in.
@@ -181,7 +182,7 @@ async function sendMoveNotice(
 export function registerRemoteCommand(program: Command): void {
   const remote = program
     .command("remote")
-    .description("Move a Claude Code session to/from a remote Mac");
+    .description(commandGroup("remote").description);
 
   remote
     .command("hosts")
