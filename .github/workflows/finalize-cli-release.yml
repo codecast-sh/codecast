@@ -133,7 +133,36 @@ jobs:
               '.artifacts[$artifact].size |
                type == "number" and . > 1000000 and floor == .' \
               /tmp/release-expected.json >/dev/null
+            # The cast computer helper is a separately signed app bundle inside
+            # the darwin binaries, so it is part of what a darwin artifact IS.
+            # A darwin entry without it means the builder shipped a macOS CLI
+            # that cannot drive the Mac; a non-darwin entry with it means the
+            # helper leaked into a build that can never run it. (ct-49524)
+            case "$artifact" in
+              codecast-darwin-*)
+                jq -e \
+                  --arg artifact "$artifact" \
+                  '.artifacts[$artifact].computer_helper_sha256 |
+                   type == "string" and test("^[0-9a-f]{64}$")' \
+                  /tmp/release-expected.json >/dev/null
+                ;;
+              *)
+                jq -e \
+                  --arg artifact "$artifact" \
+                  '.artifacts[$artifact] | has("computer_helper_sha256") | not' \
+                  /tmp/release-expected.json >/dev/null
+                ;;
+            esac
           done
+          # One helper per release: the builder compiles and signs it once and
+          # embeds the same bytes in both darwin binaries. Two hashes here would
+          # mean two different helpers went out under one version.
+          if ! jq -e '.artifacts["codecast-darwin-arm64"].computer_helper_sha256 ==
+                      .artifacts["codecast-darwin-x64"].computer_helper_sha256' \
+                 /tmp/release-expected.json >/dev/null; then
+            echo "::error::the two darwin artifacts carry different cast computer helpers"
+            exit 1
+          fi
           expected_keys=$(jq -r '.artifacts | keys[]' /tmp/release-expected.json)
           actual_keys=$(printf '%s\n' "${artifacts[@]}" | sort)
           if [[ "$(sort <<<"$expected_keys")" != "$actual_keys" ]]; then
@@ -575,6 +604,7 @@ jobs:
           echo "Release commit: \`$release_sha\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create or verify GitHub release
+        id: github_release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -588,15 +618,25 @@ jobs:
             codecast-windows-x64.exe
           )
           tag="v$RELEASE_VERSION"
+          # Why: the release is born a draft so that publishing it is one later
+          # step, gated on the draft assertion and the required assets check.
+          # A release created public is visible while its assets still upload,
+          # and nothing can tell a half-uploaded release from a finished one
+          # (ct-49566). gh resolves a draft by tag name, so every verb below
+          # works unchanged.
+          created_draft=false
           if ! gh release view "$tag" >/dev/null 2>&1; then
             files=()
             for artifact in "${artifacts[@]}"; do
               files+=("/tmp/cli-release/$artifact")
             done
             gh release create "$tag" "${files[@]}" \
+              --draft \
               --verify-tag \
               --generate-notes
+            created_draft=true
           fi
+          echo "created_draft=$created_draft" >> "$GITHUB_OUTPUT"
 
           for artifact in "${artifacts[@]}"; do
             expected_sha=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
@@ -633,17 +673,70 @@ jobs:
             fi
           done
 
-          release_state=$(gh release view "$tag" --json isDraft,isPrerelease)
+          release_state=$(gh release view "$tag" --json isPrerelease)
           if [[ "$(jq -r '.isPrerelease' <<<"$release_state")" != "false" ]]; then
             echo "::error::$tag unexpectedly exists as a prerelease"
             exit 1
           fi
+
+      - name: Verify the release is still a draft
+        # Why: this workflow owns the one draft -> published transition. If the
+        # release it created is already public, something else published it and
+        # the bytes behind it were never checked (ct-49566).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CREATED_DRAFT: ${{ steps.github_release.outputs.created_draft }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          # The tags endpoint cannot see drafts; the list can.
+          releases_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          draft="$(jq -e -r --arg tag "$tag" '
+            map(select(.tag_name == $tag))
+            | if length == 1 and (.[0].draft | type) == "boolean"
+              then (.[0].draft | tostring) else empty end
+          ' <<<"$releases_json")" || {
+            echo "::error::$tag was not found exactly once in the draft-aware releases list"
+            exit 1
+          }
+          if [[ "$draft" == "true" ]]; then
+            echo "$tag is still a draft"
+          elif [[ "$CREATED_DRAFT" == "true" ]]; then
+            echo "::error::$tag was created as a draft by this run and published by something else"
+            exit 1
+          else
+            echo "::notice::$tag was already published before this run; its assets were verified above"
+          fi
+
+      - name: Verify every required release asset is present
+        # Why: publishing a release that is missing a platform points clients at
+        # a download that does not exist (ct-49566).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: bun scripts/ci/verify-release-required-assets.ts "v$RELEASE_VERSION"
+
+      - name: Publish the GitHub release
+        # Why: the only draft -> published transition, and it runs after both
+        # checks above, before latest.json points anyone at these bytes.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          release_state=$(gh release view "$tag" --json isDraft,isPrerelease)
           if [[ "$(jq -r '.isDraft' <<<"$release_state")" == "true" ]]; then
             gh release edit "$tag" --draft=false
             release_state=$(gh release view "$tag" --json isDraft,isPrerelease)
           fi
           if [[ "$(jq -r '.isDraft' <<<"$release_state")" != "false" ]]; then
             echo "::error::$tag did not converge to a published release"
+            exit 1
+          fi
+          if [[ "$(jq -r '.isPrerelease' <<<"$release_state")" != "false" ]]; then
+            echo "::error::$tag unexpectedly became a prerelease"
             exit 1
           fi
 
