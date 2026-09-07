@@ -6,8 +6,9 @@ import { useInboxStore } from "../store/inboxStore";
 import { useRepoAccess, useRepoViewerScope } from "./useRepoAccess";
 import { repoBrowseKey, retainRepoBrowseRows, type RepoBrowseRow } from "../lib/repoBrowseCache";
 import { useWatchEffect } from "./useWatchEffect";
-import { pathSegments, type RepoTreeEntry } from "../lib/repoView";
+import { pathSegments, type BlameSessionResolution, type RepoTreeEntry } from "../lib/repoView";
 import { publicRepoUrl, usePublicRepoRead, useRepoTransport } from "../lib/repoTransport";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; the call then fails and the surface reports it as an
@@ -52,7 +53,7 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
   const key = repoBrowseKey(access.scope, publicKind, args);
   const ensure = useAction(ensureRef as never) as (a: unknown) => Promise<{ requested?: boolean } | undefined>;
   // What the ensure for this key is doing: still running, answered by GitHub
-  // (nothing to note), handed to a teammate's daemon (`requested`), or failed.
+  // (nothing to note), handed to a checkout's daemon (`requested`), or failed.
   const [failure, setFailure] = useState<{ key: string | null; ensuring?: boolean; requested?: boolean; error?: Error }>({ key: null });
   const requestKey = live ? key : null;
   useWatchEffect(() => {
@@ -68,6 +69,10 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
       });
     return () => { cancelled = true; };
   }, [requestKey, ensure]);
+  // A read handed to a checkout answers through the cache row, and fails
+  // through the request: watch it so a decline reaches the page instead of an
+  // endless wait.
+  const requested = useLocalReadStatus(failure.key === key && failure.requested ? { repository, kind: publicKind, ...(args ?? {}) } : null);
   const select = useCallback((value: unknown) => {
     if (!key || !access.scope || !repository) return [];
     return retainRepoBrowseRows(useInboxStore.getState().repoBrowse, {
@@ -80,21 +85,33 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
   const params = descriptor.publicParams === undefined ? args : descriptor.publicParams;
   const viaPublic = usePublicRepoRead<T>(mode === "public" ? publicRepoUrl(repository, publicKind, params) : null);
   if (mode === "public") return viaPublic;
-  const visible = access.allowed === true && !feed.error && !(failure.key === key && failure.error);
+  const failed = failure.key === key ? failure.error ?? requested.error : undefined;
+  const visible = access.allowed === true && !feed.error && !failed;
   // An empty answer is "missing" only once nothing is still on its way: while
-  // the ensure runs, or while a teammate's daemon holds the request, the
+  // the ensure runs, or while a checkout's daemon holds the request, the
   // absence is a wait, not a verdict.
-  const inFlight = failure.key === key && (!!failure.ensuring || !!failure.requested);
+  const inFlight = failure.key === key && (!!failure.ensuring || (!!failure.requested && !requested.error));
   return {
     data: visible && row?.value != null ? row.value as T : undefined,
     missing: visible && row?.value === null && !inFlight,
-    pending: visible && row?.value == null && failure.key === key && !!failure.requested,
+    pending: visible && row?.value == null && inFlight && !failure.ensuring,
     ready: visible && row !== undefined,
-    error: access.error ?? feed.error ?? (failure.key === key ? failure.error : undefined),
+    error: access.error ?? feed.error ?? failed,
   };
 }
 
 const REPO_SNAPSHOT = { isDelta: false };
+
+/**
+ * The fate of a read handed to a checkout: nothing while it is open or once
+ * it is answered, the reason once every checkout (and GitHub after them)
+ * could not answer it. `args === null` watches nothing.
+ */
+function useLocalReadStatus(args: Record<string, unknown> | null): { error: Error | undefined } {
+  const status = useQueryNoThrow(api.repos.readRequestStatus, (args ?? "skip") as never);
+  const failed = status.data?.status === "failed" ? status.data.error ?? "No checkout could answer this read" : undefined;
+  return useMemo(() => ({ error: failed ? new Error(failed) : undefined }), [failed]);
+}
 
 // ── Branches ──
 
@@ -222,6 +239,29 @@ export function useRepoBlame(
   });
 }
 
+/**
+ * The sessions behind a file's blame lines.
+ *
+ * Joined server side from the same cached blame row, so it is asked for only
+ * once the git blame has arrived (`enabled`) and the ensure it repeats is a
+ * fresh-cache no-op. Sessions are codecast's own, so the public transport
+ * (a shared page with no viewer) has none to show and is never asked.
+ */
+export function useRepoBlameSessions(
+  repository: string | undefined,
+  ref: string | undefined,
+  path: string | undefined,
+  enabled: boolean,
+): RepoRead<BlameSessionResolution> {
+  const mode = useRepoTransport();
+  return useEnsuredRead<BlameSessionResolution>({
+    ensureRef: api.repos.ensureBlame,
+    queryRef: api.repos.getBlameSessions,
+    args: enabled && mode === "convex" && repository && ref && path ? { repository, ref, path } : null,
+    publicKind: "blamesessions",
+  });
+}
+
 // ── History ──
 
 const NO_COMMITS: RepoLogCommit[] = [];
@@ -322,6 +362,14 @@ export function useRepoLog(
 
 export type RepositoryRow = { repository: string; team_id: string; installed: boolean };
 
+/** The team whose App installation covers a repository: the roster a
+ *  comment on its code can name. Undefined until the list is known. */
+export function useRepositoryTeamId(repository: string | undefined): string | undefined {
+  const { rows } = useRepositories();
+  const wanted = (repository ?? "").toLowerCase();
+  return rows.find((r) => r.repository.toLowerCase() === wanted)?.team_id;
+}
+
 export function useRepositories(): { rows: RepositoryRow[]; ready: boolean; error: Error | undefined } {
   const scope = useRepoViewerScope();
   const { isAuthenticated } = useConvexAuth();
@@ -375,7 +423,8 @@ export function useEnsureCommitFiles(
   }, [key, ensure]);
 
   const current = state.key === key ? state : { pending: !!key, reason: undefined, error: undefined };
-  return { pending: current.pending, reason: current.reason, error: current.error };
+  const requested = useLocalReadStatus(current.reason === "requested" ? { repository, kind: "commit", ref: sha } : null);
+  return { pending: current.pending, reason: requested.error ? undefined : current.reason, error: current.error ?? requested.error };
 }
 
 // ── The repository itself ──

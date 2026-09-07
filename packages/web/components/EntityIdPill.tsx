@@ -797,14 +797,14 @@ export function EntityIdPill({
           onClick={handleClick}
           onMouseEnter={openSoon}
           onMouseLeave={closeSoon}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[3px] px-[3px] rounded-[3px] text-[0.94em] font-medium leading-[1.3] no-underline ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none no-underline ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={compact && fullLabel !== pillLabel ? fullLabel : undefined}
         >
-          <span className="relative flex-shrink-0 opacity-80">
+          <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
             {isSession && (entity?.author_name || entity?.author_avatar) ? (
-              <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={12} />
+              <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
-              <Icon className={`w-[0.85em] h-[0.85em] ${isTask ? taskV.color : ""}`} />
+              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />

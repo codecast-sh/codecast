@@ -91,6 +91,7 @@ import type * as fileChanges_unifiedDiffParser from "../fileChanges/unifiedDiffP
 import type * as fileTouches from "../fileTouches.js";
 import type * as forkCopy from "../forkCopy.js";
 import type * as functions from "../functions.js";
+import type * as gitActivity from "../gitActivity.js";
 import type * as githubApi from "../githubApi.js";
 import type * as githubApp from "../githubApp.js";
 import type * as githubIssuesApi from "../githubIssuesApi.js";
@@ -296,6 +297,7 @@ declare const fullApi: ApiFromModules<{
   fileTouches: typeof fileTouches;
   forkCopy: typeof forkCopy;
   functions: typeof functions;
+  gitActivity: typeof gitActivity;
   githubApi: typeof githubApi;
   githubApp: typeof githubApp;
   githubIssuesApi: typeof githubIssuesApi;
