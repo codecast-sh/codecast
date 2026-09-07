@@ -89,6 +89,7 @@ import {
   collectInboxOverlayDeps,
   overlaysAffecting,
   convHasPendingSend,
+  isInterruptControlMessage,
   sessionsWithPendingSend,
   freshReviveRequestIds,
   type DeclaredInboxOverlay,
@@ -104,6 +105,7 @@ export {
   overlaysAffecting,
   anyOverlayActive,
   convHasPendingSend,
+  isInterruptControlMessage,
   sessionsWithPendingSend,
   freshReviveRequestIds,
   type DeclaredInboxOverlay,
@@ -1896,7 +1898,11 @@ const INBOX_FACT_FIELD_SET: ReadonlySet<string> = new Set(INBOX_FACT_FIELDS);
 // status is undefined once the managed row is gone, the key is absent from
 // the payload, and a stale "stopped" would otherwise outlive it and file a
 // declared-done session under Needs Input on this replica alone.
-function mergeOverlayFacts(target: Record<string, unknown>, facts: Record<string, unknown>): void {
+function mergeOverlayFacts(target: Record<string, unknown>, incoming: Record<string, unknown>, pending: Record<string, PendingEntry>): Record<string, PendingEntry> {
+  const { fields: facts, pending: nextPending } = applySyncPatch("sessions", String(target._id), {
+    ...Object.fromEntries(INBOX_FACT_FIELDS.map((key) => [key, incoming[key] ?? null])),
+    ...incoming,
+  }, [], pending);
   for (const key of INBOX_FACT_FIELDS) {
     const next = facts[key] === undefined ? null : facts[key];
     if (!Object.is(target[key], next)) target[key] = next;
@@ -1905,6 +1911,7 @@ function mergeOverlayFacts(target: Record<string, unknown>, facts: Record<string
     if (SESSIONS_STRIP_FIELD_SET.has(key) || INBOX_FACT_FIELD_SET.has(key)) continue;
     if (!Object.is(target[key], facts[key])) target[key] = facts[key];
   }
+  return nextPending;
 }
 
 // Facts the overlay delivered for ids the store did not hold yet: a session a
@@ -1914,16 +1921,17 @@ function mergeOverlayFacts(target: Record<string, unknown>, facts: Record<string
 // lands through syncTable, then merged exactly as the applier would have; a
 // newer payload replaces the whole hold, so nothing outlives one execution.
 let _heldOverlayFacts: Record<string, Record<string, Record<string, unknown>>> = {};
-function applyHeldOverlayFacts(sessions: Record<string, unknown>): void {
+function applyHeldOverlayFacts(sessions: Record<string, unknown>, pending: Record<string, PendingEntry>): Record<string, PendingEntry> {
   for (const scope in _heldOverlayFacts) {
     const held = _heldOverlayFacts[scope];
     for (const id in held) {
       const target = sessions[id] as Record<string, unknown> | undefined;
       if (!target) continue;
-      mergeOverlayFacts(target, held[id]);
+      pending = mergeOverlayFacts(target, held[id], pending);
       delete held[id];
     }
   }
+  return pending;
 }
 export function __resetHeldOverlayFactsForTests(): void {
   _heldOverlayFacts = {};
@@ -2052,12 +2060,6 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
     .map((s) => ({ s, rank: sessionSortRank(s) }));
   keyed.sort(compareRankedSessions);
   return keyed.map((x) => x.s);
-}
-
-export function isInterruptControlMessage(raw: string | null | undefined): boolean {
-  const trimmed = raw?.trim();
-  if (!trimmed) return false;
-  return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
 }
 
 // ACTIVE_AGENT_STATUSES / DEAD_AGENT_STATUSES come from @codecast/shared/contracts (canonical).
@@ -2613,6 +2615,7 @@ let _placementDeadlineMemo: {
   revive: PlaceInboxState["blockedReviveRequestedAt"];
   stamps: NonNullable<PlaceInboxState["sessionsProjection"]>[string]["stamps"] | undefined;
   now: number;
+  validUntil: number;
   sig: string;
 } | null = null;
 
@@ -2627,9 +2630,15 @@ function placementDeadlineSig(state: PlaceInboxState, now: number): string {
   const revive = state.blockedReviveRequestedAt;
   const stamps = state.sessionsProjection?.["mine"]?.stamps;
   const memo = _placementDeadlineMemo;
-  if (memo && memo.sessions === state.sessions && memo.revive === revive && memo.stamps === stamps && memo.now === now) {
+  if (memo && memo.sessions === state.sessions && memo.revive === revive && memo.stamps === stamps && now >= memo.now && now < memo.validUntil) {
     return memo.sig;
   }
+  let validUntil = Infinity;
+  const passedDeadline = (at: number): boolean => {
+    if (at <= now) return true;
+    if (at < validUntil) validUntil = at;
+    return false;
+  };
   let h = FNV1A32_OFFSET;
   let n = 0;
   const mix = (tag: string, id: string) => {
@@ -2644,24 +2653,24 @@ function placementDeadlineSig(state: PlaceInboxState, now: number): string {
     // reads): the count changes exactly when a time term crosses, so the
     // signature moves at the same instants the server's stamp would.
     let passed = 0;
-    for (const d of rowLiveDeadlines(liveFactsOf(row))) if (d != null && d <= now) passed++;
+    for (const d of rowLiveDeadlines(liveFactsOf(row))) if (d != null && passedDeadline(d)) passed++;
     if (passed > 0) mix(`l${passed}`, id);
-    if (row.inbox_snoozed_until && row.inbox_snoozed_until <= now) mix("s", id);
+    if (row.inbox_snoozed_until && passedDeadline(row.inbox_snoozed_until)) mix("s", id);
     if (row._hasDraft) mix("d", id);
   }
   if (revive) {
     for (const id in revive) {
-      if (now - revive[id] < BLOCKED_REVIVE_TTL_MS) mix("r", id);
+      if (!passedDeadline(revive[id] + BLOCKED_REVIVE_TTL_MS)) mix("r", id);
     }
   }
   if (stamps) {
     for (const id in stamps) {
       const at = stamps[id]?.bucket_stale_at;
-      if (at != null && at <= now) mix("b", id);
+      if (at != null && passedDeadline(at)) mix("b", id);
     }
   }
   const sig = `${n}:${h.toString(16)}`;
-  _placementDeadlineMemo = { sessions, revive, stamps, now, sig };
+  _placementDeadlineMemo = { sessions, revive, stamps, now, validUntil, sig };
   return sig;
 }
 
@@ -4440,8 +4449,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+  retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
   resumeSession: (convId: string) => Promise<any>;
-  sendEscape: (convId: string) => void;
+  sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) => Promise<any>;
@@ -4660,7 +4670,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // Hydration safety net for the tiny crash window after a stub rekeyed but
   // before its first-message fallback could enqueue. Safe on every boot because
   // sendMessage is idempotent on the persisted client id.
-  redrivePendingMessages: () => void;
+  redrivePendingMessages: () => Promise<void>;
   resumePostCreateSessionIntents: () => void;
 
   // -- Fork navigation --
@@ -5107,6 +5117,33 @@ function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
 
+function appendOptimisticMessage(draft: Draft, convId: string, content: string, images?: OptimisticImage[], clientId?: string): string {
+  // A caller-supplied clientId lets a DIFFERENT window (the compose popup) seed
+  // an optimistic bubble in this window that still dedupes against the server
+  // echo of the send the popup already dispatched — the echo's client_id matches
+  // this _clientId. Idempotent on that id so a re-delivered cross-window
+  // broadcast (or a racing server echo) can't double-insert.
+  const id = clientId ?? `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  if (clientId && draft.pendingMessages[convId]?.some((m) => m._clientId === clientId)) return id;
+  const msg: Message = {
+    _id: id,
+    role: "user",
+    content,
+    timestamp: Date.now(),
+    _isOptimistic: true,
+    ...(isInterruptControlMessage(content) ? {} : { _clientId: id }),
+    // Snapshot the conversation's current server updated_at so the absence-prune
+    // can later tell "server has processed my send" from "stale pre-send snapshot."
+    _sentBaselineTs: isInterruptControlMessage(content)
+      ? Math.max(draft.sessions[convId]?.updated_at ?? 0, draft.messages[convId]?.at(-1)?.timestamp ?? 0)
+      : draft.sessions[convId]?.updated_at,
+    ...(images && images.length > 0 ? { images } : {}),
+  };
+  if (!draft.pendingMessages[convId]) draft.pendingMessages[convId] = [];
+  draft.pendingMessages[convId].push(msg);
+  return id;
+}
+
 function messageReplayKey(message: Message): string | null {
   if (message._isOptimistic || message._isQueued || message._isFailed) return null;
   if (message.message_uuid) return `uuid:${message.message_uuid}`;
@@ -5139,8 +5176,9 @@ function prunePendingEchoes(draft: any, convId: string, incoming: Message[]) {
     }
     const stripped = stripImageRef(m.content || "");
     return !serverUserMsgs.some((s: Message) =>
-      stripImageRef(s.content || "") === stripped &&
-      Math.abs(s.timestamp - m.timestamp) < 120_000
+      isInterruptControlMessage(m.content)
+        ? isInterruptControlMessage(s.content) && s.timestamp > (m._sentBaselineTs ?? m.timestamp - 120_000)
+        : stripImageRef(s.content || "") === stripped && Math.abs(s.timestamp - m.timestamp) < 120_000
     );
   });
   if (kept.length !== pending.length) {
@@ -5881,9 +5919,9 @@ export function pendingRowSendArgs(message: Message): { content: string; imageId
   };
 }
 
-function redrivePendingMessagesFor(convexId: string): void {
+function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void {
   const store = useInboxStore.getState();
-  for (const message of store.pendingMessages[convexId] || []) {
+  for (const message of messages ?? store.pendingMessages[convexId] ?? []) {
     if (message._isFailed) continue;
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
@@ -6844,7 +6882,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         held[id] = row as Record<string, unknown>;
         continue;
       }
-      mergeOverlayFacts(target, row as Record<string, unknown>);
+      this.pending = mergeOverlayFacts(target, row as Record<string, unknown>, this.pending);
     }
     _heldOverlayFacts[scopeKey] = held;
     const projection = payload?.projection;
@@ -7568,7 +7606,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   releaseSettledFieldLocks: sync(function (this: Draft, ids: string[]) {
     const now = Date.now();
     const wanted = new Set(ids);
-    for (const [key, entry] of Object.entries(this.pending)) {
+    const pending = (original(this) as InboxStoreState).pending;
+    for (const [key, entry] of Object.entries(pending)) {
       if ((entry as any)?.type !== "field") continue;
       const parts = key.split(":");
       if (parts.length < 3 || !wanted.has(parts[1])) continue;
@@ -8097,6 +8136,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // server echoes it back. Fire-and-forget — status is read back from the
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
+  retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
+
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);
@@ -8129,9 +8170,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // the server and queues them in the outbox.
   }),
 
-  resumeSession: action(function (_convId: string) {}),
+  resumeSession: (convId: string) => get().convCommand(convId, "resumeSession"),
 
-  sendEscape: action(function (_convId: string) {}),
+  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession"),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
@@ -8151,7 +8192,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     };
   }),
 
-  convCommand: asyncAction(function (this: Draft, convId: string, _command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
+  convCommand: asyncAction(function (this: Draft, convId: string, command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
+    if (command === "sendEscapeToSession" && this.sessions[convId]) {
+      this.sessions[convId].agent_status = "idle";
+      this.sessions[convId].is_idle = true;
+      appendOptimisticMessage(this, convId, this.sessions[convId].agent_type === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+    }
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
@@ -8554,6 +8600,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!incoming && incoming !== 0) return;
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
     const kind = config.kind ?? "collection";
+    const base = (isDraft(this) ? original(this) : this) as any;
 
     if (kind === "scalar" || kind === "list") {
       if (config.normalize) incoming = config.normalize(incoming, this);
@@ -8566,7 +8613,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // even against an identical payload). These lists are small rosters, so
       // the JSON compare is far cheaper than the wake + IDB put it avoids.
       if (!config.transform && !config.extra) {
-        const current = (this as any)[field];
+        const current = base[field];
         if (Object.is(current, incoming)) return;
         if (kind === "list" && Array.isArray(current) && Array.isArray(incoming) &&
             JSON.stringify(current) === JSON.stringify(incoming)) return;
@@ -8580,6 +8627,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (kind === "singleton") {
       if (config.normalize) incoming = config.normalize(incoming, this);
       const local = (this as any)[field];
+      const comparable = base[field];
       const initKey = `${field}Initialized`;
       const initialized = (this as any)[initKey] ?? false;
       // Same no-op bail as list-kind above: currentUser re-pushes on every
@@ -8587,7 +8635,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // identity that wakes every subscriber. `local &&` keeps the first real
       // write landing (and setting the init flag below) unconditionally.
       if (!config.transform && !config.merge && !config.extra &&
-          local && incoming && JSON.stringify(local) === JSON.stringify(incoming)) {
+          comparable && incoming && JSON.stringify(comparable) === JSON.stringify(incoming)) {
         return;
       }
       const result = config.merge
@@ -8620,7 +8668,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // collection × every crawl page made this the top idle cost). The
     // decision is made on plain objects; only the final assignment touches the
     // draft.
-    const base: any = isDraft(this) ? original(this) : this;
     const prevCollection = base[field] || {};
     // Single-writer enforcement (sync-convergence C1): stamp fields never land
     // on a row, whichever channel delivered it. Copy-on-write per row so an
@@ -8660,8 +8707,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
       const incomingByAlt = new Map(
         (incoming as any[]).map((r: any) => [r[config.altKey!], r])
       );
-      for (const [oldId, old] of Object.entries(prevCollection)) {
+      for (const oldId in prevCollection) {
         if (isConvexId(oldId)) continue;
+        const old = prevCollection[oldId];
         const match = incomingByAlt.get((old as any)[config.altKey!] || oldId);
         if (match) {
           const launchReconfigure =
@@ -8731,6 +8779,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // pending map must land even when the rows didn't: an echo that CLEARS a
     // local-first field protection changes pending, not the table.
     if (!config.altKey && !config.extra && !config.transform && base.pending === pending) {
+      if (table === prevCollection) return;
       if (prevCollection) {
         const newKeys = Object.keys(table);
         if (newKeys.length === Object.keys(prevCollection).length &&
@@ -8754,9 +8803,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // applySyncTable returns the PREVIOUS table/pending objects untouched when
     // a push changed nothing (whole-collection identity reuse) — skip the draft
     // writes so a no-op sync produces no commit at all.
-    if (base[field] !== table) (this as any)[field] = table;
+    if (base[field] !== table) (this as any)[field] = Object.freeze(table);
     if (base.pending !== (pending as any)) this.pending = pending as any;
-    if (field === "sessions") applyHeldOverlayFacts(this.sessions as Record<string, unknown>);
+    if (field === "sessions") this.pending = applyHeldOverlayFacts(this.sessions as Record<string, unknown>, this.pending);
     if (field === "bucketAssignments") {
       for (const row of Object.values(table) as BucketAssignmentItem[]) {
         if (!isConvexId(String(row._id))) continue;
@@ -8847,7 +8896,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const id in overlayById) {
       const row = collection[id];
       if (!row) continue;
-      const fields = overlayById[id];
+      const { fields, pending } = applySyncPatch(field, id, overlayById[id], [], this.pending);
+      if (pending !== this.pending) this.pending = pending;
       for (const key in fields) {
         if (stripSet?.has(key)) continue;
         if (!Object.is(row[key], fields[key])) row[key] = fields[key];
@@ -9060,29 +9110,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.conversations[id]) (this.conversations[id] as any).target_device_id = deviceId;
   }),
 
-  setConversationAgent: sync(function (this: Draft, id: string, agentType: string) {
+  setConversationAgent: action(function (this: Draft, id: string, agentType: string) {
     // Same as the server patch: an agent flip invalidates the previous
     // agent's model/effort (claude-fable on a Codex session is leftover).
-    // Pending-lock the clear so a stale inbox/meta echo cannot put the old
-    // model back on the header chip; an omitted `model` from
-    // getConversationWithMeta retires the lock (undefined === undefined).
-    const ts = Date.now();
     for (const coll of ["sessions", "conversations"] as const) {
       const row = this[coll][id] as any;
       if (!row) continue;
       row.agent_type = agentType;
       row.model = undefined;
       row.effort = undefined;
-      this.pending[`${coll}:${id}:agent_type`] = { type: "field", value: agentType, ts };
-      this.pending[`${coll}:${id}:model`] = { type: "field", value: undefined, ts };
-      this.pending[`${coll}:${id}:effort`] = { type: "field", value: undefined, ts };
     }
     if (this.currentConversation.conversationId === id) {
       this.currentConversation.agentType = agentType;
     }
   }),
 
-  setConversationModel: sync(function (this: Draft, id: string, opts: { model?: string | null; effort?: string | null }) {
+  setConversationModel: action(function (this: Draft, id: string, opts: { model?: string | null; effort?: string | null }) {
     for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
       if (!row) continue;
       if (opts.model !== undefined) row.model = opts.model ?? undefined;
@@ -9241,6 +9284,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   mergeMessages: sync(function (this: Draft, convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) {
     msgs = dedupeReplayedMessages(msgs);
+    prunePendingEchoes(this, convId, msgs);
     const existing = this.messages[convId] || [];
     const existingIds = new Set(existing.map((m: Message) => m._id));
     const existingReplayKeys = new Set(existing.map(messageReplayKey).filter((key): key is string => !!key));
@@ -9280,28 +9324,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) {
-    // A caller-supplied clientId lets a DIFFERENT window (the compose popup) seed
-    // an optimistic bubble in this window that still dedupes against the server
-    // echo of the send the popup already dispatched — the echo's client_id matches
-    // this _clientId. Idempotent on that id so a re-delivered cross-window
-    // broadcast (or a racing server echo) can't double-insert.
-    const id = clientId ?? `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    if (clientId && this.pendingMessages[convId]?.some((m) => m._clientId === clientId)) return id;
-    const msg: Message = {
-      _id: id,
-      role: "user",
-      content,
-      timestamp: Date.now(),
-      _isOptimistic: true,
-      _clientId: id,
-      // Snapshot the conversation's current server updated_at so the absence-prune
-      // can later tell "server has processed my send" from "stale pre-send snapshot."
-      _sentBaselineTs: this.sessions[convId]?.updated_at,
-      ...(images && images.length > 0 ? { images } : {}),
-    };
-    if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
-    this.pendingMessages[convId].push(msg);
-    return id;
+    return appendOptimisticMessage(this, convId, content, images, clientId);
   }),
 
   markOptimisticAsQueued: sync(function (this: Draft, convId: string, content: string) {
@@ -9694,9 +9717,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return realId;
   },
 
-  redrivePendingMessages: () => {
-    for (const convId of Object.keys(get().pendingMessages)) {
-      if (isConvexId(convId)) redrivePendingMessagesFor(convId);
+  redrivePendingMessages: async () => {
+    const userId = get().currentUser?._id;
+    for (const [convId, messages] of Object.entries(get().pendingMessages) as [string, Message[]][]) {
+      if (!isConvexId(convId)) continue;
+      for (const message of messages) {
+        if (message._isFailed) continue;
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        const state = get();
+        if (state.currentUser?._id !== userId) return;
+        const latest = state.pendingMessages[convId]?.find((m: Message) => m._id === message._id);
+        if (latest) redrivePendingMessagesFor(convId, [latest]);
+      }
     }
   },
 
@@ -11218,7 +11250,7 @@ function cloneInitialValue<T>(value: T): T {
 // Captured before any protected hydration. Functions remain installed in the
 // middleware; every data-bearing slot returns to this account-neutral floor.
 const INITIAL_INBOX_DATA = Object.fromEntries(
-  Object.entries(useInboxStore.getState())
+  Object.entries(useInboxStore.getInitialState())
     .filter(([, value]) => typeof value !== "function")
     .map(([key, value]) => [key, cloneInitialValue(value)]),
 );

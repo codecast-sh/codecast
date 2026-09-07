@@ -64,9 +64,16 @@ export function nextVersion(current, bump) {
   return `${major}.${minor}.${patch + 1}`;
 }
 
+/** The store's own limits, checked before an upload rather than learned from its rejection. */
+const STORE_LIMITS = { name: 75, description: 132 };
+
 /** The manifest as the store receives it: this version, no development key. */
 export function storeManifest(manifest, version) {
   const { key: _key, ...rest } = manifest;
+  for (const [field, max] of Object.entries(STORE_LIMITS)) {
+    const len = String(rest[field] ?? "").length;
+    if (len > max) throw new Error(`manifest ${field} is ${len} characters; the Chrome Web Store allows ${max}`);
+  }
   return { ...rest, version };
 }
 

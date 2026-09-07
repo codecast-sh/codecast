@@ -1,16 +1,19 @@
 // Browsing a repository from codecast.
 //
 // The source, history and blame pages read from one cache (repo_cache) that is
-// filled from two directions. GitHub, through the App installation the
-// repository's team has, fills it on demand: the page asks for what it wants,
-// an action refreshes the row if it is stale, and the query answers from the
-// row. A team member's daemon fills it from their local checkout (ingestLocal):
-// branches, tags, history, the root tree and the readme arrive whenever the
-// refs move, in the same shapes GitHub answers with, so every page reads the
-// same rows whichever side wrote them. GitHub is additive: a repository nobody
-// installed the App for is still browsable from a shared checkout. Nothing
-// here syncs to the client store — these pages are read per view, and a
-// repository is far too large to mirror.
+// filled from two directions. A team member's daemon fills it from their local
+// checkout (ingestLocal): branches, tags, history, the root tree and the readme
+// arrive whenever the refs move, in the same shapes GitHub answers with, and
+// anything deeper is asked of the checkout on demand (requestLocalRead). GitHub,
+// through the App installation the repository's team has, fills it too: on
+// demand when nobody publishes a checkout, and as the fallback when every
+// checkout declines a read or none answers in time. The checkout comes first
+// because it is where the work is: a commit that is not pushed yet, a branch
+// measured against its upstream, a file at a local ref exist there and nowhere
+// else, and GitHub can only answer for what has already left the machine.
+// Every page reads the same rows whichever side wrote them. Nothing here syncs
+// to the client store — these pages are read per view, and a repository is far
+// too large to mirror.
 //
 // Freshness is per kind, and the one rule worth stating: content addressed by a
 // full commit sha never changes, so it is cached forever. Everything reached by
@@ -28,6 +31,8 @@ import { installationCoversRepo } from "./githubApp";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { applyCommitFilesTo } from "./commits";
+import { matchFileLines, newResolveCaches, resolveCommitSessions } from "./blame";
+import { contentLinesToMatch } from "@codecast/shared/blame";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -123,24 +128,32 @@ async function localSourcesFor(ctx: { db: any }, repository: string) {
 /**
  * How a viewer may browse a repository, or null.
  *
- * Two ways in, tried in order: the GitHub App installation their team has
- * (which also carries the credential that refreshes the cache from GitHub),
- * or a teammate's local checkout that publishes the repository. The second
- * grants reading the cache and nothing more — there is no credential, so a
- * row the daemon has not pushed cannot be fetched on demand.
+ * Two ways in, and a viewer may hold both: a teammate's local checkout that
+ * publishes the repository (`local_team_id`, the team it publishes to), and
+ * the GitHub App installation their team has (`installation_id`, which also
+ * carries the credential that fetches from GitHub). Reads prefer the checkout
+ * and fall back to the installation; `source` names which of the two admits
+ * the viewer at all, and `team_id` stamps the rows GitHub writes.
  */
-export type BrowseAccess = { team_id: Id<"teams">; installation_id?: number; source: "installation" | "local" };
+export type BrowseAccess = {
+  team_id: Id<"teams">;
+  installation_id?: number;
+  source: "installation" | "local";
+  local_team_id?: Id<"teams">;
+};
 
 async function browseAccessForUser(
   ctx: { db: any },
   userId: Id<"users">,
   repository: string,
 ): Promise<BrowseAccess | null> {
-  const installation = await installationForUser(ctx, userId, repository);
-  if (installation) return { ...installation, source: "installation" };
+  let local_team_id: Id<"teams"> | undefined;
   for (const source of await localSourcesFor(ctx, repository)) {
-    if (await isTeamMember(ctx, userId, source.team_id)) return { team_id: source.team_id, source: "local" };
+    if (await isTeamMember(ctx, userId, source.team_id)) { local_team_id = source.team_id; break; }
   }
+  const installation = await installationForUser(ctx, userId, repository);
+  if (installation) return { ...installation, source: "installation", local_team_id };
+  if (local_team_id) return { team_id: local_team_id, source: "local", local_team_id };
   return null;
 }
 
@@ -332,10 +345,23 @@ const commitFiles = v.object({
   deletions: v.number(),
 });
 
+/** How long the checkouts get before GitHub is asked instead, when it can be. */
+export const LOCAL_READ_GRACE_MS = 10 * 1000;
+
+async function readRequestByKey(ctx: { db: any }, args: { repository: string; kind: string; ref: string; path: string }) {
+  const repository = normalizeRepository(args.repository);
+  return await ctx.db
+    .query("repo_read_requests")
+    .withIndex("by_key", (q: any) => q.eq("repository", repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
+    .first();
+}
+
 /**
  * Open (or re-open) the request for one read a checkout must answer. One row
  * per cache key however many pages ask. A recent failure is reported back so
- * the page can say why instead of waiting; an old one is asked again.
+ * the page can say why instead of waiting; an old one is asked again. The
+ * fallback installation, when the caller has one, rides on the row so the
+ * answer can come from GitHub once the checkouts have had their turn.
  */
 export const requestLocalRead = internalMutation({
   args: {
@@ -346,23 +372,39 @@ export const requestLocalRead = internalMutation({
     path: v.string(),
     params: v.optional(v.any()),
     requested_by: v.id("users"),
+    fallback_installation_id: v.optional(v.number()),
+    fallback_team_id: v.optional(v.id("teams")),
   },
-  handler: async (ctx, args): Promise<{ failed: boolean; error?: string }> => {
+  handler: async (ctx, args): Promise<{ failed: boolean; error?: string; request_id?: Id<"repo_read_requests"> }> => {
     const repository = normalizeRepository(args.repository);
     const now = Date.now();
-    const existing = await ctx.db
-      .query("repo_read_requests")
-      .withIndex("by_key", (q: any) => q.eq("repository", repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-      .first();
+    const existing = await readRequestByKey(ctx, args);
     if (existing?.status === "failed" && now - existing.updated_at < LOCAL_READ_RETRY_MS) {
-      return { failed: true, error: existing.error ?? "A teammate's checkout could not answer this read" };
+      return { failed: true, error: existing.error ?? "No checkout could answer this read" };
     }
+    const fallback = { fallback_installation_id: args.fallback_installation_id, fallback_team_id: args.fallback_team_id };
     if (existing) {
-      await ctx.db.patch(existing._id, { status: "pending", error: undefined, params: args.params, requested_by: args.requested_by, updated_at: now });
-    } else {
-      await ctx.db.insert("repo_read_requests", { ...args, repository, status: "pending", created_at: now, updated_at: now });
+      await ctx.db.patch(existing._id, { status: "pending", error: undefined, declined_by: undefined, params: args.params, requested_by: args.requested_by, ...fallback, updated_at: now });
+      return { failed: false, request_id: existing._id };
     }
-    return { failed: false };
+    const request_id = await ctx.db.insert("repo_read_requests", { ...args, repository, status: "pending", created_at: now, updated_at: now });
+    return { failed: false, request_id };
+  },
+});
+
+export const getReadRequest = internalQuery({
+  args: { request_id: v.id("repo_read_requests") },
+  handler: async (ctx, args) => await ctx.db.get(args.request_id),
+});
+
+/** Close a request GitHub answered, or record that GitHub could not either. */
+export const settleReadRequest = internalMutation({
+  args: { request_id: v.id("repo_read_requests"), error: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.request_id);
+    if (!request) return;
+    if (args.error === undefined) await ctx.db.delete(request._id);
+    else await ctx.db.patch(request._id, { status: "failed", error: args.error.slice(0, 500), updated_at: Date.now() });
   },
 });
 
@@ -390,6 +432,7 @@ export const pendingLocalReads = query({
         .collect();
       for (const request of requests) {
         if (request.status !== "pending" || request.team_id !== source.team_id) continue;
+        if (request.declined_by?.includes(userId)) continue;
         out.push({ _id: request._id, repository: request.repository, root: source.root, kind: request.kind, ref: request.ref, path: request.path, params: request.params ?? {}, created_at: request.created_at });
       }
     }
@@ -403,6 +446,11 @@ export const pendingLocalReads = query({
  * a commit's diff onto the commit row, or the reason it could not answer.
  * Only a daemon that publishes the repository to the request's team may
  * answer, which is the same rule that let its rows in through ingestLocal.
+ *
+ * A checkout that cannot answer declines rather than fails the request:
+ * another publisher may hold the ref. The request fails once every publisher
+ * has declined, and then GitHub takes it when the request carries an
+ * installation to fall back to.
  */
 export const answerLocalRead = mutation({
   args: {
@@ -428,7 +476,18 @@ export const answerLocalRead = mutation({
 
     const now = Date.now();
     if (args.error !== undefined) {
-      await ctx.db.patch(request._id, { status: "failed", error: args.error.slice(0, 500), updated_at: now });
+      const declined_by = [...new Set([...(request.declined_by ?? []), userId])];
+      const error = args.error.slice(0, 500);
+      const publishers = (await localSourcesFor(ctx, request.repository))
+        .filter((s: any) => s.team_id === request.team_id)
+        .map((s: any) => s.user_id as Id<"users">);
+      const everyone = publishers.every((u: Id<"users">) => declined_by.includes(u));
+      if (!everyone) {
+        await ctx.db.patch(request._id, { declined_by, error, updated_at: now });
+        return { ok: true, reason: "declined" };
+      }
+      await ctx.db.patch(request._id, { status: "failed", declined_by, error, updated_at: now });
+      if (request.fallback_installation_id) await ctx.scheduler.runAfter(0, internal.repos.fallbackToGitHub, { request_id: request._id });
       return { ok: true };
     }
     if (request.kind === "commit") {
@@ -536,34 +595,62 @@ export const ingestLocal = mutation({
     }
 
     let created = 0;
-    const ownConversations = new Map<string, Id<"conversations"> | null>();
     for (const commit of args.commits ?? []) {
       const { conversation_id: claimed, ...fields } = commit;
-      let conversationId: Id<"conversations"> | undefined;
-      if (claimed) {
-        if (!ownConversations.has(claimed)) {
-          const id = ctx.db.normalizeId("conversations", claimed);
-          const conv = id ? await ctx.db.get(id) : null;
-          ownConversations.set(claimed, conv && conv.user_id === userId ? id : null);
-        }
-        conversationId = ownConversations.get(claimed) ?? undefined;
-      }
-      const dup = await ctx.db
-        .query("commits")
-        .withIndex("by_sha", (q: any) => q.eq("sha", commit.sha))
-        .first();
-      if (dup) {
-        // A row that arrived first (a webhook, another machine) may still learn
-        // which session made it; a session already named is never overwritten.
-        if (conversationId && !dup.conversation_id) await ctx.db.patch(dup._id, { conversation_id: conversationId });
-        continue;
-      }
-      await ctx.db.insert("commits", { ...fields, repository, team_id: teamId, ...(conversationId ? { conversation_id: conversationId } : {}) });
-      created++;
+      const result = await upsertLocalCommit(ctx, { userId, teamId, repository, commit: fields, claimedConversationId: claimed });
+      if (result.created) created++;
     }
     return { published: true, rows: args.rows.length, commits_created: created };
   },
 });
+
+/** A commit as the daemon describes it: the commits-table fields a checkout can supply. */
+export type LocalCommitFields = {
+  sha: string;
+  message: string;
+  author_name: string;
+  author_email: string;
+  timestamp: number;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  branch?: string;
+};
+
+/**
+ * One commit from a checkout into the commits table, once. The publish pass and
+ * the activity tailer both land here, so a commit reported twice (or by a
+ * webhook first) stays one row. A session claimed by the daemon is written only
+ * when it belongs to the caller; a row that had no session learns one, a row
+ * that has one keeps it.
+ */
+export async function upsertLocalCommit(
+  ctx: { db: any },
+  args: { userId: Id<"users">; teamId: Id<"teams">; repository: string; commit: LocalCommitFields; claimedConversationId?: string },
+): Promise<{ commit_id: Id<"commits">; created: boolean; conversation_id?: Id<"conversations"> }> {
+  const repository = normalizeRepository(args.repository);
+  let conversationId: Id<"conversations"> | undefined;
+  if (args.claimedConversationId) {
+    const id = ctx.db.normalizeId("conversations", args.claimedConversationId);
+    const conv = id ? await ctx.db.get(id) : null;
+    if (conv && conv.user_id === args.userId) conversationId = id;
+  }
+  const dup = await ctx.db
+    .query("commits")
+    .withIndex("by_sha", (q: any) => q.eq("sha", args.commit.sha))
+    .first();
+  if (dup) {
+    if (conversationId && !dup.conversation_id) await ctx.db.patch(dup._id, { conversation_id: conversationId });
+    return { commit_id: dup._id, created: false, conversation_id: dup.conversation_id ?? conversationId };
+  }
+  const commit_id = await ctx.db.insert("commits", {
+    ...args.commit,
+    repository,
+    team_id: args.teamId,
+    ...(conversationId ? { conversation_id: conversationId } : {}),
+  });
+  return { commit_id, created: true, conversation_id: conversationId };
+}
 
 /** Cached repository content is disposable: anything a week old is refetched. */
 export const pruneRepoCache = internalMutation({
@@ -832,41 +919,40 @@ async function installationToken(ctx: any, access: any): Promise<string> {
 }
 
 /**
- * Refresh one cache row if it has gone stale, using an already-resolved
- * installation. The access decision happens above this, which is what lets the
- * viewer path and the public path share one body.
+ * Ask the checkouts publishing a repository for one read, on the viewer's
+ * behalf. Returns `requested` when the request is open and a daemon will
+ * answer, or `failed` with the reason when the checkouts declined it recently.
+ * With an installation to fall back to, GitHub is scheduled to answer once
+ * the grace window passes with the request still open.
  */
-async function fillCache(
+async function askCheckouts(
+  ctx: any,
+  access: { team_id: Id<"teams">; installation_id?: number; local_team_id?: Id<"teams"> },
+  read: { repository: string; kind: string; ref: string; path: string; params?: SpecParams },
+): Promise<{ requested: boolean; error?: string }> {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new Error("Unauthorized");
+  const request = await ctx.runMutation(internal.repos.requestLocalRead, {
+    team_id: access.local_team_id ?? access.team_id,
+    repository: read.repository, kind: read.kind, ref: read.ref, path: read.path, params: read.params ?? {},
+    requested_by: userId,
+    ...(access.installation_id ? { fallback_installation_id: access.installation_id, fallback_team_id: access.team_id } : {}),
+  });
+  if (request.failed) return { requested: false, error: request.error };
+  if (access.installation_id && request.request_id) {
+    await ctx.scheduler.runAfter(LOCAL_READ_GRACE_MS, internal.repos.fallbackToGitHub, { request_id: request.request_id });
+  }
+  return { requested: true };
+}
+
+/** Fetch one cache row from GitHub and write it, stamped with the installation's team. */
+async function fillFromGitHub(
   ctx: any,
   repository: string,
   access: { team_id: Id<"teams">; installation_id?: number },
   spec: Refresh,
-  params: SpecParams = {},
-): Promise<{ cached: boolean; requested?: boolean }> {
-  const cached = await ctx.runQuery(internal.repos.getCacheRow, {
-    repository,
-    kind: spec.kind,
-    ref: spec.ref,
-    path: spec.path,
-  });
-  if (isFresh(cached, Date.now())) return { cached: true };
-  // Access through a teammate's checkout carries no GitHub credential: the
-  // cache holds what the daemon pushed, a stale row is still the answer, and
-  // a row nobody pushed is asked of the daemons that publish the repository.
-  if (!access.installation_id) {
-    if (cached) return { cached: true };
-    if (!LOCAL_KINDS.has(spec.kind)) throw new Error("This read needs the GitHub App; a checkout cannot answer it");
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthorized");
-    const request = await ctx.runMutation(internal.repos.requestLocalRead, {
-      team_id: access.team_id, repository, kind: spec.kind, ref: spec.ref, path: spec.path, params, requested_by: userId,
-    });
-    if (request.failed) throw new Error(request.error);
-    return { cached: false, requested: true };
-  }
-
+): Promise<void> {
   const result = await spec.fetch(await installationToken(ctx, access));
-
   await ctx.runMutation(internal.repos.upsertCache, {
     team_id: access.team_id,
     repository,
@@ -878,8 +964,78 @@ async function fillCache(
     size: result.size,
     truncated: result.truncated,
   });
+}
+
+/**
+ * Refresh one cache row if it has gone stale, using already-resolved access.
+ * The access decision happens above this, which is what lets the viewer path
+ * and the public path share one body.
+ *
+ * A checkout that publishes the repository is asked first for every kind it
+ * can answer; a stale row still paints while it works. GitHub answers when no
+ * checkout publishes the repository, when the checkouts declined this read,
+ * or — through the request's fallback — when they do not answer in time.
+ */
+async function fillCache(
+  ctx: any,
+  repository: string,
+  access: { team_id: Id<"teams">; installation_id?: number; local_team_id?: Id<"teams"> },
+  spec: Refresh,
+  params: SpecParams = {},
+): Promise<{ cached: boolean; requested?: boolean }> {
+  const cached = await ctx.runQuery(internal.repos.getCacheRow, {
+    repository,
+    kind: spec.kind,
+    ref: spec.ref,
+    path: spec.path,
+  });
+  if (isFresh(cached, Date.now())) return { cached: true };
+
+  const checkoutCanAnswer = !!access.local_team_id && LOCAL_KINDS.has(spec.kind);
+  if (checkoutCanAnswer) {
+    const asked = await askCheckouts(ctx, access, { repository, kind: spec.kind, ref: spec.ref, path: spec.path, params });
+    if (asked.requested) return { cached: !!cached, requested: true };
+    if (!access.installation_id) {
+      if (cached) return { cached: true };
+      throw new Error(asked.error);
+    }
+  }
+  if (!access.installation_id) {
+    if (cached) return { cached: true };
+    throw new Error("This read needs the GitHub App; a checkout cannot answer it");
+  }
+
+  await fillFromGitHub(ctx, repository, access, spec);
   return { cached: false };
 }
+
+/**
+ * GitHub answering a read the checkouts did not.
+ *
+ * Runs on the grace timer armed when the request was opened, and again the
+ * moment the last publisher declines. Whichever fires first does the work;
+ * the other finds the request gone. A request that was answered meanwhile is
+ * left alone, and one already failed with no installation stays failed.
+ */
+export const fallbackToGitHub = internalAction({
+  args: { request_id: v.id("repo_read_requests") },
+  handler: async (ctx, args): Promise<void> => {
+    const request = await ctx.runQuery(internal.repos.getReadRequest, { request_id: args.request_id });
+    if (!request || !request.fallback_installation_id || !request.fallback_team_id) return;
+    const access = { team_id: request.fallback_team_id, installation_id: request.fallback_installation_id };
+    try {
+      if (request.kind === "commit") {
+        await fetchCommitFromGitHub(ctx, request.repository, request.ref, access);
+      } else {
+        await fillFromGitHub(ctx, request.repository, access, refreshSpec(ctx, request.repository, request.kind, request.params ?? {}));
+      }
+      await ctx.runMutation(internal.repos.settleReadRequest, { request_id: request._id });
+    } catch (e) {
+      const local = request.error ? `${request.error}; ` : "";
+      await ctx.runMutation(internal.repos.settleReadRequest, { request_id: request._id, error: `${local}${(e as Error)?.message ?? String(e)}` });
+    }
+  },
+});
 
 async function ensureCached(ctx: any, repository: string, spec: Refresh, params: SpecParams): Promise<{ cached: boolean; requested?: boolean }> {
   return await fillCache(ctx, repository, await requireRepoAccess(ctx, repository), spec, params);
@@ -978,9 +1134,28 @@ export const publicRead = internalQuery({
  * built and discarded unused, so the context it would have needed is not.
  */
 export function cacheKeyFor(kind: string, params: SpecParams): { ref: string; path: string } {
+  if (kind === "commit") return { ref: params.ref ?? "-", path: "" };
   const spec = refreshSpec(null as any, "", kind, params);
   return { ref: spec.ref, path: spec.path };
 }
+
+/**
+ * What a page waiting on a checkout may learn: the read is still open, or it
+ * failed and why. Named the way the page asked for it (the same args as its
+ * ensure), keyed here the way the request was. Null once it is answered (the
+ * row it asked for is the answer) or was never asked.
+ */
+export const readRequestStatus = query({
+  args: { repository: v.string(), kind: v.string(), ...specArgs },
+  handler: async (ctx, args): Promise<{ status: "pending" | "failed"; error?: string } | null> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const { repository, kind, ...params } = args;
+    const request = await readRequestByKey(ctx, { repository, kind, ...cacheKeyFor(kind, params) });
+    if (!request || !(await isTeamMember(ctx, userId, request.team_id))) return null;
+    return { status: request.status, error: request.error };
+  },
+});
 
 // ── The reads ──
 
@@ -1011,6 +1186,32 @@ async function readCache(ctx: any, repository: string, kind: string, ref: string
  * came from a transcript and never learned its remote is still filled in, and
  * learns the remote in the process.
  */
+/** A commit's diff from GitHub, written onto its row. Throws when the row is gone or GitHub has no such commit. */
+async function fetchCommitFromGitHub(
+  ctx: any,
+  repository: string,
+  sha: string,
+  access: { team_id: Id<"teams">; installation_id?: number },
+): Promise<void> {
+  const state = await ctx.runQuery(internal.commits.commitFilesState, { repository, sha });
+  if (!state) throw new Error(`${sha.slice(0, 7)} is not a commit of ${repository} this workspace knows`);
+  if (state.has_files) return;
+  const data = await ctx.runAction(internal.githubApi.getCommit, {
+    repository,
+    sha,
+    github_access_token: await installationToken(ctx, access),
+  });
+  await ctx.runMutation(internal.commits.applyCommitFiles, {
+    commit_id: state.commit_id,
+    files: data.files,
+    additions: data.additions,
+    deletions: data.deletions,
+    author_login: data.author_login,
+    author_avatar_url: data.author_avatar_url,
+    repository: state.needs_repository ? repository : undefined,
+  });
+}
+
 export const ensureCommitFiles = action({
   args: { repository: v.string(), sha: v.string() },
   handler: async (ctx, args): Promise<{ fetched: boolean; reason?: string }> => {
@@ -1022,33 +1223,17 @@ export const ensureCommitFiles = action({
     });
     if (!state) return { fetched: false, reason: "unknown_commit" };
     if (state.has_files) return { fetched: false, reason: "already_present" };
-    // No GitHub credential: a teammate's checkout is asked for the diff, and
-    // the commit row updates itself when the answer lands.
-    if (!access.installation_id) {
-      const userId = await getAuthUserId(ctx);
-      if (!userId) throw new Error("Unauthorized");
-      const request = await ctx.runMutation(internal.repos.requestLocalRead, {
-        team_id: access.team_id, repository: args.repository, kind: "commit", ref: args.sha, path: "", params: {}, requested_by: userId,
-      });
-      if (request.failed) throw new Error(request.error);
-      return { fetched: false, reason: "requested" };
+    // The checkout that made the commit has its diff whether or not the commit
+    // was ever pushed, so it is asked first; the commit row updates itself when
+    // the answer lands, and GitHub takes over if no checkout answers.
+    if (access.local_team_id) {
+      const asked = await askCheckouts(ctx, access, { repository: args.repository, kind: "commit", ref: args.sha, path: "" });
+      if (asked.requested) return { fetched: false, reason: "requested" };
+      if (!access.installation_id) throw new Error(asked.error);
     }
+    if (!access.installation_id) throw new Error("This read needs the GitHub App; no checkout publishes this repository");
 
-    const data = await ctx.runAction(internal.githubApi.getCommit, {
-      repository: args.repository,
-      sha: args.sha,
-      github_access_token: await installationToken(ctx, access),
-    });
-
-    await ctx.runMutation(internal.commits.applyCommitFiles, {
-      commit_id: state.commit_id,
-      files: data.files,
-      additions: data.additions,
-      deletions: data.deletions,
-      author_login: data.author_login,
-      author_avatar_url: data.author_avatar_url,
-      repository: state.needs_repository ? args.repository : undefined,
-    });
+    await fetchCommitFromGitHub(ctx, args.repository, args.sha, access);
     return { fetched: true };
   },
 });
@@ -1076,6 +1261,53 @@ export const getTree = readAction("tree");
 export const getBlob = readAction("blob");
 export const getBlame = readAction("blame");
 export const getLastCommits = readAction("lastcommits");
+
+/**
+ * The sessions behind a file's blame: session blame for the source viewer.
+ *
+ * Reads the cached git blame and the cached file, and joins each commit sha
+ * to the session that made it (commits table, stored commit hashes, subject
+ * and time). Lines from recent commits are also matched by text against the
+ * edits sessions made to the file, which names the session that WROTE a line
+ * even when another one committed it. Edits are stored under the absolute
+ * path of the checkout they happened in, so the roots teammates publish for
+ * this repository are the paths tried.
+ */
+export const getBlameSessions = query({
+  args: { repository: v.string(), ref: v.string(), path: v.string() },
+  handler: async (ctx, args) => {
+    const { ref, path } = cacheKeyFor("blame", args);
+    const blame = await readCache(ctx, args.repository, "blame", ref, path);
+    if (!blame) return null;
+    const userId = await requireUser(ctx);
+    const caches = newResolveCaches();
+
+    const ranges: { start_line: number; end_line: number; sha: string; message?: string; committed_at?: number }[] = blame.ranges ?? [];
+    const bySha = new Map<string, { sha: string; summary?: string; author_time?: number }>();
+    for (const r of ranges) {
+      if (!bySha.has(r.sha)) bySha.set(r.sha, { sha: r.sha, summary: r.message?.split("\n")[0], author_time: r.committed_at || undefined });
+    }
+    const resolved = await resolveCommitSessions(ctx, userId, [...bySha.values()], caches);
+
+    const blob = await readCache(ctx, args.repository, "blob", ref, path);
+    const lines: string[] = typeof blob?.content === "string" && !blob.truncated ? blob.content.split("\n") : [];
+    const blamed = ranges.flatMap((r) =>
+      lines.slice(r.start_line - 1, r.end_line).map((text) => ({ text, authorMs: r.committed_at || undefined })),
+    );
+    const wanted = contentLinesToMatch(blamed, Date.now()).map((l) => ({ text: l.t, deadline: l.d }));
+
+    const repository = normalizeRepository(args.repository);
+    const sources = await ctx.db
+      .query("repo_sources")
+      .withIndex("by_repository", (q: any) => q.eq("repository", repository))
+      .take(50);
+    const roots = [...new Set(sources.map((s: any) => String(s.root).replace(/\/+$/, "")))];
+    const filePaths = roots.map((root) => `${root}/${path}`);
+    const lineMatches = wanted.length > 0 ? await matchFileLines(ctx, userId, filePaths, wanted, caches) : [];
+
+    return { by_sha: resolved, line_matches: lineMatches };
+  },
+});
 export const getCompare = readAction("compare");
 export const getSearch = readAction("search");
 

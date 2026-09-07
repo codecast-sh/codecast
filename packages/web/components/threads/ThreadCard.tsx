@@ -52,7 +52,7 @@ export const ThreadCard = memo(function ThreadCard({
   // "Done" archives the follow: only the thread_reads-backed kinds have a row
   // to archive. DM, session and question cards are projections of other state
   // with their own lifecycles.
-  const dismissible = card.kind === "chat" || card.kind === "comment" || card.kind === "task" || card.kind === "page";
+  const dismissible = card.kind === "chat" || card.kind === "comment" || card.kind === "code" || card.kind === "task" || card.kind === "page";
   const dismiss = useCallback(() => {
     const row = card.source as ThreadInboxRow;
     useInboxStore.getState().dismissThread(row.kind, row.root_key);

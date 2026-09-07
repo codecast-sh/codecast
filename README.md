@@ -385,6 +385,28 @@ Configure your Convex instance URL in each `.env.local`. See [Getting Started](d
 
 Starts both the Convex backend and Vite web dashboard. The CLI daemon runs separately with `cast start`.
 
+### Run the daemon from source
+
+For faster iteration on daemon behavior, run it directly from your checkout with Bun. Changes take effect on restart without building, reinstalling, or cutting a CLI release.
+
+After installing dependencies and signing in with `cast auth`, run these commands from the repository root:
+
+```bash
+bun run packages/cli/src/main.ts setup
+bun run packages/cli/src/main.ts restart --wait
+```
+
+On macOS and Linux, `setup` points the login service at this checkout's `packages/cli/src/daemon.ts`. Keep Bun and the checkout at those paths while using this setup.
+
+**Source mode does not watch for code changes.** The service restarts the daemon if it exits, but saving a source file does not trigger a restart. After editing daemon code, load your changes and check its status with:
+
+```bash
+bun run packages/cli/src/main.ts restart --wait
+bun run packages/cli/src/main.ts status
+```
+
+To switch back to a released build, run `setup` and `restart --wait` using the installed binary instead of the source command above.
+
 ### Type check
 
 ```bash

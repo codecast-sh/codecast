@@ -31,9 +31,10 @@ export type ReplicationUpdate = {
 
 export type ReplicationMessage =
   /** Follower asks the host for a snapshot (also: host re-announce probe). */
-  | { type: "hello"; from: string }
+  | { type: "hello"; from: string; snapshotRequest?: string }
   /** Host answers one follower (`to`) with the full replicated slice. */
   | { type: "snapshot"; hostId: string; seq: number; to: string; entries: Record<string, any> }
+  | { type: "snapshotChunk"; hostId: string; seq: number; to: string; request: string; index: number; done: boolean; updates: ReplicationUpdate[] }
   /** Host broadcast of a write's replicated changes. `origin` is the window
    *  the write came from (the host itself, or the follower whose `mut` this
    *  rebroadcasts) so the origin can skip re-applying its own write. */
@@ -162,6 +163,44 @@ export function snapshotEntries(
   return entries;
 }
 
+export function* snapshotBatches(
+  state: any,
+  replicatedKeys: readonly string[],
+  isCollectionKey: (key: string) => boolean,
+  maxRows = 256,
+): Generator<ReplicationUpdate[]> {
+  let batch: ReplicationUpdate[] = [];
+  let count = 0;
+  for (const key of replicatedKeys) {
+    const value = state?.[key];
+    if (value === undefined) continue;
+    if (isCollectionKey(key)) {
+      let upserts: any[] = [];
+      for (const id in value) {
+        upserts.push(value[id]);
+        count++;
+        if (count === maxRows) {
+          batch.push({ key, upserts });
+          yield batch;
+          batch = [];
+          upserts = [];
+          count = 0;
+        }
+      }
+      if (upserts.length) batch.push({ key, upserts });
+    } else {
+      batch.push({ key, value, hasValue: true });
+      count++;
+    }
+    if (count >= maxRows || batch.length >= 8) {
+      yield batch;
+      batch = [];
+      count = 0;
+    }
+  }
+  if (batch.length) yield batch;
+}
+
 // ---------------------------------------------------------------------------
 // Follower ordering: seq tracking + pre-snapshot buffering
 // ---------------------------------------------------------------------------
@@ -176,6 +215,7 @@ export type FollowerInboxResult<TMsg> =
   | { action: "resync" };
 
 export type FollowerInbox<TMsg extends SeqStamped> = {
+  reset: () => void;
   onUpdate: (msg: TMsg) => FollowerInboxResult<TMsg>;
   /** A snapshot landed: adopt its position. Returns buffered messages newer
    *  than the snapshot to replay, or "resync" when the buffer itself has a
@@ -210,12 +250,13 @@ export function createFollowerInbox<TMsg extends SeqStamped>(
   };
 
   return {
+    reset,
     onUpdate(msg) {
       if (!synced) {
         buffer.push(msg);
         // An unbounded buffer while no snapshot arrives is a leak; drop and
         // start over — the eventual snapshot supersedes everything dropped.
-        if (buffer.length > maxBuffer) buffer = [];
+        if (buffer.length > maxBuffer) return reset();
         return { action: "apply", messages: [] };
       }
       if (msg.hostId !== hostId) return reset();
