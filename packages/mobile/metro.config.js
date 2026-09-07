@@ -13,6 +13,13 @@ if (process.env.METRO_NO_WATCHMAN) {
 }
 
 config.watchFolders = [workspaceRoot];
+const defaultBlockList = config.resolver.blockList;
+config.resolver.blockList = [
+  ...(Array.isArray(defaultBlockList) ? defaultBlockList : defaultBlockList ? [defaultBlockList] : []),
+  /[/\\]\.claude[/\\]worktrees[/\\].*/,
+  /[/\\]\.conductor[/\\].*/,
+  /[/\\]dist-perf[/\\].*/,
+];
 
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
