@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
+import { queryWithSignal } from "../lib/queryWithSignal";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyLiveInboxIds, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
 import { onSyncWake } from "./syncWake";
@@ -227,12 +228,12 @@ export function useSyncInboxSessions() {
   // sleep/wake or WebSocket reconnection, and each one stalls independently.
   // Poll a one-shot query to catch divergence — same pattern as
   // useConversationMessages' watermark loop.
-  useRecoveryPoll(lastSyncRef, useCallback(async () => {
+  useRecoveryPoll(lastSyncRef, useCallback(async (signal: AbortSignal) => {
     // `_probe` makes this a novel query token so Convex round-trips instead of
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
-    const fresh: any = await convex.query(api.conversations.listInboxSessions, { ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() });
-    if (!fresh) return;
+    const fresh: any = await queryWithSignal(convex, api.conversations.listInboxSessions, { ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() }, signal);
+    if (signal.aborted || !fresh) return;
     const sessions = fresh.sessions ?? fresh;
     syncTable("sessions", sessions as unknown as InboxSession[]);
     applyLiveInboxIds(sessions);
@@ -243,8 +244,9 @@ export function useSyncInboxSessions() {
   // Liveness can stall independently of the base list — recover it on the same
   // cadence so a frozen subscription doesn't leave every session reading a stale
   // (or null) agent_status after a sleep/reconnect.
-  useRecoveryPoll(lastLivenessSyncRef, useCallback(async () => {
-    const fresh: any = await convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() });
+  useRecoveryPoll(lastLivenessSyncRef, useCallback(async (signal: AbortSignal) => {
+    const fresh: any = await queryWithSignal(convex, api.conversations.sessionsLiveness, { _probe: Date.now() }, signal);
+    if (signal.aborted) return;
     const liveness = fresh?.liveness;
     if (!liveness) return;
     // Same applier as the subscription: facts onto rows, stamps + envelope into
@@ -264,9 +266,9 @@ export function useSyncInboxSessions() {
   // (fn, args) token, so a bare getCurrentUser() probe reads back the exact
   // stale value it's meant to replace. getCurrentUserProbe has no live
   // subscriber, so its token is never cached and this always round-trips.
-  useRecoveryPoll(lastUserSyncRef, useCallback(async () => {
-    const fresh: any = await convex.query(api.users.getCurrentUserProbe, { _probe: Date.now() });
-    if (fresh === undefined) return;
+  useRecoveryPoll(lastUserSyncRef, useCallback(async (signal: AbortSignal) => {
+    const fresh: any = await queryWithSignal(convex, api.users.getCurrentUserProbe, { _probe: Date.now() }, signal);
+    if (signal.aborted || fresh === undefined) return;
     useInboxStore.getState().syncTable("currentUser", fresh);
     lastUserSyncRef.current = Date.now();
   }, [convex]), 45_000);
