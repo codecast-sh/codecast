@@ -37,6 +37,11 @@ export function shellEscapeForSh(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+export function daemonLauncherMatchesCommand(launcher: string, executable: string, args: string[]): boolean {
+  const command = [executable, ...args].map(shellEscapeForSh).join(" ");
+  return launcher.split("\n").some((line) => line.trim() === `exec ${command}`);
+}
+
 // exec (not plain invocation) so the daemon replaces the shell and launchd tracks
 // the daemon's pid as the job instance — kickstart, KeepAlive, and the mutual
 // supervision pid checks all depend on that.
@@ -61,6 +66,7 @@ export const WATCHDOG_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 // kept here so the shell script and any future native watchdog agree on one number.
 const WATCHDOG_INTERVAL_SECONDS = 60;
 export const DAEMON_HEARTBEAT_STALE_MS = 180000; // 3 min = 6 missed 30s daemon heartbeats
+export const DAEMON_HEARTBEAT_BUSY_GRACE_MS = 10 * 60 * 1000;
 
 // The daemon's heartbeat tick freezes during system sleep exactly like it does
 // when the event loop is wedged — and the watchdog resumes its loop within
@@ -78,10 +84,6 @@ export const WATCHDOG_AWAKE_GAP_MS = WATCHDOG_INTERVAL_SECONDS * 1000 + 30_000;
 // Pure verdict shared by both watchdog forms (dev shell inline check, compiled
 // `_watchdog` pass). gapMs is the watchdog's time since its own previous pass;
 // null (first pass, missing stamp) defers — a fresh watchdog has no baseline.
-// logAgeMs is the time since the daemon last wrote daemon.log (null = unknown):
-// a wedged event loop runs no JS and cannot log, while a busy-but-alive boot
-// (transcript sweeps, git subprocesses) starves the tick stamper yet keeps
-// logging — killing it just restarts the same slow boot and loops the outage.
 export function daemonTickStale(
   tickAgeMs: number,
   gapMs: number | null,
@@ -92,7 +94,7 @@ export function daemonTickStale(
   if (tickAgeMs <= thresholdMs) return false;
   if (gapMs === null || gapMs < 0) return false;
   if (gapMs >= awakeGapMs) return false;
-  if (logAgeMs !== null && logAgeMs >= 0 && logAgeMs <= thresholdMs) return false;
+  if (tickAgeMs <= Math.max(thresholdMs, DAEMON_HEARTBEAT_BUSY_GRACE_MS) && logAgeMs !== null && logAgeMs >= 0 && logAgeMs <= thresholdMs) return false;
   return true;
 }
 
@@ -278,12 +280,9 @@ check_once() {
         # wedged event loop. A large gap in our OWN loop = the machine slept and
         # the daemon may simply not have re-stamped yet — give it one cycle.
         if [ "\$LOOP_GAP" -ge 0 ] && [ "\$LOOP_GAP" -lt ${WATCHDOG_AWAKE_GAP_MS} ]; then
-          # A wedged event loop runs no JS and cannot write daemon.log. A busy
-          # boot starves the tick stamper but keeps logging — killing it only
-          # restarts the same slow boot. Kill when the log is ALSO silent.
           LOG_MTIME=\$(stat -f %m "\${HOME}/.codecast/daemon.log" 2>/dev/null || echo 0)
           LOG_AGE=\$(( NOW_MS - LOG_MTIME * 1000 ))
-          if [ "\$LOG_MTIME" -gt 0 ] && [ "\$LOG_AGE" -le ${DAEMON_HEARTBEAT_STALE_MS} ]; then
+          if [ "\$AGE" -le ${DAEMON_HEARTBEAT_BUSY_GRACE_MS} ] && [ "\$LOG_MTIME" -gt 0 ] && [ "\$LOG_AGE" -le ${DAEMON_HEARTBEAT_STALE_MS} ]; then
             log "Daemon tick stale (\${AGE}ms) but daemon.log written \${LOG_AGE}ms ago - busy, not wedged"
           else
             STALE=1
@@ -342,7 +341,7 @@ run_check() {
   ${watchdogCommand} 2>>"\$LOGFILE" && return 0
   log "Watchdog failed (exit \$?), checking for update"
 
-  LATEST="\$(curl -fsSL "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; return 1; }
+  LATEST="\$(curl -fsSL --connect-timeout 10 --max-time 30 "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; return 1; }
   VERSION="\$(printf '%s' "\$LATEST" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"
   [ -z "\$VERSION" ] && { log "Could not parse version"; return 1; }
 
@@ -360,7 +359,7 @@ run_check() {
   DIR="\${HOME}/.local/bin"; mkdir -p "\$DIR"
   TMP="\$(mktemp)"
   log "Downloading codecast v\$VERSION (\$P-\$A)"
-  curl -fsSL "\$DL_HOST/codecast-\$P-\$A" -o "\$TMP" 2>>"\$LOGFILE" || { rm -f "\$TMP"; log "Download failed"; return 1; }
+  curl -fsSL --connect-timeout 10 --max-time 180 "\$DL_HOST/codecast-\$P-\$A" -o "\$TMP" 2>>"\$LOGFILE" || { rm -f "\$TMP"; log "Download failed"; return 1; }
   mv "\$TMP" "\$DIR/codecast" && chmod +x "\$DIR/codecast"
   printf '%s' "\$VERSION" > "\$LAST_DL_FILE"
   log "Installed v\$VERSION, retrying watchdog"

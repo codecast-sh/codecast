@@ -100,7 +100,9 @@ import { OpencodeServer } from "./opencodeServer.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
+  buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
+  daemonLauncherMatchesCommand,
   daemonTickStale,
   DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
@@ -21867,10 +21869,10 @@ function migrateDaemonPlistToStableLauncher(): void {
 
 /** What the supervision tick should do, from what it observed. Pure so the
  *  branches are testable without launchd. */
-export function watchdogSupervisionAction(input: { loaded: boolean; plistExists: boolean; heartbeat: string | null; now: number }): "bootstrap" | "plist_missing" | "kickstart" | "none" {
+export function watchdogSupervisionAction(input: { loaded: boolean; plistExists: boolean; heartbeat: string | null; now: number; scriptChanged?: boolean }): "bootstrap" | "plist_missing" | "kickstart" | "none" {
   if (!input.loaded) return input.plistExists ? "bootstrap" : "plist_missing";
   // Loaded. A stale heartbeat means the loop is wedged or dead.
-  return watchdogHeartbeatStale(input.heartbeat, input.now) ? "kickstart" : "none";
+  return input.scriptChanged || watchdogHeartbeatStale(input.heartbeat, input.now) ? "kickstart" : "none";
 }
 
 let lastWatchdogEnsureAt = 0;
@@ -21878,7 +21880,7 @@ let watchdogEnsureInFlight = false;
 // Async: three launchctl calls on the health tick held the loop for their
 // whole round trip. The throttle stamp is taken before the first await, and
 // the in flight flag keeps the boot call and the tick from overlapping.
-async function ensureWatchdogSupervised(force = false): Promise<void> {
+export async function ensureWatchdogSupervised(force = false): Promise<void> {
   if (platform !== "darwin" || !process.getuid) return;
   const now = Date.now();
   if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
@@ -21895,10 +21897,23 @@ async function ensureWatchdogSupervised(force = false): Promise<void> {
       _execFileAsync("launchctl", args, { timeout: 10_000 }).then(() => true, () => false);
     const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
     const loaded = await launchctl(["print", `${domain}/${label}`]);
+    const scriptPath = path.join(CONFIG_DIR, "watchdog.sh");
+    const launcher = await fs.promises.readFile(path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME), "utf-8").catch(() => "");
+    const { executablePath, args } = getDaemonExecInfo();
+    const previousScript = await fs.promises.readFile(scriptPath, "utf-8").catch(() => null);
+    const script = buildWatchdogShellScript({
+      isBinary: args[0] === "--",
+      watchdogCommand: [executablePath, "--", "_watchdog"].map(shellEscapeForSh).join(" "),
+    });
+    const scriptChanged = daemonLauncherMatchesCommand(launcher, executablePath, args) && previousScript !== script;
+    if (scriptChanged) {
+      await fs.promises.writeFile(`${scriptPath}.${process.pid}.tmp`, script, { mode: 0o755 });
+      await fs.promises.rename(`${scriptPath}.${process.pid}.tmp`, scriptPath);
+    }
     const heartbeat = loaded
       ? await fs.promises.readFile(path.join(CONFIG_DIR, WATCHDOG_HEARTBEAT_FILENAME), "utf-8").catch(() => null)
       : null;
-    const action = watchdogSupervisionAction({ loaded, plistExists: fs.existsSync(plistPath), heartbeat, now });
+    const action = watchdogSupervisionAction({ loaded, plistExists: fs.existsSync(plistPath), heartbeat, now, scriptChanged });
     switch (action) {
       case "plist_missing":
         log(`Watchdog plist missing (${plistPath}): run 'cast setup' to restore supervision`);
@@ -21909,8 +21924,11 @@ async function ensureWatchdogSupervised(force = false): Promise<void> {
         await launchctl(["kickstart", `${domain}/${label}`]);
         return;
       case "kickstart":
-        log("Watchdog loaded but heartbeat stale: kickstarting the wedged loop");
-        await launchctl(["kickstart", "-k", `${domain}/${label}`]);
+        log(scriptChanged ? "Watchdog script updated: reloading resident loop" : "Watchdog loaded but heartbeat stale: kickstarting the wedged loop");
+        if (!(await launchctl(["kickstart", "-k", `${domain}/${label}`])) && scriptChanged) {
+          if (previousScript === null) await fs.promises.unlink(scriptPath);
+          else await fs.promises.writeFile(scriptPath, previousScript, { mode: 0o755 });
+        }
         return;
       case "none":
         return;
@@ -23723,14 +23741,7 @@ async function main(): Promise<void> {
   // and the boot sweep only covers generations orphaned before we started.
   setInterval(() => { void sweepStaleTmuxServers(); }, 3_600_000);
 
-  // Check for forced updates immediately on startup before anything else
-  // This allows recovery from broken versions by downloading a fix early
-  try {
-    const didUpdate = await checkForForcedUpdate(syncService);
-    if (didUpdate) return; // process.exit already called inside
-  } catch (err) {
-    log(`Startup update check failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  void checkForForcedUpdate(syncService);
 
   // Repair any project paths that were stored incorrectly (one-time on startup)
   repairProjectPaths(syncService).catch(err => {
@@ -23962,7 +23973,7 @@ async function main(): Promise<void> {
   // read here is async: the sweep stats a path per segment of every project
   // dir name, which is thousands of stats on a machine with hundreds of
   // projects, and it runs on the same loop the hook server answers from.
-  {
+  const syncStartupSkills = async () => {
     const globalSkills = await readAvailableSkills();
     if (globalSkills.length > 0) {
       const skillsJson = JSON.stringify(globalSkills);
@@ -24007,7 +24018,10 @@ async function main(): Promise<void> {
         }
       }
     } catch {}
-  }
+  };
+  setImmediate(() => {
+    void syncStartupSkills().catch((err) => logError("Startup skills scan failed", err instanceof Error ? err : new Error(String(err))));
+  });
 
   const retryQueue = new RetryQueue({
     initialDelayMs: 3000,
@@ -26410,6 +26424,13 @@ export async function runWatchdog(): Promise<void> {
   const logLine = (msg: string) => {
     try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
   };
+  const daemonPlist = path.join(process.env.HOME || "", "Library", "LaunchAgents", `${DAEMON_LAUNCHD_LABEL}.plist`);
+  const supervised = platform === "darwin" && fs.existsSync(daemonPlist);
+  const { executablePath, args } = getDaemonExecInfo();
+  const launcher = supervised
+    ? await fs.promises.readFile(path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME), "utf-8").catch(() => "")
+    : "";
+  const mayUpgradeDaemon = !supervised || daemonLauncherMatchesCommand(launcher, executablePath, args);
 
   // 1. Report crash loop info if crash file exists
   if (fs.existsSync(CRASH_FILE)) {
@@ -26418,6 +26439,7 @@ export async function runWatchdog(): Promise<void> {
       if (crashes.count > 3) {
         await fetch(`${siteUrl}/cli/log`, {
           method: "POST",
+          signal: AbortSignal.timeout(10_000),
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_token: config.auth_token,
@@ -26465,8 +26487,6 @@ export async function runWatchdog(): Promise<void> {
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
-        // A busy boot starves the tick stamper but keeps writing daemon.log; a
-        // truly wedged loop runs no JS and cannot log (see daemonTickStale).
         let logAgeMs: number | null = null;
         try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
         if (daemonTickStale(staleness, passGap, logAgeMs)) {
@@ -26489,6 +26509,7 @@ export async function runWatchdog(): Promise<void> {
   try {
     const response = await fetch(`${siteUrl}/cli/heartbeat`, {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: config.auth_token,
@@ -26510,6 +26531,7 @@ export async function runWatchdog(): Promise<void> {
   const sendWatchdogLog = async (level: string, message: string) => {
     await fetch(`${siteUrl}/cli/log`, {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: config.auth_token,
@@ -26521,7 +26543,7 @@ export async function runWatchdog(): Promise<void> {
     }).catch(() => {});
   };
 
-  if (minCliVersion && compareVersions(version, minCliVersion) < 0) {
+  if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
     const result = await performUpdate();
@@ -26543,7 +26565,7 @@ export async function runWatchdog(): Promise<void> {
   }
 
   // 3c. If daemon is alive but running an older version than the binary, kill it
-  if (daemonAlive && daemonPid > 0) {
+  if (mayUpgradeDaemon && daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const daemonVersion = state.runtimeVersion;
@@ -26565,6 +26587,16 @@ export async function runWatchdog(): Promise<void> {
   if (!daemonAlive) {
     logLine("Daemon not running, restarting...");
 
+    if (supervised) {
+      const domain = `gui/${process.getuid!()}`;
+      const job = await readLaunchdDaemonJobAsync();
+      if (!job.loaded) {
+        await _execFileAsync("launchctl", ["bootstrap", domain, daemonPlist], { timeout: 5000 });
+      }
+      await _execFileAsync("launchctl", ["kickstart", `${domain}/${DAEMON_LAUNCHD_LABEL}`], { timeout: 5000 });
+      return;
+    }
+
     // Handle force_update before restart so daemon starts with new binary
     const updateCmd = commands.find(c => c.command === "force_update");
     if (updateCmd) {
@@ -26573,6 +26605,7 @@ export async function runWatchdog(): Promise<void> {
       // Report result
       await fetch(`${siteUrl}/cli/command-result`, {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
@@ -26592,6 +26625,7 @@ export async function runWatchdog(): Promise<void> {
     for (const cmd of commands) {
       await fetch(`${siteUrl}/cli/command-result`, {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
@@ -26603,7 +26637,6 @@ export async function runWatchdog(): Promise<void> {
 
     // Spawn daemon
     clearCrashCount();
-    const { executablePath, args } = getDaemonExecInfo();
     try {
       const child = spawn(executablePath, args, {
         detached: true,
@@ -26628,7 +26661,8 @@ function getDaemonExecInfo(): { executablePath: string; args: string[] } {
   if (isBinary) {
     return { executablePath: execPath, args: ["--", "_daemon"] };
   }
-  return { executablePath: execPath, args: [path.resolve(__dirname, "daemon.js")] };
+  const source = path.resolve(__dirname, "daemon.ts");
+  return { executablePath: execPath, args: [fs.existsSync(source) ? source : path.resolve(__dirname, "daemon.js"), "_daemon"] };
 }
 
 // Only run directly if executed as the main module (not when imported)
