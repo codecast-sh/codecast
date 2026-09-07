@@ -64,3 +64,39 @@ Production client cloud-toggle/header/fork checks remain part of the coordinated
 ## Deferred storage optimization
 
 Writable shared package symlinks were tested and rejected: one workspace's package mutation appeared in a sibling. Reflinks were unavailable on the host's ext4 filesystem. An OverlayFS proof isolated writes using a read-only lower layer and separate upper layers, but a production implementation needs per-workspace mounts, cleanup and cache-version lifecycle. That optimization was deliberately not built. Private dependencies and sufficient disk space are the baseline.
+
+## Home mirror
+
+The laptop supplies personal agent context and project documents to cloud hosts. Discovery is recursive and independent of Git ignore rules: instructions, overrides, working notes, rules, skills, plugins, prompts, hooks, scripts and their portable support files travel together. `AGENTS.md` and the `CLAUDE.md` symlink are also tracked in this repository, so fresh clones carry its development rules.
+
+| Source | Coverage |
+| --- | --- |
+| Personal agent directories | `.claude`, `.codex`, `.gemini`, `.grok`, `.opencode`, `.agents` and `.config/opencode`, including shared skill symlink aliases and portable plugin content |
+| Project context | Nested instruction files, Markdown and other text documents, agent configuration, `.mcp.json`, docs/scripts/support directories and referenced files, including ignored and untracked files |
+| Supporting context | In-home file references, relevant ancestor instructions and Claude project memory directories; transcripts and process state are excluded |
+| Git preferences | An allowlisted global configuration block and global ignore file; host Git identity and access remain owned by host provisioning |
+
+Symlinks are resolved into regular files at their logical destination, so every agent sees its own skill namespace. Cycles terminate; references and resolved paths use the same exclusion and size checks as ordinary files. Portable text receives home and project path rewrites. Binary support assets retain their bytes. macOS commands and paths can still require host tooling; copying a script does not install its interpreter or make an Apple framework available on Linux.
+
+Credentials, session transcripts, databases, sockets, caches, dependency installations and native executables are excluded. Structured configuration is scrubbed of credentials and provider routing before transmission. Portable MCP definitions are retained; their authentication and host dependencies need the provisioning path. Explicit include paths cannot bypass the denylist. Inventory or parse failures prevent a success report, and the 256 MiB cap fails with a diagnostic instead of silently truncating coverage.
+
+Codecast-owned snippets, hooks and settings remain host-managed. The receiver preserves Claude authentication environment pins from `~/.codecast/mirrored-claude-env.json`, Codex project trust tables and unrelated host configuration, then runs the host refresh step. A failed refresh leaves the mirror incomplete. Files are written atomically as `0600`, or `0700` when executable, without following destination symlinks.
+
+The receiver stores the source generation and the bytes it actually wrote in `~/.codecast/mirror.json`. Later updates reconcile against that baseline. Removed source files and configuration keys are removed only where the mirror still owns them; host edits remain in place and are reported as conflicts, including when both sides changed. The sender never labels a partial apply or conflict current. This is a one-way context mirror; cloud edits are not copied back to the laptop.
+
+Project source-to-target mappings live in `~/.codecast/browser/mirror-projects.json`. Repository registration happens after checkout creation, and worktree registration happens before the agent starts. Periodic refresh applies context to registered targets without resetting their source code or running dependency installation. With mirroring enabled, an initial sync failure stops placement rather than starting an agent without its instructions. Disabling mirroring explicitly opts out of that requirement.
+
+The sender checks for laptop changes every minute and verifies remote file bytes, type and mode every 30 minutes. It serializes pushes, retries failures with backoff, and never wakes a sleeping host. A matching local generation avoids an upload on the fast path; verification checks the destination itself, not merely the saved receipt. The scheduler can be stopped and its active transfer settled during shutdown.
+
+```sh
+cast hosts sync --dry-run
+cast hosts sync
+cast hosts sync i-084309c56a91e15ff --take-over
+cast config cloud_mirror_enabled false
+cast config cloud_mirror_exclude ".claude/skills/private-*/**,.codex/prompts/**"
+cast config cloud_mirror_include ".dotfiles/skills"
+```
+
+`cast hosts sync --dry-run` reports files, exclusions, scrubbed settings and compatibility warnings. `cast hosts ls` reports the last sender result. Another laptop's ownership requires explicit `--take-over`; a different user or target home is refused.
+
+File freshness and loaded instructions are separate. An agent that is already running may retain the instructions and configuration it read at startup. Sync updates its files without forcibly restarting its work; start a new session when a changed instruction or configuration requires a reload. Skill hot reload depends on the agent. A verified disk generation is not a claim that every active model has re-read it.

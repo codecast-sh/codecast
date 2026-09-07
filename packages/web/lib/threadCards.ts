@@ -5,7 +5,8 @@
 // rules are testable without the React tree behind them.
 
 import type { LucideIcon } from "lucide-react";
-import { CircleHelp, Globe, Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
+import { CircleHelp, GitCommitHorizontal, Globe, Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
+import { parseCodeThreadRootKey } from "@codecast/shared/comments";
 import type { ThreadCardOpenEntry, ThreadInboxRow, ThreadKind } from "../store/threadTypes";
 import type { ChatRailChannel } from "../store/chatSlice";
 import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
@@ -13,13 +14,14 @@ import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
 export type ThreadCardKind = ThreadKind | "dm" | "session" | "question";
 
 /** The single-select chips. `all` is the default view and carries no ?type=. */
-export type ChipKey = "all" | "chat" | "dm" | "comment" | "task" | "page" | "question";
+export type ChipKey = "all" | "chat" | "dm" | "comment" | "code" | "task" | "page" | "question";
 
 export const CHIPS: Array<{ key: ChipKey; label: string }> = [
   { key: "all", label: "All" },
   { key: "chat", label: "Chat" },
   { key: "dm", label: "DMs" },
   { key: "comment", label: "Comments" },
+  { key: "code", label: "Code" },
   { key: "task", label: "Tasks" },
   { key: "page", label: "Pages" },
   { key: "question", label: "Questions" },
@@ -32,7 +34,7 @@ const CHAT_CHIPS: ReadonlySet<ChipKey> = new Set(["chat", "dm"]);
  *  here: a chat thread can live in a DM room and file under the DMs chip, so
  *  a kind-scoped server sweep would erase threads the reader never saw —
  *  those chips mark their visible cards one by one instead. */
-export const SWEEPABLE_CHIPS: ReadonlySet<ChipKey> = new Set(["comment", "task", "page"]);
+export const SWEEPABLE_CHIPS: ReadonlySet<ChipKey> = new Set(["comment", "code", "task", "page"]);
 
 /** ?type= → chip. Unknown values, and chat chips on a team with chat off,
  *  fall back to the default view. */
@@ -123,6 +125,15 @@ export const THREAD_KIND_META: Record<ThreadCardKind, ThreadKindMeta> = {
     countsTowardBadge: true,
     emptyCopy: "Comments on sessions you own or have replied in land here.",
   },
+  code: {
+    key: "code",
+    label: "Code",
+    icon: GitCommitHorizontal,
+    tone: "green",
+    chip: "code",
+    countsTowardBadge: true,
+    emptyCopy: "Comments on commits and pull requests you wrote, replied in or were named in land here.",
+  },
   task: {
     key: "task",
     label: "Tasks",
@@ -164,7 +175,7 @@ export const THREAD_KIND_META: Record<ThreadCardKind, ThreadKindMeta> = {
 };
 
 /** The default view's empty copy: the ways a thread reaches this page. */
-export const ALL_EMPTY_COPY = "Chat replies, session comments, task comments and page comments land here when they have something new for you.";
+export const ALL_EMPTY_COPY = "Chat replies, session comments, code comments, task comments and page comments land here when they have something new for you.";
 
 /** The collapsed card's count line, one shape for every kind: "3 replies",
  *  "1 comment", or "No messages yet" when there are none. */
@@ -189,6 +200,19 @@ export function answeredByViewer(row: ThreadInboxRow, viewerId: string | undefin
  *  chat row's room kind so a thread in a DM files under DMs; `taskShortIdOf`
  *  gives the canonical /tasks/<short_id> link when the task row is cached;
  *  `viewerId` retires the threads the viewer answered (answeredByViewer). */
+/** The page a code thread is read on: the pull request when the row names
+ *  one and the store knows its number, else the commit, with the thread's
+ *  file so the page lands on it. */
+export function codeThreadHref(row: ThreadInboxRow, prNumber?: number): string {
+  const parsed = parseCodeThreadRootKey(row.root_key);
+  const repository = row.repository ?? parsed.repository;
+  const ref = row.ref ?? parsed.ref;
+  const file = row.file_path ?? parsed.filePath;
+  const query = file ? `?file=${encodeURIComponent(file)}` : "";
+  if (row.pull_request_id && prNumber) return `/pr/${repository}/${prNumber}${query}`;
+  return `/commit/${repository}/${ref}${query}`;
+}
+
 export function serverCards(
   rows: ThreadInboxRow[],
   channelKindOf: (channelId: string) => string | undefined,
@@ -213,6 +237,8 @@ export function serverCards(
     } else if (row.kind === "page") {
       const slug = pageSlugOf(row.root_key);
       href = slug ? `/a/${slug}` : `/a`;
+    } else if (row.kind === "code") {
+      href = codeThreadHref(row);
     } else {
       const taskId = String(row.task_id ?? row.root_key);
       href = `/tasks/${taskShortIdOf(taskId) ?? taskId}`;
@@ -347,7 +373,7 @@ export function sortCards(cards: ThreadCardModel[]): ThreadCardModel[] {
 /** How many cards carry unread, per chip and for the default view. Sessions
  *  never count: `all` equals the sidebar badge. */
 export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> {
-  const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, task: 0, page: 0, question: 0 };
+  const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, code: 0, task: 0, page: 0, question: 0 };
   for (const c of cards) {
     const meta = THREAD_KIND_META[c.kind] as ThreadKindMeta | undefined;
     if (!meta) continue;

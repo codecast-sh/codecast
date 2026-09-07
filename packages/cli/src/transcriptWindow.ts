@@ -20,7 +20,7 @@ const newlineBoundary: PassBoundary = (buf, len, _atEof, from = 0) => {
 
 type ReadRequest = { buf: Buffer; offset: number; length: number; position: number };
 
-export type ReadWindowOpts = { step?: number; boundary?: PassBoundary; buffer?: Buffer };
+export type ReadWindowOpts = { step?: number; boundary?: PassBoundary; buffer?: Buffer; checkpoint?: () => void };
 
 // The window algorithm both readers share: fill one window, look for a
 // boundary, and when there is none and bytes remain, grow the window and
@@ -33,26 +33,37 @@ function* completeLinesPlan(
   position: number,
   available: number,
   opts: ReadWindowOpts,
+  checkpoint?: () => void,
 ): Generator<ReadRequest, { content: string; bytesConsumed: number; steps: number }, number> {
   const step = opts.step ?? SYNC_BYTES_PER_PASS;
   const boundary = opts.boundary ?? newlineBoundary;
+  checkpoint?.();
   // allocUnsafe: every byte read below `len` is written by a read first.
   let buf = opts.buffer ?? Buffer.allocUnsafe(Math.min(available, step));
   let len = 0;
   let steps = 0;
   for (;;) {
+    checkpoint?.();
     const from = len;
     const want = Math.min(buf.length, available) - len;
     const n = want > 0 ? yield { buf, offset: len, length: want, position: position + len } : 0;
+    checkpoint?.();
     steps++;
     if (n <= 0) available = len; // the file shrank under us: what we hold is all there is
     len += n;
     const atEof = len >= available;
     const cut = len > 0 ? boundary(buf, len, atEof, from) : -1;
-    if (cut >= 0) return { content: buf.toString("utf8", 0, cut + 1), bytesConsumed: cut + 1, steps };
+    checkpoint?.();
+    if (cut >= 0) {
+      const content = buf.toString("utf8", 0, cut + 1);
+      checkpoint?.();
+      return { content, bytesConsumed: cut + 1, steps };
+    }
     // No boundary at EOF: a line still being written. Consume nothing and let
     // the next pass re-read it (same rule as before the window existed).
     if (atEof) return { content: "", bytesConsumed: 0, steps };
+    if (len < Math.min(buf.length, available)) continue;
+    checkpoint?.();
     const grown = Buffer.allocUnsafe(Math.min(Math.max(buf.length * 2, step), available));
     buf.copy(grown, 0, 0, len);
     buf = grown;
@@ -71,12 +82,16 @@ export async function readCompleteLines(
   available: number,
   opts: ReadWindowOpts = {},
 ): Promise<{ content: string; bytesConsumed: number; steps: number }> {
-  const plan = completeLinesPlan(position, available, opts);
+  const checkpoint = opts.checkpoint;
+  const plan = completeLinesPlan(position, available, opts, checkpoint);
   let r = plan.next(0);
   while (!r.done) {
+    checkpoint?.();
     const { bytesRead } = await fd.read(r.value.buf, r.value.offset, r.value.length, r.value.position);
+    checkpoint?.();
     r = plan.next(bytesRead);
   }
+  checkpoint?.();
   return r.value;
 }
 
@@ -87,11 +102,16 @@ export function readCompleteLinesSync(
   available: number,
   opts: ReadWindowOpts = {},
 ): { content: string; bytesConsumed: number; steps: number } {
-  const plan = completeLinesPlan(position, available, opts);
+  const checkpoint = opts.checkpoint;
+  const plan = completeLinesPlan(position, available, opts, checkpoint);
   let r = plan.next(0);
   while (!r.done) {
-    r = plan.next(fs.readSync(fd, r.value.buf, r.value.offset, r.value.length, r.value.position));
+    checkpoint?.();
+    const bytesRead = fs.readSync(fd, r.value.buf, r.value.offset, r.value.length, r.value.position);
+    checkpoint?.();
+    r = plan.next(bytesRead);
   }
+  checkpoint?.();
   return r.value;
 }
 
