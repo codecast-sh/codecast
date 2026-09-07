@@ -65,10 +65,18 @@ classification so a new key is classified consciously.
 All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
 `hostId` triggers a fresh snapshot request. Messages:
 
-- `hello` (follower → host): request a snapshot.
-- `snapshot` (host → follower): `{seq, entries: {key: value}}` for every
-  replicated key. Applied through the same row path as live updates; identical
-  rows no-op via the engine's identity-reuse bails.
+- `hello` (follower → host): request a snapshot. `snapshotRequest` is a fresh
+  request token that opts into bounded delivery.
+- `snapshotChunk` (host → follower): `{seq, to, request, index, done, updates}`.
+  The host captures one immutable state and sequence position, then sends at
+  most 256 collection rows or eight keys per batch, yielding between batches.
+  Singleton values remain whole. The follower applies each batch through the
+  normal row path and buffers live updates until the final batch arrives.
+  Missing or reordered chunks, a changed host, or a full update buffer trigger
+  a fresh request; chunks from obsolete requests are ignored.
+- `snapshot` (host → follower): the legacy `{seq, entries: {key: value}}` response
+  for followers without a request token. New followers also accept this
+  response from older hosts. Identical rows no-op through the same engine path.
 - `update` (host → all): the teed row updates.
 - `mut` (follower → host): the follower's own action writes. A row the action
   EDITED ships as exactly the fields it wrote (`fields`, from the action's
@@ -96,7 +104,9 @@ All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
   is per window).
 
 Follower boot: hydrate from IDB read-only, subscribe and buffer, `hello`,
-apply snapshot, replay buffered updates past the snapshot seq.
+apply snapshot batches, replay buffered updates past the snapshot seq, then
+publish that the follower is synced. Snapshot progress refreshes the retry
+deadline; stopping the runtime cancels outstanding send timers.
 
 ## Election
 

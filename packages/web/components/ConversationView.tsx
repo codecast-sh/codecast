@@ -38,7 +38,7 @@ import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } fr
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, computeConversationTaskStats, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -199,7 +199,7 @@ import { parseSessionUpdateSend } from "./sessionUpdateSend";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { DocDates } from "./DocDates";
 
@@ -235,12 +235,14 @@ import { useMessageSelection } from "../hooks/useMessageSelection";
 import { useMessageBookmark } from "../hooks/useMessageBookmark";
 import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
-import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
+import { getToolPatchInputs, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
+import { MentionSuggestion } from "./editor/MentionSuggestion";
+import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
@@ -251,7 +253,7 @@ import { defaultSessionMachineId, type SessionMachine } from "../lib/sessionMach
 import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, buildMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
 import { pendingBannerState, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
@@ -3368,20 +3370,16 @@ function TaskProgressRow({ taskStats }: { taskStats: { total: number; done: numb
   );
 }
 
-// Tool/task stats live in their own leaves so getConversationToolStats — which
-// re-scans ALL messages and updates continuously as a live session streams — re-renders
-// only these tiny consumers instead of the 11k-line ConversationView. Both leaves share
-// one Convex subscription (identical query+args are deduped); the header menu item only
-// mounts (and subscribes) while the dropdown is open.
+// Task stats live in their own leaves so a streaming TodoWrite re-renders
+// only these tiny consumers instead of the 11k-line ConversationView. Derived
+// from the messages already in the store — a live getConversationToolStats
+// scan of assistant tool_calls times out on long sessions ("too many system
+// operations") and used to ErrorBoundary the Questions header.
 function useConversationTaskStats(conversationId: string | undefined) {
-  const enabled = useDeferUntilSettled(conversationId);
-  const toolStats = useQuery(
-    api.conversations.getConversationToolStats,
-    enabled && conversationId && isConvexId(conversationId)
-      ? { conversation_id: conversationId, ...shareTokenArg(conversationId) }
-      : "skip"
+  const messages = useInboxStore((s) =>
+    conversationId ? s.messages[conversationId] : undefined,
   );
-  return toolStats?.taskStats ?? null;
+  return useMemo(() => computeConversationTaskStats(messages), [messages]);
 }
 
 // Full-width strip at the header's bottom edge narrating a kill+restart the
@@ -3948,11 +3946,16 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   // codex's synonyms so every client's file/shell/search tools hit the same
   // specialized cards (DiffView, syntax read, bash styling) instead of the generic
   // fallback. Lowercase ids don't collide with claude/codex spellings.
-  const isApplyPatch = tool.name === "apply_patch";
+  const rawToolInput = tool.input || "";
+  const patchInputs = useMemo(() => getToolPatchInputs({ name: tool.name, input: rawToolInput }), [tool.name, rawToolInput]);
+  const applyPatchDiffs = useMemo(() => patchInputs.flatMap(parseApplyPatchSections), [patchInputs]);
+  const isEmbeddedPatch = tool.name !== "apply_patch" && applyPatchDiffs.length > 0;
+  const isApplyPatch = tool.name === "apply_patch" || isEmbeddedPatch;
   const isStandardEdit = isEditTool(tool.name) || isWriteTool(tool.name);
   const isFileChange = tool.name === "fileChange";
   const isEdit = isStandardEdit || isApplyPatch || isFileChange;
-  const [expanded, setExpanded] = useState(isEdit);
+  const [expandedOverride, setExpanded] = useState<boolean>();
+  const expanded = expandedOverride ?? isEdit;
   const isRead = isReadTool(tool.name);
   const isBash = isShellTool(tool.name);
   const isGlob = isGlobTool(tool.name);
@@ -3969,7 +3972,6 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   try {
     parsedInput = JSON.parse(tool.input);
   } catch {}
-  const rawToolInput = tool.input || "";
   // A wrapper tool call (Codex `exec`, the extension's `browser_batch`) renders
   // as its inner steps: the row is named after the one step when there is one,
   // summarised by the steps otherwise, and expands to a per-step list.
@@ -3979,7 +3981,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   );
   const isCodexExec = tool.name === "exec";
   const isBrowserBatch = tool.name === BROWSER_BATCH_TOOL;
-  const isNested = isCodexExec || isBrowserBatch;
+  const isNested = (isCodexExec || isBrowserBatch) && !isEmbeddedPatch;
 
   // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase),
   // grok read_file uses target_file and list_dir uses target_directory.
@@ -3992,11 +3994,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const lineCommentCtx = (path: string) =>
     conversationId ? { conversationId: String(conversationId), anchorKey: `diff:${tool.id}:${path}`, filePath: getRelativePath(path) } : undefined;
   const language = getFileExtension(filePath);
-  const applyPatchInput = tool.name === "apply_patch" ? getApplyPatchInput(rawToolInput) : "";
-  const applyPatchDiffs = useMemo(
-    () => (tool.name === "apply_patch" ? parseApplyPatchSections(applyPatchInput) : []),
-    [tool.name, applyPatchInput],
-  );
+  const applyPatchInput = patchInputs.join("\n");
   const fileChangePaths = useMemo(
     () => (tool.name === "fileChange" ? parseFileChangeSummary(String(parsedInput.changes || "")) : []),
     [tool.name, parsedInput.changes],
@@ -4057,6 +4055,15 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   }, [codeFullscreen]);
 
   const getToolSummary = () => {
+    if (isApplyPatch) {
+      if (applyPatchDiffs.length > 0) {
+        const firstPath = getRelativePath(applyPatchDiffs[0].filePath);
+        return applyPatchDiffs.length > 1 ? `${firstPath} (+${applyPatchDiffs.length - 1})` : firstPath;
+      }
+      const fileMatch = applyPatchInput.match(/\*\*\* (?:Update|Add|Delete) File:\s+(.+)/);
+      if (fileMatch) return getRelativePath(fileMatch[1].trim());
+      return "Apply patch";
+    }
     if (isNested) {
       if (nestedActions.length === 1) {
         const inner = nestedActions[0];
@@ -4080,15 +4087,6 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     if (isCodeSearch && parsedInput.query) return truncateStr(String(parsedInput.query), 40);
     if (isStructuredOutput) return structuredPayloadSummary(parsedInput) || null;
 
-    if (tool.name === "apply_patch") {
-      if (applyPatchDiffs.length > 0) {
-        const firstPath = getRelativePath(applyPatchDiffs[0].filePath);
-        return applyPatchDiffs.length > 1 ? `${firstPath} (+${applyPatchDiffs.length - 1})` : firstPath;
-      }
-      const fileMatch = applyPatchInput.match(/\*\*\* (?:Update|Add|Delete) File:\s+(.+)/);
-      if (fileMatch) return getRelativePath(fileMatch[1].trim());
-      return "Apply patch";
-    }
     if (tool.name === "file_read" || tool.name === "file_write" || tool.name === "file_edit") {
       return getRelativePath(String(parsedInput.file_path || parsedInput.path || ""));
     }
@@ -4244,7 +4242,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
 
   const summary = getToolSummary();
   const resultSummary = getResultSummary();
-  const displayToolName = isNested && nestedActions.length === 1
+  const displayToolName = isApplyPatch ? formatToolName("apply_patch") : isNested && nestedActions.length === 1
     ? formatToolName(nestedActions[0].name)
     : formatToolName(tool.name);
 
@@ -4292,7 +4290,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   };
   const startLine = getStartLine();
 
-  const toolColor = toolColorClass(tool.name);
+  const toolColor = toolColorClass(isApplyPatch ? "apply_patch" : tool.name);
 
   const targetStart = changeRange?.start ?? changeIndex;
   const targetEnd = changeRange?.end ?? changeIndex;
@@ -4538,10 +4536,10 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 commentContext={lineCommentCtx(filePath)}
               />
             )
-          ) : tool.name === "apply_patch" || tool.name === "fileChange" ? (
-            (tool.name === "apply_patch" ? applyPatchDiffs : fileChangeDiffs).length > 0 ? (
+          ) : isApplyPatch || isFileChange ? (
+            (isApplyPatch ? applyPatchDiffs : fileChangeDiffs).length > 0 ? (
               <div className="max-h-80 overflow-auto">
-                {(tool.name === "apply_patch" ? applyPatchDiffs : fileChangeDiffs).map((diff, idx) => {
+                {(isApplyPatch ? applyPatchDiffs : fileChangeDiffs).map((diff, idx) => {
                   const diffLanguage = getFileExtension(diff.filePath);
                   const diffStartLine = diff.hunks[0]?.oldStart || diff.hunks[0]?.newStart || 1;
                   return (
@@ -4560,7 +4558,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                   );
                 })}
               </div>
-            ) : tool.name === "apply_patch" && applyPatchInput.trim() ? (
+            ) : isApplyPatch && applyPatchInput.trim() ? (
               <div className="max-h-80 overflow-auto">
                 <pre className="p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-text-secondary">
                   {applyPatchInput}
@@ -4694,6 +4692,25 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
             </div>
           ) : (
             <div className="p-2 text-xs text-sol-text-dim">No output</div>
+          )}
+          {(isEmbeddedPatch || (isApplyPatch && result?.is_error)) && (
+            <details open={result?.is_error || undefined} className="border-t border-sol-border/20">
+              <summary className="cursor-pointer px-2 py-1 text-xs text-sol-text-dim">Execution details</summary>
+              <div className="max-h-80 overflow-auto">
+                {nestedActions.length > 1 && (
+                  <NestedStepList
+                    steps={nestedActions.map((action) => ({ label: formatToolName(action.name), summary: sharedToolSummary(action) }))}
+                    labelClass="text-sol-cyan/80"
+                  />
+                )}
+                {shellCommand && <pre className="p-2 text-xs font-mono whitespace-pre-wrap text-sol-text-muted">{shellCommand}</pre>}
+                {processedContent.trim() ? (
+                  <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                    {renderAnsi(processedContent)}
+                  </pre>
+                ) : <div className="p-2 text-xs text-sol-text-dim">{result ? "No output" : "Running"}</div>}
+              </div>
+            </details>
           )}
         </div>
       )}
@@ -10157,14 +10174,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const composeTeamId = useInboxStore((s) => s.sessions[conversationId]?.team_id);
   // Suggestion pills pref — off by default; the strip mounts only when on.
   const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
-  // The mention picker is team-scoped, so it surfaces sessions from sibling repos.
-  // We show a row's project only when it differs from this one — same-repo rows
-  // would just repeat it. This is the current conversation's project basename.
-  const composeProject = useInboxStore((s) => {
-    const sess = s.sessions[conversationId];
-    const p = sess?.project_path || sess?.git_root;
-    return p ? (p.split("/").filter(Boolean).pop() || null) : null;
-  });
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
     const teamId = mentionTeamId
@@ -10185,7 +10194,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Distinct from isResuming: true only while a destructive kill+restart is in flight, so the
   // footer can say "Killing & restarting" instead of the gentler "Waiting for connection".
   const [isRestarting, setIsRestarting] = useState(false);
-  const [optimisticSending, setOptimisticSending] = useState(false);
+  const hasPendingSend = useInboxStore((s) => convHasPendingSend(s.pendingMessages[conversationId]));
   const [showModeLabel, setShowModeLabel] = useState(false);
   const [modeTooltip, setModeTooltip] = useState(false);
   const modeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -10193,7 +10202,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Guards the one allowed automatic kill+restart: fires once when the daemon has declared a
   // sent message undeliverable (delivery genuinely failed over many minutes), reset per message.
   const autoRestartTriggeredRef = useRef(false);
-  const resumeSessionMutation = useMutation(api.users.resumeSession);
   const convCommand = useInboxStore((s) => s.convCommand);
   // Live kill→resume ladder while a recovery is in flight: the daemon stamps
   // each command row (executed_at + result/error), so the footer can show what
@@ -10225,25 +10233,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const sentContentRef = useRef<string | null>(null);
 
   type AutocompleteTrigger = { type: "/" | "@"; startPos: number } | null;
-  type AcItem = {
-    label: string;
-    description?: string;
-    type: string;
-    id?: string;
-    shortId?: string;
-    status?: string;
-    priority?: string;
-    docType?: string;
-    messageCount?: number;
-    projectPath?: string;
-    updatedAt?: number;
-    idleSummary?: string;
-    goal?: string;
-    model?: string;
-    image?: string;
-    handle?: string;
-    isBot?: boolean;
-  };
+  type AcItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
   const acRef = useRef<HTMLDivElement>(null);
@@ -10307,69 +10297,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         .map(s => ({ label: s.name, description: s.description, type: "skill" as string }));
     }
     if (acTrigger.type === "@") {
-      const items: AcItem[] = [];
-      const currentMentionItems = effectiveMentionItemsRef.current;
-
-      // Cap per type so a flood of sessions doesn't push tasks/docs out.
-      const perTypeCap = acQuery ? 5 : 6;
-      const perType: Record<string, number> = {};
-      const entityMatches: AcItem[] = [];
-      if (currentMentionItems?.length) {
-        for (const m of currentMentionItems) {
-          // Chat: a label tags nothing here, and a person with no resolvable
-          // handle cannot be notified — offering either is a lie the composer
-          // tells about what the send will do.
-          if (chatMentionMode && m.type === "label") continue;
-          if (chatMentionMode && m.type === "person" && !m.handle) continue;
-          if (!mentionItemMatches(m, acQuery)) continue;
-          const c = perType[m.type] || 0;
-          if (c >= perTypeCap) continue;
-          perType[m.type] = c + 1;
-          entityMatches.push({
-            label: m.label,
-            description: m.sublabel,
-            type: m.type,
-            id: m.id,
-            shortId: m.shortId,
-            image: m.image,
-            messageCount: m.messageCount,
-            projectPath: m.projectPath,
-            updatedAt: m.updatedAt,
-            idleSummary: m.idleSummary,
-            handle: m.handle,
-            isBot: m.isBot,
-          });
-        }
-      }
-
-      // Server results fill in below the cache hits, deduped by id, sharing the
-      // same per-type budget so the dropdown stays scannable.
-      const localIds = new Set(entityMatches.map(m => m.id));
-      for (const m of acServerItems) {
-        if (!m.id || localIds.has(m.id)) continue;
-        const c = perType[m.type] || 0;
-        if (c >= perTypeCap + 3) continue;
-        perType[m.type] = c + 1;
-        entityMatches.push({
-          label: m.label,
-          description: m.sublabel,
-          type: m.type,
-          id: m.id,
-          shortId: m.shortId,
-          image: m.image,
-          messageCount: m.messageCount,
-          projectPath: m.projectPath,
-          updatedAt: m.updatedAt,
-          idleSummary: m.idleSummary,
-        });
-      }
-
-      // Regroup same-type items contiguously (first-appearance type order): the
-      // dropdown renders grouped-by-type and its selection index math assumes
-      // each type occupies one contiguous run of acItems.
-      const typeOrder: string[] = [];
-      for (const it of entityMatches) if (!typeOrder.includes(it.type)) typeOrder.push(it.type);
-      for (const t of typeOrder) items.push(...entityMatches.filter(it => it.type === t));
+      const candidates = mergeMentionSuggestions(
+        effectiveMentionItemsRef.current ?? [], acServerItems,
+        mentionViewTimes(useInboxStore.getState()),
+      ).filter((m) => {
+        if (chatMentionMode && (m.type === "label" || (m.type === "person" && !m.handle))) return false;
+        return mentionItemMatches(m, acQuery);
+      });
+      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 8 : 6, acQuery)
+        .map((m) => ({ ...m, description: m.sublabel }));
 
       const fileMatches = (filePathsRef.current || [])
         .filter(p => {
@@ -10722,7 +10658,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         setIsRestarting(true);
         handleRestartResult(await convCommand(conversationId, "restartSession", ghostRestartContext()));
       } else {
-        await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
+        await convCommand(conversationId, "resumeSession");
       }
     } catch (err) {
       // A parked request is durable but has no response from which to infer a
@@ -10749,7 +10685,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setIsResuming(false);
       setIsRestarting(false);
     }
-  }, [conversationId, resumeSessionMutation, convCommand, isResuming, isExistingMessageDead, messageStatus?.status, ghostRestartContext, handleRestartResult, serverDeleted]);
+  }, [conversationId, convCommand, isResuming, isExistingMessageDead, messageStatus?.status, ghostRestartContext, handleRestartResult, serverDeleted]);
 
   // Stop the (otherwise indefinite) retry loop for a message that genuinely can't land. Resolve
   // the id from either the precise tracker or the conversation-scoped pending row, since a reload
@@ -11094,15 +11030,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, [composeMode, setMessage]);
 
   const [isMultiline, setIsMultiline] = useState(false);
+  useWatchEffect(() => {
+    const el = textareaRef.current;
+    if (!FIELD_SIZING_SUPPORTED || !el) return;
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[0]?.borderBoxSize[0]?.blockSize;
+      if (height !== undefined) setIsMultiline(Math.round(height) > 36);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [composeMode]);
+
   const resetTextareaHeight = () => {
+    if (FIELD_SIZING_SUPPORTED) return;
     const el = textareaRef.current;
     if (!el) return;
-    if (FIELD_SIZING_SUPPORTED) {
-      // The browser autosizes via `field-sizing: content` — no JS writes, no
-      // forced reflow. clientHeight is already-laid-out most of the time here.
-      setIsMultiline(el.clientHeight > 36);
-      return;
-    }
     // Fallback (Safari): the write→measure→write dance forces two synchronous
     // reflows of the whole page per keystroke — it was the single largest
     // app-code frame in typing CPU profiles, so it only runs where the CSS
@@ -11429,7 +11371,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : { media_type: img.file.type, preview_url: img.previewUrl, uploading: true }
     );
     sendingRef.current = true;
-    if (isInactive) setOptimisticSending(true);
     if (draftTimerRef.current) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
@@ -11471,7 +11412,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         // this same message optimistically in the MAIN window (send & open) without
         // a second send — same clientId means it dedupes against the server echo.
         onDidSend?.({ conversationId: resolvedId, content: expandedContent, clientId });
-        setOptimisticSending(false);
         setSentAt(Date.now());
         sentContentRef.current = trimmed;
         setShowStuckBanner(false);
@@ -11480,12 +11420,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         // the optimistic bubble pending; the rekey continuation sends it with
         // the same clientId once the real conversation row arrives.
         if (isParkedDispatchError(error)) {
-          setOptimisticSending(false);
           return;
         }
         toast.error(error instanceof Error ? error.message : "Failed to send message");
         useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
-        setOptimisticSending(false);
       }
     };
 
@@ -11869,8 +11807,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       handleForkSend();
       return;
     }
+    // ⌘↵ QUEUES for a busy session, and the queue drains when the agent frees
+    // up. A gated composer — a comment on a commit, a thread on a diff line —
+    // has no session behind it, so nothing ever drains that queue and the same
+    // chord swallowed the comment with no error. There it posts instead, which
+    // is what the composer's own hint promised and what anyone arriving from
+    // GitHub presses.
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
+      if (onGateSend) { void handleSubmit(e); return; }
       const text = message.trim();
       if (text) {
         sendingRef.current = true;
@@ -12062,7 +12007,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       Session idle
                     </span>
                   )
-                ) : optimisticSending ? (
+                ) : hasPendingSend ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Resuming session...
@@ -12142,24 +12087,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               them in. */}
           {threadStateNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
-            const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
-              person: { icon: User, color: "text-sol-green", label: "People" },
-              task: { icon: CheckSquare, color: "text-sol-violet", label: "Tasks" },
-              doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
-              session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
-              plan: { icon: MapIcon, color: "text-sol-violet", label: "Plans" },
-              label: { icon: Tag, color: "text-sol-magenta", label: "Labels" },
-              file: { icon: FolderOpen, color: "text-sol-base01", label: "Files" },
-              skill: { icon: Hash, color: "text-sol-orange", label: "Commands" },
-            };
-            const grouped: Array<{ type: string; items: typeof acItems; startIdx: number }> = [];
-            let idx = 0;
-            for (const item of acItems) {
-              let group = grouped.find(g => g.type === item.type);
-              if (!group) { group = { type: item.type, items: [], startIdx: idx }; grouped.push(group); }
-              group.items.push(item);
-              idx++;
-            }
             const dropdown = (
               <div
                 ref={acRef}
@@ -12168,67 +12095,26 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   : `mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "conv-col" : "max-w-md"}`}
                 style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH } : undefined}
               >
-                <div className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto">
-                  {grouped.map(group => {
-                    const config = typeConfig[group.type] || typeConfig.doc;
-                    const GIcon = config.icon;
+                <div role="listbox" aria-label="Suggestions" className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto overflow-x-hidden">
+                  <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-sol-text-dim">
+                    {acTrigger.type === "@" ? "Recently viewed · then updated" : "Commands"}
+                  </div>
+                  {acItems.map((item, index) => {
+                    const isSelected = index === clampedAcIndex;
                     return (
-                      <div key={group.type}>
-                        <div className="px-3 py-1.5 flex items-center gap-1.5">
-                          <GIcon className={`w-3 h-3 ${config.color}`} />
-                          <span className="text-[10px] font-medium uppercase tracking-wider text-sol-text-dim">{config.label}</span>
-                        </div>
-                        {group.items.map((item, i) => {
-                          const globalIdx = group.startIdx + i;
-                          const isSelected = globalIdx === clampedAcIndex;
-                          // Session rows: prefer what it's about (idle summary); else show the
-                          // project only when it's a different repo than the current conversation.
-                          const itemProject = item.projectPath?.split("/").filter(Boolean).pop() || null;
-                          const sessionLeft = item.idleSummary || (itemProject && itemProject !== composeProject ? itemProject : null);
-                          return (
-                            <button
-                              key={item.id || item.label}
-                              type="button"
-                              ref={isSelected ? (el) => { if (el && acScrollRef.current) { el.scrollIntoView({ block: "nearest" }); acScrollRef.current = false; } } : undefined}
-                              onMouseEnter={() => setAcIndex(globalIdx)}
-                              onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
-                              className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 transition-colors ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
-                            >
-                              {item.image ? (
-                                <AvatarImg src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
-                              ) : item.isBot ? (
-                                <Bot className="w-3.5 h-3.5 flex-shrink-0 text-sol-violet" />
-                              ) : (
-                                <Hash className={`w-3.5 h-3.5 flex-shrink-0 ${config.color} opacity-60`} />
-                              )}
-                              <span className="text-sm flex-shrink-0">
-                                {item.type === "file" ? (item.label.split("/").pop() || item.label) : item.type === "skill" ? `/${item.label}` : item.label}
-                              </span>
-                              {item.type === "file" && (
-                                <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0 truncate max-w-[50%]">{item.label.replace(/\/[^/]+$/, "")}</span>
-                              )}
-                              {item.type === "session" ? (
-                                // Sessions show real metadata, never an id: what it's about
-                                // (idle summary) or a cross-repo project on the left, msgs · age on the right.
-                                <span className="flex items-center gap-1.5 min-w-0 flex-1 text-[11px] text-sol-text-dim">
-                                  {sessionLeft && (
-                                    <span className="truncate">{sessionLeft}</span>
-                                  )}
-                                  {(item.messageCount || item.updatedAt) && (
-                                    <span className="ml-auto flex-shrink-0 flex items-center gap-1 whitespace-nowrap">
-                                      {item.messageCount ? <span>{item.messageCount} msg{item.messageCount === 1 ? "" : "s"}</span> : null}
-                                      {item.messageCount && item.updatedAt ? <span className="opacity-40">·</span> : null}
-                                      {item.updatedAt ? <span>{formatRelativeTime(item.updatedAt)}</span> : null}
-                                    </span>
-                                  )}
-                                </span>
-                              ) : item.type !== "file" && item.description ? (
-                                <span className="text-[11px] text-sol-text-dim font-mono truncate">{item.description}</span>
-                              ) : null}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <button
+                        key={`${item.type}:${item.id || item.label}`}
+                        type="button"
+                        data-mention-id={item.id}
+                        role="option"
+                        aria-selected={isSelected}
+                        ref={isSelected ? (el) => { if (el && acScrollRef.current) { el.scrollIntoView({ block: "nearest" }); acScrollRef.current = false; } } : undefined}
+                        onMouseEnter={() => setAcIndex(index)}
+                        onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
+                        className={`w-full text-left px-3 py-2 flex items-center gap-2.5 ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
+                      >
+                        <MentionSuggestion item={item} />
+                      </button>
                     );
                   })}
                   {acTrigger.type === "@" && acServerLoading && (
@@ -13036,47 +12922,33 @@ const ConversationViewInner = (
     }
   }, [selectedWorkflowId, createWorkflowRun, conversation?.project_path, conversation?._id]);
 
-  const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
-  const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleCycleMode = useCallback(() => {
     // convexConvId is undefined until the session exists server-side; a not-yet-started
     // draft carries a stub id and has no live process to receive keystrokes.
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    void convCommand(convexConvId, "sendKeysToSession", { keys: "BTab" }).catch((err) => {
+    const currentMode = useInboxStore.getState().sessions[convexConvId]?.permission_mode || "default";
+    const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
+    void convCommand(convexConvId, "sendKeysToSession", { keys: "BTab" }, { permission_mode: CC_MODE_ORDER[nextIdx] }).catch((err) => {
       if (isParkedDispatchError(err)) return;
       toast.error(err instanceof Error ? err.message : "Failed to change permission mode");
     });
-    const currentMode = optimisticMode || managedSession?.permission_mode || "default";
-    const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
-    setOptimisticMode(CC_MODE_ORDER[nextIdx]);
-    clearTimeout(optimisticTimerRef.current);
-    optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, effectiveIsOwner, convCommand, optimisticMode, managedSession?.permission_mode, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
 
   const handleEnableBypass = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    const currentMode = optimisticMode || managedSession?.permission_mode || "default";
+    const currentMode = useInboxStore.getState().sessions[convexConvId]?.permission_mode || "default";
     const currentIdx = CC_MODE_ORDER.indexOf(currentMode);
     const targetIdx = CC_MODE_ORDER.indexOf("bypassPermissions");
     if (currentIdx === -1 || targetIdx === -1 || currentIdx === targetIdx) return;
     const steps = (targetIdx - currentIdx + CC_MODE_ORDER.length) % CC_MODE_ORDER.length;
     if (steps === 0) return;
     const keys = Array(steps).fill("BTab").join(" ");
-    void convCommand(convexConvId, "sendKeysToSession", { keys }).catch((err) => {
+    void convCommand(convexConvId, "sendKeysToSession", { keys }, { permission_mode: "bypassPermissions" }).catch((err) => {
       if (isParkedDispatchError(err)) return;
       toast.error(err instanceof Error ? err.message : "Failed to enable bypass permissions");
     });
-    setOptimisticMode("bypassPermissions");
-    clearTimeout(optimisticTimerRef.current);
-    optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, effectiveIsOwner, convCommand, optimisticMode, managedSession?.permission_mode, convexConvId]);
-  useWatchEffect(() => {
-    if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
-      setOptimisticMode(null);
-      clearTimeout(optimisticTimerRef.current);
-    }
-  }, [managedSession?.permission_mode, optimisticMode]);
-  const effectiveMode = optimisticMode || managedSession?.permission_mode || "default";
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
+  const effectiveMode = managedSession?.permission_mode || "default";
 
   const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
 
@@ -13794,21 +13666,20 @@ const ConversationViewInner = (
   // message still pending delivery is the dangerous case. On 2026-08-28 an
   // Escape pressed seconds after send reached the daemon 400ms after it had
   // injected that message and cancelled the turn the message had just started.
-  const liveAgentStatus = managedSession?.agent_status as LiveAgentStatus | undefined;
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    const liveAgentStatus = useInboxStore.getState().sessions[convexConvId]?.agent_status as LiveAgentStatus | undefined;
     if (!isActiveAgentStatus(liveAgentStatus)) return;
-    void convCommand(convexConvId, "sendEscapeToSession").then(
-      () => toast.info("Escape sent to session"),
-      (err) => {
+    setUserScrolled(false);
+    void convCommand(convexConvId, "sendEscapeToSession").catch((err) => {
         if (isParkedDispatchError(err)) {
           toast.info("Escape queued — it will send when the connection recovers");
           return;
         }
         toast.error(err instanceof Error ? err.message : "Failed to send Escape");
-      },
-    );
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId, liveAgentStatus]);
+    });
+    requestAnimationFrame(() => scrollToBottomFnRef.current());
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId, setUserScrolled]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -14008,38 +13879,14 @@ const ConversationViewInner = (
   // Mention items are computed lazily (on dropdown open) to avoid subscribing
   // ConversationView to s.sessions, mentionIndex, and teamMembers — those
   // change on every heartbeat and would re-render this 10K-line component.
-  const buildMentionItems = useCallback(() => {
+  const refreshMentionItems = useCallback(() => {
     const state = useInboxStore.getState();
-    const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
-    const inScope = (rec: any): boolean => inActiveWorkspace(rec, convTeamId);
-    const persons: MentionItem[] = (state.teamMembers || []).map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
-    const tasks: MentionItem[] = Object.values(state.mentionIndex?.tasks ?? {})
-      .filter(inScope)
-      .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
-      .map((t: any) => ({ id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id, status: t.status, priority: t.priority, updatedAt: t.updated_at }));
-    const docs: MentionItem[] = Object.values(state.mentionIndex?.docs ?? {})
-      .filter((d: any) => d.doc_type !== "plan" && inScope(d))
-      .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
-      .map((d: any) => ({ id: d._id, type: "doc", label: d.title, sublabel: d.doc_type, docType: d.doc_type, updatedAt: d.updated_at }));
-    const plans: MentionItem[] = Object.values(state.mentionIndex?.plans ?? {})
-      .filter(inScope)
-      .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
-      .map((p: any) => ({ id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id, status: p.status, goal: p.goal, updatedAt: p.updated_at }));
-    const sessions: MentionItem[] = Object.values(state.sessions)
-      .filter(s => !s.is_subagent && inScope(s))
-      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
-      // shortId must be the cc id (`jx…`, the 7-char prefix of _id) — not session_id
-      // (the Claude JSONL UUID), which the mention parser can't match and cast can't resolve.
-      // No id rides in sublabel: the picker shows real metadata (project · msgs · time) instead.
-      .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || undefined, shortId: s._id.slice(0, 7).toLowerCase(), messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
-    // Labels are personal filing, not team entities — never team-filtered.
-    const labels: MentionItem[] = labelMentionItems(state);
-    const all = [...persons, ...labels, ...tasks, ...docs, ...plans, ...sessions];
-    all.sort(byRecency);
-    mentionItemsRef.current = all;
+    const scope = convTeamId
+      ? { kind: "team" as const, teamId: convTeamId }
+      : { kind: "personal" as const, userId: String(state.currentUser?._id ?? "") };
+    mentionItemsRef.current = buildMentionItems(state, scope);
   }, [convTeamId]);
-  useWatchEffect(() => { buildMentionItems(); }, [buildMentionItems]);
-  const handleMentionQuery = useCallback((_q: string) => { buildMentionItems(); }, [buildMentionItems]);
+  const handleMentionQuery = useCallback((_q: string) => { refreshMentionItems(); }, [refreshMentionItems]);
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -14443,9 +14290,9 @@ const ConversationViewInner = (
     return latestUsageOf(messages as any);
   }, [messages]);
 
-  // Tool/task stats moved into the ConversationTaskProgress / ...MenuItem leaves so this
-  // monolith no longer re-renders every time getConversationToolStats re-scans a streaming
-  // conversation. (See useConversationTaskStats.)
+  // Tool/task stats live in ConversationTaskProgress / ...MenuItem so this
+  // monolith does not re-render when a streaming TodoWrite updates the store.
+  // (See useConversationTaskStats.)
 
   // Key a message row by its STABLE client id (present on both the optimistic
   // copy as `_clientId` and the server echo as `client_id`, equal by
