@@ -13,7 +13,6 @@ import {
   AGENT_MODEL_CONFIG,
   agentSupportsExecutionTransport,
   isStashHidden,
-  isSessionUpdateBatch,
 } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -472,9 +471,6 @@ export async function beginLegacyQuiescenceInDb(
     if (inspected > 128) {
       fail("LEGACY_PENDING_QUEUE_REQUIRES_DRAIN", "drain the unresolved legacy queue to at most 128 messages before migration");
     }
-    if (messages.some((message: any) => isSessionUpdateBatch(message.content))) {
-      fail("LEGACY_SESSION_UPDATES_REQUIRE_RESOLUTION", "deliver or explicitly cancel unresolved session updates before migration");
-    }
   }
 
   await ctx.db.insert("conversation_execution_heads", {
@@ -632,14 +628,6 @@ export async function activateAfterLegacyQuiescenceInDb(
     fail(
       "LEGACY_DELIVERY_OUTCOME_UNRESOLVED",
       `legacy message ${String(unsafe._id)} is ${unsafe.status}; resolve it before activation`,
-    );
-  }
-
-  const outstandingUpdate = legacyInFlight.find((message: any) => isSessionUpdateBatch(message.content));
-  if (outstandingUpdate) {
-    fail(
-      "LEGACY_SESSION_UPDATES_REQUIRE_RESOLUTION",
-      `legacy session update ${String(outstandingUpdate._id)} must be delivered or explicitly cancelled before activation`,
     );
   }
 

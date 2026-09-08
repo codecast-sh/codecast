@@ -17,6 +17,37 @@ const write = (root: string, rel: string, text: string) => { const file = path.j
 const read = (root: string, rel: string) => fs.readFileSync(path.join(root, rel), "utf8");
 afterEach(() => { for (const p of scratch.splice(0)) fs.rmSync(p, { force: true, recursive: true }); });
 
+test("selective Claude project MCP definitions fan out to actual worktree keys without copying account state", async () => {
+  const local = temp();
+  const remote = temp();
+  const sourceRoot = path.join(local, "src/app with spaces");
+  const targetRoots = [path.join(remote, "work/app"), path.join(remote, "worktrees/feature 'quoted'")];
+  write(sourceRoot, "AGENTS.md", "Project rules\n");
+  write(local, ".claude.json", JSON.stringify({ oauthAccount: { accessToken: "fixture-laptop-auth" }, mcpServers: { global: { command: "portable-tool" } }, projects: { [sourceRoot]: { hasTrustDialogAccepted: true, mcpServers: { local: { command: "portable-tool", args: ["--root", sourceRoot] } } } } }));
+  for (const root of targetRoots) fs.mkdirSync(root, { recursive: true });
+  write(remote, ".claude.json", JSON.stringify({ oauthAccount: { accessToken: "fixture-host-auth" }, projects: { [targetRoots[0]!]: { hasTrustDialogAccepted: true } } }));
+  const build = () => buildHomeMirror({ home: local, hostHome: remote, config: { user_id: "u" }, deviceId: "d", projects: targetRoots.map((targetRoot) => ({ host: "ubuntu@test.invalid", sourceRoot, targetRoot })), gitEnv: { GIT_CONFIG_GLOBAL: path.join(local, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" } });
+  const built = await build();
+  const parsed = await parseMirrorBundle(built.bytes);
+  const projected = parsed.files.find((file) => file.path === ".claude.json")!;
+  expect(projected.kind).toBe("claude-mcp");
+  expect(projected.bytes.toString()).not.toContain("fixture-laptop-auth");
+  expect(projected.bytes.toString()).not.toContain("hasTrustDialogAccepted");
+  for (const root of targetRoots) expect(JSON.parse(projected.bytes.toString()).projects[root].mcpServers.local.args).toEqual(["--root", root]);
+  const apply = async (bytes: Buffer) => applyMirrorBundle(await parseMirrorBundle(bytes), { home: remote, configUserId: "u", previousStamp: readStamp(remote), refresh: () => {} });
+  expect((await apply(built.bytes)).errors).toEqual([]);
+  const host = JSON.parse(read(remote, ".claude.json"));
+  expect(host.oauthAccount.accessToken).toBe("fixture-host-auth");
+  expect(host.projects[targetRoots[0]!].hasTrustDialogAccepted).toBe(true);
+  write(local, ".claude.json", JSON.stringify({ oauthAccount: { accessToken: "fixture-laptop-auth" }, mcpServers: {} }));
+  expect((await apply((await build()).bytes)).errors).toEqual([]);
+  const removed = JSON.parse(read(remote, ".claude.json"));
+  expect(removed.oauthAccount.accessToken).toBe("fixture-host-auth");
+  expect(removed.projects[targetRoots[0]!]).toEqual({ hasTrustDialogAccepted: true });
+  expect(removed.projects[targetRoots[1]!]).toBeUndefined();
+  expect(verifyMirrorStamp(remote)?.complete).toBe(true);
+});
+
 test("temp HOME end-to-end refresh covers edits, deletions, drift, conflicts, pins and registered worktrees", async () => {
   const local = temp();
   const remote = temp();

@@ -5,7 +5,9 @@ import { Loader2 } from "lucide-react";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
+  type AppConnectionScope,
   type AppConnectionStatus,
+  type AppConnectionsResult,
   type AppDescriptor,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -16,9 +18,10 @@ import { InlineSpinner, SurfaceError } from "./EmptyStates";
 /**
  * The Apps tab of /capabilities: the services a workspace can connect so agents
  * can act through them. The catalog is `APP_DESCRIPTORS` (shared contracts);
- * connection state is `appConnections.listConnections`; the connect flows are
- * the EXISTING ones — Slack's getInstallUrl action (slack.ts) and the GitHub
- * App install URL (lib/githubAppInstall, shared with the settings page) — this
+ * connection state is `appConnections.listConnections`, which answers once per
+ * app per scope it supports (team, personal); the connect flows are the
+ * EXISTING ones — Slack's getInstallUrl action (slack.ts) and the GitHub App
+ * install URL (lib/githubAppInstall, shared with the settings page) — this
  * surface only presses their buttons.
  *
  * Deliberately logo-less: a kind icon in an accent tile plus the name in strong
@@ -31,7 +34,7 @@ import { InlineSpinner, SurfaceError } from "./EmptyStates";
 const connectedDate = (at: number) =>
   new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
-function ScopePill({ scope }: { scope: "team" | "personal" }) {
+function ScopePill({ scope }: { scope: AppConnectionScope }) {
   return (
     <span className="inline-flex items-center rounded px-1.5 py-[1px] text-[10px] font-mono border border-sol-border text-sol-text-muted">
       {scope}
@@ -41,11 +44,13 @@ function ScopePill({ scope }: { scope: "team" | "personal" }) {
 
 function AppCard({
   descriptor,
+  scope,
   connection,
   loading,
   me,
 }: {
   descriptor: AppDescriptor;
+  scope: AppConnectionScope;
   /** Undefined while the query has not answered (or failed) — unknown, not "no". */
   connection: AppConnectionStatus | undefined;
   loading: boolean;
@@ -55,7 +60,7 @@ function AppCard({
   const comingSoon = descriptor.connectKind === "coming-soon";
   const connected = connection?.status === "connected" ? connection : null;
 
-  const { connect, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, me);
+  const { connect, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, me, scope);
   const disconnect = async () => {
     if (!connected?.disconnect_id) return;
     if (!confirm(`Disconnect ${descriptor.name}? Agents lose access it granted.`)) return;
@@ -78,6 +83,7 @@ function AppCard({
         <span className="text-sm font-semibold text-sol-text tracking-tight">
           {descriptor.name}
         </span>
+        <ScopePill scope={scope} />
         <span className="flex-1" />
         {comingSoon ? (
           <span className="text-[10px] font-mono text-sol-text-dim border border-dashed border-sol-border rounded px-1.5 py-[1px]">
@@ -112,7 +118,6 @@ function AppCard({
 
       {connected ? (
         <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-muted">
-          <ScopePill scope={connected.scope} />
           <span className="truncate">
             by {connected.by_me ? "you" : (connected.by ?? "a removed account")}
             {" · "}
@@ -120,7 +125,7 @@ function AppCard({
             {connected.detail ? ` · ${connected.detail}` : ""}
           </span>
           <span className="flex-1" />
-          {/* Only where a real revoke path exists (GitHub). Slack has none
+          {/* Only where a real revoke path exists FOR THIS CALLER. Slack has none
               server-side, so no button rather than a dead one. */}
           {connected.disconnect_id && (
             <button
@@ -161,19 +166,42 @@ function AppCard({
   );
 }
 
+/**
+ * The cards this tab draws: one per (app, scope) entry the query answered.
+ * Before it answers, the catalog at every scope each app supports, so the
+ * grid has its shape while the state is still "checking".
+ */
+function cardsOf(result: AppConnectionsResult | undefined) {
+  if (!result) {
+    return APP_IDS.flatMap((id) =>
+      APP_DESCRIPTORS[id].scopes.map((scope) => ({
+        key: `${id}:${scope}`,
+        descriptor: APP_DESCRIPTORS[id],
+        scope,
+        connection: undefined as AppConnectionStatus | undefined,
+      })),
+    );
+  }
+  return result.apps.map((entry) => {
+    const scope: AppConnectionScope = entry.status === "coming_soon" ? "team" : entry.scope;
+    return { key: `${entry.id}:${scope}`, descriptor: APP_DESCRIPTORS[entry.id], scope, connection: entry as AppConnectionStatus | undefined };
+  });
+}
+
 export function AppsTab() {
   const connections = useQueryNoThrow(api.appConnections.listConnections, {});
   const me = useQueryNoThrow(api.users.getCurrentUser, {});
-  const loading = connections.data === undefined && !connections.error;
-  const byId = new Map<string, AppConnectionStatus>(
-    (connections.data?.apps ?? []).map((a: AppConnectionStatus) => [a.id, a]),
-  );
+  const result = connections.data as AppConnectionsResult | undefined;
+  const loading = result === undefined && !connections.error;
+  const cards = cardsOf(result);
 
   return (
     <div className="space-y-3">
       <p className="text-[11px] text-sol-text-dim max-w-2xl leading-relaxed">
-        Connections belong to your workspace, not to a machine. Tokens stay server-side — an
-        agent asks the backend to act, it never holds the credential.
+        {result?.team
+          ? `Team connections serve ${result.team.name}; personal ones follow you into every workspace you work in.`
+          : "Personal connections follow you into every workspace you work in."}{" "}
+        Tokens stay server-side — an agent asks the backend to act, it never holds the credential.
       </p>
       {connections.error && (
         <SurfaceError
@@ -182,11 +210,12 @@ export function AppsTab() {
         />
       )}
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-        {APP_IDS.map((id) => (
+        {cards.map((card) => (
           <AppCard
-            key={id}
-            descriptor={APP_DESCRIPTORS[id]}
-            connection={byId.get(id)}
+            key={card.key}
+            descriptor={card.descriptor}
+            scope={card.scope}
+            connection={card.connection}
             loading={loading}
             me={me.data}
           />

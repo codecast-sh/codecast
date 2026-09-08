@@ -165,9 +165,18 @@ export const cacheToken = internalMutation({
   },
 });
 
+/** The scope an installation row binds to, as the resolvers compare it. */
+function installationScopeKey(row: { team_id?: Id<"teams">; scope_user_id?: Id<"users"> }): string {
+  return row.team_id ? `team:${row.team_id}` : row.scope_user_id ? `user:${row.scope_user_id}` : "none";
+}
+
 export const storeInstallation = internalMutation({
   args: {
-    team_id: v.id("teams"),
+    /** Exactly one of these: the team the install binds to, or the person
+     *  whose own credential it becomes (usable in every workspace they work
+     *  in). */
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")),
     installation_id: v.number(),
     account_login: v.string(),
     account_type: v.union(v.literal("User"), v.literal("Organization")),
@@ -181,21 +190,31 @@ export const storeInstallation = internalMutation({
     installed_by_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    // The callback's OAuth `state` (team_id + user_id) is client-supplied and
-    // unsigned, so bind an installation to a team only if the named installer
-    // actually belongs to it. Blocks binding your GitHub installation to a team
-    // you're not in. (Signing the state end-to-end is a follow-up.)
-    if (!args.installed_by_user_id || !(await isTeamMember(ctx, args.installed_by_user_id, args.team_id))) {
+    // The callback's install `state` is client-supplied and unsigned, so it
+    // names identity, never authority: a team install binds only if the named
+    // installer actually belongs to that team, and a personal install binds
+    // only to the installer themself. Blocks binding your GitHub installation
+    // to a team you're not in, or to another person.
+    if (!!args.team_id === !!args.scope_user_id) {
+      throw new Error("An installation binds to exactly one of a team or a person");
+    }
+    if (!args.installed_by_user_id) throw new Error("Installer is unknown");
+    if (args.team_id && !(await isTeamMember(ctx, args.installed_by_user_id, args.team_id))) {
       throw new Error("Installer is not a member of the target team");
     }
+    if (args.scope_user_id && String(args.scope_user_id) !== String(args.installed_by_user_id)) {
+      throw new Error("A personal installation binds only to its installer");
+    }
+    const scope = { team_id: args.team_id, scope_user_id: args.scope_user_id };
     const existing = await ctx.db
       .query("github_app_installations")
       .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
       .first();
     // Don't let a fresh install silently re-point an installation that is
-    // already bound to a different team (would move that team's repo access).
-    if (existing && String(existing.team_id) !== String(args.team_id)) {
-      throw new Error("Installation is already linked to another team");
+    // already bound to a different workspace (would move that workspace's
+    // repo access).
+    if (existing && installationScopeKey(existing) !== installationScopeKey(scope)) {
+      throw new Error("Installation is already linked to another workspace");
     }
 
     // `by_account_login` is the index every repository lookup splits its owner
@@ -203,7 +222,7 @@ export const storeInstallation = internalMutation({
     const accountLogin = normalizeRepository(args.account_login);
     if (existing) {
       await ctx.db.patch(existing._id, {
-        team_id: args.team_id,
+        ...scope,
         account_login: accountLogin,
         account_type: args.account_type,
         account_id: args.account_id,
@@ -216,7 +235,7 @@ export const storeInstallation = internalMutation({
 
     const now = Date.now();
     return await ctx.db.insert("github_app_installations", {
-      team_id: args.team_id,
+      ...scope,
       installation_id: args.installation_id,
       account_login: accountLogin,
       account_type: args.account_type,
@@ -230,6 +249,52 @@ export const storeInstallation = internalMutation({
   },
 });
 
+/** Drop an installation and its cached token — the one removal, whoever asks. */
+export async function deleteInstallationRows(
+  ctx: { db: any },
+  installation: { _id?: Id<"github_app_installations">; installation_id: number },
+): Promise<void> {
+  if (installation._id) await ctx.db.delete(installation._id);
+  const token = await ctx.db
+    .query("github_installation_tokens")
+    .withIndex("by_installation_id", (q: any) => q.eq("installation_id", installation.installation_id))
+    .first();
+  if (token) await ctx.db.delete(token._id);
+}
+
+/**
+ * Who may revoke an installation: a team install needs a team admin (it is
+ * the team's credential, and taking it away reshapes everyone's access); a
+ * personal install is its owner's alone, and nobody else may touch it.
+ * Fails closed, like the team helpers it composes.
+ */
+export async function requireInstallationRevoker(
+  ctx: { db: any },
+  userId: Id<"users">,
+  installation: { team_id?: Id<"teams">; scope_user_id?: Id<"users"> },
+): Promise<void> {
+  if (installation.team_id) {
+    await requireTeamAdmin(ctx as any, userId, installation.team_id);
+    return;
+  }
+  if (installation.scope_user_id && String(installation.scope_user_id) === String(userId)) return;
+  throw new Error("Forbidden: only the owner may disconnect a personal installation");
+}
+
+/** Whether `userId` would be handed a disconnect id for this installation. */
+export async function canRevokeInstallation(
+  ctx: { db: any },
+  userId: Id<"users">,
+  installation: { team_id?: Id<"teams">; scope_user_id?: Id<"users"> },
+): Promise<boolean> {
+  try {
+    await requireInstallationRevoker(ctx, userId, installation);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const removeInstallation = internalMutation({
   args: {
     installation_id: v.number(),
@@ -239,19 +304,7 @@ export const removeInstallation = internalMutation({
       .query("github_app_installations")
       .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
       .first();
-
-    if (installation) {
-      await ctx.db.delete(installation._id);
-    }
-
-    const token = await ctx.db
-      .query("github_installation_tokens")
-      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
-      .first();
-
-    if (token) {
-      await ctx.db.delete(token._id);
-    }
+    await deleteInstallationRows(ctx, installation ?? { installation_id: args.installation_id });
   },
 });
 
@@ -301,29 +354,43 @@ async function installationsCoveringRepo(
 }
 
 /**
- * The team that governs an installation. Read through the access layer so an
- * installation answers the same "which team owns this record" question as every
- * other resource.
+ * The team that governs a TEAM installation. Read through the access layer so
+ * an installation answers the same "which team owns this record" question as
+ * every other resource. A personal installation governs no team and answers
+ * undefined; callers that serve a team skip it.
  *
- * `team_id` is required on this table and the row links no conversation, so the
- * answer today is always that team_id. An undefined answer would mean the
- * access layer had started narrowing a credential by conversation visibility,
- * which reads to the caller exactly like "nobody installed this app" — the
- * owning team would silently stop resolving its own installation. Say it.
+ * For a team row the row links no conversation, so the answer is always its
+ * team_id. An undefined answer there would mean the access layer had started
+ * narrowing a credential by conversation visibility, which reads to the caller
+ * exactly like "nobody installed this app" — the owning team would silently
+ * stop resolving its own installation. Say it.
  */
 async function installationTeam(
   ctx: QueryCtx,
   installation: Doc<"github_app_installations">,
-): Promise<Id<"teams">> {
+): Promise<Id<"teams"> | undefined> {
+  if (!installation.team_id) return undefined;
   const team = await effectiveTeamForResource(ctx, installation);
   if (!team) {
     throw new Error(
       `GitHub installation ${installation.installation_id} (row ${installation._id}) resolved to no team. ` +
-        `team_id is required on github_app_installations, so repair that row — and do not let a ` +
+        `A team installation must keep its team_id, so repair that row — and do not let a ` +
         `credential lookup be narrowed by conversation visibility.`,
     );
   }
   return team;
+}
+
+/** The personal installation `userId` owns that covers `repository`, or null. */
+async function personalInstallationForRepo(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  repository: string,
+): Promise<Doc<"github_app_installations"> | null> {
+  for (const installation of await installationsCoveringRepo(ctx, repository)) {
+    if (installation.scope_user_id && String(installation.scope_user_id) === String(userId)) return installation;
+  }
+  return null;
 }
 
 /**
@@ -342,10 +409,22 @@ export const getInstallationForRepoInTeam = internalQuery({
   handler: async (ctx, args) => {
     for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
       const team = await installationTeam(ctx, installation);
-      if (String(team) === String(args.team_id)) return installation;
+      if (team && String(team) === String(args.team_id)) return installation;
     }
     return null;
   },
+});
+
+/**
+ * The personal installation that lets `user_id` act on `repository`, or null.
+ * The second half of every user-facing resolution: the work's team is tried
+ * first (getInstallationForRepoInTeam), and the person's own credential
+ * serves when the team has none — that is what lets one personal grant follow
+ * its owner into every workspace they work in.
+ */
+export const getPersonalInstallationForRepo = internalQuery({
+  args: { repository: v.string(), user_id: v.id("users") },
+  handler: async (ctx, args) => await personalInstallationForRepo(ctx, args.user_id, args.repository),
 });
 
 /**
@@ -353,8 +432,10 @@ export const getInstallationForRepoInTeam = internalQuery({
  *
  * `user_id` is required because an internalQuery carries no identity of its own:
  * a caller that cannot name a principal cannot be scoped, and there is no safe
- * default. `team_id` narrows the search to one workspace and fails loudly if the
- * caller is not in it; omitting it searches every team the caller belongs to.
+ * default. `team_id` narrows the search to that workspace — its own install,
+ * else the caller's personal one — and fails loudly if the caller is not in
+ * it. Omitting it answers for the person: their personal install, else the
+ * install of any team they belong to.
  */
 export const getInstallationForRepo = internalQuery({
   args: {
@@ -370,29 +451,72 @@ export const getInstallationForRepo = internalQuery({
       await requireTeamMembership(ctx, args.user_id, args.team_id);
     }
 
-    for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
-      const team = await installationTeam(ctx, installation);
-      if (args.team_id && String(team) !== String(args.team_id)) continue;
-      if (!(await isTeamMember(ctx, args.user_id, team))) continue;
-      return installation;
+    const covering = await installationsCoveringRepo(ctx, args.repository);
+    if (args.team_id) {
+      for (const installation of covering) {
+        const team = await installationTeam(ctx, installation);
+        if (team && String(team) === String(args.team_id)) return installation;
+      }
+      return await personalInstallationForRepo(ctx, args.user_id, args.repository);
     }
 
+    const personal = await personalInstallationForRepo(ctx, args.user_id, args.repository);
+    if (personal) return personal;
+    for (const installation of covering) {
+      const team = await installationTeam(ctx, installation);
+      if (!team || !(await isTeamMember(ctx, args.user_id, team))) continue;
+      return installation;
+    }
     return null;
   },
 });
 
+/**
+ * The installations one workspace holds, for the surfaces that list them (the
+ * GitHub card's detail, the import picker). A team's rows for its members;
+ * the caller's own rows with no team named.
+ */
+async function installationsForScope(
+  ctx: { db: any },
+  scope: { team_id?: Id<"teams">; user_id: Id<"users"> },
+): Promise<Doc<"github_app_installations">[]> {
+  if (scope.team_id) {
+    await requireTeamMembership(ctx as any, scope.user_id, scope.team_id);
+    return await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", scope.team_id))
+      .collect();
+  }
+  return await ctx.db
+    .query("github_app_installations")
+    .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scope.user_id))
+    .collect();
+}
+
 export const listInstallations = query({
   args: {
-    team_id: v.id("teams"),
+    /** The team whose installations to list; absent lists the caller's personal ones. */
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
-    await requireTeamMembership(ctx, userId, args.team_id);
+    return await installationsForScope(ctx, { team_id: args.team_id, user_id: userId });
+  },
+});
 
-    return await ctx.db
-      .query("github_app_installations")
-      .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
-      .collect();
+/**
+ * Every installation a piece of work can import through: the work's team's,
+ * plus the acting user's personal ones. Both, because the credential resolver
+ * answers with either — a picker that listed only the team's repos would hide
+ * repositories the person can already sync.
+ */
+export const installationsForWork = internalQuery({
+  args: { team_id: v.optional(v.id("teams")), user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const personal = await installationsForScope(ctx, { user_id: args.user_id });
+    if (!args.team_id) return personal;
+    const team = await installationsForScope(ctx, { team_id: args.team_id, user_id: args.user_id });
+    return [...team, ...personal];
   },
 });
 
@@ -407,19 +531,8 @@ export const deleteInstallation = mutation({
     if (!installation) {
       throw new Error("Installation not found");
     }
-    await requireTeamAdmin(ctx, userId, installation.team_id);
-
-    await ctx.db.delete(args.installation_id);
-
-    const token = await ctx.db
-      .query("github_installation_tokens")
-      .withIndex("by_installation_id", (q) => q.eq("installation_id", installation.installation_id))
-      .first();
-
-    if (token) {
-      await ctx.db.delete(token._id);
-    }
-
+    await requireInstallationRevoker(ctx, userId, installation);
+    await deleteInstallationRows(ctx, installation);
     return { success: true };
   },
 });

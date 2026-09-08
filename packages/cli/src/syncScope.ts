@@ -28,8 +28,30 @@ export function claudeProjectsDir(): string {
 // to "-"). Enforced on every machine regardless of the user's excluded_paths config.
 export const TEST_SCRATCH_DIRNAME = "codecasttestscratch";
 
-export function isTestScratchPath(projectPath: string): boolean {
-  return !!projectPath && projectPath.includes(TEST_SCRATCH_DIRNAME);
+// The other two markers the test suites stamp into their throwaway cwds:
+// `messagingHarness.ts` (a real tmux pane running the fake claude shim) and
+// `fakeClaudeShim.ts`. Both carry hyphens, so they survive the slug ENCODE that
+// names the dir under ~/.claude/projects but not the lossy DECODE back to a
+// path, where every "-" reads as a "/". isTestArtifactPath normalizes both
+// spellings to one before matching, so a marker is recognized whichever form
+// of the path a caller happens to hold.
+const TEST_PATH_MARKERS = [
+  TEST_SCRATCH_DIRNAME,
+  "codecast-test-cwd-",
+  "codecast-fake-claude-",
+];
+
+/**
+ * A path produced by codecast's own test suites, in any of its spellings: the
+ * recorded cwd, the encoded dir name under ~/.claude/projects, or the decoded
+ * dir name. Never user data, so no gate may let one through — a synced one is a
+ * phantom conversation in the user's inbox (2026-06-03 for the scratch marker,
+ * 2026-09-07 for the harness ones).
+ */
+export function isTestArtifactPath(candidatePath: string): boolean {
+  if (!candidatePath) return false;
+  const normalized = candidatePath.replace(/[/.]/g, "-");
+  return TEST_PATH_MARKERS.some(marker => normalized.includes(marker));
 }
 
 export function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
@@ -52,7 +74,7 @@ export function isPathExcluded(projectPath: string, excludedPaths?: string): boo
 }
 
 export function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
-  if (isTestScratchPath(projectPath)) {
+  if (isTestArtifactPath(projectPath)) {
     return false;
   }
   if (!config.sync_mode || config.sync_mode === "all") {
@@ -70,16 +92,12 @@ export function isProjectAllowedToSync(projectPath: string, config: Config): boo
   });
 }
 
-// Marker substrings produced by the test harness (`messagingHarness.ts` →
-// `codecast-test-cwd-`, `fakeClaudeShim.ts` → `codecast-fake-claude-`).
-// These tmpdirs end up under ~/.claude/projects/<encoded-cwd>/ when tests
-// run, and without filtering the daemon would upload them to the user's
-// production Convex inbox. Tests that need a real session-watcher event
-// loop should pick a neutral project dir name.
-const TEST_PROJECT_MARKERS = ["codecast-test-cwd-", "codecast-fake-claude-"];
-
+// The live watcher's own view of the same rule: these tmpdirs end up under
+// ~/.claude/projects/<encoded-cwd>/ when tests run, and without filtering the
+// daemon would upload them to the user's production Convex inbox. Tests that
+// need a real session-watcher event loop should pick a neutral project dir name.
 export function isTestProjectDir(projectDirName: string): boolean {
-  return TEST_PROJECT_MARKERS.some(m => projectDirName.includes(m));
+  return isTestArtifactPath(projectDirName);
 }
 
 // Dynamic-workflow run snapshot: <projectDir>/<session>/workflows/wf_<id>.json

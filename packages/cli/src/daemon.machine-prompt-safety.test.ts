@@ -6,17 +6,16 @@ import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
-import { formatSessionUpdateBatch } from "../../shared/contracts/sessionUpdates";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
+import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
-afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); clearPromptHolds(); setPendingRedrive(null); });
 const poll = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Deploy" });
 const session = (body: string) => `<session-message from="jxsrc01">\n${body}\n</session-message>`;
-const batch = (body: string) => formatSessionUpdateBatch("batch-1", [{ id: "update-1", from: "jxsrc01", sent_at: 1, body }]);
 const menu = "Ship the change?\n❯ 1. Deploy\n  2. Deny\nEnter to select · Esc to cancel";
 const cursorMenu = "Ship the change?\n❯ 1. Deploy\n  2. Deny";
 const confirmation = "Confirm deployment\nPress Enter to continue · Esc to cancel";
@@ -118,19 +117,20 @@ function fixture(transport = "tmux", cached = true) {
   const closed: unknown[][] = [];
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
-  const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean }>();
+  const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
   const syncService = {
     getConversationOwnerInfo: async () => null,
     claimPendingMessageForDelivery: async (id: string) => messages.get(id) ?? { _id: id, conversation_id: "conv" },
     updateMessageStatus: async (args: any) => { statuses.push(args); },
     updateSessionAgentStatus: async () => {},
-    retryMessage: async (id: string) => { events.push(`retry:${id}`); },
+    retryMessage: async (id: string, opts?: { holdReason?: string }) => { events.push(opts?.holdReason ? `hold:${id}` : `retry:${id}`); },
     setSessionError: async () => {},
     cancelPendingMessage: fail("cancel pending"),
   };
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold,
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {
@@ -174,7 +174,7 @@ function fixture(transport = "tmux", cached = true) {
       : { tmuxTarget: null, proc: { tty: "ttys-test", termProgram: transport } },
     markInjectedBestEffort: (_sync: unknown, id: string) => {
       statuses.push({ messageId: id, status: "injected" });
-      injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false });
+      injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false, pasted: false });
     },
     clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
     autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
@@ -257,7 +257,7 @@ describe("machine prompt delivery safety", () => {
   test("fixture resolves a one-second delivery sleep while retry timers stay controlled", async () => {
     const f = fixture();
     const start = f.clock.now;
-    f.scheduleMessageRetry("update", 0, "conv", batch("context"));
+    f.scheduleMessageRetry("update", 0, "conv", session("context"));
     await new Promise<void>(resolve => f.deps.setTimeout(resolve, 1000));
     expect(f.clock.now).toBe(start + 1000);
     expect(f.events).toEqual([]);
@@ -275,7 +275,7 @@ describe("machine prompt delivery safety", () => {
     await expect(spin()).rejects.toThrow("fixture step cap exceeded");
   });
 
-  for (const format of [session, batch]) {
+  for (const format of [session]) {
     for (const body of ["Do not Deploy yet", "yes", "deny", poll]) {
       test(`${format.name}: ${body} preserves content and both prompt caches`, async () => {
         const f = fixture();
@@ -296,11 +296,11 @@ describe("machine prompt delivery safety", () => {
   test.each([menu, cursorMenu, confirmation])("tmux blocks a real menu before Escape, drain, paste or Enter: %s", async pane => {
     const f = fixture();
     f.state.menu = pane;
-    await expect(f.injectViaTmux("target:0.0", batch("yes"))).rejects.toThrow("human answer");
+    await expect(f.injectViaTmux("target:0.0", session("yes"))).rejects.toThrow("human answer");
     expect(f.events).toEqual([]);
   });
 
-  for (const format of [session, batch]) {
+  for (const format of [session]) {
     test.each([menu, confirmation])(`${format.name}: full literal dialog inside the composer submits once`, async literal => {
       const f = fixture();
       f.state.menu = null;
@@ -319,7 +319,7 @@ describe("machine prompt delivery safety", () => {
   ])("a real menu still blocks when its explanation quotes composer text: %s", async explanation => {
     const f = fixture();
     f.state.menu = menu.replace("Enter to select", `${explanation}\nEnter to select`);
-    await expect(f.deliver(batch("context only"))).rejects.toThrow("human answer");
+    await expect(f.deliver(session("context only"))).rejects.toThrow("human answer");
     expect(f.events).toEqual([]);
   });
 
@@ -367,8 +367,8 @@ describe("machine prompt delivery safety", () => {
     const f = fixture();
     f.state.menu = null;
     f.state.history = menu;
-    await expect(f.deliver(batch("new evidence"))).resolves.toBe(true);
-    expect(f.bodies).toEqual([batch("new evidence")]);
+    await expect(f.deliver(session("new evidence"))).resolves.toBe(true);
+    expect(f.bodies).toEqual([session("new evidence")]);
     expect(f.closed).toHaveLength(0);
   });
 
@@ -398,22 +398,44 @@ describe("machine prompt delivery safety", () => {
   ])(`held update releases the legacy slot for a human answer and one retry (cached=${cached}): %s`, async pane => {
     const f = fixture("tmux", cached);
     f.state.menu = pane;
-    const content = batch("Do not Deploy yet");
+    const content = session("Do not Deploy yet");
     await f.scan([{ _id: "update", content }, { _id: "answer", content: poll }]);
     expect(f.state.menu).toBeNull();
     expect(f.bodies).toEqual([]);
-    expect(f.events).toEqual(["Enter"]);
+    // The refused update is HELD (re-pended without spending a retry), the
+    // human's answer is never held, and delivering it releases the hold.
+    expect(f.events).toEqual(["hold:update", "Enter"]);
+    expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBe(0);
     expect(f.deps.messagesInFlight.size).toBe(0);
     expect(f.deps.conversationDeliveryActive.size).toBe(0);
     expect(f.deps.tmuxTargetLocks.size).toBe(0);
     expect(f.deps.injectedMessageTs.has("update")).toBe(false);
     expect(f.statuses.filter((s: { status: string }) => s.status === "delivered" || s.status === "undeliverable")).toEqual([]);
-    const retry = f.timers.find((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)!;
-    expect(retry).toBeDefined();
-    await retry.fn();
     await f.scan([{ _id: "update", content }]);
     expect(f.bodies).toEqual([content]);
     await f.scan([{ _id: "update", content }]);
+    expect(f.bodies).toEqual([content]);
+  });
+
+  test("a held conversation is skipped without touching the pane until the prompt closes", async () => {
+    const f = fixture();
+    const content = session("status update");
+    await f.scan([{ _id: "held", content }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:held"]);
+    expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    const captures = f.state.captures;
+    await f.scan([{ _id: "held", content }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:held"]);
+    let redriven = 0;
+    setPendingRedrive(() => { redriven++; });
+    f.state.menu = null;
+    expect(releasePromptHold("conv")).toBe(true);
+    expect(redriven).toBe(1);
+    await f.scan([{ _id: "held", content }]);
     expect(f.bodies).toEqual([content]);
   });
 
@@ -432,7 +454,7 @@ describe("machine prompt delivery safety", () => {
     if (stage === "before Escape") f.hooks.capture = () => { if (f.state.captures === 1) f.state.menu = menu; };
     if (stage === "before paste") f.hooks.loaded = () => { f.state.menu = menu; };
     if (stage === "before Enter") f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
-    await expect(f.deliver(batch("preserve this"))).rejects.toThrow("human answer");
+    await expect(f.deliver(session("preserve this"))).rejects.toThrow("human answer");
     expect(f.events).not.toContain("Enter");
     if (stage !== "before Enter") expect(f.events).not.toContain("paste");
     if (stage === "before Escape") expect(f.events).toEqual([]);
@@ -489,12 +511,12 @@ describe("machine prompt delivery safety", () => {
   ])("startup capture releases a real menu hold immediately: %s", async pane => {
     const f = fixture();
     f.state.menu = pane;
-    await expect(f.resumeReadiness(batch("context"))).rejects.toThrow("human answer");
+    await expect(f.resumeReadiness(session("context"))).rejects.toThrow("human answer");
     expect(f.state.captures).toBe(1);
     expect(f.events).toEqual([]);
     f.state.menu = null;
     f.state.history = menu;
-    await expect(f.resumeReadiness(batch("context"))).resolves.toBe(true);
+    await expect(f.resumeReadiness(session("context"))).resolves.toBe(true);
     await expect(f.resumeReadiness("human prose")).resolves.toBe(true);
   });
 
@@ -518,7 +540,7 @@ describe("machine prompt delivery safety", () => {
   test("started-pane machine callback precedes trust input without altering default probes", async () => {
     const f = fixture("tmux", false);
     f.state.menu = `Do you trust this folder?\n❯ 1. Yes\n  2. No\nEnter to select · Esc to cancel`;
-    await expect(f.deliver(batch("context"))).rejects.toThrow("human answer");
+    await expect(f.deliver(session("context"))).rejects.toThrow("human answer");
     expect(f.events).toEqual([]);
     expect(f.statuses).toEqual([]);
     const entry = f.deps.startedSessionTmux.get("conv");
@@ -528,7 +550,7 @@ describe("machine prompt delivery safety", () => {
   });
 
   for (const transport of ["kitty", "WezTerm", "iTerm.app", "Apple_Terminal"]) {
-    for (const format of [session, batch]) test.each([menu, confirmation])(`${transport}: ${format.name} literal dialog stays composer text: %s`, async literal => {
+    for (const format of [session]) test.each([menu, confirmation])(`${transport}: ${format.name} literal dialog stays composer text: %s`, async literal => {
       const f = fixture(transport);
       f.state.menu = null;
       const content = format(`Captured output:\n${literal}\nEnd of quoted evidence.`);
@@ -540,7 +562,7 @@ describe("machine prompt delivery safety", () => {
 
     test(`${transport}: live menu holds without input or resume; ready composer recovers`, async () => {
       const f = fixture(transport);
-      const content = batch("Do not Deploy yet");
+      const content = session("Do not Deploy yet");
       await expect(f.deliver(content)).rejects.toThrow("human answer");
       expect(f.events).toEqual([]);
       expect(f.pendingInteractivePrompts.get("sid")).toBe(f.prompt);
@@ -573,7 +595,7 @@ describe("machine prompt delivery safety", () => {
     const f = fixture(transport);
     f.state.menu = null;
     f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
-    await expect(f.deliver(batch("preserve"))).rejects.toThrow("human answer");
+    await expect(f.deliver(session("preserve"))).rejects.toThrow("human answer");
     expect(f.events).toEqual(["paste"]);
   });
 
@@ -583,7 +605,7 @@ describe("machine prompt delivery safety", () => {
     expect(human.script).toContain('tell s to write text ""');
     const answer = f.buildAppleScript("iTerm2", "/dev/ttys-test", poll, f.parsePollMessage(poll));
     expect(answer.script).toContain('tell s to write text "Enter" without newline');
-    const machinePaste = f.buildAppleScript("iTerm2", "/dev/ttys-test", batch("hello"), null, false, true, false);
+    const machinePaste = f.buildAppleScript("iTerm2", "/dev/ttys-test", session("hello"), null, false, true, false);
     expect(machinePaste.script).not.toContain('tell s to write text ""');
   });
 });

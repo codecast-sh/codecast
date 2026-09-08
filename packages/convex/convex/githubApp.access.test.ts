@@ -9,7 +9,7 @@
 // name they could guess.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { getInstallationForRepo, getInstallationForRepoInTeam } from "./githubApp";
+import { getInstallationForRepo, getInstallationForRepoInTeam, getPersonalInstallationForRepo } from "./githubApp";
 
 const TEAM_A = "t_a";
 const TEAM_B = "t_b";
@@ -218,7 +218,7 @@ describe("the webhook lookup is scoped too", () => {
     // And it may hand back a team to attribute to, nothing else. A token read
     // here would be exactly the unscoped credential resolution this forbids.
     const body = src.slice(enclosing, src.indexOf("\n}", idx));
-    expect(body).toContain("installation?.team_id");
+    expect(body).toContain("?.team_id");
     expect(body).not.toContain("token");
   });
 
@@ -228,5 +228,53 @@ describe("the webhook lookup is scoped too", () => {
     ).text();
     const calls = src.match(/internal\.githubApp\.getInstallationForRepoInTeam/g) ?? [];
     expect(calls.length).toBe(2);
+  });
+});
+
+// A personal installation is one person's credential: it follows its owner
+// into every workspace they work in, and reaches nobody else — not their
+// teammates, and never a webhook that serves a team.
+describe("personal installations", () => {
+  function personalInstallation(owner: string, extra: Record<string, any> = {}) {
+    return teamBInstallation({ _id: `gai_${owner}`, team_id: undefined, scope_user_id: owner, installation_id: 777, ...extra });
+  }
+
+  test("the owner resolves it with no team named", async () => {
+    expect((await lookup([personalInstallation(USER_A)], { user_id: USER_A }))?.installation_id).toBe(777);
+  });
+
+  test("the owner resolves it inside a team that has no install of its own", async () => {
+    expect((await lookup([personalInstallation(USER_A)], { user_id: USER_A, team_id: TEAM_A }))?.installation_id).toBe(777);
+  });
+
+  test("the team's own install outranks the member's personal one", async () => {
+    const both = [personalInstallation(USER_A), teamAInstallation()];
+    expect((await lookup(both, { user_id: USER_A, team_id: TEAM_A }))?.installation_id).toBe(111);
+  });
+
+  test("with no team named the person's own install comes first", async () => {
+    const both = [teamAInstallation(), personalInstallation(USER_A)];
+    expect((await lookup(both, { user_id: USER_A }))?.installation_id).toBe(777);
+  });
+
+  test("a teammate never reaches another person's install", async () => {
+    // USER_B is in team B only; USER_A's personal install is not team B's.
+    expect(await lookup([personalInstallation(USER_A)], { user_id: USER_B })).toBeNull();
+    expect(await lookup([personalInstallation(USER_A)], { user_id: USER_B, team_id: TEAM_B })).toBeNull();
+  });
+
+  test("the team-only entry point skips it — a webhook serves teams", async () => {
+    const found = await (getInstallationForRepoInTeam as any)._handler(ctx([personalInstallation(USER_A)]), {
+      repository: "acme/widgets",
+      team_id: TEAM_A,
+    });
+    expect(found).toBeNull();
+  });
+
+  test("the personal entry point answers for the owner alone", async () => {
+    const c = ctx([personalInstallation(USER_A), teamAInstallation()]);
+    const mine = await (getPersonalInstallationForRepo as any)._handler(c, { repository: "acme/widgets", user_id: USER_A });
+    expect(mine?.installation_id).toBe(777);
+    expect(await (getPersonalInstallationForRepo as any)._handler(c, { repository: "acme/widgets", user_id: USER_B })).toBeNull();
   });
 });

@@ -89,11 +89,13 @@ export async function resolveTeamForRepository(
   ctx: { db: any },
   repository: string,
 ): Promise<Id<"teams"> | null> {
-  const installation = await ctx.db
+  // A personal installation is one person's credential and routes nothing to
+  // a team, so only a team-bound row answers here — whichever comes first.
+  const installations = await ctx.db
     .query("github_app_installations")
     .withIndex("by_account_login", (q: any) => q.eq("account_login", repositoryOwner(repository)))
-    .first();
-  return installation?.team_id ?? null;
+    .collect();
+  return installations.find((row: any) => row.team_id)?.team_id ?? null;
 }
 
 async function prByNumber(ctx: { db: any }, repository: string, number: number) {

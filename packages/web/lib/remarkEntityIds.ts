@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseMessageRefUrl, messageRefPayload } from "./entityLinks";
+import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
 
@@ -12,6 +12,12 @@ import { filesHref } from "./vault/vaultHref";
 // server-side; ids that resolve to nothing render back as plain text.
 const ENTITY_ID_RE = bareEntityIdRegex();
 const MENTION_RE = entityMentionRegex();
+// `#3263`, `PR 3263`, `pull request #12`: a pull request named by number
+// alone. Runs after ENTITY_ID_RE so `owner/repo#12` is already a link and
+// never reaches it. The words in front stay prose; the number becomes a
+// `pr:#N|<as written>` payload that EntityAwareLink completes from the
+// conversation's repository, or prints back verbatim where there is none.
+const CONTEXTUAL_PR_RE = contextualPrRefRegex();
 // Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
 // they're the entity whose body IS markdown meant to be read in place.
 const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
@@ -138,7 +144,9 @@ function referenceKey(node: any): string | null {
       const ref = node.url.slice(9).toLowerCase();
       // Dates and message refs are not objects a reader needs introduced once.
       if (ref.startsWith("date:") || ref.startsWith("msg:")) return null;
-      return ref;
+      // A payload may carry the text as written after `|`; the object is the
+      // part before it, so "PR 3263" and "#3263" count as one reference.
+      return ref.split("|")[0];
     }
     const parsed = parseEntityUrl(node.url);
     if (parsed) return parsed.id.toLowerCase();
@@ -249,6 +257,23 @@ export function remarkEntityIds() {
             url: `entity://${match.toLowerCase()}`,
             children: [{ type: "text", value: match.toLowerCase() }],
           };
+        },
+      ],
+      [
+        CONTEXTUAL_PR_RE,
+        (_full: string, lead: string, digits: string, tail: string) => {
+          // Each number is its own link and every other character stays a
+          // text node, so the prose a reader sees never changes: "PRs 3263
+          // (a), 3262 (b)" keeps its words and gains two references.
+          return splitContextualPrRefs(lead, digits, tail ?? "").map((token) =>
+            "text" in token
+              ? { type: "text" as const, value: token.text }
+              : {
+                  type: "link" as const,
+                  url: `entity://${contextualPrRefPayload(token.number, token.label)}`,
+                  children: [{ type: "text" as const, value: contextualPrRefPayload(token.number, token.label) }],
+                },
+          );
         },
       ],
       [

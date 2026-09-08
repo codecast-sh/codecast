@@ -595,3 +595,93 @@ test("Claude MCP pins omit the consumed server definition rather than inventing 
   expect(result.errors).toEqual([]);
   expect(JSON.parse(read(".claude/.mcp.json"))).toEqual({ mcpServers: { portable: { command: "linux-tool" } } });
 });
+
+test("selective Claude MCP ownership updates and removes definitions while preserving host login, trust and edits", async () => {
+  const root = path.join(home, "work/app");
+  const local = { command: "portable-tool", args: ["first"] };
+  const initialHost = { oauthAccount: { accessToken: "fixture-host-auth" }, numStartups: 17, mcpServers: { host: { command: "host-tool" } }, projects: { [root]: { hasTrustDialogAccepted: true, mcpServers: { host: { command: "project-host-tool" } } } } };
+  write(".claude.json", JSON.stringify(initialHost));
+  const file = (value: unknown): BundleInput[] => [{ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify(value)) }];
+  const first = { mcpServers: { local }, projects: { [root]: { mcpServers: { local } } } };
+  expect((await apply(await bundleOf(file(first)))).errors).toEqual([]);
+  expect(JSON.parse(read(".claude.json"))).toMatchObject(initialHost);
+  const next = { mcpServers: { local: { command: "portable-tool", args: ["second"] } } };
+  const updated = await apply(await bundleOf(file(next)));
+  expect(updated.host_edited).toEqual([]);
+  expect(updated.errors).toEqual([]);
+  expect(JSON.parse(read(".claude.json")).projects[root]).toEqual(initialHost.projects[root]);
+  const edited = JSON.parse(read(".claude.json"));
+  edited.mcpServers.local.args = ["remote edit"];
+  write(".claude.json", JSON.stringify(edited));
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  const conflict = await apply(await bundleOf(file({ mcpServers: { local: { command: "portable-tool", args: ["third"] } } })));
+  expect(conflict.host_edited).toEqual([".claude.json"]);
+  expect(JSON.parse(read(".claude.json")).mcpServers.local.args).toEqual(["remote edit"]);
+  expect(readStamp(home)?.complete).toBe(false);
+  edited.mcpServers.local.args = ["third"];
+  write(".claude.json", JSON.stringify(edited));
+  expect((await apply(await bundleOf(file({ mcpServers: { local: { command: "portable-tool", args: ["third"] } } })))).host_edited).toEqual([]);
+  expect((await apply(await bundleOf([]))).errors).toEqual([]);
+  expect(JSON.parse(read(".claude.json"))).toEqual(initialHost);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  expect(readStamp(home)?.files[".claude.json"]?.source).not.toContain("fixture-host-auth");
+});
+
+test("Claude global and project pins mask only matching commands and recover when removed or changed", async () => {
+  const { emptyOverrides, reconcilePins, readHostMcpOverrides, writeHostMcpOverrides } = await import("../hostMcpOverrides");
+  const root = path.join(home, "work/app");
+  const value = (command = "mac-only", timeout = 10) => ({ mcpServers: { mac: { command, timeout } }, projects: { [root]: { mcpServers: { mac: { command: "portable" } } } } });
+  const file = (projection: unknown): BundleInput[] => [{ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify(projection)) }];
+  const pins = reconcilePins(emptyOverrides(), "claude", [{ name: "mac", command: "mac-only", status: "unsupported" }], "now");
+  expect((await apply(await bundleOf(file(value())))).errors).toEqual([]);
+  writeHostMcpOverrides(home, pins);
+  const disabled = await apply(await bundleOf(file(value("mac-only", 20))));
+  expect(disabled.errors).toEqual([]);
+  expect(disabled.host_edited).toEqual([]);
+  expect(JSON.parse(read(".claude.json")).mcpServers.mac).toBeUndefined();
+  expect(JSON.parse(read(".claude.json")).projects[root].mcpServers.mac.command).toBe("portable");
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  writeHostMcpOverrides(home, emptyOverrides());
+  expect((await apply(await bundleOf(file(value("mac-only", 30))))).host_edited).toEqual([]);
+  expect(JSON.parse(read(".claude.json")).mcpServers.mac.timeout).toBe(30);
+  writeHostMcpOverrides(home, pins);
+  expect((await apply(await bundleOf(file(value())))).errors).toEqual([]);
+  const changed = await apply(await bundleOf(file(value("linux-tool"))));
+  expect(changed.errors).toEqual([]);
+  expect(changed.host_edited).toEqual([]);
+  expect(JSON.parse(read(".claude.json")).mcpServers.mac.command).toBe("linux-tool");
+  expect(readHostMcpOverrides(home).claude).toEqual({});
+});
+
+test("chunked verification covers a binary final chunk and mode drift on an unchanged bundle", async () => {
+  const bytes = Buffer.alloc(2 * 64 * 1024 + 17, 0xff);
+  const file: BundleInput = { path: ".agents/skills/asset.bin", kind: "verbatim", mode: "0600", bytes };
+  const built = await bundleOf([file]);
+  expect((await apply(built)).errors).toEqual([]);
+  expect((await apply(built)).applied).toEqual([]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  const drifted = Buffer.from(bytes);
+  drifted[drifted.length - 1] = 0;
+  write(file.path, drifted);
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(built)).host_edited).toEqual([file.path]);
+  expect(fs.readFileSync(path.join(home, file.path)).equals(drifted)).toBe(true);
+  write(file.path, bytes);
+  fs.chmodSync(path.join(home, file.path), 0o700);
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(built)).applied).toEqual([file.path]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+test("pruning one harness keeps stale-pin removals already reconciled for the other harness", async () => {
+  const { emptyOverrides, reconcilePins, readHostMcpOverrides, writeHostMcpOverrides } = await import("../hostMcpOverrides");
+  const unsupported = [{ name: "mac", command: "mac-only", status: "unsupported" as const }];
+  writeHostMcpOverrides(home, reconcilePins(reconcilePins(emptyOverrides(), "codex", unsupported, "now"), "claude", unsupported, "now"));
+  const claude = (command: string): BundleInput => ({ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify({ mcpServers: { mac: { command } } })) });
+  expect((await apply(await bundleOf([claude("mac-only"), { path: ".codex/config.toml", kind: "codex-toml", mode: "0600", bytes: Buffer.from('[mcp_servers.mac]\ncommand = "mac-only"\n') }]))).errors).toEqual([]);
+  const changed = await apply(await bundleOf([claude("portable")]));
+  expect(changed.errors).toEqual([]);
+  expect(changed.host_edited).toEqual([]);
+  expect(readHostMcpOverrides(home)).toEqual(emptyOverrides());
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});

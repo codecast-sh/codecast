@@ -7,6 +7,7 @@ import {
   ChromeNotFoundError,
   findChromeBinary,
   isPidAlive,
+  keychainArgs,
   launchChrome,
   stopChrome,
   type ChromeInstance,
@@ -38,6 +39,27 @@ afterEach(async () => {
   if (tmpDir && fs.existsSync(tmpDir)) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Keychain flags
+// ---------------------------------------------------------------------------
+
+describe("keychainArgs", () => {
+  test("a macOS home without a login keychain gets the mock keychain flag", () => {
+    expect(keychainArgs({ HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
+  });
+
+  test("a macOS home with a login keychain keeps the real keychain", () => {
+    const dir = path.join(tmpDir, "Library", "Keychains");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "login.keychain-db"), "");
+    expect(keychainArgs({ HOME: tmpDir }, "darwin")).toEqual([]);
+  });
+
+  test("other platforms never pass the flag", () => {
+    expect(keychainArgs({ HOME: tmpDir }, "linux")).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { FORCE_PERSISTENCE_VAR, ensureClaudeSettingsPersistence } from "../../ag
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import { installAllStableHooks } from "../../stableContext.js";
 import { maskPins, readHostMcpOverrides, writeHostMcpOverrides, type HostMcpOverrides, type McpSourceServer } from "../hostMcpOverrides.js";
-import { assertSafePath, sha256, type ParsedBundle, type ParsedFile } from "./bundle.js";
+import { assertMirrorFileContent, assertSafePath, sha256, type ParsedBundle, type ParsedFile } from "./bundle.js";
 import {
   dropCodecastHooks, findAllOwnedSections, joinTomlTables, splitTomlTables, stripOwnedSections, tableFirstSegment,
   type MirrorKind, type TomlTable,
@@ -30,6 +30,7 @@ export interface StampFile {
   source?: string;
   removed?: true;
   alias?: string;
+  satisfied_alias?: { project: string; target: string };
   mcp_disabled?: string[];
 }
 
@@ -378,6 +379,21 @@ function readIfRegular(abs: string): Buffer | null {
   return fs.readFileSync(abs);
 }
 
+const hashChunk = Buffer.allocUnsafe(64 * 1024);
+function hashIfRegular(abs: string): string | null {
+  if (!fs.lstatSync(abs, { throwIfNoEntry: false })?.isFile()) return null;
+  const fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    if (!fs.fstatSync(fd).isFile()) return null;
+    const hash = createHash("sha256");
+    for (;;) {
+      const size = fs.readSync(fd, hashChunk, 0, hashChunk.length, null);
+      if (!size) return hash.digest("hex");
+      hash.update(hashChunk.subarray(0, size));
+    }
+  } finally { fs.closeSync(fd); }
+}
+
 function checkDestination(home: string, rel: string): void {
   assertSafePath(rel);
   let dir = home;
@@ -400,6 +416,21 @@ function destinationRelative(home: string, rel: string, kind?: MirrorKind): stri
   return target;
 }
 
+function projectAliasDestination(home: string, rel: string, project: string, expectedTarget?: string): string {
+  assertSafePath(rel);
+  assertSafePath(project);
+  if (!rel.startsWith(`${project}/`)) throw new Error("alias is outside its registered project");
+  checkDestination(home, path.dirname(rel));
+  const file = path.join(home, rel);
+  if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("project alias is missing or replaced");
+  const target = path.relative(home, path.resolve(path.dirname(file), fs.readlinkSync(file)));
+  assertSafePath(target);
+  if (!target.startsWith(`${project}/`)) throw new Error("alias target leaves its registered project");
+  if (expectedTarget && target !== expectedTarget) throw new Error("project alias target changed");
+  checkDestination(home, target);
+  return target;
+}
+
 export function verifyMirrorStamp(home: string): MirrorStamp | null {
   const stamp = readStamp(home);
   if (!stamp) return null;
@@ -416,11 +447,11 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
         if (fs.lstatSync(path.join(home, rel), { throwIfNoEntry: false })) complete = false;
         continue;
       }
-      const dest = destinationRelative(home, rel, info.kind);
+      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
       if (info.alias && info.alias !== dest) complete = false;
-      const bytes = readIfRegular(path.join(home, dest));
+      const hash = hashIfRegular(path.join(home, dest));
       const mode = fs.statSync(path.join(home, dest)).mode & 0o777;
-      if (info.host_edited || !bytes || sha256(bytes) !== info.written || mode !== Number.parseInt(info.mode, 8)) complete = false;
+      if (info.host_edited || hash !== info.written || mode !== Number.parseInt(info.mode, 8)) complete = false;
     } catch {
       complete = false;
     }
@@ -543,7 +574,29 @@ function codexMcpEnabled(text: string, names: readonly string[], source?: string
   return joinTomlTables(tables);
 }
 
+function claudeMcpSections(value: Record<string, any>): Array<[string | null, Record<string, any>]> {
+  return [
+    ...(isPlainObject(value.mcpServers) ? [[null, value.mcpServers] as [null, Record<string, any>]] : []),
+    ...Object.entries(value.projects ?? {}).flatMap(([root, project]) => isPlainObject(project) && isPlainObject(project.mcpServers) ? [[root, project.mcpServers] as [string, Record<string, any>]] : []),
+  ];
+}
+
+function claudeMcpPins(text: string, overrides: HostMcpOverrides): { pinned: string[]; next: HostMcpOverrides } {
+  const pinned: string[] = [];
+  const names = new Set<string>();
+  for (const [root, servers] of claudeMcpSections(JSON.parse(text))) {
+    for (const name of maskPins(overrides, "claude", mcpSourceServers(JSON.stringify({ mcpServers: servers }), false)).pinned) {
+      pinned.push(JSON.stringify([root, name]));
+      names.add(name);
+    }
+  }
+  const next = structuredClone(overrides);
+  for (const name of Object.keys(next.claude)) if (!names.has(name)) delete next.claude[name];
+  return { pinned, next };
+}
+
 export function finalBytes(file: ParsedFile, current: Buffer | null, home: string, pinnedEnvKeys: readonly string[], previous?: StampFile, conflict: () => void = () => {}, overrides?: HostMcpOverrides): Buffer {
+  if (VERBATIM_KINDS.includes(file.kind) && !(overrides && path.basename(file.path) === ".mcp.json")) return file.bytes;
   const text = file.bytes.toString("utf-8");
   const cur = current ? current.toString("utf-8") : null;
   // The host's own installers (installHookScript, installStableHook*) write
@@ -556,6 +609,24 @@ export function finalBytes(file: ParsedFile, current: Buffer | null, home: strin
   };
   const json = (v: unknown, indent: number) => Buffer.from(JSON.stringify(ordered(v, parse(cur)), null, indent));
   switch (file.kind) {
+    case "claude-mcp": {
+      const original = parse(cur) ?? {};
+      const masked = structuredClone(original);
+      const prior = previous?.source ? parse(previous.source) : {};
+      for (const [root, servers] of claudeMcpSections(prior)) {
+        for (const [name, server] of Object.entries(servers)) {
+          if (!previous?.mcp_disabled?.includes(JSON.stringify([root, name]))) continue;
+          const section = root === null ? masked : ((masked.projects ??= {})[root] ??= {});
+          if (!Object.hasOwn(section.mcpServers ?? {}, name)) (section.mcpServers ??= {})[name] = server;
+        }
+      }
+      const merged = reconcileFields(prior, masked, parse(text), conflict) as Record<string, any>;
+      const pins = overrides ? claudeMcpPins(text, overrides).pinned : [];
+      for (const [root, servers] of claudeMcpSections(merged)) {
+        for (const name of Object.keys(servers)) if (pins.includes(JSON.stringify([root, name]))) delete servers[name];
+      }
+      return json(merged, 2);
+    }
     case "claude-md":
     case "agents-md": {
       if (previous?.source !== undefined && cur !== null && stripOwnedSections(cur).trim() !== previous.source.trim() && stripOwnedSections(cur).trim() !== text.trim()) {
@@ -642,7 +713,8 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   if (prev && prev.source_device_id && prev.source_device_id !== src.device_id && !bundle.header.take_over) {
     return { ...result, refused: "other_device" };
   }
-  for (const root of bundle.header.project_roots ?? []) {
+  const projectRoots = [...(bundle.header.project_roots ?? [])].sort((a, b) => b.length - a.length);
+  for (const root of projectRoots) {
     try {
       checkDestination(home, root);
       if (!fs.statSync(path.join(home, root)).isDirectory()) throw new Error("not a directory");
@@ -663,12 +735,21 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   for (const file of bundle.files) {
     if (isCodecastOwnedHomePath(file.path)) { result.errors.push({ path: file.path, error: "codecast-owned path" }); continue; }
     try {
+      assertMirrorFileContent(file);
+      const before = prev?.files[file.path]?.removed ? undefined : prev?.files[file.path];
+      const project = projectRoots.find((root) => file.path.startsWith(`${root}/`));
+      if (file.kind === "verbatim" && project && (before?.satisfied_alias || fs.lstatSync(path.join(home, file.path), { throwIfNoEntry: false })?.isSymbolicLink())) {
+        const target = projectAliasDestination(home, file.path, project, before?.satisfied_alias?.target);
+        const abs = path.join(home, target);
+        if (hashIfRegular(abs) !== file.sha256 || (fs.statSync(abs).mode & 0o777) !== Number.parseInt(file.mode, 8)) throw new Error("project alias target bytes or mode differ from mirror");
+        stampFiles[file.path] = { sha: file.sha256, written: file.sha256, kind: file.kind, mode: file.mode, satisfied_alias: { project, target } };
+        result.unchanged++;
+        continue;
+      }
       const dest = destinationRelative(home, file.path, file.kind);
       const abs = path.join(home, dest);
-      const current = readIfRegular(abs);
-      const before = prev?.files[file.path]?.removed ? undefined : prev?.files[file.path];
+      const current = VERBATIM_KINDS.includes(file.kind) && hashIfRegular(abs) === file.sha256 ? file.bytes : readIfRegular(abs);
       if (before && before.source === undefined && !VERBATIM_KINDS.includes(file.kind) && before.sha !== file.sha256) throw new Error("previous mirror lacks field ownership; restore the previous source once before changing it");
-      const project = bundle.header.project_roots?.find((root) => file.path.startsWith(`${root}/`));
       let cleanTracked = false;
       if (project && !before && current && !current.equals(finalBytes(file, current, home, pinned, undefined, undefined, overrides))) {
         if (!gitTrees.has(project)) gitTrees.set(project, await cleanTrackedFiles(path.join(home, project)));
@@ -689,8 +770,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       }
       let conflicted = false;
       const bytes = finalBytes(file, current, home, pinned, before, () => { conflicted = true; }, overrides);
-      const mcp = file.kind === "codex-toml" ? maskPins(overrides, "codex", mcpSourceServers(file.bytes.toString("utf8"), true)) : undefined;
+      const mcp = file.kind === "codex-toml" ? maskPins(nextOverrides, "codex", mcpSourceServers(file.bytes.toString("utf8"), true))
+        : file.kind === "claude-mcp" ? claudeMcpPins(file.bytes.toString("utf8"), nextOverrides) : undefined;
       if (file.path === ".codex/config.toml" && mcp) nextOverrides = mcp.next;
+      if (file.path === ".claude.json" && mcp) nextOverrides = mcp.next;
       if (conflicted) result.host_edited.push(file.path);
       const sameBytes = current !== null && current.equals(bytes);
       let sameMode = true;
@@ -731,6 +814,21 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
           if (path.dirname(rel) !== ".") checkDestination(home, path.dirname(rel));
           if (fs.lstatSync(abs, { throwIfNoEntry: false })) result.host_edited.push(rel);
           stampFiles[rel] = info;
+          continue;
+        }
+        if (info.satisfied_alias) {
+          assertSafePath(rel);
+          checkDestination(home, path.dirname(rel));
+          if (!fs.lstatSync(abs, { throwIfNoEntry: false })) { stampFiles[rel] = { ...info, removed: true }; continue; }
+          const target = projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target);
+          const targetAbs = path.join(home, target);
+          if (!(stampFiles[target]?.removed && !fs.lstatSync(targetAbs, { throwIfNoEntry: false }))
+            && (hashIfRegular(targetAbs) !== info.written || (fs.statSync(targetAbs).mode & 0o777) !== Number.parseInt(info.mode, 8))) {
+            stampFiles[rel] = info; result.host_edited.push(rel); continue;
+          }
+          fs.unlinkSync(abs);
+          stampFiles[rel] = { ...info, removed: true };
+          result.pruned.push(rel);
           continue;
         }
         dest = destinationRelative(home, rel, info.kind);
@@ -775,9 +873,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
         try {
           if (info.source === undefined) throw new Error("previous mirror lacks field ownership; restore the source once before removing it");
           let conflicted = false;
-          const empty = kind === "claude-settings" || kind === "codex-hooks" ? "{}" : "";
+          const empty = kind === "claude-settings" || kind === "codex-hooks" || kind === "claude-mcp" ? "{}" : "";
           const bytes = finalBytes({ path: rel, kind, mode: info.mode, size: 0, sha256: sha256(empty), bytes: Buffer.from(empty) }, current, home, pinned, info, () => { conflicted = true; }, overrides);
-          if (rel === ".codex/config.toml") nextOverrides = maskPins(overrides, "codex", {}).next;
+          if (rel === ".codex/config.toml") nextOverrides = maskPins(nextOverrides, "codex", {}).next;
+          if (rel === ".claude.json") nextOverrides = maskPins(nextOverrides, "claude", {}).next;
           if (!bytes.equals(current)) {
             if (bytes.toString().trim()) writeMirroredFile(home, dest, bytes, info.mode); else fs.unlinkSync(abs);
             result.pruned.push(rel);
@@ -816,11 +915,14 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   for (const [rel, info] of Object.entries(stampFiles)) {
     if (info.host_edited || info.removed) continue;
     try {
-      const dest = destinationRelative(home, rel, info.kind);
+      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
+      if ((fs.statSync(path.join(home, dest)).mode & 0o777) !== Number.parseInt(info.mode, 8)) throw new Error("mode changed during refresh");
+      if (VERBATIM_KINDS.includes(info.kind ?? "verbatim")) {
+        if (hashIfRegular(path.join(home, dest)) !== info.written) throw new Error("file changed during refresh");
+        continue;
+      }
       const current = readIfRegular(path.join(home, dest));
       if (!current) throw new Error("file missing after refresh");
-      if ((fs.statSync(path.join(home, dest)).mode & 0o777) !== Number.parseInt(info.mode, 8)) throw new Error("mode changed during refresh");
-      if (VERBATIM_KINDS.includes(info.kind ?? "verbatim") && sha256(current) !== info.written) throw new Error("file changed during refresh");
       if (info.source !== undefined && info.kind) {
         const bytes = Buffer.from(info.source);
         finalBytes({ path: rel, kind: info.kind, mode: info.mode, size: bytes.length, sha256: sha256(bytes), bytes }, current, home, pinned, info, () => { throw new Error("mirrored content changed during refresh"); }, overrides);

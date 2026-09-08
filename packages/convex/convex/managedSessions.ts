@@ -724,6 +724,12 @@ export const markMessageDelivered = mutation({
  * "delivered", and the two-minute healer that re-pends stale "injected" rows
  * had nothing left to revive — the message sat in the composer for good
  * (2026-09-03). */
+// Which "injected" rows an observed working status may terminalize: only a
+// paste the daemon saw land. Exported for tests.
+export function ackableInjectedRow(row: { paste_verified_at?: number }): boolean {
+  return typeof row.paste_verified_at === "number";
+}
+
 export function activeStatusAcksInjected(agentStatus: string, presumed: boolean | undefined): boolean {
   if (presumed === true) return false;
   return (
@@ -830,14 +836,18 @@ export const updateAgentStatus = mutation({
       await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at, args.session_boundary);
     }
 
-    // An observed processing state proves the message reached the session — ack injected messages
+    // An observed processing state proves the message reached the session — ack injected messages.
+    // Only rows whose paste the daemon has VERIFIED (paste_verified_at): the
+    // pre-paste "injected" mark is set before the guard even runs, and a working
+    // report from an unrelated turn acked one such row while its paste was being
+    // refused (the message never landed, 2026-09-08).
     if (activeStatusAcksInjected(args.agent_status, args.presumed)) {
-      const injected = await ctx.db
+      const injected = (await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_status", (q: any) =>
           q.eq("conversation_id", args.conversation_id).eq("status", "injected")
         )
-        .collect();
+        .collect()).filter((msg: any) => ackableInjectedRow(msg));
       const now = Date.now();
       for (const msg of injected) {
         await ctx.db.patch(msg._id, { status: "delivered" as const, delivered_at: now });

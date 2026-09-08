@@ -72,11 +72,23 @@ const FAKE_SESSION = {
   is_own: true,
 };
 
+// A pull request codecast has synced. `union-ai/union-mobile#3263` below is
+// one it has not: no installation covers that repository.
+const FAKE_PR = {
+  _id: "sx72qtvpbmmrmwcjqmhzawejsx8bq9gm",
+  repository: "codecast-sh/codecast",
+  number: 482,
+  title: "Fix the auth race",
+  state: "open",
+  updated_at: Date.now(),
+};
+
 const ROWS: Record<string, any[]> = {
   "agentTasks:webGet": [FAKE_TRIGGER],
   "tasks:webGet": [FAKE_TASK, LONG_TITLE_TASK],
   "plans:webGet": [FAKE_PLAN],
   "conversations:webGet": [FAKE_SESSION],
+  "pull_requests:webGet": [FAKE_PR],
 };
 
 const TYPE_OF_CONVEX_ID: Record<string, string> = {
@@ -104,7 +116,11 @@ function fakeQuery(fn: unknown, args: any) {
   if (name === "artifacts:getShared") return args?.slug === PAGE_SLUG ? FAKE_PAGE : null;
   const rows = ROWS[name];
   if (!rows) return undefined;
-  return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
+  return rows.find((r) =>
+    (args?.short_id != null && r.short_id === args.short_id)
+    || (args?.id != null && r._id === args.id)
+    || (args?.repository != null && r.repository === args.repository && r.number === args.number),
+  ) ?? null;
 }
 
 // Keep every other export real — the component graph imports names statically,
@@ -177,6 +193,7 @@ function pillTexts(html: string): string[] {
 }
 
 const { EstablishedRefsProvider } = await import("../hooks/entityMentionScope");
+const { FilePathContext } = await import("../lib/filePathLinks");
 
 // The same pipeline inside a "message from <sender>" card: the header already
 // named the sender, and the body renders under that knowledge.
@@ -444,5 +461,84 @@ describe("pill chrome", () => {
     const html = render("Rolled into pl-88 this week.");
     expect(html).toContain("bg-sol-cyan/[0.08]");
     expect(html).not.toContain("text-sol-yellow");
+  });
+});
+
+describe("pull request references", () => {
+  // A conversation bound to a repository: the pill completes `#3263` from it.
+  function renderIn(repository: string | null, markdown: string): string {
+    return renderToStaticMarkup(
+      <MemoryRouter>
+        <FilePathContext.Provider value={{ repository }}>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
+            {markdown}
+          </ReactMarkdown>
+        </FilePathContext.Provider>
+      </MemoryRouter>,
+    );
+  }
+
+  test("a GitHub link to a synced pull request reads as the PR's title and opens in the app", () => {
+    const html = render("see https://github.com/codecast-sh/codecast/pull/482 for the fix");
+    expect(pillText(html)).toBe("#482 Fix the auth race");
+    expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
+    expect(html).not.toContain('href="https://github.com');
+  });
+
+  test("a GitHub link to a pull request codecast has not synced still pills and opens the app page", () => {
+    // No installation covers union-mobile, so the row is unknown. The link
+    // named a pull request beyond doubt, so it is a reference, not an external
+    // link; the page it opens offers GitHub when it has nothing to show.
+    const html = render("merged https://github.com/Union-AI/union-mobile/pull/3263 today");
+    expect(pillText(html)).toBe("union-ai/union-mobile#3263");
+    expect(html).toContain('href="/pr/union-ai/union-mobile/3263"');
+    expect(html).not.toContain('href="https://github.com');
+  });
+
+  test("a GitHub link the author gave their own words keeps them until the row resolves", () => {
+    const html = render("see [the rescue dial card](https://github.com/Union-AI/union-mobile/pull/3247)");
+    expect(pillText(html)).toBe("the rescue dial card");
+    expect(html).toContain('href="/pr/union-ai/union-mobile/3247"');
+  });
+
+  test("a GitHub commit link pills the same way", () => {
+    const html = render("at https://github.com/Union-AI/union-mobile/commit/aa57b85ee0123");
+    expect(pillText(html)).toBe("union-ai/union-mobile@aa57b85ee0123");
+    expect(html).toContain('href="/commit/union-ai/union-mobile/aa57b85ee0123"');
+  });
+
+  test("a bare owner/repo#N nobody has synced stays text (it could be a file and line)", () => {
+    const html = render("edit union-ai/union-mobile#3263 now");
+    expect(html).not.toContain('class="not-prose');
+    expect(html).toContain("union-ai/union-mobile#3263");
+  });
+
+  test("#N and PR N inside a repository bound conversation pill and open that repository's PR", () => {
+    const html = renderIn("union-ai/union-mobile", "PRs 3247 (rescue dial card), 3230 (objection playbook) and #3263 landed");
+    expect(pillTexts(html)).toEqual(["3247", "3230", "#3263"]);
+    expect(html).toContain('href="/pr/union-ai/union-mobile/3230"');
+    expect(html).toContain('href="/pr/union-ai/union-mobile/3247"');
+    expect(html).toContain('href="/pr/union-ai/union-mobile/3263"');
+    // The words before the number stay prose.
+    expect(html).toContain("PRs <a");
+  });
+
+  test("#N in a repository bound conversation reads as the title once the row is in hand", () => {
+    const html = renderIn("codecast-sh/codecast", "landed PR #482 this morning");
+    expect(pillText(html)).toBe("#482 Fix the auth race");
+    expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
+  });
+
+  test("#N outside any repository is the text it was written as", () => {
+    const html = render("see #3263 and PR 3247");
+    expect(html).not.toContain('class="not-prose');
+    expect(html).not.toContain("pr:#");
+    expect(html).toContain("see #3263 and PR 3247");
+  });
+
+  test("a conversation with no repository prints the text back too", () => {
+    const html = renderIn(null, "see #3263 and PR 3247");
+    expect(html).not.toContain('class="not-prose');
+    expect(html).toContain("see #3263 and PR 3247");
   });
 });

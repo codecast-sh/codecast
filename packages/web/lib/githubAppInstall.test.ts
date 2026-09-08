@@ -5,6 +5,7 @@
 // install lands in one workspace while the Apps card reports another.
 
 import { describe, expect, test } from "bun:test";
+import { parseGithubAppInstallState } from "@codecast/shared/contracts";
 import { githubAppInstallTeam, githubAppInstallUrl } from "./githubAppInstall";
 
 const decodeState = (url: string) =>
@@ -19,7 +20,38 @@ describe("githubAppInstallUrl", () => {
     const url = githubAppInstallUrl({ _id: "u1", team_id: "t_home" })!;
     expect(url).toStartWith("https://github.com/apps/");
     expect(url).toContain("/installations/new?state=");
-    expect(decodeState(url)).toEqual({ team_id: "t_home", user_id: "u1" });
+    expect(decodeState(url)).toEqual({ user_id: "u1", scope: "team", team_id: "t_home" });
+  });
+
+  test("a personal install needs no team and names none", () => {
+    const url = githubAppInstallUrl({ _id: "u1" }, "personal")!;
+    expect(url).toContain("/installations/new?state=");
+    expect(decodeState(url)).toEqual({ user_id: "u1", scope: "personal" });
+    // Even with a team in view, a personal install binds to the person.
+    expect(decodeState(githubAppInstallUrl({ _id: "u1", active_team_id: "t_active" }, "personal")!)).toEqual({
+      user_id: "u1",
+      scope: "personal",
+    });
+  });
+
+  test("the callback reads back exactly what the button minted, old states included", () => {
+    const team = githubAppInstallUrl({ _id: "u1", team_id: "t_home" })!;
+    expect(parseGithubAppInstallState(new URL(team).searchParams.get("state"))).toEqual({
+      user_id: "u1",
+      scope: "team",
+      team_id: "t_home",
+    });
+    const personal = githubAppInstallUrl({ _id: "u1" }, "personal")!;
+    expect(parseGithubAppInstallState(new URL(personal).searchParams.get("state"))).toEqual({ user_id: "u1", scope: "personal" });
+    // Installs minted before scopes existed carried only team_id + user_id.
+    expect(parseGithubAppInstallState(btoa(JSON.stringify({ team_id: "t_old", user_id: "u1" })))).toEqual({
+      user_id: "u1",
+      scope: "team",
+      team_id: "t_old",
+    });
+    // A state that names nobody binds to nothing.
+    expect(parseGithubAppInstallState(btoa(JSON.stringify({ team_id: "t_old" })))).toBeNull();
+    expect(parseGithubAppInstallState("not-base64-json")).toBeNull();
   });
 
   test("the team being looked at outranks the home team — the same resolution listConnections uses", () => {

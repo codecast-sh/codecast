@@ -1,7 +1,13 @@
 // The one integrations surface (docs/architecture/issue-sync.md S9): Slack,
-// GitHub, Linear, Google and Notion, each with connect, disconnect, scope, who
+// GitHub, Linear, Google and Notion, each with connect, disconnect, who
 // connected it, health, and what it enables — plus the imported issue sources
 // inside the GitHub and Linear cards.
+//
+// Two ledgers, because a connection belongs to exactly one workspace
+// (appDescriptors.ts SCOPE): the team the reader is looking at, and the reader
+// themself. A team connection serves the team inside the team; a personal one
+// follows its owner into every workspace they work in, and a credential
+// resolver reaches for it whenever the work's team has none of its own.
 //
 // It replaces the old /settings/integrations/github-app page, whose installed
 // accounts and repository list now live inside the GitHub card.
@@ -16,8 +22,14 @@ import { useState } from "react";
 import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Plug } from "lucide-react";
-import { APP_DESCRIPTORS, APP_IDS, type AppConnectionStatus } from "@codecast/shared/contracts";
+import { User, Users } from "lucide-react";
+import {
+  APP_DESCRIPTORS,
+  APP_IDS,
+  type AppConnectionScope,
+  type AppConnectionStatus,
+  type AppConnectionsResult,
+} from "@codecast/shared/contracts";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -31,6 +43,15 @@ import {
 } from "../../../lib/connectorReturn";
 
 const api = _api as any;
+
+/** The entries at one scope, keyed by app, for the cards of that ledger. */
+function entriesAt(result: AppConnectionsResult | undefined, scope: AppConnectionScope) {
+  return new Map<string, AppConnectionStatus>(
+    (result?.apps ?? [])
+      .filter((a) => a.status === "coming_soon" || a.scope === scope)
+      .map((a) => [a.id, a]),
+  );
+}
 
 export default function IntegrationsPage() {
   const connections = useSettingsData("connections");
@@ -70,9 +91,22 @@ export default function IntegrationsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one read of the landing URL
   }, []);
 
-  const loading = connections.data === undefined && !connections.error;
-  const byId = new Map<string, AppConnectionStatus>(
-    (connections.data?.apps ?? []).map((a: AppConnectionStatus) => [a.id, a]),
+  const result = connections.data as AppConnectionsResult | undefined;
+  const loading = result === undefined && !connections.error;
+  // The team ledger answers for a team only once the query has said which;
+  // until then the section renders as unknown, never as "no team".
+  const team = result?.team ?? null;
+  const teamKnown = result !== undefined;
+  const teamEntries = entriesAt(result, "team");
+  const personalEntries = entriesAt(result, "personal");
+
+  const errorCallout = connections.error && (
+    <div className="px-4 py-3 sm:px-5">
+      <SettingsCallout tone="warning">
+        Couldn&apos;t load connection state: {connections.error.message}. The cards below say nothing
+        rather than guessing.
+      </SettingsCallout>
+    </div>
   );
 
   return (
@@ -85,25 +119,47 @@ export default function IntegrationsPage() {
       )}
 
       <SettingsSection
-        title="Connected services"
-        icon={Plug}
-        description="Connections belong to your workspace, not to a machine. Tokens stay server-side — an agent asks the backend to act, it never holds the credential."
+        title={team ? `Team connections · ${team.name}` : "Team connections"}
+        icon={Users}
+        description="Shared by everyone on the team, for work inside it. Tokens stay server-side — an agent asks the backend to act, it never holds the credential."
       >
-        {connections.error && (
+        {errorCallout}
+        {teamKnown && !team ? (
           <div className="px-4 py-3 sm:px-5">
-            <SettingsCallout tone="warning">
-              Couldn&apos;t load connection state: {connections.error.message}. The cards below say nothing
-              rather than guessing.
+            <SettingsCallout tone="info">
+              You&apos;re not looking at a team you belong to. Join or create one to connect services for a
+              team, or connect them for yourself below.
             </SettingsCallout>
           </div>
+        ) : (
+          APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("team")).map((id) => (
+            <IntegrationCard
+              key={id}
+              descriptor={APP_DESCRIPTORS[id]}
+              scope="team"
+              connection={teamEntries.get(id)}
+              loading={loading}
+              me={user}
+              showSources={!!team}
+            />
+          ))
         )}
-        {APP_IDS.map((id) => (
+      </SettingsSection>
+
+      <SettingsSection
+        title="Personal connections"
+        icon={User}
+        description="Yours alone, and they follow you: in any workspace you work in that has no connection of its own, an agent acting for you acts through these."
+      >
+        {APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("personal")).map((id) => (
           <IntegrationCard
             key={id}
             descriptor={APP_DESCRIPTORS[id]}
-            connection={byId.get(id)}
+            scope="personal"
+            connection={personalEntries.get(id)}
             loading={loading}
             me={user}
+            showSources={teamKnown && !team}
           />
         ))}
       </SettingsSection>

@@ -4,13 +4,6 @@ import { internal } from "./_generated/api";
 const crons = cronJobs();
 
 crons.interval(
-  "recover overdue session updates",
-  { seconds: 60 },
-  internal.sessionUpdates.recoverDueUpdates,
-  {}
-);
-
-crons.interval(
   "fill short titles for tasks and plans",
   { minutes: 2 },
   internal.titleGeneration.fillShortTitles,

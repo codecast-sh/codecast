@@ -46,6 +46,8 @@ import { heldKeysFor, requireTeamMembership, resolveWorkspaceKey } from "./lib/a
 import { forbidden, notFound } from "./lib/auth";
 import { insertTaskComment, recalcPlanProgress, resolveAssigneeToUserId } from "./tasks";
 import { verifyApiToken } from "./apiTokens";
+import { installationCoversRepo } from "./githubApp";
+import { connectionForWork } from "./oauthConnectors";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 
@@ -774,7 +776,29 @@ export const taskPushContext = internalQuery({
   },
 });
 
-/** The token for a provider write, or null when the connection is gone. */
+/** Does `userId` hold a personal connection that can reach this container? */
+async function hasPersonalConnection(
+  ctx: any,
+  provider: string,
+  userId: Id<"users">,
+  externalId: string,
+): Promise<boolean> {
+  if (provider === "linear") return !!(await connectionForWork(ctx, "linear", { user_id: userId }));
+  const installs = await ctx.db
+    .query("github_app_installations")
+    .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
+    .collect();
+  return installs.some((row: any) => installationCoversRepo(row, externalId));
+}
+
+/**
+ * The token for a provider call, or null when no connection serves it.
+ *
+ * The work's team is tried first, then the acting user's personal connection
+ * (appDescriptors.ts SCOPE) — so a person who connected Linear or GitHub for
+ * themself can import into, and push from, any workspace they work in, while
+ * a team that connected its own never borrows a member's grant.
+ */
 async function tokenFor(
   ctx: any,
   provider: string,
@@ -783,13 +807,13 @@ async function tokenFor(
   repo?: string,
 ): Promise<string | null> {
   if (provider === "linear") {
-    if (!teamId) return null;
     // Refreshes an expiring or unknown-age token first (Linear rotates 24h
     // tokens). A missing connection is null like GitHub's; a refresh refusal
     // is thrown so the source's last_error says "reconnect", not "401".
-    const res = await ctx.runAction(internal.oauthConnectors.getFreshAccessTokenForTeam, {
+    const res = await ctx.runAction(internal.oauthConnectors.getFreshAccessToken, {
       provider: "linear",
       team_id: teamId,
+      user_id: userId,
     });
     if (res.ok && res.token) return res.token;
     if (res.error?.startsWith("no_connection")) return null;
@@ -797,7 +821,8 @@ async function tokenFor(
   }
   if (!repo) return null;
   const installation = teamId
-    ? await ctx.runQuery(internal.githubApp.getInstallationForRepoInTeam, { repository: repo, team_id: teamId })
+    ? (await ctx.runQuery(internal.githubApp.getInstallationForRepoInTeam, { repository: repo, team_id: teamId })) ??
+      (await ctx.runQuery(internal.githubApp.getPersonalInstallationForRepo, { repository: repo, user_id: userId }))
     : await ctx.runQuery(internal.githubApp.getInstallationForRepo, { repository: repo, user_id: userId });
   if (!installation) return null;
   const token = await ctx.runAction(internal.githubApp.getInstallationToken, {
@@ -1285,13 +1310,15 @@ async function addSourceFor(
 
   let teamId = args.team_id ?? (project?.team_id as Id<"teams"> | undefined);
   if (!teamId) {
-    // Linear and GitHub connections belong to a team (oauthConnectors binds
-    // them to active_team_id), so a source with no team can never find a
-    // token. Default to the actor's active team the same way the connect
-    // flow does; a teamless actor gets a clear error instead of a dead row.
+    // Default to the actor's active team the same way the connect flow does.
+    // With no team at all the source lives in the personal workspace, which
+    // works only through the actor's own connection — refuse a row that could
+    // never find a token rather than leave a dead source behind.
     const actor = await ctx.db.get(userId);
     teamId = ((actor as any)?.active_team_id ?? (actor as any)?.team_id) as Id<"teams"> | undefined;
-    if (!teamId) throw new Error(`Join or create a team first: ${args.provider} connections bind to a team`);
+    if (!teamId && !(await hasPersonalConnection(ctx, args.provider, userId, args.external_id))) {
+      throw new Error(`Connect ${args.provider} for yourself, or join a team that has: nothing here can reach it`);
+    }
   }
   if (teamId) await requireTeamMembership(ctx, userId, teamId);
 
@@ -1383,7 +1410,7 @@ async function removeSourceFor(ctx: any, userId: Id<"users">, id: Id<"issue_sync
   return { success: true };
 }
 
-/** Linear teams and projects, or the GitHub repos the team's installations cover. */
+/** Linear teams and projects, or the GitHub repos the team's and the caller's own installations cover. */
 async function remoteCandidatesFor(
   ctx: any,
   provider: string,
@@ -1407,9 +1434,10 @@ async function remoteCandidatesFor(
     ];
   }
 
-  const installations: any[] = teamId
-    ? await ctx.runQuery(internal.issueSync.githubInstallationsForTeam, { team_id: teamId })
-    : [];
+  const installations: any[] = await ctx.runQuery(internal.githubApp.installationsForWork, {
+    team_id: teamId,
+    user_id: userId,
+  });
   const out: Array<{ kind: string; external_id: string; name: string; url?: string }> = [];
   const seen = new Set<string>();
   for (const installation of installations) {
@@ -1433,15 +1461,6 @@ async function remoteCandidatesFor(
   }
   return out;
 }
-
-export const githubInstallationsForTeam = internalQuery({
-  args: { team_id: v.id("teams") },
-  handler: async (ctx, args) =>
-    await ctx.db
-      .query("github_app_installations")
-      .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
-      .collect(),
-});
 
 /** The workspace an action should read a connection from, when none was named. */
 export const resolveActor = internalQuery({
