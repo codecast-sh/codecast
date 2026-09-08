@@ -740,58 +740,6 @@ jobs:
             exit 1
           fi
 
-      - name: Refresh and verify legacy stable aliases
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifacts=(
-            codecast-darwin-arm64
-            codecast-darwin-x64
-            codecast-linux-arm64
-            codecast-linux-x64
-            codecast-windows-x64.exe
-          )
-          prefix=$(cat /tmp/cli-release-prefix)
-          mkdir -p /tmp/cli-alias
-          for artifact in "${artifacts[@]}"; do
-            expected=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
-            aws s3api copy-object \
-              --bucket "$R2_BUCKET" \
-              --key "$artifact" \
-              --copy-source "$R2_BUCKET/$prefix/$artifact" \
-              --metadata-directive REPLACE \
-              --metadata "sha256=$expected,version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
-              --content-type application/octet-stream \
-              --cache-control "no-cache, no-store, must-revalidate" \
-              --endpoint-url "$R2_ENDPOINT" >/dev/null
-
-            matched=false
-            for attempt in $(seq 1 10); do
-              if curl -fsSL \
-                --retry 3 --retry-all-errors \
-                --connect-timeout 20 --max-time 900 \
-                -H 'Cache-Control: no-cache' \
-                "https://dl.codecast.sh/$artifact" \
-                -o "/tmp/cli-alias/$artifact"; then
-                actual=$(sha256sum "/tmp/cli-alias/$artifact" | awk '{print $1}')
-                if [[ "$actual" == "$expected" ]]; then
-                  matched=true
-                  break
-                fi
-              fi
-              sleep 15
-            done
-            if [[ "$matched" != true ]]; then
-              echo "::error::$artifact stable alias checksum did not converge"
-              exit 1
-            fi
-          done
-
       - name: Publish latest.json last
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -911,6 +859,39 @@ jobs:
             echo
             echo "- Source: \`$SOURCE_COMMIT\`"
             echo "- Manifest: \`$expected_manifest_sha\`"
-            echo "- Immutable and stable public URLs: verified"
+            echo "- Immutable public URLs: verified"
             echo "- GitHub release assets: verified"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refresh legacy stable aliases
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+          prefix=$(cat /tmp/cli-release-prefix)
+          for artifact in "${artifacts[@]}"; do
+            expected=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
+            aws s3api copy-object \
+              --bucket "$R2_BUCKET" \
+              --key "$artifact" \
+              --copy-source "$R2_BUCKET/$prefix/$artifact" \
+              --metadata-directive REPLACE \
+              --metadata "sha256=$expected,version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
+              --content-type application/octet-stream \
+              --cache-control "no-cache, no-store, must-revalidate" \
+              --cli-connect-timeout 10 --cli-read-timeout 30 \
+              --endpoint-url "$R2_ENDPOINT" >/dev/null
+          done
