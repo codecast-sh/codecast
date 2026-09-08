@@ -685,3 +685,74 @@ test("pruning one harness keeps stale-pin removals already reconciled for the ot
   expect(readHostMcpOverrides(home)).toEqual(emptyOverrides());
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
 });
+
+test("identical project documentation aliases are satisfied without writes and remain byte/mode/target verified", async () => {
+  const root = "work/app";
+  const target = `${root}/packages/convex/convex/README.md`;
+  const alias = `${root}/convex/README.md`;
+  write(target, "# context\n", 0o600);
+  fs.mkdirSync(path.dirname(path.join(home, alias)), { recursive: true });
+  const link = path.relative(path.dirname(path.join(home, alias)), path.join(home, target));
+  fs.symlinkSync(link, path.join(home, alias));
+  const make = (include = true) => parseMirrorBundle(buildMirrorBundle(include ? [{ path: alias, kind: "verbatim", mode: "0600", bytes: Buffer.from("# context\n") }] : [], { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  const targetStat = fs.statSync(path.join(home, target));
+  const first = await apply(await make());
+  expect(first.errors).toEqual([]);
+  expect(first.applied).toEqual([]);
+  expect(first.unchanged).toBe(1);
+  expect(fs.readlinkSync(path.join(home, alias))).toBe(link);
+  expect(fs.statSync(path.join(home, target)).ino).toBe(targetStat.ino);
+  expect(readStamp(home)?.files[alias]?.satisfied_alias).toEqual({ project: root, target });
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  expect((await apply(await make())).errors).toEqual([]);
+  write(target, "host edit\n");
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(await make())).errors.some((error) => /bytes or mode/.test(error.error))).toBe(true);
+  expect(read(target)).toBe("host edit\n");
+  write(target, "# context\n");
+  fs.chmodSync(path.join(home, target), 0o700);
+  expect((await apply(await make())).errors.some((error) => /bytes or mode/.test(error.error))).toBe(true);
+  expect(modeOf(target)).toBe(0o700);
+  fs.chmodSync(path.join(home, target), 0o600);
+  expect((await apply(await make())).errors).toEqual([]);
+  write(`${root}/other.md`, "# context\n", 0o600);
+  fs.unlinkSync(path.join(home, alias));
+  fs.symlinkSync("../other.md", path.join(home, alias));
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(await make())).errors.some((error) => /target changed/.test(error.error))).toBe(true);
+  fs.unlinkSync(path.join(home, alias));
+  fs.symlinkSync(link, path.join(home, alias));
+  expect((await apply(await make())).errors).toEqual([]);
+  const pruned = await apply(await make(false));
+  expect(pruned.errors).toEqual([]);
+  expect(pruned.pruned).toEqual([alias]);
+  expect(fs.lstatSync(path.join(home, alias), { throwIfNoEntry: false })).toBeUndefined();
+  expect(read(target)).toBe("# context\n");
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+test.each(["outside project", "outside home", "ancestor symlink", "chained symlink", "missing", "different bytes", "different mode", "non-verbatim"])("project alias satisfaction refuses %s without writing through it", async (scenario) => {
+  const root = "work/app";
+  const alias = `${root}/README.md`;
+  let target = `${root}/docs/README.md`;
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mirror-alias-outside-")));
+  try {
+    if (scenario === "outside project") target = "work/sibling/README.md";
+    write(target, scenario === "different bytes" ? "host edit" : "same", scenario === "different mode" ? 0o700 : 0o600);
+    fs.mkdirSync(path.join(home, root), { recursive: true });
+    let destination = path.join(home, target);
+    if (scenario === "outside home") { destination = path.join(outside, "README.md"); fs.writeFileSync(destination, "same", { mode: 0o600 }); }
+    if (scenario === "ancestor symlink") { fs.symlinkSync("docs", path.join(home, root, "linked")); destination = path.join(home, root, "linked/README.md"); }
+    if (scenario === "chained symlink") { fs.symlinkSync("docs/README.md", path.join(home, root, "second.md")); destination = path.join(home, root, "second.md"); }
+    if (scenario === "missing") destination = path.join(home, root, "absent.md");
+    fs.symlinkSync(destination, path.join(home, alias));
+    const built = await parseMirrorBundle(buildMirrorBundle([{ path: alias, kind: scenario === "non-verbatim" ? "json-remap" : "verbatim", mode: "0600", bytes: Buffer.from("same") }], { source: source(), target_home: home, managed_roots: ["work"], project_roots: ["work", root] }).bytes);
+    const result = await apply(built);
+    expect(result.errors.length).toBe(1);
+    expect(result.applied).toEqual([]);
+    expect(readStamp(home)?.complete).toBe(false);
+    expect(fs.readlinkSync(path.join(home, alias))).toBe(destination);
+    expect(read(target)).toBe(scenario === "different bytes" ? "host edit" : "same");
+    expect(modeOf(target)).toBe(scenario === "different mode" ? 0o700 : 0o600);
+  } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+});
