@@ -8,6 +8,7 @@ import {
   type TmuxRunner,
   type SpawnAgentTmuxDeps,
 } from "./spawnAgentTmux.js";
+import { mintLaunchToken } from "../agentEnv.js";
 
 // A fake tmux runner: records every argv it's handed, never touches a real server.
 function recordingTmux(): { runner: TmuxRunner; calls: string[][] } {
@@ -123,6 +124,44 @@ describe("spawnAgentTmux — managed-session tagging", () => {
     const order = calls.map((a) => a[0]);
     expect(order.indexOf("new-session")).toBeLessThan(order.indexOf("set-option"));
     expect(order.lastIndexOf("set-option")).toBeLessThan(order.indexOf("send-keys"));
+  });
+});
+
+describe("spawnAgentTmux — launch token", () => {
+  test("stamps the token into the pane env, in front of the launch line", async () => {
+    const { runner, calls } = recordingTmux();
+    const token = mintLaunchToken();
+    const res = await spawnAgentTmux(
+      {
+        tmuxSession: "ct-claude-abc123",
+        cwd: REAL_DIR,
+        agentType: "claude",
+        command: "bash /tmp/run.sh",
+        launchToken: token,
+      },
+      baseDeps({ tmux: runner }),
+    );
+    expect(res.ok).toBe(true);
+
+    const sendLiteral = calls.find((a) => a[0] === "send-keys" && a.includes("-l"))!;
+    expect(sendLiteral[sendLiteral.length - 1]).toBe(`CODECAST_LAUNCH_TOKEN=${token} bash /tmp/run.sh`);
+  });
+
+  test("a token that was not minted here never reaches the pane", async () => {
+    const { runner, calls } = recordingTmux();
+    const res = await spawnAgentTmux(
+      {
+        tmuxSession: "ct-claude-abc123",
+        cwd: REAL_DIR,
+        agentType: "claude",
+        command: "bash /tmp/run.sh",
+        launchToken: "$(rm -rf ~)",
+      },
+      baseDeps({ tmux: runner }),
+    );
+    expect(res.ok).toBe(true);
+    const sendLiteral = calls.find((a) => a[0] === "send-keys" && a.includes("-l"))!;
+    expect(sendLiteral[sendLiteral.length - 1]).toBe("bash /tmp/run.sh");
   });
 });
 

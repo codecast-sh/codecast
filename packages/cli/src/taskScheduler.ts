@@ -6,6 +6,7 @@ import { SyncService } from "./syncService.js";
 import { hasTmux } from "./tmux.js";
 import { deviceId, isRemoteDevice } from "./remote/device.js";
 import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
+import { launchTokenLedger } from "./launchToken.js";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.js";
 
@@ -342,6 +343,9 @@ export class TaskScheduler {
         cwd,
         agentType: agentType === "codex" ? "codex" : "claude",
         command: `bash ${scriptFile}`,
+        // Fences this pane's hook posts to this run: a previous run's agent left
+        // alive in the same pane name reports for nothing (ct-49532).
+        launchToken: launchTokenLedger().issue(tmuxSession),
       },
       { config: this.config, log: this.log },
     );
