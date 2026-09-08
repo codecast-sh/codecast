@@ -644,17 +644,32 @@ test("a ring bounces the dock until it is answered, and stops the moment the sha
   assert.deepEqual(bounces, ["critical"]);
 });
 
-test("a ring's banner goes up whatever is focused; every other banner stays quiet while the app is in front", () => {
+// The focused window silences only what it is SHOWING (ct-49551). The old rule
+// dropped every banner while any window held focus, so a session finishing in a
+// conversation the user was not reading said nothing at all.
+test("a focused window silences the conversation it shows; other banners and rings still go up", () => {
   const rig = loadShell();
   rig.mainWindow.isFocused = () => true;
-  const shown = [];
   rig.electron.Notification = class {
     static isSupported() { return true; }
-    constructor(opts) { shown.push(opts); }
     on() {}
     show() {}
   };
+  // The main window reports the conversation it is on.
+  rig.handlers.get("report-window-state")(
+    { sender: Object.assign(rig.mainWindow.webContents, { once: () => {} }) },
+    { active: "/conversation/c1", open: [], inCall: false },
+  );
   const handle = rig.handlers.get("show-notification");
-  assert.equal(handle(null, { title: "a", body: "b", data: { key: "n1" } }).shown, false);
+  assert.equal(
+    handle(null, { title: "a", body: "b", data: { key: "n1", conversationId: "c1", kind: "session_idle" } }).shown,
+    false,
+    "the conversation on screen",
+  );
+  assert.equal(
+    handle(null, { title: "a", body: "b", data: { key: "n2", conversationId: "c2", kind: "session_idle" } }).shown,
+    true,
+    "any other conversation",
+  );
   assert.equal(handle(null, { title: "Sam wants to huddle", body: "b", data: { key: "ring:1", kind: "call", force: true } }).shown, true);
 });

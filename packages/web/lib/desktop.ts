@@ -1,4 +1,5 @@
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
+import { BrowserBannerGate } from "./notificationGate";
 
 declare global {
   interface Window {
@@ -1122,28 +1123,37 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return result === "granted";
 }
 
+// The browser tab's own copy of the banner rules (ct-49551). On the desktop the
+// shell applies them instead — it is the one process that sees every window.
+const browserBanners = new BrowserBannerGate();
+
 // Resolves true when THIS window announced the event to the user — the caller
-// may pair a sound with it. False when the app is focused (the toast/bell
-// layer owns that case) or, on desktop, when another window already showed
-// the same banner (the shell dedupes by `data.key`).
+// may pair a sound with it. False when the user is already looking at what the
+// banner is about, when the conversation banner already fired inside the burst
+// window, or, on desktop, when another window showed the same banner (the shell
+// dedupes by `data.key`).
 export async function notifyNative(
   title: string,
   body: string,
   data?: NotifyNativeData,
 ): Promise<boolean> {
-  // OS notifications are for the unfocused app: when the window has focus the
-  // user already sees the bell/inbox update (and hears the idle sound), so a
-  // native banner on top is noise. Applies to desktop and browser alike —
-  // except a ring, which goes up regardless.
-  if (!data?.force && typeof document !== "undefined" && document.hasFocus()) return false;
   // One click target per banner: an explicit route (chat, tasks, docs) wins,
   // else the conversation. Electron receives both and applies the same rule.
   const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
   if (isElectron()) {
+    // The shell decides whether it goes up: only it knows which of its windows
+    // is focused and what each one shows.
     const res = await bridge("showNotification")?.(title, body, { ...data, route });
     // Older shells resolve void: they showed it.
     return res ? res.shown : true;
   }
+  // A browser tab is the whole app, so it applies the same rules to itself.
+  const focused = typeof document !== "undefined" && document.hasFocus();
+  const verdict = await browserBanners.admit(
+    { focused, active: reportedWindowState?.active ?? null },
+    { ...data, route },
+  );
+  if (!verdict.shown) return false;
   if (hasBrowserNotificationPermission()) {
     const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route });
     if (route) {
@@ -1221,8 +1231,15 @@ export function installWindowRoleTracker(): void {
   });
 }
 
-// Tell the shell what this window shows (no-op outside the desktop).
+// What this window shows, as last reported. The desktop shell keeps the same
+// fact per window for banner routing; a browser tab keeps it for itself, so
+// notifyNative can tell whether the banner's target is already on screen.
+let reportedWindowState: DesktopWindowState | null = null;
+
+// Tell the shell what this window shows (the bridge call is a no-op in a
+// browser; the local record is what the banner gate reads there).
 export function reportDesktopWindowState(state: DesktopWindowState): void {
+  reportedWindowState = state;
   bridge("reportWindowState")?.(state);
 }
 
