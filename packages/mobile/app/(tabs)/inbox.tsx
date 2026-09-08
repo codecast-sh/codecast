@@ -14,7 +14,7 @@ import {
   useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, placeInboxRows,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
-  sessionsWakeSig, pendingSendWakeSig,
+  sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig,
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
@@ -1068,6 +1068,9 @@ export default function InboxScreen() {
   // pushes don't re-render this screen at all.
   const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
   const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
+  // Unread has its own signature: sessionsWakeSig deliberately omits
+  // updated_at, which is exactly the number the read model compares against.
+  const unreadSig = useInboxStore((s) => sessionUnreadWakeSig(s));
   const sessions = useInboxStore.getState().sessions;
   // placeInboxRows' trust-TTL adaptation (stale "working" → needs-input) and
   // the rows' relative times are time-driven, not field-driven — a signature
@@ -1268,16 +1271,20 @@ export default function InboxScreen() {
   const handleSessionLongPress = useCallback((session: InboxSession) => {
     const favoriteLabel = session.is_favorite ? 'Unfavorite' : 'Favorite';
     const toggleFavorite = () => useInboxStore.getState().toggleFavorite(session._id);
+    // Same verb as the web card's right-click menu, same store action, so the
+    // dot the phone lights is the dot the desktop shows.
+    const markUnread = () => useInboxStore.getState().markSessionUnread(session._id);
     const options = [
       session.is_pinned ? 'Unpin' : 'Pin',
       favoriteLabel,
+      'Mark unread',
       'Label…',
       'Stash',
       'Kill Session',
       'Cancel',
     ];
-    const destructiveButtonIndex = 4;
-    const cancelButtonIndex = 5;
+    const destructiveButtonIndex = 5;
+    const cancelButtonIndex = 6;
 
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -1285,15 +1292,17 @@ export default function InboxScreen() {
         (index) => {
           if (index === 0) handlePin(session._id);
           else if (index === 1) toggleFavorite();
-          else if (index === 2) openLabelPicker(session);
-          else if (index === 3) handleStash(session._id);
-          else if (index === 4) confirmKill(session._id);
+          else if (index === 2) markUnread();
+          else if (index === 3) openLabelPicker(session);
+          else if (index === 4) handleStash(session._id);
+          else if (index === 5) confirmKill(session._id);
         },
       );
     } else {
       Alert.alert(cleanTitle(session.title), undefined, [
         { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
         { text: favoriteLabel, onPress: toggleFavorite },
+        { text: 'Mark unread', onPress: markUnread },
         { text: 'Label…', onPress: () => openLabelPicker(session) },
         { text: 'Stash', onPress: () => handleStash(session._id) },
         { text: 'Kill Session', style: 'destructive', onPress: () => confirmKill(session._id) },
@@ -1307,16 +1316,25 @@ export default function InboxScreen() {
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
+  // Which rows are lit, derived once per list render from the same shared
+  // predicate web uses — the phone and the desktop cannot disagree.
+  const unreadByConv = useMemo(
+    () => sessionUnreadMap(useInboxStore.getState()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature IS the dep
+    [unreadSig],
+  );
+
   const renderSessionItem = useCallback((s: InboxSession) => (
     <SwipeableSessionItem
       key={s._id}
       session={s as SessionData}
+      isUnread={!!unreadByConv[s._id]}
       onPress={() => router.push(`/session/${s._id}`)}
       onDismiss={() => handleStash(s._id)}
       onPin={() => handlePin(s._id)}
       onLongPress={() => handleSessionLongPress(s)}
     />
-  ), [router, handleStash, handlePin, handleSessionLongPress]);
+  ), [router, handleStash, handlePin, handleSessionLongPress, unreadByConv]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;

@@ -22,7 +22,7 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -35,19 +35,19 @@ import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
-import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
+import { memberListSig, rosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
-import { DeviceIcon, useRosterDevice, deviceWakesOnUse, deviceDisplayName } from "./DeviceBadge";
+import { DeviceIcon, rosterDeviceOf, deviceWakesOnUse, deviceDisplayName } from "./DeviceBadge";
 import { SessionWorktreeChip } from "./SessionWorktreeChip";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
-import { useAnchorIdentity } from "../hooks/useSyncAnchors";
+import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
 import { shareOrigin } from "../lib/utils";
@@ -2134,7 +2134,45 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
   );
 }
 
+// The card's store reads as pure projections, so they can be BOTH a dep of the
+// card's single subscription and the value it renders (ct-49746).
+
+/** The card-chrome toggles the row draws, as one string. */
+function cardChromeSig(clientState: any): string {
+  const ui = clientState?.ui;
+  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}`;
+}
+
+/** Visible-child parent link: the parent's title, so the card wakes on that
+ *  string and never on the parent row's own churn. */
+function spawnedByTitleOf(s: any, spawnedById: string | null): string | null {
+  if (!spawnedById) return null;
+  return (s.sessions[spawnedById]?.title || (s.conversations[spawnedById] as any)?.title) ?? null;
+}
+
+/** The conversation row's authorship fields only — the whole row's identity
+ *  flips on every liveness tick. */
+function convAuthorSig(conv: any): string | null {
+  const c = conv as any;
+  if (!c) return null;
+  return `${c.user_id ?? ""}\u0000${c.is_own === undefined ? "" : c.is_own ? "1" : "0"}\u0000${c.acting_user_id ?? ""}\u0000${c.user?.name ?? ""}\u0000${c.user?.email ?? ""}\u0000${c.user?.avatar_url ?? ""}`;
+}
+
 // -- SessionCard (shared) --
+
+// Unread, said once. Weight carries it (the title goes bright and medium) and
+// this dot marks the leading edge, the same two signals the chat rail uses —
+// never a count, which turns a busy afternoon into a number that never reaches
+// zero.
+function UnreadDot() {
+  return (
+    <span
+      className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-cyan"
+      title="Unread — this session moved since you last looked at it"
+      aria-label="Unread"
+    />
+  );
+}
 
 export const SessionCard = memo(function SessionCard({
   session,
@@ -2154,6 +2192,7 @@ export const SessionCard = memo(function SessionCard({
   forkColorKey,
   sessionLabel,
   isFavorite,
+  isUnread,
   subRow,
 }: {
   session: InboxSession;
@@ -2183,9 +2222,39 @@ export const SessionCard = memo(function SessionCard({
   // store heartbeat notification (the selector runs per notification, not per render).
   sessionLabel: string | null;
   isFavorite: boolean;
+  /** Lit for this viewer: the session moved since they last acknowledged it,
+   *  or they marked it unread by hand (store/inboxStore.sessionUnreadMap). */
+  isUnread?: boolean;
 }) {
   session = withSafetyBlock(session);
   const tipActions = useTipActions();
+  const spawnedById = session.spawned_by_conversation_id || null;
+  const anchorId = session.is_anchor ? (session.anchor_id ?? null) : null;
+  const deviceId = session.owner_device_id;
+  const hasDraft = !!session._hasDraft;
+  const cardId = session._id;
+  // ONE subscription for the whole card (ct-49746). Every value below used to be
+  // its own useInboxStore/hook subscription — 13 of them, so a sidebar showing 75
+  // rows held ~1000 subscriptions and zustand ran ~1000 selectors on every
+  // publish. The deps are the same narrow projections as before, so the card
+  // still wakes on exactly the fields it draws and on nothing else; only the
+  // number of subscribers changed. Same pattern as SessionListPanel above.
+  const st = useTrackedStore([
+    (s) => s.blockedReviveRequestedAt[cardId],
+    (s) => convHasPendingSend(s.pendingMessages[cardId]),
+    (s) => s.restartingSessions[cardId],
+    // The three card-chrome toggles fold into one string: they change together
+    // (a settings write) and never independently at heartbeat rate.
+    (s) => cardChromeSig(s.clientState),
+    (s) => spawnedByTitleOf(s, spawnedById),
+    (s) => (hasDraft ? ((s.drafts[cardId]?.draft_message as string | undefined) ?? "") : ""),
+    (s) => s.currentUser?._id?.toString?.() ?? null,
+    (s) => convAuthorSig(s.conversations[cardId]),
+    // The roster's own object, Object.is-stable between roster pushes.
+    (s) => rosterDeviceOf(s.machineRoster as any, deviceId),
+    (s) => memberListSig(s.teamMembers),
+    (s) => anchorIdentitySig((s as any).anchors, anchorId),
+  ]);
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
   // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
   // structural signature), subscribe to a shared 30s clock so those stay fresh on
@@ -2193,7 +2262,7 @@ export const SessionCard = memo(function SessionCard({
   // (see useCoarseNow); 30s granularity is plenty for a minutes-scale idle counter.
   // The amber blocked chip's revive stamp — read before the clock below so its
   // TTL participates in the clock's re-render signature.
-  const reviveRequestedAtEarly = useInboxStore((st) => st.blockedReviveRequestedAt[session._id]);
+  const reviveRequestedAtEarly = st.blockedReviveRequestedAt[cardId];
   const reviveRequestedAtRef = useRef(reviveRequestedAtEarly);
   reviveRequestedAtRef.current = reviveRequestedAtEarly;
   // Threshold clock, not a raw tick: every card on screen shares the 30s
@@ -2212,7 +2281,7 @@ export const SessionCard = memo(function SessionCard({
   // The machine behind a worktree, read straight off the persisted roster —
   // useDevices() here would mount the roster feeder once per card. Only a cloud
   // host earns an icon: a worktree on your own laptop needs no explaining.
-  const ownerDevice = useRosterDevice(session.owner_device_id);
+  const ownerDevice = rosterDeviceOf(st.machineRoster as any, deviceId);
   const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
   const isWorking = variant === "working";
   const isStashed = variant === "stashed" || variant === "snoozed";
@@ -2230,7 +2299,7 @@ export const SessionCard = memo(function SessionCard({
   // pendingMessages map directly returns a stable boolean, so only this card
   // re-renders when its own pending state flips — not the whole list. Clears
   // the moment status goes active or the server echoes the message.
-  const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
+  const isPendingSend = convHasPendingSend(st.pendingMessages[cardId]);
   const isPendingWorking = isPendingSend && !isAgentActive(session);
   // The amber blocked chip drops the instant the user acts on the session —
   // see showsBlockedBadge. Scalar per-card selector, so only this card
@@ -2246,9 +2315,9 @@ export const SessionCard = memo(function SessionCard({
   // Kill+restart in flight for this session (written by useSessionRestart).
   // Scalar per-card selector, so only this card re-renders when its own restart
   // begins/ends.
-  const restartStartedAt = useInboxStore((st) => st.restartingSessions[session._id]);
-  const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
-  const showAgentIcon = useInboxStore((st) => st.clientState?.ui?.show_agent_icon !== false);
+  const restartStartedAt = st.restartingSessions[cardId];
+  const showModelBadge = st.clientState?.ui?.show_model_badge === true;
+  const showAgentIcon = st.clientState?.ui?.show_agent_icon !== false;
   // Row thumbnail for sessions that contain images (server-denormalized
   // image_preview_url). Independent of simple view — applies in both.
   // Clicking it zooms the image (ImageLightbox), not the session. It lives on
@@ -2256,7 +2325,7 @@ export const SessionCard = memo(function SessionCard({
   // shared text edge. The hover controls keep their right-edge anchor; the
   // THUMB slides left on row hover instead, far enough to clear whichever
   // control set this variant renders, so both stay visible and clickable.
-  const showImageThumb = useInboxStore((st) => st.clientState?.ui?.inbox_image_thumbs === true);
+  const showImageThumb = st.clientState?.ui?.inbox_image_thumbs === true;
   const [thumbZoom, setThumbZoom] = useState(false);
   // A preview URL whose image fails to load must drop the whole thumb slot —
   // an invisible broken img still reserves ~46px and wraps the text early.
@@ -2273,21 +2342,14 @@ export const SessionCard = memo(function SessionCard({
   // Visible-child parent link (agent-team teammate → its lead). Selector
   // returns the parent's title string, so this card re-renders only when that
   // title changes — never on parent-row churn.
-  const spawnedById = session.spawned_by_conversation_id || null;
-  const spawnedByTitle = useInboxStore((st) =>
-    spawnedById
-      ? ((st.sessions[spawnedById]?.title || (st.conversations[spawnedById] as any)?.title) ?? null)
-      : null,
-  );
+  const spawnedByTitle = spawnedByTitleOf(st, spawnedById);
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
   // A kept compose draft (see ComposeView) is a blank session the user chose to
   // save. Preview its unsent text instead of the pre-warm "Waiting for
   // connection" line — the draft IS the card's content.
-  const draftPreview = useInboxStore((st) => (
-    session._hasDraft ? (st.drafts[session._id]?.draft_message as string | undefined) ?? "" : ""
-  ));
+  const draftPreview = hasDraft ? ((st.drafts[cardId]?.draft_message as string | undefined) ?? "") : "";
   const cardSummary = sessionCardSummary(session);
   // The agent's pinned thread state, when it wrote one. It REPLACES the
   // generated summary on the card rather than stacking with it: one is what the
@@ -2321,16 +2383,12 @@ export const SessionCard = memo(function SessionCard({
   // Only the viewer's id is read here (author resolution + foreign check), so
   // subscribe to that string, not the whole user doc — the doc's identity
   // churns on daemon heartbeat fields and would re-render every card.
-  const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
+  const meId = st.currentUser?._id?.toString?.() ?? null;
   const currentUser = useMemo(() => (meId ? ({ _id: meId } as any) : null), [meId]);
-  const teamMembers = useTeamRosterIdentity();
+  const teamMembers = rosterIdentity(st.teamMembers);
   // Same for the conversation row: only the authorship fields matter, and the
   // whole row's identity flips on every liveness tick.
-  const convMetaSig = useInboxStore((s) => {
-    const c = s.conversations[session._id] as any;
-    if (!c) return null;
-    return `${c.user_id ?? ""}\u0000${c.is_own === undefined ? "" : c.is_own ? "1" : "0"}\u0000${c.acting_user_id ?? ""}\u0000${c.user?.name ?? ""}\u0000${c.user?.email ?? ""}\u0000${c.user?.avatar_url ?? ""}`;
-  });
+  const convMetaSig = convAuthorSig(st.conversations[cardId]);
   const convMeta = useMemo(() => {
     if (convMetaSig === null) return null;
     const [user_id, is_own, acting_user_id, name, email, avatar_url] = convMetaSig.split("\u0000");
@@ -2348,7 +2406,8 @@ export const SessionCard = memo(function SessionCard({
   // An anchor's own row is marked as such — the glyph in place of the agent
   // icon, and the scope pill (Personal / team name) beside the title — so a
   // standing member never reads as just another session.
-  const anchorIdentity = useAnchorIdentity(session.is_anchor ? (session.anchor_id ?? null) : null);
+  const anchorSig = anchorIdentitySig((st as any).anchors, anchorId);
+  const anchorIdentity = useMemo(() => anchorIdentityFromSig(anchorSig), [anchorSig]);
   // A teammate's session (surfaced by team mode) is READ-ONLY here: dismiss /
   // stash / pin / kill all mutate GLOBAL conversation fields, so acting on a
   // foreign card would hide or tear down the session in the owner's inbox too.
@@ -2525,8 +2584,9 @@ export const SessionCard = memo(function SessionCard({
                 <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
               </span>
             )}
+            {isUnread && !isActive && <UnreadDot />}
             <span data-sv-title className={`truncate text-xs leading-tight flex-1 ${
-              isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
+              isActive ? "text-violet-300 font-medium" : isUnread ? "text-sol-text font-medium" : "text-gray-400 font-normal"
             }`}>
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
@@ -2690,7 +2750,8 @@ export const SessionCard = memo(function SessionCard({
               <EyeOff className="w-3 h-3" />
             </span>
           )}
-          <span data-sv-title className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
+          {isUnread && !isActive && <UnreadDot />}
+          <span data-sv-title className={`truncate min-w-0 ${isUnread && !isActive ? "font-semibold text-sol-text" : ""}`}>{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
@@ -3450,6 +3511,10 @@ function SessionListPanelImpl({
     // Local answered/dismissed marks — drop a question from the section in the
     // same commit the user acted in (lib/decisionQueue). Ref changes on stamp.
     s => s.questionResolutions,
+    // Which cards are lit. A signature, not the raw collections: sessions hands
+    // back a new ref every heartbeat, and unread must wake the list only when
+    // the SET changes (store/inboxStore.sessionUnreadWakeSig).
+    s => sessionUnreadWakeSig(s),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -3584,6 +3649,13 @@ function SessionListPanelImpl({
     }
     return map;
   }, [bucketByConv, s.buckets]);
+  // conversation_id → is it lit for this viewer. Derived ONCE here and handed
+  // to each card as a scalar prop, the same rule labelByConv follows.
+  const unreadByConv = useMemo(
+    () => sessionUnreadMap(s),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature IS the dep (see the tracked-store note above)
+    [sessionUnreadWakeSig(s)],
+  );
   // Favorited conversation ids, derived once from the authoritative favorites list so
   // a card checks its star with an O(1) Set lookup instead of a per-heartbeat scan.
   const favoriteIds = useMemo(
@@ -4387,6 +4459,7 @@ function SessionListPanelImpl({
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
                 {/* Stashing is the standing-loop workflow — a loop's home rests
@@ -4414,6 +4487,7 @@ function SessionListPanelImpl({
                     onKill={onKill}
                     variant={variant}
                     sessionLabel={labelByConv[sub._id] ?? null}
+                    isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
@@ -4598,6 +4672,7 @@ function SessionListPanelImpl({
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
                 {/* The bars stack under their card the way subagent rows do —
@@ -4633,6 +4708,7 @@ function SessionListPanelImpl({
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
                     sessionLabel={labelByConv[sub._id] ?? null}
+                    isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
@@ -5011,6 +5087,7 @@ function SessionListPanelImpl({
                   onPin={s.pinSession}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   subRow="trigger"
                   // A claimed stashed/killed home renders muted — resting is

@@ -174,6 +174,7 @@ import type * as sessionImages from "../sessionImages.js";
 import type * as sessionInitiator from "../sessionInitiator.js";
 import type * as sessionInsights from "../sessionInsights.js";
 import type * as sessionLaunch from "../sessionLaunch.js";
+import type * as sessionReads from "../sessionReads.js";
 import type * as sessionOwners from "../sessionOwners.js";
 import type * as sessionOwnership from "../sessionOwnership.js";
 import type * as sessionThreads from "../sessionThreads.js";
@@ -381,6 +382,7 @@ declare const fullApi: ApiFromModules<{
   sessionInitiator: typeof sessionInitiator;
   sessionInsights: typeof sessionInsights;
   sessionLaunch: typeof sessionLaunch;
+  sessionReads: typeof sessionReads;
   sessionOwners: typeof sessionOwners;
   sessionOwnership: typeof sessionOwnership;
   sessionThreads: typeof sessionThreads;

@@ -6813,6 +6813,7 @@ export const feedForCLI = query({
         armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
         declaredStatus: conv.thread_state_status ?? null,
+        sessionBoundary: managed?.agent_status_boundary === true,
         pendingApiError: conv.pending_api_error === true,
         sessionError: !!conv.session_error,
       });
@@ -7805,6 +7806,10 @@ const INBOX_PINNED_CHILDREN_SCAN = 20;
 type InboxSessionMaps = {
   agentStatusMap: Map<string, AgentStatus>;
   agentStatusUpdatedAtMap: Map<string, number>;
+  // The settle's own facts next to the status (ct-49533): whether it came from
+  // a lifecycle event rather than a turn ending, and which turn it belongs to.
+  // One map because both are read off the same managed row at the same instant.
+  settleFactsMap: Map<string, { boundary: boolean; turnCompletedAt?: number }>;
   hibernatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
   permissionModeMap: Map<string, string>;
@@ -7874,6 +7879,7 @@ async function buildUserSessionMaps(
 
   const agentStatusMap = new Map<string, any>();
   const agentStatusUpdatedAtMap = new Map<string, number>();
+  const settleFactsMap = new Map<string, { boundary: boolean; turnCompletedAt?: number }>();
   const hibernatedAtMap = new Map<string, number>();
   const tmuxSessionMap = new Map<string, string>();
   const permissionModeMap = new Map<string, string>();
@@ -7891,6 +7897,7 @@ async function buildUserSessionMaps(
     if (s.open_tasks !== undefined && s.open_tasks_at !== undefined) openTasksMap.set(cid, { tasks: s.open_tasks, at: s.open_tasks_at });
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
+    settleFactsMap.set(cid, { boundary: s.agent_status_boundary === true, turnCompletedAt: s.turn_completed_at });
     if (s.hibernated_at !== undefined) hibernatedAtMap.set(cid, s.hibernated_at);
     // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
     // (consumers pass liveConvIds membership as heartbeatAlive) so it can weigh
@@ -7901,7 +7908,7 @@ async function buildUserSessionMaps(
 
   const userDaemonAlive = userDaemonAliveAt({ latestHeartbeat }, now);
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, hibernatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
+  return { agentStatusMap, agentStatusUpdatedAtMap, settleFactsMap, hibernatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -7911,6 +7918,7 @@ async function buildUserSessionMaps(
 const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   agentStatusMap: new Map(),
   agentStatusUpdatedAtMap: new Map(),
+  settleFactsMap: new Map(),
   hibernatedAtMap: new Map(),
   tmuxSessionMap: new Map(),
   permissionModeMap: new Map(),
@@ -7952,6 +7960,7 @@ async function mergeForeignConversationLiveness(
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
     }
+    maps.settleFactsMap.set(cid, { boundary: managed.agent_status_boundary === true, turnCompletedAt: managed.turn_completed_at });
     // Raw status — same contract as buildUserSessionMaps: trustedAgentStatus
     // applies the heartbeat coercion with conversation context.
     maps.agentStatusMap.set(cid, managed.agent_status);
@@ -8242,6 +8251,10 @@ async function enrichInboxSessionRow(
     // The is_idle inputs, on the enriched row too (the CLI and liveness-on
     // clients), so every channel that carries is_idle carries what derived it.
     agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(conv._id.toString()) ?? null,
+    // The settle's own facts (ct-49533): a boundary settle carries no verdict,
+    // and the turn stamp is the identity a completion consumer dedupes on.
+    agent_status_boundary: maps.settleFactsMap.get(conv._id.toString())?.boundary === true,
+    turn_completed_at: maps.settleFactsMap.get(conv._id.toString())?.turnCompletedAt ?? null,
     hibernated_at: maps.hibernatedAtMap.get(conv._id.toString()) ?? null,
     last_heartbeat: maps.lastHeartbeatMap.get(conv._id.toString()) ?? null,
     last_role_is_user: activity.lastRoleIsUser,
@@ -9058,6 +9071,11 @@ type LivenessFields = {
   // The is_idle inputs (ct-47609), so a replica re-derives idleness,
   // responsiveness and the status trust at its own clock (shared deriveLiveAt).
   agent_status_updated_at: number | null;
+  // The settle's own facts (ct-49533). agent_status_boundary is a placement
+  // input (a boundary settle carries no verdict); turn_completed_at is the
+  // per-turn identity a completion consumer dedupes on.
+  agent_status_boundary: boolean | null;
+  turn_completed_at: number | null;
   hibernated_at?: number | null;
   last_heartbeat: number | null;
   last_role_is_user: boolean;
@@ -9312,7 +9330,7 @@ export function ownAsk(
 // same names, same meaning). Both the overlay and inboxForCLI go through here.
 export function placeConversationRow(
   conv: any,
-  lv: { agent_status?: string | null; is_idle?: boolean | null; awaiting_input?: boolean | null; is_unresponsive?: boolean | null },
+  lv: { agent_status?: string | null; is_idle?: boolean | null; awaiting_input?: boolean | null; is_unresponsive?: boolean | null; agent_status_boundary?: boolean | null },
   asking: boolean,
   lastUserMessage: string | null | undefined,
   now: number,
@@ -9328,6 +9346,7 @@ export function placeConversationRow(
     {
       ...conv,
       agent_status: lv.agent_status ?? null,
+      agent_status_boundary: lv.agent_status_boundary ?? null,
       is_idle: lv.is_idle ?? null,
       awaiting_input: lv.awaiting_input ?? null,
       is_unresponsive: lv.is_unresponsive ?? null,
@@ -9409,6 +9428,7 @@ function deriveLivenessAt(
 ): LivenessFields {
   const cid = conv._id.toString();
   const openTasks = maps.openTasksMap.get(cid);
+  const settle = maps.settleFactsMap.get(cid);
   const facts = {
     status: conv.status,
     updated_at: conv.updated_at,
@@ -9451,6 +9471,8 @@ function deriveLivenessAt(
     // un-backfilled rows — exactly the input the park rule needs (C1).
     last_turn_allows_park: rowLastTurnAllowsPark({ last_message_preview: reads.lastUserMessage }),
     agent_status_updated_at: facts.agent_status_updated_at,
+    agent_status_boundary: settle?.boundary === true,
+    turn_completed_at: settle?.turnCompletedAt ?? null,
     hibernated_at: maps.hibernatedAtMap.get(cid) ?? null,
     last_heartbeat: facts.last_heartbeat,
     last_role_is_user: facts.last_role_is_user,

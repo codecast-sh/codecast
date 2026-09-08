@@ -14,6 +14,7 @@ import {
   FileText,
   Forward,
   Link as LinkIcon,
+  MailOpen,
   Moon,
   Pencil,
   Pin,
@@ -449,6 +450,16 @@ export function SessionMenuItems({
         Open in new tab
       </CtxItem>
       <CtxSeparator />
+      <CtxItem
+        icon={MailOpen}
+        shortcut="session.markUnread"
+        onSelect={() => {
+          useInboxStore.getState().markSessionUnread(id);
+          toast.success("Marked unread");
+        }}
+      >
+        Mark unread
+      </CtxItem>
       <CtxItem
         icon={session.is_pinned ? PinOff : Pin}
         shortcut="session.pin"

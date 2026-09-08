@@ -64,7 +64,13 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // selection and fold; `as_of` removed from the envelope.
 // v3: an agent-team teammate rides its present lead's bucket and fold
 // (rideLeadPlacements), so the team files as one group everywhere.
-export const INBOX_PROJECTION_VERSION = 6 as const;
+// v7: agent_status_boundary and turn_completed_at join the facts — a settle
+// produced by a resume, a clear or a manual compact carries no verdict of its
+// own, and a settle names the turn it belongs to (ct-49533).
+// v8: every placed row carries a sort time inside its bucket, one stamp per
+// class plus a creation grace, so order inside a section is the same on the
+// server, on web and on mobile (ct-49550).
+export const INBOX_PROJECTION_VERSION = 8 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -120,6 +126,8 @@ export interface WorkStateInput {
   declaredStatus?: string | null;
   /** A declared `dormant` that names no wake the system can verify (no armed trigger or loop into the session, no daemon-checked open task) and has been quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
   dormantClaimExpired?: boolean;
+  /** The settled status is a SESSION BOUNDARY — a resume, a clear, or a manual /compact landing at an idle prompt (statusHook's SessionStart / PostCompact, carried as managed_sessions.agent_status_boundary). No turn ended, so the status is evidence that the agent is quiet and never a verdict about work: the row keeps its own declaration instead of the boundary consuming it, and every completion-reactive consumer (the needs-input push, unread) ignores it. */
+  sessionBoundary?: boolean;
   /** conversations.pending_api_error — the latest turn is an unresolved auth / API-error banner; the CLI is parked on the user (or a limit reset). */
   pendingApiError?: boolean;
   sessionError?: boolean;
@@ -174,8 +182,18 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // trigger or loop, checked open work) park in their own right below; a bare
   // promise parks only until DORMANT_CLAIM_TTL_MS of quiet — nothing else can
   // re-derive it, because the re-derivation IS the wake landing.
+  //
+  // A SESSION BOUNDARY is read for the verdict as if the daemon reported
+  // nothing: a resume, a clear or a manual /compact lands the agent at an idle
+  // prompt without a turn having ended, so the settle has no verdict of its
+  // own and must not consume the row's. Only the verdict arms below use it —
+  // the hard blocks, the active set and the dead check keep reading the real
+  // status, which is still an honest observation of the process.
+  // Why: without this a resume overwrote a declared `done` with the settled
+  // fallthrough and filed the session under Needs Input (ct-49533).
+  const verdictStatus = input.sessionBoundary ? undefined : agentStatus;
   const declaredDormant =
-    (agentStatus === "dormant" && !input.dormantClaimExpired) || agentStatus === "waiting";
+    (verdictStatus === "dormant" && !input.dormantClaimExpired) || verdictStatus === "waiting";
   // The daemon carries a declaration as the settle status while the session is
   // live. When there is NO daemon status at all (the managed row aged out, the
   // machine is gone, the row predates the feature), the row's own pinned
@@ -183,7 +201,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // the agent's last word and nothing can have moved since without a daemon.
   // Only `done` rides this fallback: a `dormant` promise with no daemon has no
   // one to deliver its wake, so it stays needs_input (a human must look).
-  const declaredDone = agentStatus === "done" || (!agentStatus && input.declaredStatus === "done");
+  const declaredDone = verdictStatus === "done" || (!verdictStatus && input.declaredStatus === "done");
   // A `done` rest with an armed once trigger into the session parks instead:
   // the follow-up names the next actor (the machine fires in N days), and
   // nothing is left for the human to unblock. Only `done` demotes — a once
@@ -201,7 +219,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
     if (declaredDone) return doneRest();
     // The classifier only ever files DONE: dormancy needs a wake the system
     // can verify, and prose cannot supply one (see idleSummary.SETTLE_VERDICTS).
-    if ((agentStatus === "idle" || !agentStatus) && input.settleVerdict === "done") return doneRest();
+    if ((verdictStatus === "idle" || !verdictStatus) && input.settleVerdict === "done") return doneRest();
     return "needs_input";
   };
 
@@ -326,6 +344,156 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   else if (input.messageCount === 0) bucket = "new";
   else bucket = work_state;
   return { bucket, work_state };
+}
+
+// ── Sort time inside a bucket (ct-49550) ────────────────────────────────────
+//
+// The bucket says which group a row is in; this says where it sits inside it.
+// The stamp is per class, because "recent" names a different event in each one:
+// a needs-input row is ranked by when it started needing you, a done row by
+// when its turn ended, a working row by the last time it asked for or got
+// attention (so a session that just came back from a settle outranks one that
+// has been grinding for an hour), a dormant row by the wake it parks on, and an
+// idle row — blank or retired — by plain recency.
+//
+// Every class but idle reads an EVENT stamp, never conversations.updated_at, so
+// a heartbeat or a streamed token can never reorder the inbox. An idle row is
+// blank or killed (classifyWorkState), so its updated_at does not churn either.
+//
+// The stamp is direction free. A list that puts the freshest on top reads
+// `key`; a queue the reader clears top-down (Needs Input, Done) reads `at`
+// ascending and keeps its own direction.
+
+// A session created this recently holds the top of a freshest-first list: the
+// events the stamps above name have not happened to it yet, so ambient output
+// on older rows would push a session the user just started out of sight. Long
+// enough to notice the new row, short enough that ordinary order returns (Orca
+// smart-sort.ts CREATE_GRACE_MS).
+export const INBOX_CREATE_GRACE_MS = 5 * 60_000;
+
+// A dormant row whose wake nothing can name sits after every named one,
+// freshest park first. The base is far past any wall-clock wake, so the two
+// ranges never interleave.
+const UNNAMED_WAKE_BASE = Number.MAX_SAFE_INTEGER;
+
+export interface InboxSortTimeInput {
+  /** The row's placed verdict — the class whose stamp applies. */
+  work_state: WorkState;
+  /** managed_sessions.agent_status_updated_at: when the current status began. */
+  statusStartedAt?: number | null;
+  /** managed_sessions.turn_completed_at: when the turn behind the current status ended (ct-49533). While a row works this still names the PREVIOUS turn's end — its last attention event. */
+  turnCompletedAt?: number | null;
+  /** The wake a parked row sleeps on, when the system can name its time (a snooze, a live loop wakeup). */
+  wakeAt?: number | null;
+  /** conversations.updated_at: the row's last activity. */
+  activityAt?: number | null;
+  /** conversations.started_at: when the session was created. */
+  createdAt?: number | null;
+}
+
+export type InboxSortTime = {
+  /** The class's own event stamp, direction free. A section the reader clears
+   *  top-down (the settled queues) orders by this, oldest first. */
+  at: number;
+  /** The freshest-first comparator key, ASCENDING (a lower key sits higher),
+   *  with the creation grace folded in. Every "newest on top" order reads this:
+   *  the flat active list, j/k, the working section, and dormant's wake order.
+   *  The grace lives here and not in `at` because a floor that lifts a row to
+   *  the top of a freshest-first list would sink it to the bottom of a queue
+   *  cleared oldest first — where a brand new row belongs anyway. */
+  key: number;
+};
+
+// A stamp the comparator can trust. A missing, zero or non-finite value reads
+// as "no such event" — an Infinity off a corrupted row would otherwise pin the
+// session to the top of its group forever (Orca mostRecentAttentionInHistory).
+function sortStamp(v: number | null | undefined): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+// The floor a brand new session keeps for INBOX_CREATE_GRACE_MS. Bounded by the
+// window on purpose: a session created days ago and never touched must not keep
+// ranking as if its last event were five minutes after its creation.
+function withCreateGrace(at: number, createdAt: number, now: number): number {
+  if (createdAt <= 0 || now >= createdAt + INBOX_CREATE_GRACE_MS) return at;
+  return Math.max(at, createdAt + INBOX_CREATE_GRACE_MS);
+}
+
+// One row's position inside its bucket, from stamps every replica holds.
+export function inboxSortTime(input: InboxSortTimeInput, now: number): InboxSortTime {
+  const status = sortStamp(input.statusStartedAt);
+  const turn = sortStamp(input.turnCompletedAt);
+  const activity = sortStamp(input.activityAt);
+  if (input.work_state === "dormant") {
+    // The named wake, soonest first: the row nearest to waking is the one the
+    // reader wants at the top of Dormant. The creation grace does not apply —
+    // a named wake is a fact about the future, and no grace improves on it.
+    const wake = sortStamp(input.wakeAt);
+    if (wake > 0) return { at: wake, key: wake };
+    // No wake to name: when the row parked, the same fallback chain the other
+    // classes read (the status start, then plain activity).
+    const parked = status || activity;
+    return { at: parked, key: UNNAMED_WAKE_BASE - parked };
+  }
+  let at: number;
+  switch (input.work_state) {
+    // When the state started. Freshly blocked first.
+    case "needs_input":
+      at = status || activity;
+      break;
+    // done: when the turn ended. The stamp outlives later status writes, so it
+    // names the delivery even for a session the harness keeps alive afterwards.
+    // working: the most recent PRIOR attention event — turn_completed_at still
+    // holds the last turn's end while this one runs, so a session that just
+    // came back outranks one that has produced nothing for an hour. One
+    // expression for both: the newest turn boundary the row can name.
+    case "done":
+    case "working":
+      at = turn || status || activity;
+      break;
+    // Blank or retired: plain recency.
+    default:
+      at = activity;
+      break;
+  }
+  // Newest first, as an ascending key; the grace floors the KEY only. A row
+  // with no event at all keeps a plain 0 — never the -0 a bare negation makes,
+  // which reads as a different value to every equality check.
+  const floored = withCreateGrace(at, sortStamp(input.createdAt), now);
+  return { at, key: floored ? -floored : 0 };
+}
+
+// Exactly the fields the sort reads, so a caller can hand over the row it
+// already holds (a conversation doc, a replica's session row) instead of
+// building a projectable row for a comparator.
+export type InboxSortRow = Pick<
+  ProjectableInboxRow,
+  "updated_at" | "started_at" | "agent_status_updated_at" | "turn_completed_at" | "inbox_snoozed_until" | "loop_state"
+>;
+
+// The row adapter, the twin of placeProjectableRow: every replica reads the
+// same stamps off the same replicated fields, so web, mobile and the server
+// order a bucket identically.
+export function inboxSortTimeOfRow(
+  row: InboxSortRow,
+  work_state: WorkState,
+  now: number,
+): InboxSortTime {
+  const loop = row.loop_state;
+  // The wakes the row can NAME a time for. An armed trigger's next run is not
+  // replicated, so a trigger home files with the unnamed wakes.
+  const wakeAt = row.inbox_snoozed_until ?? (loop?.status === "armed" ? loop.wakeup_at : null);
+  return inboxSortTime(
+    {
+      work_state,
+      statusStartedAt: row.agent_status_updated_at ?? null,
+      turnCompletedAt: row.turn_completed_at ?? null,
+      wakeAt,
+      activityAt: row.updated_at,
+      createdAt: row.started_at ?? null,
+    },
+    now,
+  );
 }
 
 // ── Time flip ────────────────────────────────────────────────────────────────
@@ -823,6 +991,8 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   thread_state_status?: string | null;
   pending_api_error?: boolean | null;
   session_error?: string | null;
+  /** conversations.started_at — when the session was created. The creation grace in inboxSortTimeOfRow is its only reader. */
+  started_at?: number | null;
   /** The last USER message (conversations.last_message_preview / last_user_message). */
   last_message_preview?: string | null;
   last_user_message?: string | null;
@@ -833,6 +1003,10 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   awaiting_input?: boolean | null;
   last_turn_allows_park?: boolean | null;
   agent_status_updated_at?: number | null;
+  /** The current agent_status is a session boundary, not a turn ending (managed_sessions.agent_status_boundary). */
+  agent_status_boundary?: boolean | null;
+  /** When the lead turn behind the current status ended (managed_sessions.turn_completed_at). Presentation and completion-dedupe only: no bucket or work-state rule reads it. */
+  turn_completed_at?: number | null;
   hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
@@ -1054,6 +1228,7 @@ export function placeProjectableRow(
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,
     dormantClaimExpired: row.agent_status === "dormant" && !verifiedWake && epoch - row.updated_at >= DORMANT_CLAIM_TTL_MS,
+    sessionBoundary: row.agent_status_boundary === true,
     pendingApiError: row.pending_api_error === true,
     sessionError: !!row.session_error,
     dismissed: !!row.inbox_dismissed_at,
@@ -1137,6 +1312,12 @@ export const INBOX_FACT_FIELDS = [
   // the +45s settle, the heartbeat lapse and the trust decay flip on the
   // replica's own clock instead of waiting for a server re-execution.
   "agent_status_updated_at",
+  // The settle's own facts (ct-49533): whether it came from a lifecycle event
+  // rather than a turn ending — which the replica must place exactly as the
+  // server does — and which turn it belongs to, the identity a completion
+  // consumer dedupes on when the status itself stops moving.
+  "agent_status_boundary",
+  "turn_completed_at",
   "hibernated_at",
   "last_heartbeat",
   "last_role_is_user",
