@@ -25,10 +25,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { Command } from "commander";
-import { apiPost, buildPublishPayload, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
+import { buildPublishPayload } from "./publish.js";
 import { stdinText } from "./sendBody.js";
 import { cliFetch } from "./cliHttp.js";
 import { fmt } from "./colors.js";
+import { commandGroup } from "./commandGroups.js";
 
 export interface DecideOption {
   label: string;
@@ -260,31 +262,7 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
 export function registerDecideCommand(program: Command, deps: PublishDeps): void {
   program
     .command("decide")
-    .description(
-      "Hand your human one decision: question, options, and the context to choose\n\n" +
-        "The decision appears in their queue and renders as a card in the conversation;\n" +
-        "the answer arrives back in this session as a message. Default is blocking:\n" +
-        "post it, then end your turn.\n\n" +
-        "Subcommands:\n" +
-        "  cast decide ls                      This session's decisions, with ids and answers\n" +
-        "  cast decide edit [id] [flags]       Change the open decision in place (question, -o, --context, --report, --advisory/--blocking)\n" +
-        "  cast decide cancel [id]             Withdraw the open decision\n\n" +
-        "Examples:\n" +
-        '  cast decide "Which schema wins?" -o "Frontmatter wins" -o "Path wins" --context -  <<\'EOF\'\n' +
-        "  The daemon writes note ids from the file path; the web index derives\n" +
-        "  them from frontmatter. Renames keep one id and change the other, so\n" +
-        "  the same note indexes twice. Either side can be authoritative.\n" +
-        "  EOF\n" +
-        '  cast decide "Approve dropping agent_runs_v1?" -o "Approve :: frees the last migration" -o "Hold" \\\n' +
-        "    --context \"Nothing wrote to it in 40 days. Not recoverable without a backup restore.\" \\\n" +
-        "    --report drop-analysis.html\n" +
-        '  cast decide "Back off or switch keys?" -o "Back off" -o "Switch keys" --advisory --default 1 \\\n' +
-        "    --context \"429s for 4m. Backing off costs ~20m of throughput.\"\n" +
-        '  cast decide edit --context - <<\'EOF\'          # new facts: rewrite the open decision\'s context\n' +
-        "  …\n" +
-        "  EOF\n" +
-        "  cast decide cancel                           # the question no longer applies"
-    )
+    .description(commandGroup("decide").description)
     .argument("[question]", "The decision, phrased as one question — or a subcommand: ls | edit | cancel")
     .argument("[args...]", "subcommand arguments (edit/cancel take an optional decision id)")
     .option(

@@ -16,7 +16,6 @@ import { spawnSync } from "./proc.js";
 import { stdinText } from "./sendBody.js";
 import type { Command } from "commander";
 import open from "open";
-import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { c, fmt, icons } from "./colors.js";
 import {
   buildAccessPayload,
@@ -35,60 +34,11 @@ import {
   type AccessFlagValues,
   type ArtifactLsRow,
 } from "./publishCommand.js";
-
-export interface PublishDeps {
-  getCliEndpoint: () => { siteUrl: string; apiToken: string };
-  detectCurrentSessionId: () => string | null;
-}
+import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
+import { commandGroup } from "./commandGroups.js";
 
 const WATCH_DEBOUNCE_MS = 400;
 const THUMB_TIMEOUT_MS = 10_000;
-
-// ── backend calls ────────────────────────────────────────────────────────────
-
-/**
- * A route the deployment does not have answers with an HTML page, not JSON, so
- * a CLI newer than the server otherwise reports the page body as a parse
- * failure. Returns the message to print, or null when the status says nothing
- * about a missing route.
- */
-export function missingRouteError(urlPath: string, status: number): string | null {
-  return status === 404
-    ? `this codecast server has no ${urlPath} route — it needs a newer deployment.`
-    : null;
-}
-
-export async function apiPost(
-  deps: PublishDeps,
-  urlPath: string,
-  body: Record<string, unknown>,
-  opts: { read?: boolean; exitOnError?: boolean } = {},
-): Promise<any> {
-  const { siteUrl, apiToken } = deps.getCliEndpoint();
-  const doFetch = opts.read ? cliFetchRead : cliFetch;
-  const response = await doFetch(`${siteUrl}${urlPath}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_token: apiToken, ...body }),
-  });
-  const text = await response.text();
-  let result: any;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    const message = missingRouteError(urlPath, response.status)
-      ?? `API error (${response.status}): ${text.slice(0, 200)}`;
-    if (opts.exitOnError === false) throw new Error(message);
-    console.error(message);
-    process.exit(1);
-  }
-  if (result?.error) {
-    if (opts.exitOnError === false) throw new Error(String(result.error));
-    console.error(`Error: ${result.error}`);
-    process.exit(1);
-  }
-  return result;
-}
 
 // ── bundle walk ──────────────────────────────────────────────────────────────
 
@@ -687,20 +637,7 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 export function registerPublishCommand(program: Command, deps: PublishDeps): void {
   program
     .command("publish")
-    .description(
-      "Publish an HTML/markdown file or a directory bundle to a shareable codecast.sh/a/<slug> URL\n\n" +
-        "Re-publishing the same path updates the same URL (version history kept).\n\n" +
-        "Subcommands:\n" +
-        "  cast publish ls                          List your published pages\n" +
-        "  cast publish rm <slug|path>              Unpublish\n" +
-        "  cast publish rollback <slug|path> <n>    Restore version n as a new version\n" +
-        "  cast publish open <slug|path>            Print + open the share URL\n" +
-        "  cast publish versions <slug|path>        Version history (+ rollback/diff hints)\n" +
-        "  cast publish comments <slug|path>        Read viewer comments; --resolve <id> | --resolve-all\n" +
-        "  cast publish viewers <slug|path>         View count + who opened it (email gate)\n" +
-        "  cast publish links <slug|path>           share / manage / edit / source / live URLs\n" +
-        "  cast publish set <slug|path> [flags]     Change gates or title WITHOUT republishing",
-    )
+    .description(commandGroup("publish").description)
     .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))

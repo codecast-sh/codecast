@@ -1,7 +1,7 @@
 // `cast cap ls` — every capability across the fleet, filterable.
 
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "../publish.js";
+import { apiPost, type PublishDeps } from "../castApi.js";
 import {
   formatCapabilityRow,
   jsonShape,

@@ -6,7 +6,7 @@
 // description field this command prints.
 
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "../publish.js";
+import { apiPost, type PublishDeps } from "../castApi.js";
 import { fenceUnlessBuiltin } from "./fence.js";
 import { parseEntries, relativeAge, type DeviceStateRow } from "./format.js";
 

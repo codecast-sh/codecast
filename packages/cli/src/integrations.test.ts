@@ -9,7 +9,7 @@ import { Command } from "commander";
 const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 let answer: (path: string, body: Record<string, unknown>) => any = () => ({});
 
-mock.module("./publish.js", () => ({
+mock.module("./castApi.js", () => ({
   apiPost: async (_deps: unknown, path: string, body: Record<string, unknown>) => {
     calls.push({ path, body });
     return answer(path, body);

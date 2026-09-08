@@ -12,7 +12,7 @@
 import type { Command } from "commander";
 import { execSync } from "child_process";
 import { buildProjectScopeKey, requiresExplicitConsent } from "@codecast/shared/contracts";
-import { apiPost, type PublishDeps } from "../publish.js";
+import { apiPost, type PublishDeps } from "../castApi.js";
 import { deviceId } from "../remote/device.js";
 
 interface EquipOpts {

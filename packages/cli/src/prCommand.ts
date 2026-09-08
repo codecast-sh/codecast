@@ -18,7 +18,7 @@
 import { execFileSync } from "node:child_process";
 import type { Command } from "commander";
 import open from "open";
-import { apiPost, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
 import { readStdinBody, stdinText } from "./sendBody.js";
 import { fmt, c, icons } from "./colors.js";
 import {
@@ -27,6 +27,7 @@ import {
   codecastPrUrl,
   checkLabel,
 } from "@codecast/shared/contracts";
+import { commandGroup } from "./commandGroups.js";
 
 // ── locating a pull request ──────────────────────────────────────────────────
 
@@ -556,26 +557,7 @@ function fail(message: string): never {
 export function registerPrCommand(program: Command, deps: PublishDeps): void {
   const pr = program
     .command("pr")
-    .description(
-      "Pull requests: their state, their checks, their reviews, and the session shepherding each one\n\n" +
-      "A pull request reference is a number (123), an owner and name with a number\n" +
-      "(owner/repo#123), a GitHub or codecast URL, or nothing at all. Nothing means\n" +
-      "the PR this session is bound to, and failing that the PR for the branch you\n" +
-      "are standing on.\n\n" +
-      "Subcommands:\n" +
-      "  cast pr ls                     Open pull requests, newest change first\n" +
-      "  cast pr show [ref]             Everything known about one\n" +
-      "  cast pr events [ref]           Its timeline\n" +
-      "  cast pr watch [ref]            Live state changes, one line each\n" +
-      "  cast pr shepherd on|off|status Bind a session to a PR until it merges\n" +
-      "  cast pr open [ref]             Its codecast page\n" +
-      "  cast pr comment [ref] \"text\"   Comment on GitHub from here\n" +
-      "  cast pr threads [ref]          Its review threads, open ones first\n" +
-      "  cast pr resolve <thread> [ref] Settle a thread (unresolve reopens it)\n" +
-      "  cast pr review [ref] --approve Approve, request changes, or just comment\n" +
-      "  cast pr merge [ref]            Merge it (--squash by default)\n" +
-      "  cast pr close [ref]            Close it without merging",
-    );
+    .description(commandGroup("pr").description);
 
   // ── ls ──
   pr.command("ls")
