@@ -258,6 +258,29 @@ export const CLIENT_ERROR_BANNER_PREFIX = "⚠ Turn stopped:";
 const CLIENT_AUTH_ERROR_RE =
   /\b(?:api[\s_-]?key|apikey|authenticat|unauthori[sz]|not logged in|\/login\b|invalid.{0,12}(?:key|token|credential)|missing.{0,20}(?:key|token|credential|api|location)|no .{0,16}(?:api key|credential)|credential|GOOGLE_VERTEX_LOCATION|location setting is missing|oauth|permission denied|forbidden|\b401\b|\b403\b)/i;
 
+// A codex plan-window park recorded BEFORE codecast learned to read the
+// structured code (ct-49676). Those turns kept only the provider's prose,
+// wrapped in the marked client-error banner, so they classify as "error" and
+// no recovery ever looks at them; they do not heal on a re-classify either,
+// because the code they would need was never stored. This is the one form
+// that can be recovered from the text alone.
+//
+// Matching prose is safe HERE and nowhere else: the marker above is written
+// only by the client's own error parser for a failed turn, so the body is a
+// provider error rather than a chat turn that merely mentions a limit. That
+// is the same guarantee CLIENT_AUTH_ERROR_RE already leans on.
+//
+// The usage-limit sentence ALONE must not mean "limit": codex sends the very
+// same "You've hit your usage limit." for rate_limit_exceeded, the per-minute
+// cap, which has to stay "throttle" — reading a burst as a quota park is what
+// sent the fleet rotating accounts on 2026-09-04. What separates them is the
+// remedy. Only a spent plan window is cured by buying credits, and codex's own
+// per-minute prose (read out of the 0.153.4 binary) offers "Try again in
+// <duration>" or "Upgrade to Pro (openai.com/chatgpt/pricing)" — it never
+// names credits. So the purchase clause, not the sentence, is the evidence.
+const CODEX_PLAN_WINDOW_BODY_RE =
+  /you['’]ve hit your usage limit\b[\s\S]{0,240}?purchase more credits/i;
+
 export function classifyApiErrorBanner(
   content: string | null | undefined,
 ): ApiErrorBannerKind | null {
@@ -270,6 +293,7 @@ export function classifyApiErrorBanner(
   // can be long, and the marker already guarantees it's a real error, not prose.
   if (trimmed.startsWith(CLIENT_ERROR_BANNER_PREFIX)) {
     const body = trimmed.slice(CLIENT_ERROR_BANNER_PREFIX.length);
+    if (CODEX_PLAN_WINDOW_BODY_RE.test(body)) return "limit";
     return CLIENT_AUTH_ERROR_RE.test(body) ? "auth" : "error";
   }
   if (THROTTLE_BANNER_RE.test(trimmed) && !trimmed.includes("\n")) return "throttle";
