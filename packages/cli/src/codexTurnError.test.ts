@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CodexAppServer } from "./codexAppServer";
 import { parseCodexSessionFile } from "./parser";
-import { classifyApiErrorBanner, codexErrorKind } from "@codecast/shared/contracts";
+import { SAFETY_BANNER_PREFIX, classifyApiErrorBanner, codexErrorKind } from "@codecast/shared/contracts";
 import { codexTurnErrorMessage } from "./codexTurnError";
 
 const message = "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
@@ -123,5 +123,40 @@ describe("Codex limit parks (ct-49676)", () => {
     notify("turn/started", { turn: { id: "turn1" } });
     notify("turn/completed", { turn: { id: "turn1", status: "failed", error: { codexErrorInfo: "usage_limit_exceeded", message: "You've hit your usage limit." } } });
     expect(classifyApiErrorBanner(result[2].at(-1).content)).toBe("limit");
+  });
+});
+
+describe("Codex cyber policy stops (ct-49794)", () => {
+  // The wording codex 0.153.4 carries for this code, beside the misalignment
+  // one in the same string table. Production rows show a LONGER wording for the
+  // same code, so the banner must not be built out of either.
+  const cyber = "This request has been flagged for possible cybersecurity risk.";
+
+  test("a cyber policy stop parks as safety instead of dropping to a silent error", () => {
+    const banner = codexTurnErrorMessage("turn1", { message: cyber, codex_error_info: "cyber_policy" }, 1);
+    expect(classifyApiErrorBanner(banner.content)).toBe("safety");
+    expect(banner.content).toContain(cyber);
+    // Named by the code that actually fired: labelling every safety stop
+    // "misalignment_policy_violation" would tell the user the wrong policy.
+    expect(banner.content).toBe(`${SAFETY_BANNER_PREFIX} cyber_policy · ${cyber}`);
+  });
+
+  test("the wordless prose stop still carries the misalignment label", () => {
+    // No code on the wire, so the prose match is all there is — and the code it
+    // stands in for is the misalignment one.
+    const banner = codexTurnErrorMessage("turn1", { message }, 1);
+    expect(banner.content).toBe(`${SAFETY_BANNER_PREFIX} misalignment_policy_violation · ${message}`);
+    expect(classifyApiErrorBanner(banner.content)).toBe("safety");
+  });
+
+  test("the live app-server path stamps the cyber policy park too", () => {
+    const server = new CodexAppServer({ log: () => {} });
+    let result: any[] = [];
+    server.on("turnCompleted", (...args) => { result = args; });
+    const notify = (method: string, params: object) => (server as any).handleNotification({ method, params: { threadId: "thread1", ...params } });
+    notify("turn/started", { turn: { id: "turn1" } });
+    notify("turn/completed", { turn: { id: "turn1", status: "failed", error: { codexErrorInfo: "cyberPolicy", message: cyber } } });
+    expect(classifyApiErrorBanner(result[2].at(-1).content)).toBe("safety");
+    expect(codexErrorKind({ codexErrorInfo: "cyberPolicy" })).toBe("safety");
   });
 });
