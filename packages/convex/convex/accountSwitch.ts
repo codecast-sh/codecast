@@ -50,6 +50,8 @@ import {
   continueNeedsRestart,
   parkedOnActiveAccount,
   resumePinFor,
+  activeCodexProfile,
+  codexAccountNeedsRestart,
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
@@ -1680,6 +1682,98 @@ export const pinForResume = mutation({
       );
     }
     return { cc_account: pin ?? null };
+  },
+});
+
+/**
+ * The Codex account a pane launched under, reported by the daemon that launched
+ * it (ct-49528).
+ *
+ * Codex reads ~/.codex/auth.json once and holds that grant for the process's
+ * life, so nothing about a running session says which account it is spending —
+ * only the daemon that started it knows, and only at that moment. The row is
+ * the durable copy: it outlives the pane, the daemon and the machine's next
+ * `codex login`, which is what lets the web name the stale panes.
+ *
+ * `codex_account` is optional so a daemon that predates this call keeps
+ * validating; an absent value clears the record rather than asserting an
+ * account we could not name.
+ */
+export const recordCodexAccount = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    codex_account: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return null;
+    if ((conv.codex_account ?? undefined) !== args.codex_account) {
+      await ctx.db.patch(conv._id, { codex_account: args.codex_account });
+    }
+    return { codex_account: args.codex_account ?? null };
+  },
+});
+
+// A pane that stopped reporting for this long is not part of the live fleet any
+// more, and a dead pane cannot be stale. Deliberately generous: the cost of
+// naming a session that just died is one restart button nobody presses, while
+// missing a live one leaves it burning the wrong account's window.
+const CODEX_PANE_LIVE_MS = 10 * 60 * 1000;
+
+/**
+ * The live Codex sessions whose process is still running an account the machine
+ * has since moved off — the "restart to move this session" prompt's whole input.
+ *
+ * Scoped to the live fleet (managed_sessions, one row per running pane) rather
+ * than to every conversation ever: a restart can only be offered for a process
+ * that exists, and the fleet is small where the conversation history is not.
+ */
+export const listStaleCodexSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const now = Date.now();
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const deviceById = new Map(devices.map((d) => [d.device_id, d]));
+    const live = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_heartbeat", (q: any) =>
+        q.eq("user_id", userId).gt("last_heartbeat", now - CODEX_PANE_LIVE_MS),
+      )
+      .collect();
+    const out: Array<{
+      conversation_id: Id<"conversations">;
+      session_id: string;
+      title?: string;
+      device_id?: string;
+      codex_account: string;
+      active_account?: string;
+    }> = [];
+    const seen = new Set<string>();
+    for (const session of live) {
+      if (!session.conversation_id || seen.has(session.conversation_id)) continue;
+      const conv = await ctx.db.get(session.conversation_id);
+      if (!conv || !conv.codex_account) continue;
+      const device = conv.owner_device_id ? deviceById.get(conv.owner_device_id) : undefined;
+      if (!codexAccountNeedsRestart(conv, device)) continue;
+      seen.add(session.conversation_id);
+      out.push({
+        conversation_id: conv._id,
+        session_id: session.session_id,
+        title: conv.title,
+        device_id: conv.owner_device_id,
+        codex_account: conv.codex_account,
+        active_account: activeCodexProfile(device),
+      });
+    }
+    return out;
   },
 });
 
