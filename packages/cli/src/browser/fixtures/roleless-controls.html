@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Role-less controls</title>
+<style>
+  body { font: 15px system-ui; margin: 2rem; }
+  .btn { cursor: pointer; display: inline-block; padding: .6rem 1rem;
+         border-radius: 6px; background: #2b6cb0; color: #fff; }
+  .card { cursor: pointer; padding: 1rem; border: 1px solid #ccc; margin: 1rem 0; }
+  .card .title { cursor: pointer; font-weight: 600; }
+  .editor { border: 1px solid #999; padding: .6rem; min-height: 2.5rem; }
+  .hidden { display: none; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h1>Role-less controls</h1>
+
+  <!-- Styled as a button, no role: invisible to the accessibility tree. -->
+  <div class="btn" id="publish" onclick="fired('publish')">Publish</div>
+
+  <!-- cursor:pointer with a JS listener rather than an attribute. -->
+  <span class="btn" id="discard">Discard</span>
+
+  <!-- Focusable, no role. -->
+  <div tabindex="0" id="focusable">Keyboard reachable</div>
+
+  <!-- The nested span inherits cursor:pointer; only the card should be listed. -->
+  <div class="card" id="card"><span class="title">Nested card</span></div>
+
+  <div class="editor" contenteditable="true" id="editor" aria-label="Message body"></div>
+
+  <!-- Real controls: the accessibility tree already covers these. -->
+  <button id="real" onclick="fired('real')">Real button</button>
+  <a href="#somewhere">Real link</a>
+
+  <!-- Neither visible nor reportable. -->
+  <div class="hidden">Hidden control</div>
+
+  <p id="log"></p>
+  <script>
+    function fired(what) { document.getElementById('log').textContent = 'fired:' + what; }
+    document.getElementById('discard').addEventListener('click', () => fired('discard'));
+  </script>
+</body>
+</html>

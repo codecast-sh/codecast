@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript, loginRaisePlan, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
+import { lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript, loginRaisePlan, withOrdinals, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
 
 describe("translate: text", () => {
   test("bare text reads the whole page", () => {
@@ -95,6 +95,53 @@ describe("parseEngineRefs", () => {
     const roles = parseEngineRefs(stdout).map((i) => i.role);
     expect(roles).not.toContain("listitem");
     expect(roles).not.toContain("StaticText");
+  });
+
+  test("carries the ref itself, and no ordinal when every name is its own", () => {
+    expect(parseEngineRefs(stdout).map((i) => i.ref)).toEqual(["e9", "e162", "e47", "e77"]);
+    expect(parseEngineRefs(stdout).every((i) => i.nth === undefined)).toBe(true);
+  });
+});
+
+describe("ordinals on the engine's snapshot", () => {
+  // Verbatim from agent-browser 0.34.0 on a three-row list: three identical
+  // lines, nothing to tell the rows apart (ct-49555).
+  const dupes = [
+    '- heading "Duplicate names" [level=1, ref=e1]',
+    '- button "Delete" [ref=e3]',
+    '- button "Delete" [ref=e4]',
+    '- button "Delete" [ref=e5]',
+    '- button "Rerender" [ref=e2]',
+  ].join("\n");
+
+  test("numbers the namesakes in the order the page shows them", () => {
+    expect(parseEngineRefs(dupes).map((i) => [i.ref, i.nth])).toEqual([
+      ["e1", undefined],
+      ["e3", 1],
+      ["e4", 2],
+      ["e5", 3],
+      ["e2", undefined],
+    ]);
+  });
+
+  test("prints the ordinal on the repeats and leaves everything else alone", () => {
+    expect(withOrdinals(dupes).split("\n")).toEqual([
+      '- heading "Duplicate names" [level=1, ref=e1]',
+      '- button "Delete" [ref=e3]',
+      '- button "Delete (2nd)" [ref=e4]',
+      '- button "Delete (3rd)" [ref=e5]',
+      '- button "Rerender" [ref=e2]',
+    ]);
+  });
+
+  test("a page with nothing ambiguous on it is passed through untouched", () => {
+    const plain = ['- link "All issues" [ref=e9]', '- button "Watch" [expanded=false, ref=e162]'].join("\n");
+    expect(withOrdinals(plain)).toBe(plain);
+  });
+
+  test("same name under different roles is not a duplicate", () => {
+    const mixed = ['- link "Delete" [ref=e3]', '- button "Delete" [ref=e4]'].join("\n");
+    expect(withOrdinals(mixed)).toBe(mixed);
   });
 });
 
