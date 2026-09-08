@@ -9,9 +9,15 @@
  *
  * `FakeExtension` is a scripted stand-in for background.js on the other side
  * of that host, so a test can watch what reaches "Chrome" without a Chrome.
+ *
+ * The state file it writes is a real one, so the helper first points
+ * CODECAST_DIR at a temp directory and restores it in `close()`. Without that
+ * it overwrites the human's ~/.codecast/browser/bridge.json with the test
+ * token, which unpairs their Chrome extension for good (ct-49576).
  */
 
 import { WebSocket } from "ws";
+import { isolateCodecastDir } from "../../test-helpers/codecastDir.js";
 import { freePort } from "../instance.js";
 import { startBridgeHost, writeBridgeState, type RunningHost } from "./host.js";
 import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, type BridgeTab } from "./protocol.js";
@@ -19,10 +25,26 @@ import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatch
 export const TEST_TOKEN = "t".repeat(64);
 
 export async function testBridgeHost(token = TEST_TOKEN): Promise<RunningHost & { token: string }> {
-  const port = await freePort();
-  const host = await startBridgeHost({ port, token });
-  writeBridgeState({ port, token });
-  return { ...host, token };
+  const home = isolateCodecastDir("cast-bridge-test-");
+  try {
+    const port = await freePort();
+    const host = await startBridgeHost({ port, token });
+    writeBridgeState({ port, token });
+    return {
+      ...host,
+      token,
+      close: async () => {
+        try {
+          await host.close();
+        } finally {
+          home.restore();
+        }
+      },
+    };
+  } catch (e) {
+    home.restore();
+    throw e;
+  }
 }
 
 export function dial(port: number, path: string, headers: Record<string, string> = {}): Promise<WebSocket> {
