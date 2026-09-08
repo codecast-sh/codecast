@@ -20,6 +20,7 @@ jobs:
       web: ${{ steps.scope.outputs.web }}
       convex: ${{ steps.scope.outputs.convex }}
       shared: ${{ steps.scope.outputs.shared }}
+      platform: ${{ steps.scope.outputs.platform }}
       electron: ${{ steps.scope.outputs.electron }}
       mobile: ${{ steps.scope.outputs.mobile }}
       extension: ${{ steps.scope.outputs.extension }}
@@ -30,6 +31,7 @@ jobs:
       run_test_convex: ${{ steps.scope.outputs.run_test_convex }}
       run_test_web: ${{ steps.scope.outputs.run_test_web }}
       run_test_cli: ${{ steps.scope.outputs.run_test_cli }}
+      run_test_platform: ${{ steps.scope.outputs.run_test_platform }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -287,6 +289,64 @@ jobs:
           echo "::error::E2E failed all 3 attempts — likely a real regression"
           exit 1
 
+  # platform/packages is the vendored mirror of the shared @platform/* packages,
+  # and it is what Railway, the CLI release workflow and the desktop build ship
+  # from. Until now nothing ran its tests and nothing checked it for drift, so a
+  # broken mirror merged green (ct-49675).
+  test-platform:
+    needs: [code_paths]
+    if: needs.code_paths.outputs.run_test_platform == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      # Before the installs below, which write a bun.lock into each mirrored
+      # package. `--check` diffs against ~/src/platform, which no runner has;
+      # `--check-manifest` re-hashes the mirror against
+      # platform/vendor-manifest.txt and re-reads the dep lines the mirror was
+      # generated from. That catches a hand-edited mirror, a package adopted
+      # without a re-vendor, and a dep pointing outside the checkout. A mirror
+      # that is only STALE against a newer canonical repo is not visible from
+      # here, and cannot be: the canonical repo is not on the runner.
+      - name: Vendored mirror integrity
+        run: scripts/vendor-platform.sh --check-manifest
+
+      - name: Unit tests (vendored platform packages)
+        # The mirror is not a bun workspace member (the root workspaces glob is
+        # packages/*), so resolution from platform/packages walks up to a root
+        # node_modules that never held these deps: @platform/engine's
+        # zustand/mutative/dexie and @platform/auth's @auth/core resolve nowhere
+        # without a per-package install. Each package already declares what it
+        # needs, so one install per package is the whole fix.
+        run: |
+          set -euo pipefail
+          ran=0
+          for pkg in $(scripts/vendor-platform.sh --list-with-tests); do
+            dir="platform/packages/$pkg"
+            echo "::group::$dir"
+            (cd "$dir" && bun install --silent && bun test)
+            echo "::endgroup::"
+            ran=$((ran + 1))
+          done
+          echo "ran tests in $ran vendored platform packages"
+          # A loop that silently matched nothing is the failure this job exists
+          # to prevent, so an empty run is a red, not a green.
+          if [ "$ran" -eq 0 ]; then
+            echo "::error::no vendored platform package tests ran"
+            exit 1
+          fi
+
   # `cast computer` needs a Mac, a Swift toolchain and a real signed bundle, so
   # none of it can run on the ubuntu lanes above. ADVISORY on purpose: it is
   # outside `verify`, and `continue-on-error` keeps a red here from failing the
@@ -365,6 +425,7 @@ jobs:
       - test-convex
       - test-web
       - test-cli
+      - test-platform
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -384,6 +445,8 @@ jobs:
           TEST_WEB_SHOULD_RUN: ${{ needs.code_paths.outputs.run_test_web }}
           TEST_CLI: ${{ needs.test-cli.result }}
           TEST_CLI_SHOULD_RUN: ${{ needs.code_paths.outputs.run_test_cli }}
+          TEST_PLATFORM: ${{ needs.test-platform.result }}
+          TEST_PLATFORM_SHOULD_RUN: ${{ needs.code_paths.outputs.run_test_platform }}
         run: |
           failed=0
           # The two ungated jobs: if either did not succeed, the gates below
@@ -414,6 +477,7 @@ jobs:
           check_job test-convex "$TEST_CONVEX" "$TEST_CONVEX_SHOULD_RUN"
           check_job test-web "$TEST_WEB" "$TEST_WEB_SHOULD_RUN"
           check_job test-cli "$TEST_CLI" "$TEST_CLI_SHOULD_RUN"
+          check_job test-platform "$TEST_PLATFORM" "$TEST_PLATFORM_SHOULD_RUN"
           exit "$failed"
       # The injection path is the most fragile code in the daemon, so a change
       # to it runs the rest of the cold-boot matrix (ct-49536): the per-client
@@ -467,3 +531,5 @@ jobs:
           done
           echo "::error::Injection matrix failed all 3 attempts — likely a real regression"
           exit 1
+          check_job test-platform "$TEST_PLATFORM" "$TEST_PLATFORM_SHOULD_RUN"
+          exit "$failed"

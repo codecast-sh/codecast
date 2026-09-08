@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn } from "../../proc.js";
 import { gzipSync } from "node:zlib";
 import * as fs from "node:fs";
 import * as os from "node:os";

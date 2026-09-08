@@ -23,7 +23,7 @@ import type http from "http";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { execFile } from "child_process";
+import { execFile } from "../proc.js";
 import { authorizeLocalRequest, corsHeaders, type TerminalServerOptions } from "../terminal/terminalServer.js";
 
 export interface DirEntry {

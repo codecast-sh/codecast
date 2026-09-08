@@ -13,7 +13,6 @@ import { ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.j
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { registerPrCommand, readLocalGitContext } from "./prCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import open from "open";

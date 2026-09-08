@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "../../proc.js";
 import { promisify } from "node:util";
 import { FORCE_PERSISTENCE_VAR, ensureClaudeSettingsPersistence } from "../../agentEnv.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";

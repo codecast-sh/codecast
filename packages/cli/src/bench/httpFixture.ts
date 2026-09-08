@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "../proc.js";
+import { type ChildProcessWithoutNullStreams } from "../proc.js";
 import { fileURLToPath } from "node:url";
 
 export async function startFakeHttp(root: string, socket: string, options: { entrypoint?: string; startupTimeoutMs?: number; onSpawn?: (child: ChildProcessWithoutNullStreams) => void } = {}) {

@@ -25,7 +25,7 @@ const ALLOWLIST = join(import.meta.dir, "childProcessImports.allowlist.txt");
 const CHILD_PROCESS_IMPORT = /(?:from\s*["'](?:node:)?child_process["']|(?:require|import)\s*\(\s*["'](?:node:)?child_process["'])/;
 
 /** How many files import node:child_process directly. May only fall. */
-const PIN = 23;
+const PIN = 21;
 
 const result = checkRatchet({
   name: "direct child_process import",

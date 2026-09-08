@@ -16,6 +16,10 @@ export const AREAS = [
   "web",
   "convex",
   "shared",
+  // The vendored @platform mirror. Its own area rather than a corner of
+  // "shared", so the job that tests it and checks it for drift can gate on
+  // just that mirror (ct-49675).
+  "platform",
   "electron",
   "mobile",
   "extension",
@@ -35,6 +39,16 @@ export const JOB_AREAS: Record<string, Area[]> = {
   "test-convex": ["convex", "shared"],
   "test-web": ["web", "shared"],
   "test-cli": ["cli", "shared"],
+  build: ["cli", "web", "shared", "extension", "platform"],
+  typecheck: ["web", "convex", "shared", "platform"],
+  lint: ["web"],
+  "test-convex": ["convex", "shared", "platform"],
+  "test-web": ["web", "shared", "platform"],
+  "test-cli": ["cli", "shared", "platform"],
+  // The mirror's own job: its package tests, and the drift check. Every other
+  // job above lists "platform" too, because the mirror is a dependency of all
+  // of them and used to reach them through "shared".
+  "test-platform": ["platform"],
 };
 
 export const GATED_JOBS = Object.keys(JOB_AREAS);
@@ -60,9 +74,13 @@ const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
   ["cli", ["packages/cli/"]],
   ["web", ["packages/web/"]],
   ["convex", ["packages/convex/"]],
-  // platform/packages is the vendored mirror of the @platform/* packages every
-  // other package depends on, so it moves with @codecast/shared.
-  ["shared", ["packages/shared/", "platform/packages/"]],
+  ["shared", ["packages/shared/"]],
+  // The vendored mirror is its own area: a change to it runs the platform
+  // tests and the manifest drift check, which "shared" alone never did
+  // (ct-49675).
+  ["platform", ["platform/"]],
+  ["shared", ["packages/shared/"]],
+  ["platform", ["platform/"]],
   ["electron", ["packages/electron/", "packages/desktop/"]],
   ["mobile", ["packages/mobile/"]],
   ["extension", ["packages/browser-extension/", "packages/vscode-extension/"]],
@@ -93,6 +111,18 @@ export function areaOf(file: string): Area | null {
   return isDocsPath(file) ? "docs" : null;
 }
 
+/**
+ * Paths that make the vendored mirror worth re-checking on top of whatever area
+ * they belong to. The mirror's package set is derived from the workspace
+ * manifests: scripts/vendor-platform.sh reads the `@platform` dep lines out of
+ * every package.json under packages. Adopting a package there is what makes the
+ * mirror wrong, and the mirror check is the only thing that catches the
+ * adoption landing without a re-vendor (ct-49675).
+ */
+export function touchesPlatform(file: string): boolean {
+  return file.startsWith("platform/") || /^packages\/[^/]+\/package\.json$/.test(file);
+}
+
 export type Scope = {
   /** Every area and job flag, in emit order. */
   flags: Record<string, boolean>;
@@ -112,6 +142,7 @@ export function classifyChangedPaths(files: string[]): Scope {
   const areas = new Set<Area>();
   for (const file of paths) {
     const area = areaOf(file);
+    if (touchesPlatform(file)) areas.add("platform");
     if (area === null) {
       forcedBy.push(file);
       continue;

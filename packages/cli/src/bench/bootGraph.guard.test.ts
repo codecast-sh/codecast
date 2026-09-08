@@ -80,8 +80,16 @@ describe("command groups stay off the boot graph", () => {
     // Before lifting either number, find out WHY the graph grew. A group coming
     // back, or a whole subsystem arriving sideways through a leaf, is what this
     // exists to catch; a genuinely new module is not.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(188);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2663);
+    //
+    // 220 after the pl-552 landing. The 32 additions were checked one by one
+    // against the rule above and every one is a genuinely new leaf: the shared
+    // contracts the landing introduced (fence, liveness, sessionRead,
+    // triggerPrecheck, plan foreign text), the codex account modules, the one
+    // config-directory resolver, the workers' type-only modules, and three
+    // workspace helpers. No command group is among them — that is the check
+    // above, and it passes.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(220);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2987);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -95,7 +103,8 @@ describe("command groups stay off the boot graph", () => {
     // the workers, so all 26 `workers/*` modules are work it actually does
     // rather than a graph it carries by accident (ct-49758) — but the command
     // groups are not its work, which is what assertOffGraph checks above.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(273);
+    // 290 after the landing, from the same new leaves index.ts picked up.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(290);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

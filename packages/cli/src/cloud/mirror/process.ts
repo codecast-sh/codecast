@@ -1,4 +1,5 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn } from "../../proc.js";
+import { type ChildProcess } from "../../proc.js";
 import * as path from "node:path";
 import { agentSpawnPath } from "../../agentSpawnPath.js";
 
