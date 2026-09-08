@@ -9,9 +9,10 @@ import * as fs from "node:fs";
 import type { Config } from "./types.js";
 import { sharedConfigFile } from "./sharedConfig.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "../tokenEncryption.js";
+import { codecastDir } from "../codecastDir.js";
 
 export function defaultConfigDir(): string {
-  return process.env.HOME + "/.codecast";
+  return codecastDir();
 }
 
 export function readAuthConfig(

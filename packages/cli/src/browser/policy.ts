@@ -40,11 +40,11 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parseManifest } from "../workspace/manifest.js";
 import { MANIFEST_REL_PATH } from "../workspace/resolver.js";
 import type { Config } from "../config/types.js";
+import { codecastDir } from "../codecastDir.js";
 
 export interface PolicySource {
   /** File the patterns came from, for messages. */
@@ -157,7 +157,7 @@ export function originOf(url: string): string {
 // ---------------------------------------------------------------------------
 
 function codecastRoot(): string {
-  return process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  return codecastDir();
 }
 
 /** Walk up from `cwd` to the nearest .codecast/workspace.toml, if any. */

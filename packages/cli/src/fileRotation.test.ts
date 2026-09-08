@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import { getPosition, setPosition, clearPosition } from "./positionTracker.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// setPosition/clearPosition rewrite positions.json under CODECAST_DIR. Without
+// this redirect the suite rewrote the human's real ~/.codecast/positions.json
+// and could drop a position the live daemon had just written (ct-49597).
+const isolated = isolateCodecastDir("cast-test-rotation-");
 
 describe("File rotation detection", () => {
-  const testDir = path.join(process.env.HOME || "", ".codecast", "test-rotation");
+  const testDir = path.join(isolated.dir, "test-rotation");
   const testFile = path.join(testDir, "history.jsonl");
 
   beforeEach(() => {
@@ -20,6 +26,8 @@ describe("File rotation detection", () => {
     }
     clearPosition(testFile);
   });
+
+  afterAll(() => isolated.restore());
 
   it("should detect when file size is less than saved position", () => {
     fs.writeFileSync(testFile, "Line 1\nLine 2\nLine 3\n");

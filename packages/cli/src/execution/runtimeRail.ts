@@ -1,5 +1,3 @@
-import * as os from "node:os";
-import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   FENCED_EXECUTION_PROTOCOL_VERSION,
@@ -20,6 +18,7 @@ import {
 } from "./localJournal.js";
 import type { EnsureBindingRequest } from "./types.js";
 import type { ExecutionConvexTransport } from "./convexControlPlane.js";
+import { codecastPath } from "../codecastDir.js";
 
 export const FENCED_EXECUTION_FEATURE_FLAG = "CODECAST_FENCED_EXECUTION_V1" as const;
 
@@ -270,7 +269,7 @@ export class DaemonExecutionRuntime {
       ? options.drivers
       : new RuntimeDriverRegistry(options.drivers);
     const journal = options.journal ?? new FileExecutionOperationJournal(
-      options.journalDirectory ?? path.join(os.homedir(), ".codecast", "execution-journal"),
+      options.journalDirectory ?? codecastPath("execution-journal"),
     );
     this.coordinator = new ExecutionCoordinator({
       controlPlane: this.controlPlane,

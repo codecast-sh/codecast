@@ -18,11 +18,12 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { whichBin } from "./proc.js";
+import { codecastPath } from "./codecastDir.js";
 
 /** A native-installer release: `.../claude/versions/<version>` (basename is a version). */
 export const CLAUDE_VERSIONED_BINARY_RE = /\/claude\/versions\/[^/]+$/;
 
-export const STABLE_CLAUDE_DIR = path.join(os.homedir(), ".codecast", "bin");
+export const STABLE_CLAUDE_DIR = codecastPath("bin");
 
 export interface StableClaudeBinaryOptions {
   platform?: NodeJS.Platform;
