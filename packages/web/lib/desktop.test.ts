@@ -340,10 +340,11 @@ describe("desktop window role", () => {
       expect(shown[0].data.route).toBe("/chat/a?m=1");
       await notifyNative("t", "b", { conversationId: "c1", key: "first" });
       expect(shown[2].data.route).toBe("/conversation/c1");
-      // A focused window never asks the shell.
+      // The shell owns the focus rule now: it is the one process that sees
+      // every window, so a focused tab still reports and lets it decide.
       g.document = { hasFocus: () => true };
-      expect(await notifyNative("t", "b", { key: "first" })).toBe(false);
-      expect(shown.length).toBe(3);
+      expect(await notifyNative("t", "b", { key: "first" })).toBe(true);
+      expect(shown.length).toBe(4);
 
       // An unsubscribed watcher stops being woken — a window that closed its
       // pin must not keep a dead callback alive for the life of the process.
@@ -356,6 +357,55 @@ describe("desktop window role", () => {
       roleCb!({ leader: true, appFocused: false, anyInCall: false });
       g.window = prevWindow;
       g.document = prevDocument;
+    }
+  });
+});
+
+// With no shell the tab applies the banner rules to itself: it is silent only
+// while it BOTH has focus and shows what the banner is about (ct-49551).
+describe("notifyNative in a browser", () => {
+  const g = globalThis as any;
+
+  function browserRig(focused: boolean) {
+    const built: any[] = [];
+    const prev = { window: g.window, document: g.document, Notification: g.Notification };
+    g.window = { focus: () => {}, location: { href: "" } };
+    g.document = { hasFocus: () => focused };
+    g.Notification = class {
+      static permission = "granted";
+      onclick: (() => void) | null = null;
+      constructor(title: string, opts: any) { built.push({ title, ...opts }); }
+    };
+    return { built, restore: () => Object.assign(g, prev) };
+  }
+
+  test("a focused tab silences the conversation it shows and banners the rest", async () => {
+    const { built, restore } = browserRig(true);
+    try {
+      reportDesktopWindowState({ active: "/conversation/br1", open: [], inCall: false });
+      // The conversation on screen: the toast and the bell already say it.
+      expect(await notifyNative("t", "b", { conversationId: "br1", kind: "session_idle" })).toBe(false);
+      expect(built.length).toBe(0);
+      // Any other conversation still gets its banner.
+      expect(await notifyNative("t", "b", { conversationId: "br2", kind: "session_idle" })).toBe(true);
+      expect(built[0].body).toBe("b");
+      // ...and a ring goes up even over the conversation on screen.
+      expect(await notifyNative("ring", "b", { conversationId: "br1", force: true })).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test("an unfocused tab banners the conversation it shows, once per burst", async () => {
+    const { built, restore } = browserRig(false);
+    try {
+      reportDesktopWindowState({ active: "/conversation/br3", open: [], inCall: false });
+      expect(await notifyNative("t", "b", { conversationId: "br3", kind: "session_idle" })).toBe(true);
+      // A second state change for that conversation is the same episode.
+      expect(await notifyNative("t", "b", { conversationId: "br3", kind: "session_error" })).toBe(false);
+      expect(built.length).toBe(1);
+    } finally {
+      restore();
     }
   });
 });

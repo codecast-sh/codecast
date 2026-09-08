@@ -151,8 +151,15 @@ export function DesktopProvider() {
         // message, a task banner on the task — not just "the app, focused".
         const route = notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
         // `key` lets the desktop shell collapse the same row reported by every
-        // open window into one banner.
-        notifyNative(title, body, { conversationId: n.conversation_id, route, key: String(n._id) });
+        // open window into one banner; `kind` is the row's type, which decides
+        // which of two banners for one conversation wins a same-moment race
+        // (a completion beats the permission request it arrived with).
+        notifyNative(title, body, {
+          conversationId: n.conversation_id,
+          route,
+          key: String(n._id),
+          kind: typeof n.type === "string" ? n.type : undefined,
+        });
         // A banner this row deserved could not be shown: the app is unfocused
         // (a focused app is announced by the toast/bell — nothing missed) and
         // the OS-level permission is not granted, so the notifyNative above
@@ -294,13 +301,16 @@ export function DesktopProvider() {
   // in the window (and tab) already on the target and so the shell knows which
   // window hosts a live call. Main window: its tabs, with the inbox tab named
   // by the conversation it shows; detached window: its own URL.
+  //
+  // A browser tab reports too, with nothing to report it to: the record stays
+  // local and is what tells notifyNative whether a banner's conversation is the
+  // one already on screen (ct-49551).
   const location = useLocation();
   const surfaceSig = useInboxStore((st) => {
     const tabs = st.tabs.map((t) => `${t.id}=${t.path}`).join("|");
     return `${tabs}#${st.activeTabId ?? ""}#${st.currentSessionId ?? ""}#${st.call?.phase ?? ""}`;
   });
   useWatchEffect(() => {
-    if (!isDesktop()) return;
     const st = useInboxStore.getState();
     const live = `${location.pathname}${location.search}`;
     const inboxFamily = (p: string) => p === "/inbox" || p.startsWith("/inbox?") || p.startsWith("/conversation/");
