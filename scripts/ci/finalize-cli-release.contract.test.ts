@@ -1,9 +1,8 @@
-// Pins .github/workflows/finalize-cli-release.yml against the properties that
-// make it safe to run: the release is born a draft, nothing publishes it until
-// the draft assertion and the required assets check have run, and latest.json
-// goes last. None of that is expressible in the YAML itself, and the workflow
-// can only be exercised by cutting a real release (ct-49566).
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { getRequiredReleaseAssetNames } from "./verify-release-required-assets.ts";
 
@@ -134,4 +133,133 @@ describe("step order", () => {
   test("the public manifest is verified after it is written", () => {
     expect(at(LATEST_JSON)).toBeLessThan(at("Verify the exact public manifest and referenced bytes"));
   });
+});
+
+async function runPublicRelease(options: { corruptImmutable?: boolean; failAliasCopy?: boolean } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "cli-publication-"));
+  const source = "a".repeat(40);
+  const prefix = `cli/releases/v1.2.4/${source}`;
+  const local = join(root, "cli-release");
+  const bin = join(root, "bin");
+  const authoritative = join(root, "authoritative-latest.json");
+  mkdirSync(local);
+  mkdirSync(bin);
+  const artifacts = Object.fromEntries(getRequiredReleaseAssetNames().map((name) => {
+    const bytes = `verified ${name}`;
+    writeFileSync(join(local, name), bytes);
+    return [name, { sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length }];
+  }));
+  const expected = JSON.stringify({ version: "1.2.4", source_commit: source, artifacts });
+  writeFileSync(join(root, "release-expected.json"), expected);
+  writeFileSync(join(local, "release.json"), expected);
+  writeFileSync(join(root, "cli-release-prefix"), prefix);
+  writeFileSync(authoritative, JSON.stringify({ version: "1.2.3" }));
+  writeFileSync(join(bin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  writeFileSync(join(bin, "aws"), `#!/bin/bash
+set -euo pipefail
+if [[ "$1" == "s3api" ]]; then
+  [[ "$ALIAS_COPY_FAIL" == "0" ]]
+elif [[ "$1" == "s3" && "$2" == "cp" ]]; then
+  if [[ "$3" == s3://* ]]; then
+    cp "$AUTHORITATIVE_MANIFEST" "$4"
+  else
+    cp "$3" "$AUTHORITATIVE_MANIFEST"
+  fi
+else
+  exit 2
+fi
+`, { mode: 0o755 });
+  const requests: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      requests.push(pathname);
+      if (pathname === "/latest.json") return new Response(Bun.file(authoritative));
+      if (pathname.startsWith(`/${prefix}/`)) {
+        const name = pathname.slice(prefix.length + 2);
+        if (options.corruptImmutable && name === "codecast-windows-x64.exe") {
+          return new Response("corrupted immutable bytes");
+        }
+        return new Response(Bun.file(join(local, name)));
+      }
+      return new Response("stale legacy alias bytes");
+    },
+  });
+  const selected = steps.filter((s) => [
+    "Verify immutable public release bytes",
+    LATEST_JSON,
+    "Verify the exact public manifest and referenced bytes",
+  ].includes(s.name) || s.name?.includes("legacy stable aliases"));
+  const results: { name: string; code: number; stdout: string; stderr: string }[] = [];
+  let failed = false;
+  try {
+    for (const s of selected) {
+      const run = s.run.replaceAll("/tmp/", `${root}/`)
+        .replaceAll("https://dl.codecast.sh", `http://127.0.0.1:${server.port}`);
+      const child = Bun.spawn(["bash", "-c", run], {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          RELEASE_VERSION: "1.2.4",
+          PREVIOUS_VERSION: "1.2.3",
+          SOURCE_COMMIT: source,
+          R2_BUCKET: "fixture",
+          R2_ENDPOINT: "http://unused.invalid",
+          GITHUB_STEP_SUMMARY: join(root, "summary"),
+          AUTHORITATIVE_MANIFEST: authoritative,
+          ALIAS_COPY_FAIL: options.failAliasCopy ? "1" : "0",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      results.push({ name: s.name, code, stdout, stderr });
+      if (code !== 0 && !s["continue-on-error"]) {
+        failed = true;
+        break;
+      }
+    }
+    return { failed, results, requests, manifest: JSON.parse(readFileSync(authoritative, "utf8")) };
+  } finally {
+    server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("public release publication", () => {
+  test("publishes verified immutable bytes when legacy URLs stay stale", async () => {
+    const result = await runPublicRelease();
+    expect(result.failed, JSON.stringify(result.results)).toBe(false);
+    expect(result.manifest.version).toBe("1.2.4");
+    expect(result.manifest.sourceCommit).toBe("a".repeat(40));
+    for (const binary of Object.values(result.manifest.binaries) as { url: string; sha256: string }[]) {
+      expect(binary.url).toContain(`/cli/releases/v1.2.4/${"a".repeat(40)}/`);
+      expect(binary.sha256).toHaveLength(64);
+    }
+    expect(result.requests.every((url) => url === "/latest.json" || url.startsWith("/cli/releases/"))).toBe(true);
+  }, 30_000);
+
+  test("keeps the predecessor manifest when immutable bytes do not match", async () => {
+    const result = await runPublicRelease({ corruptImmutable: true });
+    expect(result.failed).toBe(true);
+    expect(result.manifest.version).toBe("1.2.3");
+    expect(result.results.at(-1)?.stdout).toContain("immutable public checksum did not converge");
+  }, 30_000);
+
+  test("a legacy alias copy failure cannot undo a verified publication", async () => {
+    const result = await runPublicRelease({ failAliasCopy: true });
+    expect(result.failed, JSON.stringify(result.results)).toBe(false);
+    expect(result.manifest.version).toBe("1.2.4");
+    const alias = steps.find((s) => s.name?.includes("legacy stable aliases"));
+    expect(alias["continue-on-error"]).toBe(true);
+    expect(alias["timeout-minutes"]).toBeLessThanOrEqual(3);
+    expect(at(alias.name)).toBeGreaterThan(at("Verify the exact public manifest and referenced bytes"));
+    expect(result.results.at(-1)?.code).not.toBe(0);
+  }, 30_000);
 });
