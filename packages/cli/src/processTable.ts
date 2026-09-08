@@ -16,24 +16,70 @@ import { isRecognizedAgentComm } from "./sessionProcessMatcher.js";
 import { tmuxRunAsync } from "./tmux.js";
 import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";
 
-/** `uid` is the owning user, absent when the table was parsed from output that
- *  did not carry the column. A kill decision treats absent as "not mine". */
-export type ProcRow = { pid: number; ppid: number; uid?: number; command: string };
+/** One process, as `ps` reported it.
+ *
+ *  `uid` is the owning user, absent when the table was parsed from output that
+ *  did not carry the column. A kill decision treats absent as "not mine".
+ *
+ *  `pgid`, `startedAt` and `capturedAtMs` are the process IDENTITY, and they are
+ *  what makes a delayed SIGKILL safe: a pid alone is a slot the kernel reuses,
+ *  so a pid observed before a grace window and found alive after it may be a
+ *  different program by then. All three are absent when the table came from
+ *  output without those columns, and every identity check fails closed on
+ *  absence — no proof, no hard kill. */
+export type ProcRow = {
+  pid: number;
+  ppid: number;
+  uid?: number;
+  /** Process group id. Part of the identity because a survivor that kept its
+   *  pid but joined a new group is a different process. */
+  pgid?: number;
+  /** `ps lstart` with runs of spaces collapsed ("Tue Aug 25 05:04:18 2026").
+   *  Compared verbatim, so a locale-dependent parse never decides a kill. */
+  startedAt?: string;
+  /** Wall clock taken BEFORE the `ps` that produced this row started. A later
+   *  stamp would make a pid born during the scan look older than the capture
+   *  and defeat the capture-second rule below. */
+  capturedAtMs?: number;
+  command: string;
+};
+
+// `ps -o lstart=` is five space-separated fields of fixed shape, and it is the
+// only column between the numbers and the command line that is not itself a
+// number, so it anchors the wide form unambiguously.
+const LSTART_RE = "[A-Za-z]{3}\\s+[A-Za-z]{3}\\s+\\d{1,2}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+\\d{4}";
+const WITH_IDENTITY = new RegExp(`^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(-?\\d+)\\s+(${LSTART_RE})\\s+(\\S.*)$`);
 
 // `ps -o command` prints a multi-line command line with its newlines intact,
 // so a row can span lines: a line that does not start with a pid continues
 // the previous row's command.
 //
-// Two shapes are accepted, `pid ppid uid command` and `pid ppid command`, so a
-// caller that already holds a table without the owner column keeps working. The
-// three number form is tried first and only wins when a third bare number is
-// followed by more text, which no real command line starts with.
-export function parseProcessTable(stdout: string): ProcRow[] {
+// Three shapes are accepted, `pid ppid pgid uid lstart command`, `pid ppid uid
+// command` and `pid ppid command`, so a caller that already holds a narrower
+// table keeps working. The widest form is tried first: its four leading numbers
+// followed by a date would otherwise be read as `pid ppid uid` plus a command
+// line beginning with a number and a weekday.
+export function parseProcessTable(stdout: string, capturedAtMs?: number): ProcRow[] {
   const procs: ProcRow[] = [];
   for (const line of stdout.split("\n")) {
     // macOS prints the uid of a `nobody` process as -2, so the owner column is
     // signed. Without the sign those rows fell through to the two number shape
     // and carried "-2" into the command text.
+    const wide = WITH_IDENTITY.exec(line);
+    if (wide) {
+      procs.push({
+        pid: Number(wide[1]),
+        ppid: Number(wide[2]),
+        pgid: Number(wide[3]),
+        uid: Number(wide[4]),
+        // ps pads the day of month, so the same instant can print with one or
+        // two inner spaces; collapse them or a re-read would never match.
+        startedAt: wide[5].replace(/\s+/g, " "),
+        capturedAtMs,
+        command: wide[6],
+      });
+      continue;
+    }
     const withUid = line.match(/^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(\S.*)$/);
     const m = withUid ?? line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
     if (m) {
@@ -52,8 +98,17 @@ export function parseProcessTable(stdout: string): ProcRow[] {
 // The owner column rides along because the daemon's hourly sweep kills stale
 // tmux servers unattended, and on a shared box (the EC2 Mac mini, the Linux
 // agent hosts) another user's server on the default socket is not ours to touch.
-const PS_ARGS = ["-axww", "-o", "pid=,ppid=,uid=,command="];
-const PS_OPTS = { encoding: "utf-8" as const, maxBuffer: 64 * 1024 * 1024 };
+// pgid and lstart ride along because killProcessTree escalates to SIGKILL after
+// a grace window, and by then a pid is only evidence when its start time and
+// process group still agree (ct-49537).
+const PS_ARGS = ["-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,command="];
+// LC_ALL=C because lstart is localized: two captures under different locales
+// would print the same instant differently and never compare equal.
+const PS_OPTS = {
+  encoding: "utf-8" as const,
+  maxBuffer: 64 * 1024 * 1024,
+  env: { ...process.env, LANG: "C", LC_ALL: "C" },
+};
 
 /** How long to wait for `ps`. The default is generous because a doctor sweep
  *  would rather wait than miss an orphan fleet; on this laptop `ps aux` has run
@@ -68,9 +123,13 @@ export interface ProcessTableOptions {
 
 /** The live process table (pid, ppid, full command line). Empty on failure. */
 export function snapshotProcessTable(opts: ProcessTableOptions = {}): ProcRow[] {
+  // Stamped before the spawn: the capture second a row is judged against must
+  // never be later than the scan that produced it.
+  const capturedAtMs = Date.now();
   try {
     return parseProcessTable(
       execFileSync("ps", PS_ARGS, { ...PS_OPTS, timeout: opts.timeout ?? PS_TIMEOUT_MS }) as string,
+      capturedAtMs,
     );
   } catch {
     return [];
@@ -80,35 +139,51 @@ export function snapshotProcessTable(opts: ProcessTableOptions = {}): ProcRow[] 
 /** The same snapshot off the event loop. The daemon uses this one: a `ps` that
  *  runs for seconds under load must never be the thing holding the loop. */
 export async function snapshotProcessTableAsync(opts: ProcessTableOptions = {}): Promise<ProcRow[]> {
+  const capturedAtMs = Date.now();
   try {
     const { stdout } = await execFileAsync("ps", PS_ARGS, {
       ...PS_OPTS,
       timeout: opts.timeout ?? PS_TIMEOUT_MS,
     });
-    return parseProcessTable(String(stdout));
+    return parseProcessTable(String(stdout), capturedAtMs);
   } catch {
     return [];
   }
 }
 
-/** Every transitive child of `root` (root excluded), parents before children. */
-export function descendantPids(procs: ProcRow[], root: number): number[] {
-  const children = new Map<number, number[]>();
+/**
+ * Every transitive child of `root` (root excluded), parents before children.
+ *
+ * A root that is absent from the table, or present twice, yields nothing. A ppid
+ * walk only means something while the root is alive in the same snapshot: once
+ * it exits its real children reparent to pid 1 and leave the walk, so rows still
+ * pointing at the vacated pid are a pid-reuse coincidence and signalling them
+ * would hit a stranger's tree.
+ */
+export function descendantRows(procs: ProcRow[], root: number): ProcRow[] {
+  const children = new Map<number, ProcRow[]>();
+  let rootRow: ProcRow | undefined;
+  let duplicateRoot = false;
   for (const p of procs) {
+    if (p.pid === root) {
+      duplicateRoot ||= rootRow !== undefined;
+      rootRow ??= p;
+    }
     const list = children.get(p.ppid);
-    if (list) list.push(p.pid);
-    else children.set(p.ppid, [p.pid]);
+    if (list) list.push(p);
+    else children.set(p.ppid, [p]);
   }
-  const out: number[] = [];
+  if (!rootRow || duplicateRoot) return [];
+  const out: ProcRow[] = [];
   const seen = new Set<number>([root]);
   const queue = [root];
   while (queue.length) {
     const pid = queue.shift()!;
     for (const child of children.get(pid) ?? []) {
-      if (seen.has(child)) continue;
-      seen.add(child);
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
       out.push(child);
-      queue.push(child);
+      queue.push(child.pid);
     }
   }
   return out;
@@ -161,20 +236,33 @@ export function isDaemonCommand(command: string): boolean {
   return first === "_daemon" || first.endsWith("/daemon.ts") || first.endsWith("/daemon.js");
 }
 
-/** Pids of every other daemon process on this machine. */
+/** Every other daemon process on this machine, as the rows it was seen in — a
+ *  killer needs the identity, not just the slot number. */
+export function findOtherDaemonRows(procs: ProcRow[], selfPid = process.pid): ProcRow[] {
+  return procs.filter((p) => p.pid !== selfPid && isDaemonCommand(p.command));
+}
+
+/** The same list, as pids, for callers that only probe or signal once. */
 export function findOtherDaemonPids(procs: ProcRow[], selfPid = process.pid): number[] {
-  return procs.filter((p) => p.pid !== selfPid && isDaemonCommand(p.command)).map((p) => p.pid);
+  return findOtherDaemonRows(procs, selfPid).map((p) => p.pid);
 }
 
 export interface StaleTmuxServer {
   pid: number;
   command: string;
+  /** The server's own row, so a caller can hand the whole generation to
+   *  killProcessTree with the identity it was observed under. */
+  row: ProcRow;
   /** Every process in its tree, the server excluded. The killer takes this
    *  list as it is: walking the table a second time to rebuild it can only
-   *  disagree with the list the agent count was derived from. */
-  tree: number[];
+   *  disagree with the list the agent count was derived from, and it would
+   *  drop the capture identity a delayed SIGKILL is judged against. */
+  tree: ProcRow[];
   /** How many of those are agent processes (claude, codex, ...). */
   agents: number;
+  /** The table holds this pid more than once, so `tree` is empty for want of a
+   *  root to walk from rather than because the server holds nothing. */
+  ambiguous: boolean;
 }
 
 /** tmux SERVER processes on the default socket: daemonized (ppid 1) `tmux`
@@ -199,13 +287,13 @@ export function tmuxServerRows(procs: ProcRow[], ownerUid?: number): ProcRow[] {
  *  `livePid` null (tmux unreachable) reports every server, since none can be
  *  the live one. */
 export function findStaleTmuxServers(procs: ProcRow[], livePid: number | null, ownerUid?: number): StaleTmuxServer[] {
-  const byPid = new Map(procs.map((p) => [p.pid, p]));
   return tmuxServerRows(procs, ownerUid)
     .filter((s) => s.pid !== livePid)
     .map((s) => {
-      const tree = descendantPids(procs, s.pid);
-      const agents = tree.filter((pid) => isAgentCommand(byPid.get(pid)?.command ?? "")).length;
-      return { pid: s.pid, command: s.command, tree, agents };
+      const tree = descendantRows(procs, s.pid);
+      const agents = tree.filter((p) => isAgentCommand(p.command)).length;
+      const ambiguous = procs.filter((p) => p.pid === s.pid).length > 1;
+      return { pid: s.pid, command: s.command, row: s, tree, agents, ambiguous };
     });
 }
 
@@ -240,7 +328,10 @@ export function staleTmuxServerKillPlan(
   const kill: StaleTmuxServer[] = [];
   const selfHosted: StaleTmuxServer[] = [];
   for (const server of findStaleTmuxServers(procs, livePid, ownerUid)) {
-    if (server.pid === selfPid || server.tree.includes(selfPid)) selfHosted.push(server);
+    // An ambiguous server is spared for the same reason a self-hosting one is:
+    // its tree walk returned nothing, so the table cannot say what it holds,
+    // and "holds nothing" and "holds this daemon" look identical from here.
+    if (server.ambiguous || server.pid === selfPid || server.tree.some((p) => p.pid === selfPid)) selfHosted.push(server);
     else kill.push(server);
   }
   return { kill, selfHosted, refused: null };
@@ -270,21 +361,113 @@ const isAlive = (pid: number): boolean => {
   }
 };
 
-/** SIGTERM every pid, wait up to `graceMs`, SIGKILL the survivors. Killing a
- *  tmux server alone leaks its tree, so callers pass the server AND its
- *  descendants. Returns how many needed the hard kill. */
-export async function killProcessTree(pids: number[], graceMs = 3_000): Promise<{ terminated: number; killed: number }> {
-  for (const pid of pids) {
-    try { process.kill(pid, "SIGTERM"); } catch {}
-  }
+/** How long a process gets to honour SIGTERM before the identity check and the
+ *  hard kill. Long enough for an agent to flush, short enough that a teardown
+ *  request answers. */
+export const KILL_GRACE_MS = 2_000;
+
+/**
+ * Was this row's start time recorded early enough to identify it later?
+ *
+ * `ps lstart` has one second resolution, so a process born inside the second
+ * the table was captured shares its printed start time with anything the kernel
+ * could put in that pid slot during the same second. Such a row is never
+ * escalated: it is exactly the case where a pid that looks alive after the
+ * grace window may be a different program.
+ */
+export function bornBeforeCaptureSecond(row: ProcRow): boolean {
+  if (!row.startedAt || row.capturedAtMs === undefined) return false;
+  const startedAtMs = Date.parse(row.startedAt);
+  if (!Number.isFinite(startedAtMs)) return false;
+  return startedAtMs < Math.floor(row.capturedAtMs / 1_000) * 1_000;
+}
+
+/**
+ * Is the process at `snapshot.pid` right now still the one we snapshotted?
+ *
+ * Pid, start time and process group must all agree, and the snapshot's start
+ * time must be older than its capture second. Anything missing fails closed:
+ * a table without the identity columns cannot license a SIGKILL.
+ */
+export function sameProcess(snapshot: ProcRow, live: ProcRow | null | undefined): boolean {
+  if (!live || live.pid !== snapshot.pid) return false;
+  if (!snapshot.startedAt || snapshot.startedAt !== live.startedAt) return false;
+  if (snapshot.pgid === undefined || snapshot.pgid !== live.pgid) return false;
+  return bornBeforeCaptureSecond(snapshot);
+}
+
+export interface KillTreeResult {
+  /** Signalled processes that were gone by the end of the grace window. */
+  terminated: number;
+  /** Survivors that proved their identity and took a SIGKILL. */
+  killed: number;
+  /** Survivors left running because the table could not prove they are still
+   *  the process we signalled. Nonzero here is a leak, not a failure to try. */
+  unverified: number;
+}
+
+/**
+ * SIGTERM a snapshotted set of processes, wait out the grace window, then
+ * SIGKILL only the survivors the process table still identifies as the same
+ * processes.
+ *
+ * Callers pass ROWS, not pids, and pass them from ONE table read taken before
+ * the first signal. That is the whole point: a pid is a slot the kernel reuses,
+ * and between the SIGTERM and the SIGKILL there is a window in which the pid we
+ * are about to hard kill can belong to somebody else. The row carries the start
+ * time, the process group and the capture instant that make the second signal
+ * provably aimed at the first signal's target (ct-49537).
+ *
+ * Killing a tmux server or an agent alone leaks its tree, so callers pass the
+ * root AND its descendants, descendants first.
+ */
+export async function killProcessTree(
+  targets: ProcRow[],
+  graceMs = KILL_GRACE_MS,
+  deps: {
+    readTable?: () => Promise<ProcRow[]>;
+    sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
+    isAlive?: (pid: number) => boolean;
+  } = {},
+): Promise<KillTreeResult> {
+  const readTable = deps.readTable ?? (() => snapshotProcessTableAsync({ timeout: 10_000 }));
+  const alive = deps.isAlive ?? isAlive;
+  const sendSignal = deps.sendSignal ?? ((pid, signal) => { try { process.kill(pid, signal); } catch {} });
+
+  // Never signal this process or an init-like pid, whatever a caller hands over.
+  const signalled = targets.filter((t) => Number.isInteger(t.pid) && t.pid > 1 && t.pid !== process.pid);
+  for (const t of signalled) sendSignal(t.pid, "SIGTERM");
+  if (signalled.length === 0) return { terminated: 0, killed: 0, unverified: 0 };
+
+  // Poll rather than sleep the whole window: the common case is a tree that
+  // dies at once, and a caller waiting on teardown should not pay 2s for it.
+  // Every wait is a timer, so the daemon's loop keeps running through it.
   const deadline = Date.now() + graceMs;
-  let survivors = pids.filter(isAlive);
+  let survivors = signalled.filter((t) => alive(t.pid));
   while (survivors.length && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 250));
-    survivors = survivors.filter(isAlive);
+    survivors = survivors.filter((t) => alive(t.pid));
   }
-  for (const pid of survivors) {
-    try { process.kill(pid, "SIGKILL"); } catch {}
+  if (survivors.length === 0) return { terminated: signalled.length, killed: 0, unverified: 0 };
+
+  // `process.kill(pid, 0)` above says the slot is occupied, not by whom. Only a
+  // fresh table answers that, and only for the few pids still standing.
+  const wanted = new Set(survivors.map((t) => t.pid));
+  const live = new Map<number, ProcRow | null>();
+  for (const row of await readTable()) {
+    if (!wanted.has(row.pid)) continue;
+    // Two rows for one pid in a non-atomic read leave no safe identity.
+    live.set(row.pid, live.has(row.pid) ? null : row);
   }
-  return { terminated: pids.length - survivors.length, killed: survivors.length };
+  let killed = 0;
+  let unverified = 0;
+  for (const t of survivors) {
+    const now = live.get(t.pid);
+    // Absent from the fresh table: it exited between the last poll and the read.
+    if (now === undefined) continue;
+    if (!sameProcess(t, now)) { unverified++; continue; }
+    sendSignal(t.pid, "SIGKILL");
+    killed++;
+  }
+  return { terminated: signalled.length - killed - unverified, killed, unverified };
 }
