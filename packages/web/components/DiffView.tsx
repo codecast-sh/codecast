@@ -712,7 +712,7 @@ export const DiffView = memo(function DiffView({
           onMouseDown={(e) => e.preventDefault()}
           onClick={commentOnHoveredRow}
         >
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
           </svg>
         </button>

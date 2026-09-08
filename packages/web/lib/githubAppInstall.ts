@@ -1,7 +1,13 @@
-// The ONE place the GitHub App install URL is minted. Two surfaces start the
-// install (settings/integrations/github-app, the /capabilities Apps tab); a
-// second copy of the OAuth state format is exactly the divergence that would
-// hurt later, so both call this.
+// The ONE place the web mints the GitHub App install URL. The state format
+// itself is shared with the CLI's connect-url action and the install callback
+// (`githubAppInstallState` in shared contracts), so the workspace an
+// installation binds to cannot drift between the three.
+
+import {
+  githubAppInstallState,
+  githubAppInstallUrlFor,
+  type AppConnectionScope,
+} from "@codecast/shared/contracts";
 
 /** The fields of the current user this helper reads. */
 export interface GithubInstallUser {
@@ -11,9 +17,9 @@ export interface GithubInstallUser {
 }
 
 /**
- * The workspace a GitHub App install binds to for this user: the team they are
- * looking at, else their home team — the SAME resolution the server uses to
- * answer "is GitHub connected" (`appConnections.listConnections`,
+ * The team a TEAM install binds to for this user: the team they are looking
+ * at, else their home team — the SAME resolution the server uses to answer
+ * "is GitHub connected" (`appConnections.listConnections`,
  * `active_team_id ?? team_id`). Resolving differently here would install into
  * one team while the card reports another and never flips to Connected.
  */
@@ -22,14 +28,13 @@ export function githubAppInstallTeam(user: GithubInstallUser): string | undefine
 }
 
 /**
- * The App install URL, carrying the team and user in the `state` the install
- * webhook reads back (`convex/http.ts` github callback). Null when the user has
- * no team — there is nothing to bind the installation to.
+ * The App install URL at `scope`, carrying the workspace and user in the
+ * `state` the install callback reads back (`convex/http.ts`). Null for a team
+ * install when the user has no team — there is nothing to bind it to. A
+ * personal install needs no team.
  */
-export function githubAppInstallUrl(user: GithubInstallUser): string | null {
-  const teamId = githubAppInstallTeam(user);
-  if (!teamId) return null;
-  const state = btoa(JSON.stringify({ team_id: teamId, user_id: user._id }));
-  const appSlug = import.meta.env.VITE_GITHUB_APP_SLUG || "codecast-sh";
-  return `https://github.com/apps/${appSlug}/installations/new?state=${state}`;
+export function githubAppInstallUrl(user: GithubInstallUser, scope: AppConnectionScope = "team"): string | null {
+  const state = githubAppInstallState({ userId: user._id, scope, teamId: githubAppInstallTeam(user) });
+  if (!state) return null;
+  return githubAppInstallUrlFor(import.meta.env.VITE_GITHUB_APP_SLUG || "codecast-sh", state);
 }

@@ -177,7 +177,6 @@ import type * as sessionLaunch from "../sessionLaunch.js";
 import type * as sessionOwners from "../sessionOwners.js";
 import type * as sessionOwnership from "../sessionOwnership.js";
 import type * as sessionThreads from "../sessionThreads.js";
-import type * as sessionUpdates from "../sessionUpdates.js";
 import type * as slack from "../slack.js";
 import type * as smallViewContracts from "../smallViewContracts.js";
 import type * as spawn from "../spawn.js";
@@ -384,7 +383,6 @@ declare const fullApi: ApiFromModules<{
   sessionOwners: typeof sessionOwners;
   sessionOwnership: typeof sessionOwnership;
   sessionThreads: typeof sessionThreads;
-  sessionUpdates: typeof sessionUpdates;
   slack: typeof slack;
   smallViewContracts: typeof smallViewContracts;
   spawn: typeof spawn;

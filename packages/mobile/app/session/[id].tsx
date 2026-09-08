@@ -15,7 +15,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isSessionUpdateBatch, parseSessionUpdateBatch, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -1795,42 +1795,32 @@ function CollapsibleBody({ fadeColor, children }: { fadeColor: string; children:
 // Mobile port of web's SessionMessageBlock: a cross-session `cast send` message
 // is machine-delivered, not typed by the human, so it renders as a cyan-accented
 // card naming the sender instead of a user bubble full of raw XML.
-function SessionUpdateBatchBlock({ batch, queued }: { batch: ReturnType<typeof parseSessionUpdateBatch>; queued?: boolean }) {
-  const count = batch?.members.length;
+// `variant: 'agent'` is a subagent's report to the session that launched it
+// (<agent-message from="…">) — the same card in violet, and a sender that is an
+// agent name rather than a session short id, so it stays a badge.
+function SessionMessageBlock({ from, name, body, timestamp, variant }: { from: string; name?: string; body: string; timestamp?: number; variant?: 'agent' }) {
+  const isAgentReport = variant === 'agent';
+  const accent = isAgentReport ? Theme.violet : Theme.cyan;
+  const hasRealSender = !isAgentReport && !!from && from !== 'unknown';
   return (
-    <RNView accessibilityLabel="Session updates">
-      <RNView style={[styles.sessionMessageHeader, { paddingHorizontal: 16, paddingVertical: 6, flexWrap: 'wrap' }]}>
-        <RNText style={styles.sessionMessageLabel}>{count === undefined ? 'Session updates' : `${count} session update${count === 1 ? '' : 's'}`}</RNText>
-        {queued && <RNText style={styles.sessionMessageTime}>Queued for delivery</RNText>}
-      </RNView>
-      {batch ? batch.members.map(member => (
-        <SessionMessageBlock key={member.id} update from={member.from} body={member.body} timestamp={member.sent_at} />
-      )) : <RNText style={[styles.sessionMessageBody, { paddingHorizontal: 16 }]}>This update batch could not be read.</RNText>}
-    </RNView>
-  );
-}
-
-function SessionMessageBlock({ from, name, body, timestamp, update }: { from: string; name?: string; body: string; timestamp?: number; update?: boolean }) {
-  const hasRealSender = !!from && from !== 'unknown';
-  return (
-    <RNView style={styles.sessionMessageBlock}>
+    <RNView style={[styles.sessionMessageBlock, isAgentReport && { borderLeftColor: accent + '99', backgroundColor: accent + '0d' }]}>
       <RNView style={styles.sessionMessageHeader}>
-        <Feather name="corner-down-right" size={13} color={Theme.cyan + 'b3'} />
-        <RNText style={styles.sessionMessageLabel}>{update ? 'Update from' : 'Message from'}</RNText>
+        <Feather name={isAgentReport ? 'cpu' : 'corner-down-right'} size={13} color={accent + 'b3'} />
+        <RNText style={[styles.sessionMessageLabel, isAgentReport && { color: accent + 'b3' }]}>{isAgentReport ? 'Report from' : 'Message from'}</RNText>
         {hasRealSender ? (
           // Resolves the sender's title server-side and taps through to the
           // session — same as web's EntityIdPill in this header.
           <EntityPill shortId={from} />
         ) : (
-          <RNView style={styles.sessionMessageBadge}>
-            <RNText style={styles.sessionMessageBadgeText}>{name || 'another session'}</RNText>
+          <RNView style={[styles.sessionMessageBadge, isAgentReport && { borderColor: accent + '4d', backgroundColor: accent + '1a' }]}>
+            <RNText style={[styles.sessionMessageBadgeText, isAgentReport && { color: accent }]}>{(isAgentReport ? from : name) || 'another session'}</RNText>
           </RNView>
         )}
         {timestamp != null && timestamp > 0 && (
           <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
         )}
       </RNView>
-      <CollapsibleBody fadeColor={blendOver(Theme.cyan + '0d', Theme.bg)}>
+      <CollapsibleBody fadeColor={blendOver(accent + '0d', Theme.bg)}>
         <MarkdownContent text={body} baseStyle={styles.sessionMessageBody} isUser={false} />
       </CollapsibleBody>
     </RNView>
@@ -3011,7 +3001,11 @@ const AGENT_STATUS_META: Record<string, { color: string; label: string }> = {
   working: { color: Theme.greenBright, label: 'Working' },
   thinking: { color: Theme.violet, label: 'Thinking' },
   compacting: { color: '#f59e0b', label: 'Compacting' },
-  waiting: { color: Theme.blue, label: 'Waiting' },
+  // Both settle verdicts that park the session on a machine wake read as one
+  // word, matching the inbox's Dormant section: "waiting" is the daemon's
+  // inference from open background work, "dormant" the agent's declaration.
+  waiting: { color: Theme.blue, label: 'Dormant' },
+  dormant: { color: Theme.blue, label: 'Dormant' },
   permission_blocked: { color: Theme.orange, label: 'Needs Input' },
   connected: { color: Theme.cyan, label: 'Connected' },
 };
@@ -4973,9 +4967,6 @@ export default function SessionDetailScreen() {
                   </RNView>
                 );
               }
-              if (isSessionUpdateBatch(item.content)) {
-                return <SessionUpdateBatchBlock batch={parseSessionUpdateBatch(item.content)} queued={!!item._isQueued} />;
-              }
               const sessionMsg = parseInboundSessionMessage(item.content);
               if (sessionMsg) {
                 // A huddle digest rides the session-message rail: show the
@@ -4985,6 +4976,14 @@ export default function SessionDetailScreen() {
                   return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
                 }
                 return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
+              }
+              // A subagent reporting back to its parent arrives in the same
+              // shape under its own tag; same rail, chrome that says so.
+              if (isAgentMessage(item.content)) {
+                const report = parseAgentAuthoredMessage(item.content);
+                if (report) {
+                  return <SessionMessageBlock variant="agent" from={report.from} body={report.body} timestamp={item.timestamp} />;
+                }
               }
               if (isScheduledTaskMessage(item.content)) {
                 return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;

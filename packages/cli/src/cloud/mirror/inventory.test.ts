@@ -109,7 +109,7 @@ describe("collectMirrorFiles", () => {
     write(".claude/history.jsonl", "SECRET");
     write(".claude/projects/x/y.jsonl", "SECRET");
     write(".claude/skills/mine/node_modules/x/index.js", "noise");
-    write(".claude.json", "SECRET");
+    write(".claude.json", '{"oauthAccount":{"token":"SECRET"},"history":["PRIVATE"]}');
     write(".codex/AGENTS.md", "# codex\n");
     write(".codex/AGENTS.override.md", "# over\n");
     write(".codex/config.toml", "model = 'x'\n");
@@ -146,6 +146,7 @@ describe("collectMirrorFiles", () => {
     const inv = await collect({ cloud_mirror_include: ".ssh,.claude/.credentials.json,.claude.json,.codecast,.netrc,.codex/auth.json" });
     const byPath = new Map(inv.entries.map((e) => [e.path, e]));
     const expectKinds: Record<string, MirrorKind> = {
+      ".claude.json": "claude-mcp",
       ".claude/CLAUDE.md": "claude-md", ".claude/settings.json": "claude-settings", ".claude/settings.local.json": "claude-settings",
       ".claude/keybindings.json": "json-remap", ".claude/agents/mine.md": "verbatim", ".claude/skills/mine/SKILL.md": "verbatim",
       ".claude/commands/c.md": "verbatim", ".claude/prompts/p.md": "verbatim", ".claude/output-styles/o.md": "verbatim",
@@ -168,7 +169,7 @@ describe("collectMirrorFiles", () => {
     }
     for (const p of [
       ".claude/agents/implementer.md", ".claude/skills/codecast-orchestrate/SKILL.md", ".claude/hooks/stable-feed.sh", ".claude/hooks/thread-state.sh",
-      ".claude/.credentials.json", ".claude/history.jsonl", ".claude/projects/x/y.jsonl", ".claude.json",
+      ".claude/.credentials.json", ".claude/history.jsonl", ".claude/projects/x/y.jsonl",
       ".claude/skills/mine/node_modules/x/index.js",
       ".codex/auth.json", ".codex/state_5.sqlite", ".codex/sessions/a.jsonl",
       ".grok/sessions/a", ".gemini/oauth_creds.json", ".config/opencode/plugins/codecast-stable.js",
@@ -207,7 +208,7 @@ describe("collectMirrorFiles", () => {
     write("dotfiles/skills/real/SKILL.md", "real");
     write(".ssh/id_ed25519", "SECRET");
     write(".claude/.credentials.json", "SECRET");
-    write(".claude.json", "SECRET");
+    write(".claude.json", '{"oauthAccount":{"token":"SECRET"},"history":["PRIVATE"]}');
     fs.mkdirSync(path.join(home, ".claude/skills"), { recursive: true });
     fs.symlinkSync(path.join(home, "dotfiles/skills/real"), path.join(home, ".claude/skills/linked"));
     fs.symlinkSync(path.join(home, ".ssh/id_ed25519"), path.join(home, ".claude/skills/key"));
@@ -219,8 +220,8 @@ describe("collectMirrorFiles", () => {
     fs.symlinkSync(path.join(home, ".claude/skills"), path.join(home, ".claude/skills/loop"));
     try {
       const inv = await collect();
-      expect(inv.entries.map((e) => e.path)).toEqual([".claude/skills/linked/SKILL.md"]);
-      expect(inv.entries[0]!.bytes.toString()).toBe("real");
+      expect(inv.entries.map((e) => e.path)).toEqual([".claude.json", ".claude/skills/linked/SKILL.md"]);
+      expect(inv.entries.find((e) => e.path === ".claude/skills/linked/SKILL.md")!.bytes.toString()).toBe("real");
       const reasons = Object.fromEntries(inv.skipped.map((s) => [s.path, s.reason]));
       expect(reasons[".claude/skills/key"]).toMatch(/denied path \(\.ssh\/id_ed25519\)/);
       expect(reasons[".claude/skills/creds"]).toMatch(/denied path/);

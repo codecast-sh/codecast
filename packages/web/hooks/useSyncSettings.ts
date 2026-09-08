@@ -14,6 +14,8 @@ const queries = {
   connections: api.appConnections.listConnections,
   teamMembers: api.teams.getTeamMembers,
   githubInstallations: api.githubApp.listInstallations,
+  // The same query with no team named answers with the caller's own installs.
+  personalGithubInstallations: api.githubApp.listInstallations,
   agentBoxes: api.devices.listAgentBoxes,
 };
 
@@ -51,5 +53,6 @@ export function useSyncSettings() {
   useSettingsFeed("connections");
   useSettingsFeed("teamMembers");
   useSettingsFeed("githubInstallations");
+  useSettingsFeed("personalGithubInstallations");
   useSettingsFeed("agentBoxes");
 }

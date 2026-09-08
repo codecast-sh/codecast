@@ -9,7 +9,7 @@ import {
   isClaudeTranscriptOutOfWatchScope,
   isPathExcluded,
   isProjectAllowedToSync,
-  isTestScratchPath,
+  isTestArtifactPath,
   watchDirFilter,
 } from "./syncScope.js";
 import type { Config } from "./config/types.js";
@@ -105,7 +105,7 @@ export function isTranscriptFileInSyncScope(
   config?: Config,
   observedCwd?: string | null,
 ): boolean {
-  if (isTestScratchPath(filePath)) return false;
+  if (isTestArtifactPath(filePath)) return false;
   if (isClaudeTranscriptOutOfWatchScope(filePath)) return false;
   if (!config) return true;
 

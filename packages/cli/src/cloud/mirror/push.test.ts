@@ -339,12 +339,19 @@ test("canceling a mirror push settles only after the SSH process exits", async (
   const pending = pushMirrorToHostAsync(host, bundle, { signal: controller.signal });
   const outcome = pending.catch((error) => error);
   const pidFile = process.env.PUSH_TEST_ARGV! + ".pid";
-  for (let n = 0; n < 200 && !fs.existsSync(pidFile); n++) await new Promise((r) => setTimeout(r, 10));
-  expect(fs.existsSync(pidFile)).toBe(true);
-  const pid = Number(fs.readFileSync(pidFile, "utf8"));
-  controller.abort();
-  expect((await outcome).message).toBe("mirror operation aborted");
-  expect(() => process.kill(pid, 0)).toThrow();
+  try {
+    for (let n = 0; n < 200 && !fs.existsSync(pidFile); n++) await new Promise((r) => setTimeout(r, 10));
+    expect(fs.existsSync(pidFile)).toBe(true);
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    controller.abort();
+    expect((await outcome).message).toBe("mirror operation aborted");
+    let code: string | undefined;
+    try { process.kill(pid, 0); } catch (error) { code = (error as NodeJS.ErrnoException).code; }
+    expect(code).toBe("ESRCH");
+  } finally {
+    controller.abort();
+    await outcome;
+  }
 });
 
 test("partial results and false hashes never make a local stamp current; source failures clear prior success", async () => {

@@ -84,10 +84,38 @@ Indexes: `by_project`, `by_provider_external ["provider", "external_id"]`,
 `by_workspace`, `by_team_id`, `by_status`.
 
 Access follows the workspace rules: `workspace` is the access key, `team_id`
-is routing, reads go through the same predicate as tasks. A source always
-has a team: Linear and GitHub connections are team scoped, so `addSource`
+is routing, reads go through the same predicate as tasks. `addSource`
 defaults `team_id` to the actor's active team when neither the request nor
-the chosen project names one, and refuses a teamless actor.
+the chosen project names one. A teamless actor may still add a source when
+they hold a personal connection that reaches it (S1.6); otherwise the row
+could never find a token and is refused.
+
+### S1.6 Connection scope
+
+A connection is a credential owned by exactly one workspace: a team
+(`team_id`) or a person (`scope_user_id`). Every connection table carries
+that pair — `app_installations` (Linear, Notion), `slack_installations`,
+`github_app_installations`; `google_installations` is personal only. The
+shared catalog (`appDescriptors.ts`) says which scopes each connector takes.
+
+A team connection serves the team's members inside the team. A personal
+connection follows its owner into every workspace they work in. Every
+credential resolver applies one rule, team first, then the acting user:
+`oauthConnectors.connectionForWork` / `getFreshAccessToken` for Linear, and
+`githubApp.getInstallationForRepoInTeam` then `getPersonalInstallationForRepo`
+inside `issueSync.tokenFor` for GitHub. A source stores the acting user
+(`user_id`) beside its team for exactly this reason.
+
+Two boundaries stay team only. Repository browsing (`repos.ts`) stamps every
+cached row with a team, so a personal installation cannot admit a viewer
+there. Webhook routing (`githubWebhooks.resolveTeamForRepository`) attributes
+PR and commit activity to the team that installed the App; a personal
+installation routes nothing to a team.
+
+Revoke rules: a team Linear or Notion connection by any member, a team GitHub
+installation by a team admin, a personal connection of any provider by its
+owner alone (`githubApp.requireInstallationRevoker`). Slack has no
+server-side uninstall at either scope.
 
 ### S1.4 `linear_webhook_events`
 
@@ -263,15 +291,23 @@ accent and verb through `registerExternalEventStyles` in
 ## S9. Integrations page
 
 `/settings/integrations` lists Slack, GitHub, Linear, Google and Notion from
-`appDescriptors` and `appConnections.listConnections`, with connect,
-disconnect, scope, who connected, health (S1.5) and what each enables. GitHub
-and Linear cards carry the issue sync sources: add, pause, remove, sync now,
-delegation settings. The OAuth confirm step (`confirmConnection`) runs from
-this page when the callback lands with a `#confirm=` fragment.
+`appDescriptors` and `appConnections.listConnections`, in two ledgers: team
+connections for the team the reader is looking at, and personal connections
+(S1.6). The query answers once per app per scope the connector supports,
+plus the team's name; with no live team membership it answers personal
+entries only, and the team ledger says so instead of claiming "not
+connected". Each card carries connect, disconnect, who connected, health
+(S1.5) and what it enables. GitHub and Linear cards carry the issue sync
+sources — once, under the ledger that matches the current workspace, since
+sources belong to the workspace and not to a connection: add, pause, remove,
+sync now, delegation settings. The import picker lists the team's
+installations and the reader's own. The OAuth confirm step
+(`confirmConnection`) runs from this page when the callback lands with a
+`#confirm=` fragment.
 
 ## S10. CLI
 
 - `cast task show/ls` print the identifier and url when `external` is set.
 - `cast task start <id> --spawn`.
 - `cast trigger add --on issue_opened|issue_assigned|issue_labeled|issue_commented`.
-- `cast integrations ls|connect <provider>|disconnect <provider>|import <provider> <ref> [--project <ref>]|sources|sync <source>|pause <source>|remove <source>`.
+- `cast integrations ls|connect <provider> [--personal|--team]|disconnect <provider> [--personal|--team]|import <provider> <ref> [--project <ref>]|sources|sync <source>|pause <source>|remove <source>`. `connect` binds to the active team unless `--personal`; `disconnect` acts on the one connected scope, or the one named.

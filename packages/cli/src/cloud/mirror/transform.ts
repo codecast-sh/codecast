@@ -9,6 +9,7 @@ export type MirrorKind =
   | "claude-md"
   | "agents-md"
   | "claude-settings"
+  | "claude-mcp"
   | "codex-toml"
   | "codex-hooks"
   | "toml-remap"
@@ -19,7 +20,7 @@ export type MirrorKind =
   | "gitignore";
 
 export const MIRROR_KINDS: readonly MirrorKind[] = [
-  "verbatim", "claude-md", "agents-md", "claude-settings", "codex-toml", "codex-hooks",
+  "verbatim", "claude-md", "agents-md", "claude-settings", "claude-mcp", "codex-toml", "codex-hooks",
   "toml-remap", "json-remap", "gemini-settings", "opencode-json", "gitconfig", "gitignore",
 ];
 
@@ -29,6 +30,36 @@ export interface TransformContext {
   /** The host's home. */
   toHome: string;
   pathMappings?: Array<{ from: string; to: string }>;
+}
+
+export interface ClaudeMcpProjection {
+  mcpServers?: Record<string, Record<string, unknown>>;
+  projects?: Record<string, { mcpServers: Record<string, Record<string, unknown>> }>;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function assertClaudeMcpProjection(value: unknown): asserts value is ClaudeMcpProjection {
+  const servers = (v: unknown) => isObject(v) && Object.entries(v).every(([name, server]) => !["__proto__", "constructor", "prototype"].includes(name) && isObject(server));
+  if (!isObject(value) || Object.keys(value).some((key) => key !== "mcpServers" && key !== "projects")
+    || value.mcpServers !== undefined && !servers(value.mcpServers)
+    || value.projects !== undefined && (!isObject(value.projects) || Object.entries(value.projects).some(([root, project]) =>
+      !path.posix.isAbsolute(root) || /[\\\x00-\x1f\x7f]/.test(root) || root.split("/").some((p) => p === "." || p === "..")
+      || !isObject(project) || Object.keys(project).some((key) => key !== "mcpServers") || !servers(project.mcpServers)))) {
+    throw new Error("invalid Claude MCP projection");
+  }
+}
+
+export function projectClaudeMcp(state: unknown): ClaudeMcpProjection {
+  if (!isObject(state)) throw new Error("invalid Claude MCP source");
+  const projects = isObject(state.projects) ? Object.fromEntries(Object.entries(state.projects)
+    .filter(([, project]) => isObject(project) && project.mcpServers !== undefined)
+    .map(([root, project]) => [root, { mcpServers: (project as Record<string, unknown>).mcpServers }])) : {};
+  const projection = { mcpServers: state.mcpServers ?? {}, projects };
+  assertClaudeMcpProjection(projection);
+  return scrubSecrets(projection).value;
 }
 
 /**
@@ -118,13 +149,14 @@ export function credentialContentReason(bytes: Buffer): string | null {
   const text = portableText(bytes);
   if (text === null) return null;
   if (/^\s*-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/m.test(text)) return "private key material excluded";
-  if (/\b(?:sk-ant-[A-Za-z0-9_-]{24,}|sk-(?:proj-|or-v1-)?[A-Za-z0-9_-]{24,}|(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16})\b/.test(text)) return "credential material excluded";
-  const isCredential = (value: unknown): boolean => typeof value === "string" && value.trim().length >= 8
-    && !/^(?:[~/.].*|<[^>]+>|\$\{[^}]+\}|\$[A-Z_][A-Z_0-9]*|process\.env\..+|(?:YOUR|REPLACE|EXAMPLE|DUMMY|TEST|INSERT|CHANGEME|REDACTED|PLACEHOLDER)(?:[_ -].*)?)$/i.test(value.trim());
+  if (/\b(?:sk-ant-[A-Za-z0-9_-]{24,}|sk-(?:proj-|or-v1-)?[A-Za-z0-9_-]{24,}|(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{35})\b/.test(text)) return "credential material excluded";
+  const isCredential = (value: unknown, key: string): boolean => typeof value === "string" && value.trim().length > 0
+    && !(/(?:file|path|dir|directory)$/i.test(key) && /^[~/.]/.test(value.trim()))
+    && !/^(?:<[^>]+>|\$\{[^}]+\}|\$[A-Z_][A-Z_0-9]*|(?:process\.|ctx\.)?env\.[A-Z_][A-Z_0-9]*|os\.environ\[.+\]|(?:YOUR|REPLACE|EXAMPLE|DUMMY|TEST|INSERT|CHANGEME|REDACTED|PLACEHOLDER)(?:[_ -].*)?)$/i.test(value.trim());
   const hasCredential = (value: unknown): boolean => {
     if (Array.isArray(value)) return value.some(hasCredential);
     if (!value || typeof value !== "object") return false;
-    return Object.entries(value).some(([key, item]) => SECRET_KEY_RE.test(key) && isCredential(item) || hasCredential(item));
+    return Object.entries(value).some(([key, item]) => SECRET_KEY_RE.test(key) && isCredential(item, key) || hasCredential(item));
   };
   if (/^\s*[\[{]/.test(text)) {
     let value: unknown;
@@ -134,7 +166,7 @@ export function credentialContentReason(bytes: Buffer): string | null {
   for (const match of text.matchAll(/(?:^|[\s{,])(?:export\s+)?["']?([A-Za-z_][\w.-]{0,160})["']?\s*[:=]\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s,;#]+))/gm)) {
     const value = match[2] ?? match[3] ?? match[4];
     if (match[4] && (!/^[A-Za-z0-9+/_:.=-]+$/.test(match[4]) || !/[0-9]/.test(match[4]))) continue;
-    if (SECRET_KEY_RE.test(match[1]!) && isCredential(value)) return "credential assignment excluded";
+    if (SECRET_KEY_RE.test(match[1]!) && isCredential(value, match[1]!)) return "credential assignment excluded";
   }
   return null;
 }
@@ -142,6 +174,7 @@ export function credentialContentReason(bytes: Buffer): string | null {
 export function kindForPath(rel: string): MirrorKind {
   const lower = rel.toLowerCase();
   const base = path.posix.basename(lower);
+  if (lower === ".claude.json") return "claude-mcp";
   if (/^agents(?:\.override)?\.md$/.test(base)) return "agents-md";
   if (/^(?:claude(?:\.local)?|gemini|grok|opencode)\.md$/.test(base)) return "claude-md";
   if (/(?:^|\/)\.claude\/settings(?:\.local)?\.jsonc?$/.test(lower)) return "claude-settings";
@@ -667,6 +700,14 @@ function transformContentByKind(kind: MirrorKind, bytes: Buffer, ctx: TransformC
     case "claude-settings": {
       const r = transformClaudeSettings(parseJsonLoose(text()), ctx);
       return { bytes: json(r.settings), scrubbed: r.scrubbed, referencedFiles: r.referencedFiles };
+    }
+    case "claude-mcp": {
+      const projection: unknown = parseJsonLoose(text());
+      assertClaudeMcpProjection(projection);
+      const clean = scrubSecrets(projection);
+      const mapped = JSON.parse(remapContextPaths(JSON.stringify(clean.value), ctx));
+      assertClaudeMcpProjection(mapped);
+      return { bytes: json(mapped), scrubbed: clean.scrubbed, referencedFiles: [] };
     }
     case "codex-toml": {
       const r = transformCodexToml(text(), ctx);

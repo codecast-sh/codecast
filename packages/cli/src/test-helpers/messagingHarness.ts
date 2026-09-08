@@ -162,7 +162,16 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
       if (shimPath) cleanupShimScript(shimPath);
       try {
         fs.unlinkSync(jsonlPath);
-        fs.rmdirSync(path.dirname(jsonlPath));
+        // Recursive, not rmdir: a run the shim outlived leaves other files
+        // behind, the dir survives, and the daemon's next sweep is left holding
+        // a transcript nobody cleaned up. Guarded on the marker so this can
+        // only ever delete a dir this harness named.
+        const projectDir = path.dirname(jsonlPath);
+        if (path.basename(projectDir).includes("codecast-test-cwd-")) {
+          fs.rmSync(projectDir, { recursive: true, force: true });
+        } else {
+          fs.rmdirSync(projectDir);
+        }
       } catch {}
       // Only remove cwd if we created it (matches /tmp prefix).
       if (cwd.startsWith(os.tmpdir())) {

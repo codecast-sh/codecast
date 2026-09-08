@@ -160,11 +160,6 @@ export async function conversationHasNoWork(
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id))
     .first();
   if (hasPending) return false;
-  const hasUpdate = await ctx.db
-    .query("session_updates")
-    .withIndex("by_conversation_state_created", (q: any) => q.eq("conversation_id", conv._id).eq("state", "queued"))
-    .first();
-  if (hasUpdate) return false;
   const cs = await ctx.db
     .query("client_state")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id))
@@ -480,11 +475,6 @@ export const gcEmptyConversations = internalMutation({
         .withIndex("by_conversation_status", (q) => q.eq("conversation_id", c._id))
         .first();
       if (hasPending) continue;
-      const hasUpdate = await ctx.db
-        .query("session_updates")
-        .withIndex("by_conversation_state_created", (q) => q.eq("conversation_id", c._id).eq("state", "queued"))
-        .first();
-      if (hasUpdate) continue;
 
       const managed = await ctx.db
         .query("managed_sessions")

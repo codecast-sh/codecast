@@ -1,6 +1,7 @@
-// One provider in the integrations ledger: what it is, whether it is connected,
-// who connected it, how healthy it is, what it enables, and the two buttons
-// that change any of that.
+// One provider AT ONE SCOPE in the integrations ledger: what it is, whether it
+// is connected there, who connected it, how healthy it is, what it enables,
+// and the two buttons that change any of that. The page mounts a team card and
+// a personal card for a provider that takes both (appDescriptors.ts SCOPE).
 //
 // The card is FLAT — the settings kit gives the surrounding section card the
 // only border, so identity here comes from a left accent bar in the provider's
@@ -9,7 +10,7 @@
 
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
-import type { AppConnectionStatus, AppDescriptor } from "@codecast/shared/contracts";
+import type { AppConnectionScope, AppConnectionStatus, AppDescriptor } from "@codecast/shared/contracts";
 import { APP_LOOK, ISSUE_SYNC_APPS, useAppConnection } from "../../lib/integrations";
 import type { GithubInstallUser } from "../../lib/githubAppInstall";
 import { githubAppInstallTeam } from "../../lib/githubAppInstall";
@@ -37,18 +38,26 @@ function healthLine(connection: Extract<AppConnectionStatus, { status: "connecte
 
 export function IntegrationCard({
   descriptor,
+  scope,
   connection,
   loading,
   me,
+  showSources = true,
 }: {
   descriptor: AppDescriptor;
+  /** The workspace this card connects into: the team being looked at, or the person. */
+  scope: AppConnectionScope;
   /** Undefined while the query has not answered (or failed) — unknown, not "no". */
   connection: AppConnectionStatus | undefined;
   loading: boolean;
   me: GithubInstallUser | null | undefined;
+  /** Issue sync sources belong to the CURRENT workspace, not to a connection,
+   *  so the page shows them once — under the team cards while a team is
+   *  active, under the personal cards otherwise. */
+  showSources?: boolean;
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
-  const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, me);
+  const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, me, scope);
   const [showDetail, setShowDetail] = useState(false);
 
   const connected = connection?.status === "connected" ? connection : null;
@@ -59,7 +68,7 @@ export function IntegrationCard({
   // is shown verbatim rather than flattened into a friendlier lie.
   const notConfigured = !!error && /not configured/i.test(error);
   const health = connected ? healthLine(connected) : null;
-  const hasSources = ISSUE_SYNC_APPS.includes(descriptor.id);
+  const hasSources = showSources && ISSUE_SYNC_APPS.includes(descriptor.id);
 
   return (
     <div
@@ -167,7 +176,7 @@ export function IntegrationCard({
       </div>
 
       {descriptor.id === "github" && showDetail && (
-        <GithubInstallDetail teamId={me ? githubAppInstallTeam(me) : undefined} />
+        <GithubInstallDetail scope={scope} teamId={me ? githubAppInstallTeam(me) : undefined} />
       )}
 
       {hasSources && (

@@ -20,6 +20,8 @@
 
 import { spawn } from "../proc.js";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isPortFree } from "./ports.js";
 
@@ -109,6 +111,26 @@ export function chromeBinaryProbes(): string[] {
   return probes;
 }
 
+/**
+ * Keychain flags for a macOS launch.
+ *
+ * Chrome on macOS stores its cookie encryption key ("Chrome Safe Storage") in
+ * the login keychain of the home directory it runs under. Under a home that
+ * has no login keychain (a test sandbox, a scratch HOME) the Security
+ * framework answers "no default keychain" (-25307) and macOS raises a modal
+ * "Keychain Not Found" dialog on the desktop for every launch, blocking Chrome
+ * until a person dismisses it. `--use-mock-keychain` makes Chrome keep the key
+ * in memory instead, which is right for such a home: no keychain can exist
+ * there. A real home keeps the real keychain, so profiles that already hold
+ * encrypted cookies stay readable.
+ */
+export function keychainArgs(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== "darwin") return [];
+  const home = env.HOME || os.homedir();
+  const loginKeychain = path.join(home, "Library", "Keychains", "login.keychain-db");
+  return fs.existsSync(loginKeychain) ? [] : ["--use-mock-keychain"];
+}
+
 /** Default args used for every launch. CDP + isolation + automation-friendly. */
 function defaultArgs(opts: LaunchChromeOptions): string[] {
   return [
@@ -116,6 +138,7 @@ function defaultArgs(opts: LaunchChromeOptions): string[] {
     `--user-data-dir=${opts.userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    ...keychainArgs(),
     // Disable Chrome's own update / metrics / telemetry side-channels.
     "--disable-background-networking",
     "--disable-sync",

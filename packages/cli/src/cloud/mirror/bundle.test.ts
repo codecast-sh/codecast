@@ -125,6 +125,24 @@ test("v1 remains readable and v2 rejects repeated SHA size mismatches and write 
   await expect(parseMirrorBundle(encode(altered, Buffer.from("a")))).rejects.toThrow(/duplicate SHA body size mismatch/);
   altered.files[0]!.size = 1024 * 1024 * 1024 + 1;
   await expect(parseMirrorBundle(encode(altered, Buffer.from("a")))).rejects.toThrow(/expanded write limit/);
-  const tooMany = Array.from({ length: 17 }, (_, index) => ({ path: `file-${index}`, kind: "verbatim" as const, mode: "0600" as const, bytes: Buffer.alloc(64 * 1024 * 1024) }));
+  const shared = Buffer.alloc(64 * 1024 * 1024);
+  const tooMany = Array.from({ length: 17 }, (_, index) => ({ path: `file-${index}`, kind: "verbatim" as const, mode: "0600" as const, bytes: shared }));
   expect(() => buildMirrorBundle(tooMany, meta)).toThrow(/expanded write limit/);
+});
+
+test("Claude account storage accepts only the validated MCP projection on build and receive", async () => {
+  const file = (value: unknown): BundleInput => ({ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify(value)) });
+  expect(() => buildMirrorBundle([{ ...file({}), kind: "verbatim" }], meta)).toThrow(/selective/);
+  expect(() => buildMirrorBundle([{ ...file({}), path: ".claude/settings.json" }], meta)).toThrow(/destination/);
+  for (const value of [{ oauthAccount: {} }, { projects: { "/home/ubuntu/work/app": { hasTrustDialogAccepted: true } } }]) {
+    expect(() => buildMirrorBundle([file(value)], meta)).toThrow();
+    const built = buildMirrorBundle([{ ...file(value), path: "untrusted.json", kind: "verbatim" }], meta);
+    const header = { ...built.header, files: built.header.files.map((f) => ({ ...f, path: ".claude.json", kind: "claude-mcp" })) };
+    const bytes = Buffer.from(JSON.stringify(header));
+    const length = Buffer.alloc(4); length.writeUInt32BE(bytes.length);
+    await expect(parseMirrorBundle(Buffer.concat([Buffer.from(MIRROR_MAGIC), length, bytes, file(value).bytes]))).rejects.toThrow();
+  }
+  const valid = { mcpServers: { portable: { command: "node", args: ["server.js"] } } };
+  const parsed = await parseMirrorBundle(buildMirrorBundle([file(valid)], meta).bytes);
+  expect(JSON.parse(parsed.files[0]!.bytes.toString())).toEqual(valid);
 });

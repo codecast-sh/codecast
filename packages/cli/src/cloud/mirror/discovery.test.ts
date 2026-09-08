@@ -232,3 +232,58 @@ test("unfamiliar credential files are excluded by content while active MCP defin
   expect(transformed).not.toContain("opaque-random");
   expect(transformForHost("unfamiliar.json", Buffer.from('{"auth":{"accessToken":"opaque-random-credential-12345"}}'), { fromHome: home, toHome: "/home/u" })).toBeNull();
 });
+
+test("required hooks fail if credentials or a deny rule prevent copying their dependencies", async () => {
+  write("scripts/hook.sh", "export SERVICE_API_KEY='opaque-random-credential-12345'\n");
+  write(".claude/settings.json", JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: `${home}/scripts/hook.sh` }] }] } }));
+  await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("active context reference contains credential material");
+  write("src/repo/.claude/settings.json", JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: `${home}/scripts/hook.sh` }] }] } }));
+  expect(() => collectProjectContext({ root, home })).toThrow("active context reference contains credential material");
+  write(".claude/settings.json", JSON.stringify({ statusLine: { command: `${home}/.railway/hook.sh` } }));
+  await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("active context reference is denied");
+  write("src/repo/.claude/settings.json", JSON.stringify({ statusLine: { command: `${home}/.railway/hook.sh` } }));
+  await expect(collectProjectContextAsync({ root, home })).rejects.toThrow("active context reference is denied");
+});
+
+test("host-owned hooks removed by the settings transform are not required source dependencies", async () => {
+  write("src/repo/.claude/settings.json", JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: `${home}/.codecast/orchestration/scripts/agent-complete.sh` }] }] } }));
+  const context = await collectProjectContextAsync({ root, home });
+  const settings = context.files.find((file) => file.relativePath === ".claude/settings.json")!;
+  expect(JSON.parse(transformForHost(settings.relativePath, settings.bytes, { fromHome: home, toHome: "/home/u" })!.toString())).not.toHaveProperty("hooks");
+});
+
+test("Grok runtime registries stay excluded through includes and aliases while portable context remains", async () => {
+  write(".grok/grove/pin_gc_orphans.json", JSON.stringify({ orphans: { "session-id": "runtime state" } }));
+  write(".grok/last-copy.txt", "copied conversation");
+  write(".grok/skills/helper/SKILL.md", "portable skill");
+  write(".grok/docs/guide.md", "portable guide");
+  fs.symlinkSync(path.join(home, ".grok/grove/pin_gc_orphans.json"), path.join(home, ".grok/docs/registry.json"));
+  const result = await collectMirrorFiles({ home, hostHome: "/home/u", config: { cloud_mirror_include: ".grok/grove/pin_gc_orphans.json,.grok/docs/registry.json,.grok/last-copy.txt" } });
+  expect(result.entries.map((entry) => entry.path)).toEqual([".grok/docs/guide.md", ".grok/skills/helper/SKILL.md"]);
+});
+
+test("Antigravity skills remain portable while binary conversations and runtime snapshots stay excluded", async () => {
+  for (const rel of ["conversations/thread.pb", "implicit/thread.pb", "brain/task/task.md", "brain/task/image.png", "code_tracker/active/source.ts", "installation_id", "user_settings.pb"]) write(`.gemini/antigravity/${rel}`, "runtime state");
+  write(".gemini/antigravity/skills/helper/SKILL.md", "portable skill");
+  const result = await collectMirrorFiles({ home, hostHome: "/home/u", config: { cloud_mirror_include: ".gemini/antigravity/conversations/thread.pb,.gemini/antigravity/brain/task/task.md" } });
+  expect(result.entries.map((entry) => entry.path)).toEqual([".gemini/antigravity/skills/helper/SKILL.md"]);
+});
+
+test("Claude state contributes only scrubbed MCP definitions and malformed source still fails", async () => {
+  write(".claude.json", JSON.stringify({ oauthAccount: { accessToken: "private-session-token" }, history: ["private conversation"],
+    mcpServers: { electron: { command: "node", env: { API_KEY: "opaque-credential-12345", LANG: "C" } } },
+    projects: { [root]: { mcpServers: { linear: { type: "http", url: "https://mcp.example.test" } }, trust: true, history: ["private project history"] } } }));
+  const inv = await collectMirrorFiles({ home, hostHome: "/home/u" });
+  const entry = inv.entries.find((e) => e.path === ".claude.json")!;
+  expect(entry.kind).toBe("claude-mcp");
+  const projected = JSON.parse(entry.bytes.toString());
+  expect(Object.keys(projected).sort()).toEqual(["mcpServers", "projects"]);
+  expect(projected.mcpServers.electron).toEqual({ command: "node", env: { LANG: "C" } });
+  expect(projected.projects[root]).toEqual({ mcpServers: { linear: { type: "http", url: "https://mcp.example.test" } } });
+  expect(entry.bytes.toString()).not.toContain("private-session-token");
+  expect(entry.bytes.toString()).not.toContain("private conversation");
+  expect(entry.bytes.toString()).not.toContain("private project history");
+  expect(entry.bytes.toString()).not.toContain("oauthAccount");
+  write(".claude.json", "{malformed");
+  await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("cannot parse Claude MCP source");
+});

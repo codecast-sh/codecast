@@ -36,6 +36,14 @@ const SOURCE_STATUS_COLORS: Record<string, string> = {
   error: c.red,
 };
 
+
+/** The scope a flag named, or undefined to let the server choose (team, or
+ *  the one connected entry on disconnect). */
+function scopeOption(options: { personal?: boolean; team?: boolean }): "team" | "personal" | undefined {
+  if (options.personal && options.team) fail("Pass one of --personal or --team, not both.");
+  return options.personal ? "personal" : options.team ? "team" : undefined;
+}
+
 function appName(id: string): string {
   return APP_DESCRIPTORS[id as AppId]?.name ?? id;
 }
@@ -115,11 +123,14 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
           const who = app.by ? `by ${app.by}` : "by someone no longer in the workspace";
           const detail = app.detail ? `  ${c.dim}${app.detail}${c.reset}` : "";
           console.log(
-            `  ${c.green}connected${c.reset}      ${c.bold}${name}${c.reset}  ${c.dim}${app.scope}${c.reset}  ` +
+            `  ${c.green}connected${c.reset}      ${c.bold}${name}${c.reset}  ${c.dim}${app.scope.padEnd(8)}${c.reset}  ` +
             `${c.dim}${who} ${ago(app.at)}${c.reset}${detail}`,
           );
         } else if (app.status === "not_connected") {
-          console.log(`  ${c.dim}not connected${c.reset}  ${c.bold}${name}${c.reset}  ${c.dim}${APP_DESCRIPTORS[app.id]?.tagline ?? ""}${c.reset}`);
+          console.log(
+            `  ${c.dim}not connected${c.reset}  ${c.bold}${name}${c.reset}  ${c.dim}${app.scope.padEnd(8)}${c.reset}  ` +
+            `${c.dim}${APP_DESCRIPTORS[app.id]?.tagline ?? ""}${c.reset}`,
+          );
         } else {
           console.log(`  ${c.dim}coming soon${c.reset}    ${c.bold}${name}${c.reset}  ${c.dim}no connector yet${c.reset}`);
         }
@@ -131,9 +142,11 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
     .command("connect")
     .description("Start the connect flow for an app (opens your browser)")
     .argument("<provider>", `App to connect: ${Object.keys(APP_DESCRIPTORS).join(", ")}`)
-    .action(async (providerRaw: string) => {
+    .option("--personal", "Connect it for yourself, usable in every workspace you work in (default: your active team)")
+    .option("--team", "Connect it for your active team (the default)")
+    .action(async (providerRaw: string, options: { personal?: boolean; team?: boolean }) => {
       const provider = requireProvider(providerRaw, Object.keys(APP_DESCRIPTORS) as AppId[]);
-      const result = await post("/cli/integrations/connect-url", { provider });
+      const result = await post("/cli/integrations/connect-url", { provider, scope: scopeOption(options) });
       if (!result?.ok || !result.url) {
         fail(result?.error || `No connect flow available for ${appName(provider)}.`);
       }
@@ -149,11 +162,13 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
 
   integrations
     .command("disconnect")
-    .description("Revoke this workspace's connection to an app")
+    .description("Revoke a connection to an app (your active team's, or your own with --personal)")
     .argument("<provider>", `App to disconnect: ${Object.keys(APP_DESCRIPTORS).join(", ")}`)
-    .action(async (providerRaw: string) => {
+    .option("--personal", "Revoke your personal connection")
+    .option("--team", "Revoke your active team's connection")
+    .action(async (providerRaw: string, options: { personal?: boolean; team?: boolean }) => {
       const provider = requireProvider(providerRaw, Object.keys(APP_DESCRIPTORS) as AppId[]);
-      const result = await post("/cli/integrations/disconnect", { provider });
+      const result = await post("/cli/integrations/disconnect", { provider, scope: scopeOption(options) });
       if (!result?.ok) fail(result?.error || `Could not disconnect ${appName(provider)}.`);
       console.log(`${c.green}ok${c.reset} Disconnected ${c.bold}${appName(provider)}${c.reset}`);
     });

@@ -8,14 +8,16 @@
 // design — it only parameterizes the URLs, scopes and profile fetch, so a new
 // provider is one entry in PROVIDERS and one env var pair.
 //
-// Every provider here is TEAM-scoped: Linear and Notion are workspace tools,
-// and one connection serves every member (matching Slack). Personal-scoped
-// providers (mail) stay on their own path.
+// Every provider here binds to ONE workspace: a team (one connection serves
+// every member, matching Slack) or a person (their own credential, which a
+// resolver falls back to in every workspace they work in — appDescriptors.ts
+// SCOPE). Mail stays on its own, personal-only path (googleOAuth.ts).
 
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { convexSiteUrl, webBaseUrl } from "./slack";
@@ -127,22 +129,32 @@ function isConnectorId(v: unknown): v is ConnectorId {
 // take it for the same reason). The signed state is identical either way, so
 // the CLI and the browser cannot drift apart on what a callback carries.
 export const getConnectUrl = action({
-  args: { provider: v.string(), api_token: v.optional(v.string()) },
+  args: {
+    provider: v.string(),
+    /** "team" (default) binds the connection to the caller's active team;
+     *  "personal" to the caller alone. */
+    scope: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
   handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
     if (!isConnectorId(args.provider)) return { ok: false, error: "unknown provider" };
     const p = PROVIDERS[args.provider];
     const env = providerEnv(p);
     if (!env) return { ok: false, error: notConfigured(p) };
+    const scope: AppConnectionScope = isAppConnectionScope(args.scope) ? args.scope : "team";
     const me: any = await ctx.runQuery(internal.oauthConnectors.resolveTeam, {
       api_token: args.api_token,
     });
     if (!me?.user_id) return { ok: false, error: "not signed in" };
-    if (!me?.team_id) return { ok: false, error: `Join or create a team first — ${p.name} binds to a team` };
+    if (scope === "team" && !me?.team_id) {
+      return { ok: false, error: `Join or create a team first, or connect ${p.name} personally` };
+    }
 
     const state = await signStateWith(env.clientSecret, {
       provider: p.id,
       user_id: String(me.user_id),
-      team_id: String(me.team_id),
+      scope,
+      ...(scope === "team" ? { team_id: String(me.team_id) } : {}),
       nonce: crypto.randomUUID(),
       // `ts`, not `iat`: verifyStateWith REQUIRES this exact field and rejects
       // any state without it, so an `iat` state failed every callback with
@@ -220,6 +232,7 @@ async function tokenRequest(
 }
 
 import { accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS, REFRESH_LEASE_MS } from "./lib/tokenRefresh";
+import { isAppConnectionScope, type AppConnectionScope } from "@codecast/shared/contracts";
 export { accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS, REFRESH_LEASE_MS };
 
 /* ==========================================================================
@@ -254,7 +267,10 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
       break;
     }
   }
-  if (!st || !p || !env || typeof st.user_id !== "string" || typeof st.team_id !== "string") {
+  // States minted before scopes existed carry only a team: they read as team
+  // installs. A personal state names no team; a team state must.
+  const scope: AppConnectionScope = isAppConnectionScope(st?.scope) ? st!.scope : "team";
+  if (!st || !p || !env || typeof st.user_id !== "string" || (scope === "team" && typeof st.team_id !== "string")) {
     return new Response("bad_state", { status: 400 });
   }
 
@@ -280,7 +296,7 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
   const stored: any = await ctx.runMutation(internal.oauthConnectors.storeConnection, {
     provider: p.id,
     user_id: st.user_id,
-    team_id: st.team_id,
+    team_id: scope === "team" ? st.team_id : undefined,
     account_label: label,
     account_id: accountId,
     access_token_enc: await encryptRefreshToken(tok.access_token, env.clientSecret),
@@ -307,11 +323,33 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The one connection row a scope holds for a provider, pending or not. */
+async function connectionRowFor(
+  ctx: { db: any },
+  provider: string,
+  scope: { team_id?: any; user_id?: any },
+): Promise<any | null> {
+  if (scope.team_id) {
+    return await ctx.db
+      .query("app_installations")
+      .withIndex("by_provider_team", (q: any) => q.eq("provider", provider).eq("team_id", scope.team_id))
+      .first();
+  }
+  if (scope.user_id) {
+    return await ctx.db
+      .query("app_installations")
+      .withIndex("by_provider_user", (q: any) => q.eq("provider", provider).eq("scope_user_id", scope.user_id))
+      .first();
+  }
+  return null;
+}
+
 export const storeConnection = internalMutation({
   args: {
     provider: v.string(),
     user_id: v.string(),
-    team_id: v.string(),
+    /** The team the connection binds to; absent binds it to `user_id` alone. */
+    team_id: v.optional(v.string()),
     account_label: v.optional(v.string()),
     account_id: v.optional(v.string()),
     access_token_enc: v.string(),
@@ -322,13 +360,10 @@ export const storeConnection = internalMutation({
   },
   handler: async (ctx, args): Promise<{ ok: boolean; id?: string; error?: string }> => {
     const userId = (ctx.db as any).normalizeId("users", args.user_id);
-    const teamId = (ctx.db as any).normalizeId("teams", args.team_id);
-    if (!userId || !teamId) return { ok: false, error: "bad_ids" };
+    const teamId = args.team_id ? (ctx.db as any).normalizeId("teams", args.team_id) : undefined;
+    if (!userId || (args.team_id && !teamId)) return { ok: false, error: "bad_ids" };
     const now = Date.now();
-    const existing = await (ctx.db as any)
-      .query("app_installations")
-      .withIndex("by_provider_team", (q: any) => q.eq("provider", args.provider).eq("team_id", teamId))
-      .first();
+    const existing = await connectionRowFor(ctx, args.provider, teamId ? { team_id: teamId } : { user_id: userId });
     if (existing) {
       const stillPending = !!existing.pending_confirm_hash;
       await (ctx.db as any).patch(existing._id, {
@@ -351,6 +386,7 @@ export const storeConnection = internalMutation({
     const id = await (ctx.db as any).insert("app_installations", {
       provider: args.provider,
       team_id: teamId,
+      scope_user_id: teamId ? undefined : userId,
       connected_by: userId,
       account_label: args.account_label,
       account_id: args.account_id,
@@ -412,35 +448,6 @@ export const finishConfirm = internalMutation({
  * Read + disconnect
  * ========================================================================== */
 
-/** Confirmed connections for the caller's team, for the Apps tab. */
-export const listConnections = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const user = await ctx.db.get(userId);
-    const teamId = (user as any)?.active_team_id ?? (user as any)?.team_id;
-    if (!teamId) return [];
-    const out: Array<{ provider: string; _id: string; account_label?: string; connected_by: string; created_at: number }> = [];
-    for (const p of Object.values(PROVIDERS)) {
-      const row = await (ctx.db as any)
-        .query("app_installations")
-        .withIndex("by_provider_team", (q: any) => q.eq("provider", p.id).eq("team_id", teamId))
-        .first();
-      if (row && !row.pending_confirm_hash) {
-        out.push({
-          provider: p.id,
-          _id: row._id.toString(),
-          account_label: row.account_label,
-          connected_by: String(row.connected_by),
-          created_at: row.created_at,
-        });
-      }
-    }
-    return out;
-  },
-});
-
 export const disconnect = action({
   args: { installation_id: v.string() },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
@@ -460,32 +467,48 @@ export const deleteConnection = internalMutation({
     if (!rowId) return { ok: false, error: "no_such_installation" };
     const r = await (ctx.db as any).get(rowId);
     if (!r) return { ok: true };
-    // Any team member may disconnect a team connection: it is the team's, and
-    // a departed connector must not leave a live grant nobody can revoke.
     const userId = (ctx.db as any).normalizeId("users", args.user_id);
-    const member = userId
-      ? await (ctx.db as any)
-          .query("team_memberships")
-          .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", r.team_id))
-          .first()
-      : null;
-    if (!member) return { ok: false, error: "not_a_member" };
+    if (!userId) return { ok: false, error: "not_a_member" };
+    if (r.team_id) {
+      // Any team member may disconnect a team connection: it is the team's,
+      // and a departed connector must not leave a live grant nobody can revoke.
+      const member = await (ctx.db as any)
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", r.team_id))
+        .first();
+      if (!member) return { ok: false, error: "not_a_member" };
+    } else if (String(r.scope_user_id) !== String(userId)) {
+      // A personal connection is its owner's alone.
+      return { ok: false, error: "not_the_owner" };
+    }
     await (ctx.db as any).delete(rowId);
     return { ok: true };
   },
 });
 
-/** The connection row's credential fields, for the refresh action only.
- *  Nothing hands a token to a client. */
-export const getConnectionForTeam = internalQuery({
-  args: { provider: v.string(), team_id: v.id("teams") },
+/**
+ * The connection a piece of work acts through: the work's team's, else the
+ * acting user's personal one. Credential fields only, for the refresh action;
+ * nothing hands a token to a client. A pending (unconfirmed) row is no
+ * connection.
+ */
+export async function connectionForWork(
+  ctx: { db: any },
+  provider: string,
+  scope: { team_id?: Id<"teams">; user_id?: Id<"users"> },
+): Promise<any | null> {
+  const confirmed = (row: any) => (row && !row.pending_confirm_hash ? row : null);
+  const team = scope.team_id ? confirmed(await connectionRowFor(ctx, provider, { team_id: scope.team_id })) : null;
+  if (team) return team;
+  return scope.user_id ? confirmed(await connectionRowFor(ctx, provider, { user_id: scope.user_id })) : null;
+}
+
+export const getConnection = internalQuery({
+  args: { provider: v.string(), team_id: v.optional(v.id("teams")), user_id: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
     if (!isConnectorId(args.provider)) return null;
-    const row = await (ctx.db as any)
-      .query("app_installations")
-      .withIndex("by_provider_team", (q: any) => q.eq("provider", args.provider).eq("team_id", args.team_id))
-      .first();
-    if (!row || row.pending_confirm_hash) return null;
+    const row = await connectionForWork(ctx, args.provider, args);
+    if (!row) return null;
     return {
       _id: row._id,
       access_token_enc: row.access_token_enc as string,
@@ -527,13 +550,19 @@ export const updateStoredTokens = internalMutation({
 });
 
 /**
- * The access token for a team's connection, refreshed single flight when it
- * is expiring or of unknown age (lib/tokenRefresh.singleFlightRefresh).
+ * The access token for the connection a piece of work acts through (the
+ * team's, else the acting user's personal one), refreshed single flight when
+ * it is expiring or of unknown age (lib/tokenRefresh.singleFlightRefresh).
  * `force` refreshes regardless of the recorded expiry, for a caller that
  * just got a 401 on a token this function considered fresh.
  */
-export const getFreshAccessTokenForTeam = internalAction({
-  args: { provider: v.string(), team_id: v.id("teams"), force: v.optional(v.boolean()) },
+export const getFreshAccessToken = internalAction({
+  args: {
+    provider: v.string(),
+    team_id: v.optional(v.id("teams")),
+    user_id: v.optional(v.id("users")),
+    force: v.optional(v.boolean()),
+  },
   handler: async (ctx, args): Promise<{ ok: boolean; token?: string; error?: string }> => {
     if (!isConnectorId(args.provider)) return { ok: false, error: "unknown provider" };
     const p = PROVIDERS[args.provider];
@@ -541,7 +570,12 @@ export const getFreshAccessTokenForTeam = internalAction({
     if (!env) return { ok: false, error: notConfigured(p) };
     const res = await singleFlightRefresh({
       provider: p.name,
-      read: () => ctx.runQuery(internal.oauthConnectors.getConnectionForTeam, { provider: p.id, team_id: args.team_id }),
+      read: () =>
+        ctx.runQuery(internal.oauthConnectors.getConnection, {
+          provider: p.id,
+          team_id: args.team_id,
+          user_id: args.user_id,
+        }),
       claim: (installation_id, expected_enc, now) =>
         ctx.runMutation(internal.oauthConnectors.claimRefresh, { installation_id, expected_enc, now }),
       write: (installation_id, outcome) =>
@@ -551,7 +585,7 @@ export const getFreshAccessTokenForTeam = internalAction({
       request: (refreshToken) => tokenRequest(p, env, { grant_type: "refresh_token", refresh_token: refreshToken }),
       force: args.force,
       errors: {
-        noConnection: `no_connection: ${p.name} is not connected for this team`,
+        noConnection: `no_connection: ${p.name} is not connected for this workspace or by you`,
         undecryptable: `${p.name} token undecryptable (${p.env.clientSecret} rotated?): reconnect ${p.name}`,
         reconnect: `reconnect ${p.name} from Settings > Integrations`,
       },

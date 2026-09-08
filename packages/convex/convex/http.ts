@@ -1,4 +1,5 @@
 import { httpRouter } from "convex/server";
+import { parseGithubAppInstallState } from "@codecast/shared/contracts";
 import { ConvexError } from "convex/values";
 import { unsubscribeResponse } from "@platform/email";
 import { httpAction } from "./_generated/server";
@@ -183,18 +184,12 @@ http.route({
     }
 
     if (setupAction === "install" || setupAction === "update") {
-      let teamId: string | null = null;
-      let userId: string | null = null;
-      if (state) {
-        try {
-          const stateData = JSON.parse(atob(state));
-          teamId = stateData.team_id;
-          userId = stateData.user_id;
-        } catch {
-        }
-      }
+      // The state names the workspace the install binds to: a team, or the
+      // installer themself for a personal install. storeInstallation verifies
+      // the binding (membership, or identity) — the state carries no authority.
+      const bound = parseGithubAppInstallState(state);
 
-      if (!teamId) {
+      if (!bound) {
         const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?error=missing_team`;
         return new Response(null, {
           status: 302,
@@ -208,14 +203,15 @@ http.route({
         });
 
         await ctx.runMutation(internal.githubApp.storeInstallation, {
-          team_id: teamId as any,
+          team_id: bound.scope === "team" ? (bound.team_id as any) : undefined,
+          scope_user_id: bound.scope === "personal" ? (bound.user_id as any) : undefined,
           installation_id: installationDetails.installation_id,
           account_login: installationDetails.account_login,
           account_type: installationDetails.account_type,
           account_id: installationDetails.account_id,
           repository_selection: installationDetails.repository_selection,
           repositories: installationDetails.repositories,
-          installed_by_user_id: userId as any,
+          installed_by_user_id: bound.user_id as any,
         });
 
         const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?success=true`;
@@ -4233,9 +4229,6 @@ cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
-cliRoute("/cli/messages/update", async (ctx, body) => ctx.runMutation(api.sessionUpdates.queueUpdate, body));
-cliRoute("/cli/messages/update-status", async (ctx, body) => ctx.runQuery(api.sessionUpdates.getUpdateStatus, body));
-cliRoute("/cli/messages/update-cancel", async (ctx, body) => ctx.runMutation(api.sessionUpdates.cancelUpdate, body));
 
 // Session labels (personal filing). List the catalog, file/unfile a session,
 // and manage the label catalog itself.
