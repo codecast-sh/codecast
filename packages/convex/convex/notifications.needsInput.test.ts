@@ -644,3 +644,44 @@ describe("needs-input check — stall rule for hidden sessions", () => {
     expect(tables.conversations[0].inbox_stashed_at).toBe(111);
   });
 });
+
+// A resume, a clear or a manual /compact settles the row without a turn having
+// ended. Before ct-49533 those events reported nothing at all; now they report
+// a settled status, and this is what keeps that status from reading as a
+// finished turn.
+describe("needs-input check — a session boundary is not a completion", () => {
+  test("a resume neither chimes nor claims the dedupe key", async () => {
+    const { ctx, tables } = settledIdleWorld({ session: { agent_status_boundary: true } });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+
+    expect(res).toEqual({ notified: false, reason: "session_boundary" });
+    expect(tables.notifications.length).toBe(0);
+    expect(tables.push_outbox ?? []).toEqual([]);
+    // Leaving the key unwritten is the point: a key here would read as "this
+    // episode was already announced" and swallow the real settle below.
+    expect(tables.conversations[0].needs_input_notified_key).toBeUndefined();
+  });
+
+  test("the real turn that follows a resume still announces", async () => {
+    const { ctx, tables } = settledIdleWorld({ session: { agent_status_boundary: true } });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    // The user types, the agent works and stops. The hook's next write clears
+    // the boundary claim, because the flag describes one settle only.
+    await ctx.db.patch("ms1", { agent_status_boundary: undefined });
+
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(true);
+    expect(tables.notifications.length).toBe(1);
+    expect(tables.conversations[0].needs_input_notified_key).toBe("5:idle");
+  });
+
+  test("a boundary never un-stashes a hidden row", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111 },
+      session: { agent_status_boundary: true },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("session_boundary");
+    expect(tables.conversations[0].inbox_stashed_at).toBe(111);
+  });
+});

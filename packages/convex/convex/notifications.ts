@@ -652,6 +652,9 @@ export async function performNeedsInputCheck(
   );
   const daemonAlive = agentStatus === "stopped" ? false : heartbeatFresh;
   const hasPending = !!conv.has_pending_messages;
+  // The settle's own fact, alongside the status: it came from a lifecycle
+  // event (a resume, a clear, a manual compact), not from a turn ending.
+  const boundary = session?.agent_status_boundary === true;
 
   const lastMsg = await ctx.db
     .query("messages")
@@ -731,7 +734,22 @@ export async function performNeedsInputCheck(
     armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
     declaredStatus: conv.thread_state_status ?? null,
+    sessionBoundary: boundary,
   });
+
+  // A SESSION BOUNDARY — a resume, a clear, or a manual /compact landing the
+  // pane at an idle prompt — settles the row with no turn behind it. Nothing
+  // completed, so nothing is announced: no chime, no unstash, and above all no
+  // needs_input_notified_key. That last one is why the gate sits HERE rather
+  // than beside the chime: the key names the waiting episode this check
+  // covered, and a boundary writing it would read as "already announced" and
+  // swallow the real settle that follows at the same message count. Returning
+  // first is what keeps the key an identity for real settles only (ct-49533).
+  //
+  // A boundary write does not schedule this check at all, so this is normally
+  // unreachable; a check scheduled by another path (the AskUserQuestion
+  // recheck in messages.ts) can still land on one.
+  if (boundary) return { notified: false, reason: "session_boundary" };
 
   // ── The stall rule ─────────────────────────────────────────────────────────
   // Only the HARD kinds count as a stall: the machine cannot proceed (open
@@ -786,6 +804,11 @@ export async function performNeedsInputCheck(
   // the genuinely-waiting kinds.
   if (kind === "stopped" || kind === "unresponsive") return { notified: false, reason: "dead" };
 
+  // The waiting episode's identity, and only a REAL settle ever reaches it —
+  // the boundary return above is what keeps it that way (ct-49533). The key
+  // stays this exact shape because the daemon's own permission push writes it
+  // too (notifySession, always for a real settle) and the two must match for
+  // that stand-down to work.
   const key = `${conv.message_count}:${kind}`;
   if (conv.needs_input_notified_key === key) return { notified: false, reason: "dup" };
 

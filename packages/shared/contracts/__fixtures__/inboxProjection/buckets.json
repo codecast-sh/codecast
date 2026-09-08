@@ -147,6 +147,25 @@
       "settle_verdict_at": "E-30m"
     },
     {
+      "_id": "boundary_keeps_done",
+      "status": "active",
+      "updated_at": "E-9m",
+      "message_count": 5,
+      "agent_status": "idle",
+      "agent_status_boundary": true,
+      "is_idle": true,
+      "thread_state_status": "done"
+    },
+    {
+      "_id": "boundary_bare",
+      "status": "active",
+      "updated_at": "E-9m",
+      "message_count": 5,
+      "agent_status": "idle",
+      "agent_status_boundary": true,
+      "is_idle": true
+    },
+    {
       "_id": "declared_blocked",
       "status": "active",
       "updated_at": "E-17m",
@@ -455,8 +474,8 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 20,
-        "done": 3,
+        "needs_input": 21,
+        "done": 4,
         "dormant": 7,
         "working": 4,
         "idle": 0,
@@ -480,7 +499,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "98275b7d9cef8cdb",
+    "set_digest": "aeeabde84900a34e",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -510,6 +529,16 @@
       "blankz50000000000000000000000000": [
         "new",
         "idle",
+        false
+      ],
+      "boundarybarez1200000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "boundarykeepsdonez17000000000000": [
+        "done",
+        "done",
         false
       ],
       "completedcontentz160000000000000": [

@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isSafeStatusSessionId } from "./daemon.js";
+import { isSafeStatusSessionId, normalizeHookStatus } from "./daemon.js";
 
 const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "daemon.ts"), "utf8");
 
@@ -66,5 +66,34 @@ describe("hook status session ids", () => {
     const chainAt = src.indexOf("agentStatusWriteChain = agentStatusWriteChain");
     expect(chainAt).toBeGreaterThan(-1);
     expect(src.indexOf("writeFile(path.join(AGENT_STATUS_DIR")).toBeGreaterThan(chainAt);
+  });
+});
+
+// The hook builds one dict of extras, urlencodes it for the push and writes the
+// same dict to the fallback file, so both transports deliver strings. Every
+// reader coerces through this one function (ct-49533).
+describe("hook status wire coercion", () => {
+  const base = { status: "idle" as const, ts: 1_800_000_000 };
+
+  test("the hook's string extras become the typed record", () => {
+    expect(normalizeHookStatus({ ...base, session_boundary: "1", turn_completed_at: "1800000000" }))
+      .toEqual({ ...base, session_boundary: true, turn_completed_at: 1_800_000_000 });
+  });
+
+  test("a record with no extras claims neither", () => {
+    expect(normalizeHookStatus(base)).toEqual({ ...base, session_boundary: undefined, turn_completed_at: undefined });
+  });
+
+  // persistHookStatus writes the coerced record back to the file the watcher
+  // and the boot replay read, so a second pass must not double-convert.
+  test("coercion is idempotent over its own output", () => {
+    const once = normalizeHookStatus({ ...base, session_boundary: "1", turn_completed_at: "1800000000" });
+    expect(normalizeHookStatus(once)).toEqual(once);
+  });
+
+  test("junk claims nothing rather than a boundary at time zero", () => {
+    const out = normalizeHookStatus({ ...base, session_boundary: "0", turn_completed_at: "not-a-number" });
+    expect(out.session_boundary).toBeUndefined();
+    expect(out.turn_completed_at).toBeUndefined();
   });
 });

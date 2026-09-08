@@ -105,6 +105,43 @@ describe("inboxEpoch", () => {
   });
 });
 
+// A resume, a clear or a manual /compact lands the pane at an idle prompt with
+// no turn behind it. The status is honest — the agent really is quiet — but it
+// is not a verdict, and before ct-49533 nothing said so: the hook reported
+// nothing at all, and whatever the daemon later observed was read as the end of
+// a turn that never happened.
+describe("classifyWorkState — a session boundary carries no verdict", () => {
+  const boundary = (partial = {}) => input({ agentStatus: "idle", sessionBoundary: true, ...partial });
+
+  test("a resume does not spend the row's own declaration", () => {
+    // The regression: the boundary status is present, so without the flag the
+    // declaredStatus fallback is skipped and the row falls through to
+    // needs_input — a delivered session re-filed as one waiting on its human.
+    expect(classifyWorkState(boundary({ declaredStatus: "done" }))).toBe("done");
+    expect(classifyWorkState(input({ agentStatus: "idle", declaredStatus: "done" }))).toBe("needs_input");
+  });
+
+  test("a current settle verdict survives a resume", () => {
+    expect(classifyWorkState(boundary({ settleVerdict: "done" }))).toBe("done");
+  });
+
+  test("with nothing declared the ball is still the human's", () => {
+    expect(classifyWorkState(boundary())).toBe("needs_input");
+  });
+
+  test("the flag reaches only the verdict, never a hard block or a live status", () => {
+    expect(classifyWorkState(boundary({ awaitingInput: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "permission_blocked", sessionBoundary: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", sessionBoundary: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "working", isIdle: false, sessionBoundary: true }))).toBe("working");
+  });
+
+  test("a blank session is still idle, and a killed one still killed", () => {
+    expect(classifyWorkState(boundary({ messageCount: 0 }))).toBe("idle");
+    expect(classifyWorkState(boundary({ killed: true }))).toBe("idle");
+  });
+});
+
 describe("classifyWorkState — the pending API error rule", () => {
   test("an unresolved banner on a row with content is needs_input over every live signal", () => {
     expect(classifyWorkState(input({ pendingApiError: true, agentStatus: "working", isIdle: false }))).toBe("needs_input");
@@ -515,7 +552,7 @@ describe("field ownership constants", () => {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
-      "agent_status_updated_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
+      "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -523,9 +560,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 6", () => {
+  test("the caps are the single source and the version is 7", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(6);
+    expect(INBOX_PROJECTION_VERSION).toBe(7);
   });
 });
 

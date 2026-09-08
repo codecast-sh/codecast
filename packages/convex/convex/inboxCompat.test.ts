@@ -107,7 +107,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
     const row = sessions.find((s: any) => s._id === "conversations_a");
     expect(Object.keys(row).sort()).toEqual([
       "_id", "acting_user_id", "active_plan", "active_task", "agent_name", "agent_started_at",
-      "agent_status", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
+      "agent_status", "agent_status_boundary", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
       "awaiting_input", "cloud_placement", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
       "has_pending", "hibernated_at", "icon", "icon_color", "idle_summary", "image_preview_url",
@@ -123,7 +123,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "project_path", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
       "started_at", "status", "subtitle", "team_id", "thread_state", "thread_state_at",
       "thread_state_msg_count", "thread_state_status", "title", "tmux_session",
-      "transcript_revision", "updated_at", "user_id", "user_rest", "workflow_run_activity",
+      "transcript_revision", "turn_completed_at", "updated_at", "user_id", "user_rest", "workflow_run_activity",
       "workflow_run_agents_done", "workflow_run_agents_total", "workflow_run_id",
       "workflow_run_name", "workflow_run_started_at", "workflow_run_status", "worktree_branch",
       "worktree_name",

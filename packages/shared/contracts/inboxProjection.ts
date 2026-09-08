@@ -64,7 +64,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // selection and fold; `as_of` removed from the envelope.
 // v3: an agent-team teammate rides its present lead's bucket and fold
 // (rideLeadPlacements), so the team files as one group everywhere.
-export const INBOX_PROJECTION_VERSION = 6 as const;
+// v7: agent_status_boundary and turn_completed_at join the facts — a settle
+// produced by a resume, a clear or a manual compact carries no verdict of its
+// own, and a settle names the turn it belongs to (ct-49533).
+export const INBOX_PROJECTION_VERSION = 7 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -120,6 +123,8 @@ export interface WorkStateInput {
   declaredStatus?: string | null;
   /** A declared `dormant` that names no wake the system can verify (no armed trigger or loop into the session, no daemon-checked open task) and has been quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
   dormantClaimExpired?: boolean;
+  /** The settled status is a SESSION BOUNDARY — a resume, a clear, or a manual /compact landing at an idle prompt (statusHook's SessionStart / PostCompact, carried as managed_sessions.agent_status_boundary). No turn ended, so the status is evidence that the agent is quiet and never a verdict about work: the row keeps its own declaration instead of the boundary consuming it, and every completion-reactive consumer (the needs-input push, unread) ignores it. */
+  sessionBoundary?: boolean;
   /** conversations.pending_api_error — the latest turn is an unresolved auth / API-error banner; the CLI is parked on the user (or a limit reset). */
   pendingApiError?: boolean;
   sessionError?: boolean;
@@ -174,8 +179,18 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // trigger or loop, checked open work) park in their own right below; a bare
   // promise parks only until DORMANT_CLAIM_TTL_MS of quiet — nothing else can
   // re-derive it, because the re-derivation IS the wake landing.
+  //
+  // A SESSION BOUNDARY is read for the verdict as if the daemon reported
+  // nothing: a resume, a clear or a manual /compact lands the agent at an idle
+  // prompt without a turn having ended, so the settle has no verdict of its
+  // own and must not consume the row's. Only the verdict arms below use it —
+  // the hard blocks, the active set and the dead check keep reading the real
+  // status, which is still an honest observation of the process.
+  // Why: without this a resume overwrote a declared `done` with the settled
+  // fallthrough and filed the session under Needs Input (ct-49533).
+  const verdictStatus = input.sessionBoundary ? undefined : agentStatus;
   const declaredDormant =
-    (agentStatus === "dormant" && !input.dormantClaimExpired) || agentStatus === "waiting";
+    (verdictStatus === "dormant" && !input.dormantClaimExpired) || verdictStatus === "waiting";
   // The daemon carries a declaration as the settle status while the session is
   // live. When there is NO daemon status at all (the managed row aged out, the
   // machine is gone, the row predates the feature), the row's own pinned
@@ -183,7 +198,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // the agent's last word and nothing can have moved since without a daemon.
   // Only `done` rides this fallback: a `dormant` promise with no daemon has no
   // one to deliver its wake, so it stays needs_input (a human must look).
-  const declaredDone = agentStatus === "done" || (!agentStatus && input.declaredStatus === "done");
+  const declaredDone = verdictStatus === "done" || (!verdictStatus && input.declaredStatus === "done");
   // A `done` rest with an armed once trigger into the session parks instead:
   // the follow-up names the next actor (the machine fires in N days), and
   // nothing is left for the human to unblock. Only `done` demotes — a once
@@ -201,7 +216,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
     if (declaredDone) return doneRest();
     // The classifier only ever files DONE: dormancy needs a wake the system
     // can verify, and prose cannot supply one (see idleSummary.SETTLE_VERDICTS).
-    if ((agentStatus === "idle" || !agentStatus) && input.settleVerdict === "done") return doneRest();
+    if ((verdictStatus === "idle" || !verdictStatus) && input.settleVerdict === "done") return doneRest();
     return "needs_input";
   };
 
@@ -833,6 +848,10 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   awaiting_input?: boolean | null;
   last_turn_allows_park?: boolean | null;
   agent_status_updated_at?: number | null;
+  /** The current agent_status is a session boundary, not a turn ending (managed_sessions.agent_status_boundary). */
+  agent_status_boundary?: boolean | null;
+  /** When the lead turn behind the current status ended (managed_sessions.turn_completed_at). Presentation and completion-dedupe only: no bucket or work-state rule reads it. */
+  turn_completed_at?: number | null;
   hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
@@ -1054,6 +1073,7 @@ export function placeProjectableRow(
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,
     dormantClaimExpired: row.agent_status === "dormant" && !verifiedWake && epoch - row.updated_at >= DORMANT_CLAIM_TTL_MS,
+    sessionBoundary: row.agent_status_boundary === true,
     pendingApiError: row.pending_api_error === true,
     sessionError: !!row.session_error,
     dismissed: !!row.inbox_dismissed_at,
@@ -1137,6 +1157,12 @@ export const INBOX_FACT_FIELDS = [
   // the +45s settle, the heartbeat lapse and the trust decay flip on the
   // replica's own clock instead of waiting for a server re-execution.
   "agent_status_updated_at",
+  // The settle's own facts (ct-49533): whether it came from a lifecycle event
+  // rather than a turn ending — which the replica must place exactly as the
+  // server does — and which turn it belongs to, the identity a completion
+  // consumer dedupes on when the status itself stops moving.
+  "agent_status_boundary",
+  "turn_completed_at",
   "hibernated_at",
   "last_heartbeat",
   "last_role_is_user",
