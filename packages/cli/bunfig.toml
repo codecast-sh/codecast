@@ -1,0 +1,20 @@
+# The real-tmux suites run their panes on a tmux server private to the test
+# process (src/test-helpers/isolatedTmuxServer.ts). Establishing that server is
+# a side effect on module import, and it has to happen before daemon.ts is
+# evaluated, because daemon.ts snapshots process.env into SAFE_ENV at module
+# load and every tmux client it spawns thereafter uses that snapshot.
+#
+# A per-file `import "./test-helpers/isolatedTmuxServer.js"` cannot deliver
+# that. It orders the imports within its own file, but `bun test src/` loads
+# every file into ONE process with ONE module registry, and ~74 unit-test files
+# import daemon.js for reasons that have nothing to do with tmux. Whichever of
+# them bun happens to load first decides what SAFE_ENV holds, and when it wins
+# the race the daemon spends the rest of the run talking to the machine's
+# default tmux server while the harness panes live on the private one. Both
+# halves work; they simply never see each other (ct-49907).
+#
+# Preloading is the only hook that runs before every test module, so it is the
+# only place this ordering is decidable. messagingHarness.ts checks at pane
+# spawn that it is in force.
+[test]
+preload = ["./src/test-helpers/isolatedTmuxServer.ts"]
