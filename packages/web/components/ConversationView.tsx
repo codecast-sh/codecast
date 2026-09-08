@@ -172,6 +172,7 @@ import { createProjectFolder, useDirListing } from "../lib/fsBrowse";
 import { findEntityInStore } from "../lib/liveEntities";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
 import { usePendingMessageStatus, usePendingPermissions } from "../hooks/useSyncPendingPermissions";
+import { useAckActiveConversation } from "../hooks/useAckActiveConversation";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
@@ -13490,6 +13491,10 @@ const ConversationViewInner = (
   // a session, so it holds steady for the whole visit. Everything strictly after
   // it arrived while you were away.
   const unreadAnchorAt = useInboxStore((s) => s._seenUpToAt[pendingConvId] ?? 0);
+  // The server-backed read mark, which is a different thing from the divider
+  // above: the divider is where THIS device stopped reading, the ack is what
+  // clears the card's unread dot on every device. Presence-gated inside.
+  useAckActiveConversation(pendingConvId);
   // Upper bound for the "New" divider — the moment you last focused this
   // session (re-stamped on every entry, including window-focus). Messages newer
   // than this arrived while you were here watching and must not be split off.

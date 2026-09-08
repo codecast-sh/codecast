@@ -322,6 +322,19 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     indexes: "_id, channel_id",
   },
+  // Per-session read marks (sessionReads.listMine): where the viewer's
+  // attention stopped in each conversation. Unread is DERIVED from the mark
+  // against the session's own updated_at (shared isSessionUnread), never
+  // stored, so an ack and a new turn cannot disagree. A delta overlay because
+  // the query carries a bounded window of the newest marks; altKey lets the
+  // server row supersede the `sessionread-<id>` stub the optimistic ack wrote.
+  sessionReads: {
+    persistence: { kind: "collection", key: "sessionReads" },
+    localFirst: true,
+    sync: { isDelta: true, altKey: "conversation_id" },
+    indexes: "_id, conversation_id",
+    feeds: ["sessionReads.listMine"],
+  },
   // The server's own per-channel unread numbers (chat.listChannels' rail). A
   // small array, so a meta blob: it is the only honest count for a channel whose
   // messages this client has never loaded, and having it at boot means the rail
@@ -921,6 +934,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   chatMessages: "shared",
   chatReactions: "shared",
   chatReads: "shared",
+  // The viewer's read marks are the same in every window of theirs, and the
+  // ack that clears a card must clear it everywhere at once.
+  sessionReads: "shared",
   chatRail: "shared",
   threadInbox: "shared",
   threadUnread: "shared",

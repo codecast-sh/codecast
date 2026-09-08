@@ -455,11 +455,22 @@ describe("cold-boot injection matrix (real clients)", () => {
         endpoint = await startFakeModelEndpoint();
       });
 
+      // The budget is for the DELETE, not for anything the test is waiting on.
+      // Measured on the codex cell (ct-49852): the tmux kill takes 4-59ms, the
+      // endpoint closes in under 1ms, and `fs.rmSync` of the pane's directories
+      // takes 0.7-5.4s — 25s once with the disk contended. A fresh CODEX_HOME is
+      // why: codex bootstraps ~730MB into it that the tests never use — three
+      // 220MB copies of its own binary under `tmp/arg0/` so it can re-exec under
+      // another argv[0], and a git clone of the plugin marketplace (~2.6k files)
+      // under `.tmp/`. bun's default 5s hook budget sits inside that spread, so
+      // two runs in four failed a delivery that had already passed, on "a
+      // beforeEach/afterEach hook timed out for this test". 60s is an order of
+      // magnitude over the median removal and 2.4x the worst one measured.
       afterEach(() => {
         try { pane?.tearDown(); } catch {}
         pane = null;
         endpoint.close();
-      });
+      }, 60_000);
 
       test("cold boot: a multi-line message starts a turn and lands verbatim", async () => {
         pane = spawnClientPane(client, { endpointUrl: endpoint.url });

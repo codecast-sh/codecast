@@ -7,7 +7,7 @@ import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessage
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { formatSessionUpdateBatch } from "../../shared/contracts/sessionUpdates";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
-import { clientAcceptsBracketedPaste, pasteAndSubmitText, pasteTextIntoPane as pasteTextIntoPaneWith, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
+import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
@@ -130,7 +130,7 @@ function fixture(transport = "tmux", cached = true) {
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, PendingDeliveryHeldError, createDeliveryAdmission,
-    clientAcceptsBracketedPaste, pasteAndSubmitText, pasteTextIntoPaneWith, prepareInjectedContent, PASTE_START, PASTE_END,
+    clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {
       expect(binary).toBe("osascript");
@@ -192,6 +192,7 @@ function fixture(transport = "tmux", cached = true) {
     "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
     "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
     "pasteTextIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
+    "deliverIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
     "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
     "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
     "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",

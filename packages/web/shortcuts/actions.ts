@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
 import { resolvePaletteTarget } from "../lib/paletteTarget";
 
@@ -148,6 +149,16 @@ export function useGlobalShortcutActions() {
     const currentId = focusedId();
     if (currentId) triage.pin(currentId);
   }, [focusedId, triage]));
+
+  // Leave the focused row lit. Deliberately NOT a triage verb: it moves
+  // nothing and advances nothing — the session stays where it is, wearing the
+  // dot, until the next visit acknowledges it.
+  useShortcutAction('session.markUnread', useCallback(() => {
+    const currentId = focusedId();
+    if (!currentId) return;
+    useInboxStore.getState().markSessionUnread(currentId);
+    toast.success("Marked unread");
+  }, [focusedId]));
 
   useShortcutAction('session.stash', useCallback(() => {
     const currentId = focusedId();
