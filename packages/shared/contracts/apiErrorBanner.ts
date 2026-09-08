@@ -51,6 +51,12 @@ const CODEX_ERROR_KIND: Readonly<Record<string, ApiErrorBannerKind>> = {
   // the burst on the fresh account, so it must never be read as "limit".
   rate_limit_exceeded: "throttle",
   [CODEX_SAFETY_ERROR_CODE]: "safety",
+  // CyberPolicy sits beside MisalignmentPolicyViolation in the same
+  // CodexErrorInfo enum and stops the turn the same way: the provider refused
+  // the request as possible security work. No retry and no account switch
+  // clears it, which is exactly what kind "safety" means, so these rows earn
+  // the badge and SAFETY_BLOCK_HINT instead of a silent "error".
+  cyber_policy: "safety",
 };
 
 // codex spells the enum snake_case on the wire; some transports carry the Rust
@@ -59,15 +65,28 @@ function normalizeCodexErrorCode(raw: string): string {
   return raw.trim().replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
 
+function carriedCodexErrorCode(error: CodexTurnError) {
+  return error.codexErrorInfo ?? error.codex_error_info ?? error.code;
+}
+
+/** The normalized code codex carried, or null when it carried none (or carried
+ *  a shape that is not a code). More than one code now means kind "safety", so
+ *  a caller that NAMES the stop has to read the code that actually fired
+ *  rather than assume the one safety code there used to be. */
+export function codexErrorCode(error: CodexTurnError | null | undefined): string | null {
+  const raw = error ? carriedCodexErrorCode(error) : undefined;
+  return typeof raw === "string" ? normalizeCodexErrorCode(raw) : null;
+}
+
 /** The banner kind a codex turn error means, or null when codex reported
  *  something we have no cure for (the caller then falls back to the marked
  *  client-error banner, which classifies off the provider text). */
 export function codexErrorKind(error: CodexTurnError | null | undefined): ApiErrorBannerKind | null {
   if (!error) return null;
-  const raw = error.codexErrorInfo ?? error.codex_error_info ?? error.code;
+  const raw = carriedCodexErrorCode(error);
   // A carried code is the whole answer. Never fall back to prose when codex
   // said what happened — not even for a code we do not map.
-  if (raw != null) return typeof raw === "string" ? CODEX_ERROR_KIND[normalizeCodexErrorCode(raw)] ?? null : null;
+  if (raw != null) return CODEX_ERROR_KIND[codexErrorCode(error) ?? ""] ?? null;
   return error.message?.trim() === CODEX_SAFETY_MESSAGE ? "safety" : null;
 }
 

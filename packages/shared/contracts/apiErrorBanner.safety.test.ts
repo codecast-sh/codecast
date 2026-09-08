@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS, SAFETY_BANNER_PREFIX, classifyApiErrorBanner, isCodexSafetyError, withSafetyBlock } from "./apiErrorBanner";
+import { BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS, SAFETY_BANNER_PREFIX, blockedKindsForAgent, classifyApiErrorBanner, codexErrorKind, isCodexSafetyError, withSafetyBlock } from "./apiErrorBanner";
 
 const message = "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
 
@@ -34,5 +34,37 @@ describe("Codex safety stops", () => {
     expect(withSafetyBlock(normalized)).toBe(normalized);
     const healthy = { session_error: "Connection refused", pending_api_error: false };
     expect(withSafetyBlock(healthy)).toBe(healthy);
+  });
+});
+
+// CyberPolicy and MisalignmentPolicyViolation are neighbours in CodexErrorInfo,
+// and the binary carries their sentences side by side too. Both wordings below
+// are real: the first out of the app-server binary's string table, the second
+// off the two production rows that filed this bug. They describe ONE code, and
+// they do not match each other — which is the whole argument for reading the
+// code instead of the prose.
+const CYBER_POLICY_WORDINGS = [
+  "This request has been flagged for possible cybersecurity risk.",
+  "Turn stopped: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request.",
+];
+
+describe("Codex cyber policy stops", () => {
+  test.each(["cyber_policy", "cyberPolicy"])("the %s code is a safety stop whatever the wording", code => {
+    for (const message of CYBER_POLICY_WORDINGS) {
+      expect(codexErrorKind({ codex_error_info: code, message })).toBe("safety");
+      expect(isCodexSafetyError({ codexErrorInfo: code, message })).toBe(true);
+      // The prose alone says nothing to the classifier. Only the code does.
+      expect(classifyApiErrorBanner(message)).toBeNull();
+    }
+  });
+
+  test("it parks the session but is never read as a limit or a throttle", () => {
+    const kind = codexErrorKind({ codex_error_info: "cyber_policy" });
+    expect(kind).toBe("safety");
+    // Blocked, so the row earns the badge and the hint...
+    expect(blockedKindsForAgent("codex").has(kind!)).toBe(true);
+    // ...but no continue and no account switch is offered, because neither
+    // clears a policy stop.
+    expect(CONTINUE_BANNER_KINDS).not.toContain(kind);
   });
 });

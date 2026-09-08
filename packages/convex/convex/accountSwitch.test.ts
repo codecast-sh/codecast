@@ -37,6 +37,7 @@ import {
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_BATCH,
 } from "./ccAccountsShared";
+import { codexErrorKind } from "@codecast/shared/contracts";
 
 describe("isBlockedConversation", () => {
   const base = { pending_api_error: true, pending_api_error_kind: "limit", agent_type: "claude_code" };
@@ -1276,5 +1277,26 @@ describe("account switch restart command", () => {
     expect(args.conversation_ids).toEqual([conversationId]);
     expect(args.session_ids).toEqual({ [conversationId]: "session-1" });
     expect(args.continue_blocked).toBe(true);
+  });
+});
+
+describe("Codex cyber policy parks (ct-49794)", () => {
+  // Start from the wire code and let the classifier say what kind it is, so
+  // this covers the mapping rather than a kind typed in by hand.
+  const kind = codexErrorKind({ codex_error_info: "cyber_policy" });
+  const conv = { pending_api_error: true, pending_api_error_kind: kind ?? undefined, agent_type: "codex" };
+
+  test("parks the row so it earns the badge and the hint", () => {
+    expect(kind).toBe("safety");
+    expect(isBlockedConversation(conv)).toBe(true);
+  });
+
+  test("no revive and no account switch ever acts on it", () => {
+    // A policy stop has no cure, so a fleet revive leaves it alone...
+    expect(actedBlockedConversations([conv], true)).toEqual([]);
+    // ...and the auto switch only ever reads kind "limit" (limitBlocked in
+    // accountSwitch.ts), so rotating accounts on this is impossible.
+    expect(kind).not.toBe("limit");
+    expect(resumePinFor({ ...conv, cc_account: "work@example.com" }, undefined, Date.now())).toBe("work@example.com");
   });
 });
