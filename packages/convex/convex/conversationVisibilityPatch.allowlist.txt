@@ -1,0 +1,8 @@
+# raw conversation visibility patch: the files that still break this rule.
+#
+# THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
+# fix. Call patchConversationVisibility from lib/access.ts instead — it patches the row and rewrites the workspace key of every linked work item.
+#
+# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+#   cd packages/convex && RATCHET_WRITE=prune bun test convex/conversationVisibilityPatch.ratchet.test.ts
+conversations.ts 2  # backfillTeamIds + backfillUserTeamIds stamp team_id without recomputing linked workspace keys

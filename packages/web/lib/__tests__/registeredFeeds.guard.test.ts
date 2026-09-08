@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { walkSources } from "./sourceWalk";
+import { checkRatchet, codeOnly } from "@codecast/shared/ratchet";
 import { join } from "node:path";
 import { REGISTERED_FEEDS } from "../../store/clientSyncRegistry";
 
-// LOCAL-FIRST LEAKAGE GUARD.
+// LOCAL-FIRST LEAKAGE RATCHET.
 //
 // A store collection registers the Convex queries that feed it
 // (clientSyncRegistry `feeds`). From then on, a component or page that
@@ -17,43 +16,51 @@ import { REGISTERED_FEEDS } from "../../store/clientSyncRegistry";
 //
 // If this fails on new code, the fix is to read the store (useTrackedStore /
 // useWorkspaceCollection / a selector) and mount the feeder hook — not to
-// widen the allowlist. The allowlist is for the feeder machinery itself.
+// widen the allowlist. The allowlist is for the feeder machinery itself, the
+// count may only fall, and an entry whose file stopped subscribing fails here
+// too: this guard carried a line for components/DashboardSyncEffects.tsx long
+// after that file was deleted.
 
 const ROOT = join(import.meta.dir, "..", "..");
-const DIRS = ["app", "components"];
+const ALLOWLIST = join(import.meta.dir, "registeredFeeds.allowlist.txt");
 
-const ALLOWED = new Map<string, string>([
-  ["components/DashboardSyncEffects.tsx", "mounts the app-wide feeders"],
-]);
+/** `api.plans.webList`, `(api as any).plans.webList`, `api["plans"].webList`. */
+const feedPattern = (feed: string) =>
+  new RegExp(String.raw`\bapi\)?(?:\.|\[["'])` + feed.replace(".", String.raw`(?:["']\])?\.`) + String.raw`\b`);
 
-const walk = (dir: string) => walkSources(dir);
+/** How many files subscribe to a registered feed directly. May only fall. */
+const PIN = 0;
+
+const feeds = Object.keys(REGISTERED_FEEDS);
+const patterns = feeds.map(feedPattern);
+
+const result = checkRatchet({
+  name: "direct subscription to a registered store feed",
+  root: ROOT,
+  dirs: ["app", "components"],
+  ignoreDirs: ["__tests__"],
+  exempt: (rel) => /\.test\.tsx?$/.test(rel),
+  count: (src) =>
+    codeOnly(src)
+      .split("\n")
+      // A type reference (`FunctionReturnType<typeof api.x.y>`) names the
+      // query without subscribing to it.
+      .filter((line) => !/\btypeof\s+api\b/.test(line))
+      .reduce((hits, line) => hits + (patterns.some((re) => re.test(line)) ? 1 : 0), 0),
+  allowlist: ALLOWLIST,
+  pin: PIN,
+  fix: "Read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection) and mount the feeder hook in hooks/.",
+  pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/registeredFeeds.guard.test.ts",
+  minScanned: 400,
+});
 
 describe("registered feeds are subscribed only by feeder hooks", () => {
-  test("no component or page subscribes directly to a query registered as a store feed", () => {
-    const feeds = Object.keys(REGISTERED_FEEDS);
+  test("the registry declares feeds at all", () => {
+    // A registry read that returned nothing would make the scan vacuous.
     expect(feeds.length).toBeGreaterThan(0);
-    // `api.plans.webList` / `(api as any).plans.webList` / `api["plans"].webList`
-    const patterns = feeds.map((f) => ({
-      feed: f,
-      re: new RegExp(String.raw`\bapi\)?(?:\.|\[["'])` + f.replace(".", String.raw`(?:["']\])?\.`) + String.raw`\b`),
-    }));
-    const offenders: string[] = [];
-    for (const dir of DIRS) {
-      for (const file of walk(join(ROOT, dir))) {
-        const rel = file.slice(ROOT.length + 1);
-        if (ALLOWED.has(rel)) continue;
-        const src = readFileSync(file, "utf8");
-        src.split("\n").forEach((line, i) => {
-          // A type reference (`FunctionReturnType<typeof api.x.y>`) and a
-          // comment name the query without subscribing to it.
-          const t = line.trim();
-          if (t.startsWith("//") || t.startsWith("*") || /\btypeof\s+api\b/.test(line)) return;
-          for (const { feed, re } of patterns) {
-            if (re.test(line)) offenders.push(`${rel}:${i + 1} subscribes to ${feed} (feeds store.${REGISTERED_FEEDS[feed]})`);
-          }
-        });
-      }
-    }
-    expect(offenders).toEqual([]);
-  }, 120_000); // IO-bound source walk; the box is often under heavy test load
+  });
+
+  test("no component or page subscribes directly to a query registered as a store feed", () => {
+    expect(result.problems).toEqual([]);
+  }, 120_000);
 });

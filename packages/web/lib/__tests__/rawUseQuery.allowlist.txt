@@ -1,0 +1,51 @@
+# raw useQuery outside hooks: the files that still break this rule.
+#
+# THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
+# fix. Mount the feeder in hooks/ and read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection); if the query only enriches a surface that can paint without it, use useQueryNoThrow.
+#
+# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+#   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/rawUseQuery.ratchet.test.ts
+app/admin/daemon-logs/page.tsx 4
+app/auth/cli/page.tsx 1
+app/calls/page.tsx 1
+app/conversation/[id]/ConversationPageClient.tsx 1
+app/explore/page.tsx 1
+app/join/[code]/page.tsx 2
+app/notifications/page.tsx 1
+app/plans/[id]/page.tsx 1
+app/sessions/page.tsx 1
+app/settings/profile/page.tsx 1
+app/settings/team/join/page.tsx 1
+app/share/[token]/SharedConversationClient.tsx 1
+app/share/doc/[token]/SharedDocClient.tsx 1
+app/share/message/[token]/SharedMessageClient.tsx 1
+app/share/plan/[token]/SharedPlanClient.tsx 1
+app/team/[username]/page.tsx 8
+app/team/activity/page.tsx 1
+app/team/charts/page.tsx 3
+app/team/page.tsx 2
+app/u/[username]/page.tsx 4
+components/ActivityFeed.tsx 1
+components/BrowserHandoffToast.tsx 1
+components/CollabComposer.tsx 2
+components/CommandPalette.tsx 1
+components/ConfigEditor.tsx 2
+components/ConversationDiffLayout.tsx 1
+components/ConversationTree.tsx 1
+components/ConversationView.tsx 13
+components/CreateTaskModal.tsx 1
+components/DesktopProvider.tsx 1
+components/DocEmbed.tsx 1
+components/ForkTreePanel.tsx 1
+components/GlobalSessionPanel.tsx 1
+components/MessageBrowserPopover.tsx 3
+components/NotificationBell.tsx 1
+components/OrchestrationDashboard.tsx 5
+components/PlanContextPanel.tsx 1
+components/PlanDetailPanel.tsx 1
+components/PlanTaskHoverCard.tsx 1
+components/SetupPromptBanner.tsx 1
+components/Sidebar.tsx 1
+components/TeamAvatarBar.tsx 1
+components/WatchButton.tsx 1
+components/editor/CollabDocEditor.tsx 2
