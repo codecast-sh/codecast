@@ -14,10 +14,11 @@
 
 import type { Command } from "commander";
 import open from "open";
-import { apiPost, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
 import { formatRelativeTime } from "./formatter.js";
 import { c, fmt } from "./colors.js";
 import { APP_DESCRIPTORS, type AppId, type AppConnectionStatus } from "@codecast/shared/contracts";
+import { commandGroup } from "./commandGroups.js";
 
 export interface IntegrationsDeps extends PublishDeps {
   /** index.ts owns project lookup by id, short id or title substring. */
@@ -89,7 +90,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
   const integrations = program
     .command("integrations")
     .alias("integration")
-    .description("Connect Slack, GitHub, Linear, Gmail and Notion; sync issues into tasks")
+    .description(commandGroup("integrations").description)
     .showHelpAfterError(true);
 
   integrations

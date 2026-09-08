@@ -10,16 +10,17 @@
 // index.ts the way publish.ts receives them.
 
 import type { Command } from "commander";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
 import { registerCapStatus } from "./status.js";
 import { registerCapLs } from "./ls.js";
 import { registerCapShow } from "./show.js";
 import { registerCapEquip } from "./equip.js";
+import { commandGroup } from "../commandGroups.js";
 
 export function registerCapabilityCommand(program: Command, deps: PublishDeps): void {
   const cap = program
     .command("cap")
-    .description("Capabilities across your machines: skills, plugins, MCP servers, hooks");
+    .description(commandGroup("cap").description);
   registerCapStatus(cap, deps);
   registerCapLs(cap, deps);
   registerCapShow(cap, deps);
