@@ -15,9 +15,15 @@
  * Concurrency: claim mutates pool state under a simple in-process lock
  * (suitable for single-daemon use). For multi-daemon coordination we'd
  * need a file-based lock; out of scope for v1.
+ *
+ * Nothing here may block the event loop. The maintainer runs these functions
+ * on a timer inside the daemon, where one synchronous `git worktree add` on a
+ * large repo freezes delivery, injection and the heartbeat for its whole
+ * duration (daemon.loopBudget.guard.test.ts). Every child process and every
+ * file read below is async for that reason.
  */
 
-import { execSync } from "../../proc.js";
+import { execFileAsync } from "../../proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -27,14 +33,18 @@ import {
 } from "../lifecycle.js";
 import { deleteState, readState, writeState } from "../contract.js";
 import {
+  POOL_MAX_AGE_MS,
   initPool,
+  markStaleByAge,
   markStaleByHead,
   readPoolState,
+  resizePool,
   transitionSlot,
   writePoolState,
   type PoolSlot,
   type PoolState,
 } from "./state.js";
+import { POOL_MAX_SLOTS, clearDemand } from "./demand.js";
 import type { Workspace, WorkspaceState } from "../types.js";
 
 const WORKTREES_DIR = ".codecast/worktrees";
@@ -53,6 +63,15 @@ async function withClaimLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --------------------------------------------------------------------------
 // Public API
 // --------------------------------------------------------------------------
@@ -60,6 +79,8 @@ async function withClaimLock<T>(fn: () => Promise<T>): Promise<T> {
 export interface MaintainOptions {
   /** Skip in-flight warming if true; useful for tests that want a snapshot. */
   skipIfWarming?: boolean;
+  /** Override the max-age staleness bar. Default POOL_MAX_AGE_MS. */
+  maxAgeMs?: number;
 }
 
 /**
@@ -70,18 +91,24 @@ export interface MaintainOptions {
  */
 export async function maintainPool(
   repoRoot: string,
-  size: number,
+  requestedSize: number,
   opts: MaintainOptions = {},
 ): Promise<PoolState> {
+  // Clamped here rather than only in the callers: every warm slot is a full
+  // checkout of the repo, and this is the one function that builds them, so
+  // the ceiling belongs where nothing can route around it (ct-49540).
+  const size = Math.max(0, Math.min(Math.trunc(requestedSize) || 0, POOL_MAX_SLOTS));
   let state = readPoolState(repoRoot);
-  if (!state || state.size !== size) {
-    state = initPool(size);
-    writePoolState(repoRoot, state);
+  if (!state) {
+    state = initPool(0);
   }
+  resizePool(state, size);
+  writePoolState(repoRoot, state);
 
-  // Refresh stale-by-head info before scheduling new warming work.
-  const { headSha, lockHash } = currentRepoFingerprint(repoRoot);
+  // Refresh staleness before scheduling new warming work.
+  const { headSha, lockHash } = await currentRepoFingerprint(repoRoot);
   markStaleByHead(state, headSha, lockHash);
+  markStaleByAge(state, opts.maxAgeMs ?? POOL_MAX_AGE_MS);
 
   // Crash recovery: a slot left "warming" with no live worker is either
   // (a) actually complete on disk (workspace state ready) — promote to ready
@@ -94,7 +121,7 @@ export async function maintainPool(
       continue;
     }
     const wsState = readState(repoRoot, slot.workspaceName);
-    if (wsState && wsState.state === "ready" && fs.existsSync(wsState.path)) {
+    if (wsState && wsState.state === "ready" && (await pathExists(wsState.path))) {
       // Resume — slot completed on a previous run; mark ready.
       transitionSlot(state, slot.slotId, "ready", {
         headSha,
@@ -106,13 +133,16 @@ export async function maintainPool(
     }
   }
 
-  // Recycle stale slots back to empty.
+  // Recycle stale slots back to empty, then drop any the target no longer
+  // wants (resizePool leaves surplus slots stale so they get torn down here
+  // before they disappear from the state file).
   for (const slot of state.slots) {
     if (slot.state === "stale") {
       await teardownSlotArtifacts(repoRoot, slot);
       transitionSlot(state, slot.slotId, "empty");
     }
   }
+  resizePool(state, size);
   writePoolState(repoRoot, state);
 
   // Schedule warming for empty slots, up to `size`.
@@ -137,6 +167,30 @@ export async function maintainPool(
     }
   }
   return readPoolState(repoRoot) ?? state;
+}
+
+/**
+ * Tear down every slot and forget the pool. `cast ws pool drain` and the
+ * teardown path use this to give the disk back without waiting for staleness.
+ */
+export async function drainPool(repoRoot: string): Promise<number> {
+  return withClaimLock(async () => {
+    const state = readPoolState(repoRoot);
+    if (!state) {
+      clearDemand(repoRoot);
+      return 0;
+    }
+    let removed = 0;
+    for (const slot of state.slots) {
+      if (!slot.workspaceName) continue;
+      await teardownSlotArtifacts(repoRoot, slot);
+      removed++;
+    }
+    const { deletePoolState } = await import("./state.js");
+    deletePoolState(repoRoot);
+    clearDemand(repoRoot);
+    return removed;
+  });
 }
 
 /**
@@ -234,7 +288,7 @@ async function warmSlot(repoRoot: string, slotId: string): Promise<void> {
     throw new Error(`pool slot ${slotId}: workspace not ready`);
   }
   // Record fingerprint and transition.
-  const { headSha, lockHash } = currentRepoFingerprint(repoRoot);
+  const { headSha, lockHash } = await currentRepoFingerprint(repoRoot);
   const state = readPoolState(repoRoot);
   if (!state) return;
   const slot = state.slots.find((s) => s.slotId === slotId);
@@ -253,48 +307,48 @@ interface RepoFingerprint {
   lockHash: string;
 }
 
-export function currentRepoFingerprint(repoRoot: string): RepoFingerprint {
+const LOCKFILE_CANDIDATES = [
+  "bun.lock",
+  "bun.lockb",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "package-lock.json",
+  "uv.lock",
+  "poetry.lock",
+  "Pipfile.lock",
+  "Cargo.lock",
+  "go.sum",
+] as const;
+
+export async function currentRepoFingerprint(repoRoot: string): Promise<RepoFingerprint> {
   let headSha = "";
   try {
-    headSha = execSync("git rev-parse HEAD", {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    });
+    headSha = String(stdout).trim();
   } catch {
     /* leave empty */
   }
 
   // Hash the contents of the first lockfile we find.
-  const lockCandidates = [
-    "bun.lock",
-    "bun.lockb",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "package-lock.json",
-    "uv.lock",
-    "poetry.lock",
-    "Pipfile.lock",
-    "Cargo.lock",
-    "go.sum",
-  ];
   let lockHash = "";
-  for (const c of lockCandidates) {
-    const p = path.join(repoRoot, c);
-    if (fs.existsSync(p)) {
-      try {
-        lockHash = crypto
-          .createHash("sha256")
-          .update(fs.readFileSync(p))
-          .digest("hex")
-          .slice(0, 16);
-        break;
-      } catch {
-        /* skip */
-      }
+  for (const candidate of LOCKFILE_CANDIDATES) {
+    try {
+      const body = await fs.promises.readFile(path.join(repoRoot, candidate));
+      lockHash = crypto.createHash("sha256").update(body).digest("hex").slice(0, 16);
+      break;
+    } catch {
+      /* absent or unreadable — try the next one */
     }
   }
   return { headSha, lockHash };
+}
+
+/** Lockfiles worth watching for change. Shared with the maintainer's watcher. */
+export function lockfileNames(): readonly string[] {
+  return LOCKFILE_CANDIDATES;
 }
 
 // --------------------------------------------------------------------------
@@ -312,24 +366,18 @@ async function renameWorkspace(
   const fromPath = fromState.path;
   const toPath = path.join(repoRoot, WORKTREES_DIR, toName);
 
-  if (fs.existsSync(toPath)) {
+  if (await pathExists(toPath)) {
     throw new Error(`target worktree path already exists: ${toPath}`);
   }
 
   // 1. Move the worktree
-  execSync(`git worktree move ${JSON.stringify(fromPath)} ${JSON.stringify(toPath)}`, {
-    cwd: repoRoot,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
+  await execFileAsync("git", ["worktree", "move", fromPath, toPath], { cwd: repoRoot });
 
   // 2. Rename the branch (inside the new worktree)
   const fromBranch = fromState.branch;
   const toBranch = `codecast/${toName}`;
   if (fromBranch !== toBranch) {
-    execSync(`git branch -m ${fromBranch} ${toBranch}`, {
-      cwd: toPath,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    await execFileAsync("git", ["branch", "-m", fromBranch, toBranch], { cwd: toPath });
   }
 
   // 3. Move the state directory and update its contents
@@ -360,14 +408,19 @@ async function teardownSlotArtifacts(
   const state = readState(repoRoot, slot.workspaceName);
   if (!state) return;
   try {
-    execSync(`git worktree remove --force ${JSON.stringify(state.path)}`, {
+    await execFileAsync("git", ["worktree", "remove", "--force", state.path], {
       cwd: repoRoot,
-      stdio: ["ignore", "ignore", "pipe"],
     });
   } catch {
-    if (fs.existsSync(state.path)) {
-      fs.rmSync(state.path, { recursive: true, force: true });
-    }
+    await fs.promises.rm(state.path, { recursive: true, force: true });
   }
+  // Why the branch goes too: slot ids repeat (pool-0 is warmed again and
+  // again), and `git worktree remove` keeps the branch. The next warm would
+  // then fail to create codecast/pool-0, fall back to attaching the surviving
+  // branch, and check the slot out at the OLD tip — while the pool records the
+  // repo's CURRENT head as its fingerprint. That is a stale tree the staleness
+  // check cannot see, handed to an agent as fresh (ct-49540).
+  await execFileAsync("git", ["branch", "-D", state.branch], { cwd: repoRoot })
+    .catch(() => {});
   deleteState(repoRoot, slot.workspaceName);
 }

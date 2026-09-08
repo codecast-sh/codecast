@@ -1,7 +1,8 @@
 /**
  * `cast workspace` CLI subcommand wiring.
  *
- * Seven subcommands: init, acquire, path, status, heal, destroy, ls.
+ * Subcommands: init, acquire, path, status, heal, destroy, ls, and the
+ * `pool` group (status, warm, drain) for the warm worktree pool.
  * Registered via registerWorkspaceCommand(program) called from index.ts.
  */
 
@@ -216,6 +217,8 @@ export function registerWorkspaceCommand(program: Command): void {
       console.log(`destroyed: ${name}`);
     });
 
+  registerPoolCommands(ws);
+
   // -----------------------------------------------------------------------
   // cast workspace ls
   // -----------------------------------------------------------------------
@@ -237,6 +240,86 @@ export function registerWorkspaceCommand(program: Command): void {
           `${w.name.padEnd(nameLen)}  ${w.state.padEnd(10)}  ${w.branch.padEnd(20)}  ${w.path}`,
         );
       }
+    });
+}
+
+/**
+ * `cast ws pool status | warm | drain` — the warm worktree pool.
+ *
+ * The daemon maintains this pool on its own, sized by how often the repo has
+ * been creating workspaces. These verbs exist to see what it holds, to force a
+ * warm before a burst you already know is coming, and to give the disk back.
+ */
+function registerPoolCommands(ws: Command): void {
+  const pool = ws
+    .command("pool")
+    .description("Inspect and drive the warm worktree pool for this repo");
+
+  pool
+    .command("status")
+    .description("Show pool slots, their staleness fingerprint, and the size recent creates justify")
+    .option("--json", "Print the pool state as one JSON line")
+    .action(async (opts: { json?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      const { readPoolState } = await import("./pool/state.js");
+      const { readDemand, desiredPoolSize, POOL_MAX_SLOTS } = await import("./pool/demand.js");
+      const state = readPoolState(repoRoot);
+      const creates = readDemand(repoRoot);
+      const desired = desiredPoolSize(creates);
+      if (opts.json) {
+        console.log(JSON.stringify({ repoRoot, desired, cap: POOL_MAX_SLOTS, creates, state }));
+        return;
+      }
+      const ready = state?.slots.filter((s) => s.state === "ready").length ?? 0;
+      console.log(`pool: ${ready} ready / ${state?.slots.length ?? 0} slots (target ${desired}, cap ${POOL_MAX_SLOTS})`);
+      console.log(`creates in the burst window: ${creates.length}`);
+      if (!state || state.slots.length === 0) {
+        console.log("(no slots)");
+        return;
+      }
+      console.log(`${"SLOT".padEnd(8)}  ${"STATE".padEnd(8)}  ${"HEAD".padEnd(9)}  UPDATED`);
+      for (const s of state.slots) {
+        const head = (s.headSha ?? "-").slice(0, 8);
+        console.log(`${s.slotId.padEnd(8)}  ${s.state.padEnd(8)}  ${head.padEnd(9)}  ${s.updatedAt}${s.lastError ? `  (${s.lastError})` : ""}`);
+      }
+    });
+
+  pool
+    .command("warm")
+    .description("Run one maintenance pass now: recycle stale slots and start warming empty ones")
+    .option("--size <n>", "Slots to hold, up to the cap (default: what recent creates justify)")
+    .option("--wait", "Block until a slot is ready")
+    .option("--timeout <ms>", "How long --wait waits", "600000")
+    .action(async (opts: { size?: string; wait?: boolean; timeout: string }) => {
+      const repoRoot = findRepoRoot();
+      const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+      const { desiredPoolSizeForRepo, POOL_MAX_SLOTS } = await import("./pool/demand.js");
+      const requested = opts.size === undefined ? desiredPoolSizeForRepo(repoRoot) : Number(opts.size);
+      if (!Number.isInteger(requested) || requested < 0) {
+        console.error(`--size must be a non-negative integer, got '${opts.size}'`);
+        process.exit(1);
+      }
+      const size = Math.min(requested, POOL_MAX_SLOTS);
+      const state = await maintainPool(repoRoot, size);
+      console.log(`pool: ${size} slot(s) targeted; ${state.slots.filter((s) => s.state === "warming").length} warming, ${state.slots.filter((s) => s.state === "ready").length} ready`);
+      if (!opts.wait) return;
+      if (size === 0) return;
+      const ready = await waitForReadySlot(repoRoot, { timeoutMs: Number(opts.timeout) });
+      if (!ready) {
+        console.error("timed out waiting for a ready slot");
+        process.exit(2);
+      }
+      console.log(`ready: ${ready.slotId}`);
+    });
+
+  pool
+    .command("drain")
+    .description("Tear down every pool slot and forget the pool (gives the disk back)")
+    .action(async () => {
+      const repoRoot = findRepoRoot();
+      const { drainPool } = await import("./pool/manager.js");
+      const removed = await drainPool(repoRoot);
+      console.log(`drained: ${removed} slot(s) removed`);
     });
 }
 

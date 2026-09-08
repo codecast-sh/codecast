@@ -114,6 +114,12 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     }
 
     if (!opts.skipPool && !opts.branch && !existing && !inputRoot) {
+      // Why record BEFORE claiming: the demand file is what sizes the pool and
+      // what the daemon's maintainer watches, so writing it here is what
+      // re-arms the slot this create is about to consume — and only when the
+      // creates around it look like a burst (ct-49540).
+      const { recordWorkspaceCreate } = await import("./pool/demand.js");
+      await recordWorkspaceCreate(repoRoot).catch(() => {});
       const { claimFromPool } = await import("./pool/manager.js");
       const claimed = await claimFromPool(repoRoot, name);
       if (claimed) {
@@ -172,7 +178,7 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
 
     // Create git worktree (or attach to existing branch if already present).
     const freshWorktree = !fs.existsSync(ctxBase.worktreePath);
-    const worktreePath = createGitWorktree(repoRoot, name, branch);
+    const worktreePath = await createGitWorktree(repoRoot, name, branch);
 
     // Copy gitignored files from main worktree.
     copyWorkspaceFiles(manifest, repoRoot, worktreePath, inputRoot, freshWorktree);
@@ -454,11 +460,17 @@ function buildWorkspaceEnv(
   return { ...manifest.env, ...portsToEnv(ports) };
 }
 
-/** Create a git worktree at the conventional location. */
-function createGitWorktree(repoRoot: string, name: string, branch: string): string {
+/**
+ * Create a git worktree at the conventional location.
+ *
+ * Async because the warm pool warms slots through acquireWorkspace on the
+ * daemon's timer: a synchronous `git worktree add` on a repo this size freezes
+ * delivery, injection and the heartbeat for the seconds it runs (ct-49540).
+ */
+async function createGitWorktree(repoRoot: string, name: string, branch: string): Promise<string> {
   const worktreeDir = path.join(repoRoot, WORKTREES_DIR);
   const worktreePath = path.join(worktreeDir, name);
-  fs.mkdirSync(worktreeDir, { recursive: true });
+  await fs.promises.mkdir(worktreeDir, { recursive: true });
 
   if (fs.existsSync(worktreePath)) {
     // Already exists — assume previous successful creation. Ensure branch matches.
@@ -467,15 +479,13 @@ function createGitWorktree(repoRoot: string, name: string, branch: string): stri
 
   // Try create-new-branch path first; fall back to attaching to existing branch.
   try {
-    execSync(`git worktree add -b ${branch} ${JSON.stringify(worktreePath)}`, {
+    await execFileAsync("git", ["worktree", "add", "-b", branch, worktreePath], {
       cwd: repoRoot,
-      stdio: ["ignore", "ignore", "pipe"],
     });
   } catch {
     // Branch may already exist (e.g., from a previous broken attempt).
-    execSync(`git worktree add ${JSON.stringify(worktreePath)} ${branch}`, {
+    await execFileAsync("git", ["worktree", "add", worktreePath, branch], {
       cwd: repoRoot,
-      stdio: ["ignore", "ignore", "pipe"],
     });
   }
   return worktreePath;

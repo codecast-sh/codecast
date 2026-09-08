@@ -5,11 +5,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { startPoolMaintainer } from "./maintainer.js";
 import { readPoolState } from "./state.js";
+import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
 
 let repoRoot: string;
+let home: IsolatedCodecastDir;
 const handles: Array<{ stop: () => Promise<void> }> = [];
 
 beforeEach(() => {
+  // Warming a slot reserves ports under CODECAST_DIR; without this the suite
+  // writes into the human's real ~/.codecast (ct-49576).
+  home = isolateCodecastDir();
   repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ws-pool-maint-"));
   execSync("git init -q -b main", { cwd: repoRoot });
   execSync("git config user.email t@t.t && git config user.name t", { cwd: repoRoot });
@@ -23,6 +28,7 @@ afterEach(async () => {
   }
   try { execSync("git worktree prune", { cwd: repoRoot, stdio: "ignore" }); } catch {}
   fs.rmSync(repoRoot, { recursive: true, force: true });
+  home.restore();
 });
 
 describe("startPoolMaintainer", () => {
