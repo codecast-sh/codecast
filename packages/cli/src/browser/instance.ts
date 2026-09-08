@@ -359,10 +359,17 @@ export async function freePort(): Promise<number> {
 /** Pids of any Chrome process still holding this user-data-dir. */
 export function strayPids(userDataDir: string): number[] {
   try {
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
     // `--` before the pattern: it begins with `--user-data-dir`, which pgrep
     // would otherwise read as an option and reject — silently finding nothing.
-    const out = execSync(`pgrep -f -- ${JSON.stringify(`--user-data-dir=${userDataDir}`)}`, {
+    //
+    // And pgrep runs DIRECTLY, never through a shell: `execSync` spawns
+    // `/bin/sh -c pgrep …`, whose own argv carries the pattern, so pgrep
+    // matches that shell and the lookup always reports a stray. macOS hides it
+    // because its `sh` execs a lone simple command; Debian's stays. Here that
+    // would make `killStrays` shoot its own shell and never reach zero — the
+    // same defect the computer helper lookup carried (ct-49945).
+    const out = execFileSync("pgrep", ["-f", "--", `--user-data-dir=${userDataDir}`], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     });

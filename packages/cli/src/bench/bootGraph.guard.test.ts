@@ -106,8 +106,25 @@ describe("command groups stay off the boot graph", () => {
     // workers/operations.ts and the one-shot report in slowSync.ts, both files
     // the graph already carried. Code, not reach — which is the distinction
     // this guard is for, and why the file count is the number to watch.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(220);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2998);
+    //
+    // 209 files and 2,867 KB after ct-49905, which is the first time these
+    // numbers have come DOWN since the landing. Three clusters index.ts
+    // imported eagerly now load inside the command that uses them:
+    // codexAccounts.ts and codexResetCredit.ts inside `cast accounts codex
+    // reset-credit`, and statuslineHook.ts with capabilities/hooks.ts inside
+    // `installStatusLineHook` and `cast uninstall`. Neither is a COMMAND_GROUPS
+    // entry: a group is a whole verb, and these are individual symbols used by
+    // one action apiece, so a dynamic import at the use site is the same
+    // laziness without a placeholder command nobody would name.
+    //
+    // Measured, not estimated: dropping the four import lines and rebuilding
+    // the graph gives 209/2,866, and the implementation lands on 209/2,867 —
+    // the extra KB is the comments at the new import sites. The four together
+    // are worth more than the sum of their parts (1+4+1+2 = 8 files apart, 11
+    // together), because the two codex modules share reach that only leaves
+    // when both of them do.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(209);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2867);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

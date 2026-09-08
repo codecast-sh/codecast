@@ -136,14 +136,25 @@ describe("the verb group is registered and answers without a helper", () => {
   cliTest("a build with no embedded helper says so rather than hanging or crashing", () => {
     // From source, `helper.tar` is empty, which is exactly the state of every
     // Linux and Windows build. The verb must report the feature unavailable.
+    //
+    // WHICH unavailability is the platform's answer, not the test's. On macOS
+    // the machine could run a helper and this build carries none, so the
+    // obstacle is the missing helper. Off macOS there is no such feature to
+    // carry, and `unsupported_capability` is the honest code — asserting the
+    // macOS one there tests the runner, not the CLI (ct-49945).
     if (withHelper) return;
     const run = runCli(["computer", "get-app-state", "--app", "com.apple.Finder", "--json"]);
     expect(run.status).toBe(1);
     const envelope = run.json();
     expect(Object.keys(envelope)[0]).toBe("ok");
     expect(envelope.ok).toBe(false);
-    expect(envelope.code).toBe("accessibility_error");
-    expect(String(envelope.message)).toContain("not built into this CLI");
+    if (process.platform === "darwin") {
+      expect(envelope.code).toBe("accessibility_error");
+      expect(String(envelope.message)).toContain("not built into this CLI");
+    } else {
+      expect(envelope.code).toBe("unsupported_capability");
+      expect(String(envelope.message)).toContain("macOS");
+    }
     expect((envelope.recovery as string[]).length).toBeGreaterThan(0);
   });
 

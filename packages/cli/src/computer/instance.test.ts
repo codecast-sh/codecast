@@ -23,6 +23,7 @@ import {
   type ComputerInstanceState,
 } from "./instance.js";
 import { computerHome } from "./helperApp.js";
+import { stillRunning } from "../test-helpers/processLiveness.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -155,6 +156,37 @@ describe("strayHelperPids", () => {
   });
 
   test("returns nothing when no helper holds the directory", () => {
+    // The lookup must not match the process that performs it. Running pgrep
+    // through a shell put the pattern in that shell's own argv, and Debian's
+    // `sh` is still alive when pgrep reads the table, so every call reported a
+    // stray and no stale socket directory was ever discarded (ct-49945).
     expect(strayHelperPids(path.join(os.tmpdir(), "codecast-computer-nobody-here"))).toEqual([]);
+  });
+
+  test("reports only processes that are running, never a killed one", async () => {
+    const socketDir = path.join(os.tmpdir(), `codecast-computer-dead-${process.pid}`);
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)", "--agent", `${socketDir}/helper.sock`], { stdio: "ignore" });
+    cleanups.push(() => child.kill("SIGKILL"));
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Everything reported has to be a live process, not a transient helper of
+    // the lookup itself.
+    const found = strayHelperPids(socketDir);
+    expect(found).toContain(child.pid!);
+    expect(await stillRunning(found)).toEqual(found);
+
+    // A killed child is not a stray. It stays an unreaped zombie under any pid
+    // 1 that never wait()s, so wait for it with the zombie-aware probe rather
+    // than for its pid slot to free — then the lookup must come back empty.
+    // Nothing here asserts on the pid after it dies: that pid belongs to the
+    // kernel again, and asking about it is a race, not a check.
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.kill("SIGKILL");
+    await exited;
+    const deadline = Date.now() + 5_000;
+    while ((await stillRunning([child.pid!])).length > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(strayHelperPids(socketDir)).toEqual([]);
   });
 });

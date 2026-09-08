@@ -75,13 +75,9 @@ import {
   type Workspace,
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
-import { resolveCodexAccount, CodexAccountError } from "./codexAccounts.js";
-import { fetchCodexResetCredits, offerRevision, redeemCodexResetCredit } from "./codexResetCredit.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
-import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
-import { installOwnedStatusLine, removeOwnedStatusLine } from "./capabilities/hooks.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -1058,10 +1054,15 @@ function installTaskPulseHook(): void {
 // at. installOwnedStatusLine writes it only when the key is free (or ours) and
 // reports a conflict otherwise, and the ownership ledger is what lets
 // `cast uninstall` take it back out without touching a value we did not write.
-function installStatusLineHook(): void {
+async function installStatusLineHook(): Promise<void> {
   const home = process.env.HOME || "";
-  const hookFile = path.join(home, ".claude", "hooks", STATUSLINE_HOOK_FILE);
   try {
+    // Loaded here rather than at the top of index.ts: the hook text and the
+    // ownership ledger are reach only an install or an update needs, and every
+    // other invocation was parsing them (bench/bootGraph.guard.test.ts).
+    const { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } = await import("./statuslineHook.js");
+    const { installOwnedStatusLine } = await import("./capabilities/hooks.js");
+    const hookFile = path.join(home, ".claude", "hooks", STATUSLINE_HOOK_FILE);
     fs.mkdirSync(path.dirname(hookFile), { recursive: true });
     fs.writeFileSync(hookFile, CODECAST_STATUSLINE_HOOK, { mode: 0o755 });
     installOwnedStatusLine(hookFile, { settingsPath: path.join(home, ".claude", "settings.json") });
@@ -1784,7 +1785,7 @@ async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
   installSessionRegisterHook();
   installStatusHook();
-  installStatusLineHook();
+  await installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
 
@@ -2436,7 +2437,7 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
 // daemon that self-updates never runs the interactive paths, and without this
 // its feature snippets stayed at the old version until a human ran `cast
 // update`. Mutates `config` (messaging backfill) and persists when it does.
-function refreshEnabledSnippets(config: Record<string, any>): void {
+async function refreshEnabledSnippets(config: Record<string, any>): Promise<void> {
   if (config.memory_enabled) installMemorySnippet(true);
   if (config.task_enabled) installTaskSnippet(true);
   if (config.work_enabled) installWorkSnippet(true);
@@ -2458,7 +2459,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.orch_enabled) installOrchestration(true);
   installSessionRegisterHook();
   installStatusHook();
-  installStatusLineHook();
+  await installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
 }
@@ -4650,6 +4651,11 @@ codexAccountsCmd
   .option("--account <name>", "saved Codex profile to spend from (default: the active login)")
   .option("--yes", "skip the confirmation")
   .action(async (options: any) => {
+    // Loaded here rather than at the top of index.ts: this is one command's
+    // worth of reach, and every other verb — `cast --help`, `cast send`, a
+    // typo — was parsing it. bench/bootGraph.guard.test.ts holds the number.
+    const { resolveCodexAccount, CodexAccountError } = await import("./codexAccounts.js");
+    const { fetchCodexResetCredits, offerRevision, redeemCodexResetCredit } = await import("./codexResetCredit.js");
     let target;
     try {
       target = resolveCodexAccount(options.account);
@@ -4979,7 +4985,7 @@ program
       const { success } = await performUpdate();
       if (success) {
         const config = readConfig() || {};
-        refreshEnabledSnippets(config);
+        await refreshEnabledSnippets(config);
         console.log(`Updated to v${available}`);
       } else {
         console.log("Update failed, restarting with current version");
@@ -9258,6 +9264,8 @@ program
     // 3. Remove hooks from ~/.claude/settings.json and hook scripts
     const claudeDir = path.join(home, ".claude");
     const settingsFile = path.join(claudeDir, "settings.json");
+    const { STATUSLINE_HOOK_FILE } = await import("./statuslineHook.js");
+    const { removeOwnedStatusLine } = await import("./capabilities/hooks.js");
     const hookFiles = [
       "codecast-status.sh",
       "session-register.sh",
@@ -11597,7 +11605,7 @@ program
 
     const { success } = await performUpdate();
     if (success) {
-      refreshEnabledSnippets(config);
+      await refreshEnabledSnippets(config);
 
       if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
         console.log(`Updated to v${available} and restarted daemon`);
@@ -17813,7 +17821,7 @@ program
   .description("Re-install all enabled snippets at the current binary's versions (internal use — daemon boot after a version change)")
   .action(async () => {
     const config = readConfig() || {};
-    refreshEnabledSnippets(config);
+    await refreshEnabledSnippets(config);
     console.log("snippets refreshed");
   });
 
@@ -18299,7 +18307,7 @@ if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUp
     if (config?.orch_enabled) installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
-    installStatusLineHook();
+    await installStatusLineHook();
     installTaskPulseHook();
     installThreadStateHook();
 

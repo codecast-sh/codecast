@@ -9,7 +9,7 @@
  * re-creation of the state it leaves behind.
  */
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,17 +17,17 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 /**
- * The bytes the build embeds, under the test's control.
+ * The bytes the build embeds are passed in, never mocked in.
  *
  * `helper.tar` is an empty tracked file in a source checkout, so the real
- * reader answers null here and only the "not built into this CLI" branch could
- * ever run. Mocking the reader is what lets one test drive the whole
- * extract, verify, swap and stamp chain from a real tar.
+ * reader answers null and only the "not built into this CLI" branch is
+ * reachable by default. The one test that needs a real tar hands it to
+ * `materializeHelperApp({ payload })`. Replacing `helperPayload.js` with
+ * `mock.module` would reach far outside this file: bun installs a module mock
+ * process-wide and never lifts it, so every suite loaded afterwards in the same
+ * run would read its payload through this file's stub (ct-49918, ct-49941).
  */
-let payload: Buffer | null = null;
-mock.module("./helperPayload.js", () => ({ computerHelperTar: () => payload }));
-
-const {
+import {
   HELPER_APP_BASENAME,
   HELPER_SIGNING_TEAM,
   computerHome,
@@ -40,11 +40,10 @@ const {
   repairHalfSwap,
   sweepOldBundles,
   swapIntoPlace,
-} = await import("./helperApp.js");
+} from "./helperApp.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
-  payload = null;
   for (const fn of cleanups.splice(0)) fn();
 });
 
@@ -137,7 +136,6 @@ function tarOf(app: string): Buffer {
 describe("the embedded payload", () => {
   test("a build without the helper says so instead of half-installing one", () => {
     isolatedHome();
-    payload = null;
     expect(helperAvailability().embedded).toBe(false);
     // Off macOS `materializeHelperApp` stops one step earlier, on
     // `unsupported_capability`, so only the availability half is portable.
@@ -152,11 +150,10 @@ describe("the embedded payload", () => {
   test.skipIf(process.platform !== "darwin")("a real tar extracts, verifies, swaps into the fixed path and stamps", () => {
     isolatedHome();
     const source = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-helper-src-")), HELPER_APP_BASENAME);
-    payload = tarOf(signedBundle(source));
+    const payload = tarOf(signedBundle(source));
     cleanups.push(() => fs.rmSync(path.dirname(source), { recursive: true, force: true }));
 
-    expect(helperAvailability().embedded).toBe(true);
-    const first = materializeHelperApp({ version: "9.9.9" });
+    const first = materializeHelperApp({ version: "9.9.9", payload });
     expect(first.installed).toBe(true);
     expect(first.appPath).toBe(helperAppPath());
     expect(fs.statSync(first.executablePath).isFile()).toBe(true);
@@ -167,7 +164,7 @@ describe("the embedded payload", () => {
 
     // A matching stamp makes the next run one small read, so an unchanged CLI
     // never re-swaps a bundle a live helper may be running from.
-    expect(materializeHelperApp({ version: "9.9.9" }).installed).toBe(false);
+    expect(materializeHelperApp({ version: "9.9.9", payload }).installed).toBe(false);
   });
 });
 
@@ -180,7 +177,6 @@ describe("a CLI that carries no payload", () => {
     // one verb from a CLI built from source — and the granted half of the CLI's
     // end to end suite could not run at all (ct-49672).
     isolatedHome();
-    payload = null;
     makeBundle(helperAppPath(), "installed-by-a-release");
     fs.writeFileSync(
       path.join(computerHome(), "installed.json"),
@@ -203,14 +199,12 @@ describe("a CLI that carries no payload", () => {
     // check a staged bundle gets before a swap. A stamp is that record, which
     // is why the case above skips the two spawns.
     isolatedHome();
-    payload = null;
     makeBundle(helperAppPath(), "put-here-by-hand");
     expect(() => materializeHelperApp()).toThrow("failed signature verification");
   });
 
   darwin("with nothing installed either, the error names both halves", () => {
     isolatedHome();
-    payload = null;
     expect(() => materializeHelperApp()).toThrow("none is installed");
     expect(fs.existsSync(helperAppPath())).toBe(false);
   });
