@@ -1248,6 +1248,36 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_conversation", ["user_id", "conversation_id"]),
 
+  // One row per (user, conversation): where the viewer's attention stopped.
+  // Same reasoning as bucket_assignments above — conversations are hot shared
+  // docs, a read mark is per-user and cold, so it lives off the row and ships
+  // on its own query.
+  //
+  // Unread is DERIVED, never stored: acknowledged_at < conversations.updated_at.
+  // That is the same "a stamp any later activity silently expires" contract as
+  // inbox_rest_at (see userRestOf), which is what makes an agent re-reporting
+  // the same state free — nothing bumps updated_at — while a real new turn
+  // re-lights the card. Every replica re-derives from the same two numbers, so
+  // web, mobile and the CLI cannot disagree.
+  //
+  // No `workspace` key: a read mark is never shared, so user_id IS the access
+  // (the same choice thread_reads, bucket_assignments and bookmarks make).
+  session_reads: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    // Forward-only. Written only while the conversation is the active view
+    // under page presence (see useAckActiveConversation).
+    acknowledged_at: v.number(),
+    // The manual "mark unread" gesture: unread whatever the stamps say, until
+    // the next presence ack clears it.
+    manual_unread: v.optional(v.boolean()),
+    updated_at: v.number(),
+  })
+    // Newest-touched first: the client carries a bounded window of marks, and
+    // the ones it needs are the sessions it has looked at most recently.
+    .index("by_user_updated", ["user_id", "updated_at"])
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
+
   decisions: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -2245,8 +2275,27 @@ export default defineSchema({
     codecast_origin: v.optional(v.boolean()),
     author_github_username: v.optional(v.string()),
     author_user_id: v.optional(v.id("users")),
+    // ── Review notes written from a worktree (`cast review`, ct-49560) ──
+    // A note is a comment first, so it lives here and the web diff view picks
+    // it up from listForFile like any other. These four fields are what a
+    // batch needs on top of that.
+    // ACCESS, not routing: a note written in a directory mapped to a team is
+    // the team's, one written anywhere else is its author's alone. Set only on
+    // notes; a GitHub-mirrored comment carries none and keeps its old rule.
+    workspace: v.optional(v.string()),
+    // The worktree the batch belongs to. Two worktrees of one repository hold
+    // separate batches, because they hold separate diffs.
+    git_root: v.optional(v.string()),
+    // A stamp of the diff the note was written against. The CLI recomputes it
+    // and flags a note whose file has moved on, so a stale note never reaches
+    // an agent pretending to be current.
+    diff_identity: v.optional(v.string()),
+    // When the note was handed to a session. Editing it clears this: a changed
+    // note has not been sent.
+    sent_at: v.optional(v.number()),
   })
     .index("by_review", ["review_id"])
+    .index("by_author_git_root", ["author_user_id", "git_root"])
     .index("by_review_resolved", ["review_id", "resolved"])
     .index("by_pull_request", ["pull_request_id"])
     .index("by_github_comment_id", ["github_comment_id"])
@@ -2984,6 +3033,11 @@ export default defineSchema({
 
     mode: v.union(v.literal("propose"), v.literal("apply")),
     max_runtime_ms: v.optional(v.number()),
+    // `cast trigger add --precheck "<shell command>"`: a gate the daemon runs
+    // in project_path before a scheduled or recurring run. Exit 0 runs the
+    // trigger; anything else records a skipped run and spends no session.
+    // Event triggers ignore it — the webhook already IS the evidence.
+    precheck: v.optional(v.string()),
 
     status: v.union(
       v.literal("scheduled"),
@@ -3014,6 +3068,10 @@ export default defineSchema({
     // hadn't synced yet at completion. Absent for --context-current runs, which
     // record last_run_conversation_id directly.
     last_run_session_uuid: v.optional(v.string()),
+    // Denormalized newest precheck skip, same role as last_run_* above: the
+    // trigger rows and `cast trigger log` read one row, not the skip history.
+    last_precheck_skip_at: v.optional(v.number()),
+    last_precheck_skip_reason: v.optional(v.string()),
     run_count: v.number(),
     created_at: v.number(),
     // Haiku-generated presentation fields (agentTasks.generateDisplaySummary).
@@ -3073,9 +3131,28 @@ export default defineSchema({
       model: v.optional(v.string()),
       project_path: v.optional(v.string()),
       max_runtime_ms: v.optional(v.number()),
+      precheck: v.optional(v.string()),
     }),
     created_at: v.number(),
   }).index("by_task", ["task_id", "revision"]),
+
+  // One row per run a precheck refused. A skipped run spawns no agent, so it
+  // has no conversation — and conversations are what webListRuns projects a
+  // run history from. Without a row of its own a skip would be invisible, and
+  // "the trigger fired and did nothing" is exactly what the user needs to see.
+  agent_task_precheck_skips: defineTable({
+    task_id: v.id("agent_tasks"),
+    user_id: v.id("users"),
+    command: v.string(),
+    // Absent when the command timed out or never started.
+    exit_code: v.optional(v.number()),
+    timed_out: v.boolean(),
+    duration_ms: v.number(),
+    // Tail of stdout+stderr, capped by TRIGGER_PRECHECK_OUTPUT_CHARS.
+    output: v.optional(v.string()),
+    reason: v.string(),
+    created_at: v.number(),
+  }).index("by_task", ["task_id", "created_at"]),
 
   // --- Task Layer: Projects, Tasks, Docs ---
 

@@ -193,6 +193,41 @@ export function parkedOnActiveAccount(
   return !!pinned?.email && !!activeEmail && pinned.email === activeEmail;
 }
 
+// Codex logins are per machine and are never pushed to a remote, so a remote
+// device answers for its own panes exactly like a local one — no is_remote
+// exemption here, unlike the Claude pin.
+type CodexDevice = {
+  codex_accounts?: { active_email?: string; profiles: Array<{ name: string; email?: string }> } | null;
+};
+
+/** The Codex profile covering a device's CURRENT ~/.codex login — the account a
+ * pane launched on that machine right now would record. Undefined when the
+ * device reports no Codex inventory, or none of its profiles matches the login:
+ * a switch nobody can name orders no restarts. */
+export function activeCodexProfile(device: CodexDevice | undefined): string | undefined {
+  const accounts = device?.codex_accounts;
+  const activeEmail = accounts?.active_email;
+  if (!activeEmail) return undefined;
+  return accounts?.profiles.find((p) => p.email === activeEmail)?.name;
+}
+
+/** Whether this Codex session is still running the account it launched under.
+ *
+ * The Claude twin of this question is about a PIN the next launch would source
+ * (continueNeedsRestart). Codex has no pin: the process read auth.json at start
+ * and holds that grant until it dies, so the only fix for a machine that signed
+ * into another account is a restart. Unattributed sessions and devices whose
+ * login we cannot name are left alone — naming the wrong pane costs a user
+ * their session for nothing. */
+export function codexAccountNeedsRestart(
+  conv: { codex_account?: string | null },
+  device: CodexDevice | undefined,
+): boolean {
+  if (!conv.codex_account) return false;
+  const active = activeCodexProfile(device);
+  return !!active && conv.codex_account !== active;
+}
+
 /** The pin a RESUME of this conversation must source. The daemon reads the
  * row's `cc_account` at every resume, so a pin that cannot serve the session
  * would be re-sourced forever unless it is corrected on the row. A resume of
