@@ -168,12 +168,12 @@ function validateBrowser(raw: unknown, file?: string): BrowserSpec {
 
 function validateSetup(raw: unknown, file?: string): SetupSpec {
   if (raw === undefined) {
-    return { copy: [], install: [], generate: [], migrate: [] };
+    return { copy: [], share: [], install: [], generate: [], migrate: [] };
   }
   if (!isPlainObject(raw)) {
     throw new ManifestError("'setup' must be a table", file, "setup");
   }
-  const known = new Set(["copy", "install", "generate", "migrate"]);
+  const known = new Set(["copy", "share", "install", "generate", "migrate"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) {
       throw new ManifestError(`unknown key in [setup]: '${key}'`, file, `setup.${key}`);
@@ -181,6 +181,7 @@ function validateSetup(raw: unknown, file?: string): SetupSpec {
   }
   return {
     copy: validateStringArray(raw["copy"], "setup.copy", file),
+    share: validateStringArray(raw["share"], "setup.share", file),
     install: validateStringArray(raw["install"], "setup.install", file),
     generate: validateStringArray(raw["generate"], "setup.generate", file),
     migrate: validateStringArray(raw["migrate"], "setup.migrate", file),

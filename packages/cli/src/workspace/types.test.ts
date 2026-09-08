@@ -33,6 +33,7 @@ describe("workspace types", () => {
     const m: WorkspaceManifest = {
       setup: {
         copy: [".env", ".env.local", "credentials.json"],
+        share: [],
         install: ["bun install"],
         generate: ["bun run codegen"],
         migrate: ["bun run db:migrate"],
@@ -106,7 +107,7 @@ describe("workspace types", () => {
       branch: "codecast/my-feat",
       resourceIndex: 2,
       manifest: {
-        setup: { copy: [], install: [], generate: [], migrate: [] },
+        setup: { copy: [], share: [], install: [], generate: [], migrate: [] },
         ports: {},
         services: {},
         env: {},
@@ -129,7 +130,7 @@ describe("workspace types", () => {
     const opts: AcquireOptions = { branch: "feat/x", resourceIndex: 3, skipSetup: true, skipHooks: false };
     const mode: ServiceMode = "shared";
     const service: ServiceSpec = { mode, url: "redis://localhost:6379" };
-    const setup: SetupSpec = { copy: [], install: [], generate: [], migrate: [] };
+    const setup: SetupSpec = { copy: [], share: [], install: [], generate: [], migrate: [] };
     const td: TeardownSpec = { run: [] };
     const port: PortSpec = { base: 4000, range: 50 };
     const check: ContractCheck = { name: "x", ok: true };

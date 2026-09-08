@@ -42,6 +42,12 @@ export interface ServiceSpec {
 export interface SetupSpec {
   /** Gitignored files to copy from main worktree (e.g., ".env", ".env.local"). */
   copy: string[];
+  /**
+   * Gitignored directories the worktree borrows from the main worktree through
+   * a symlink instead of installing its own (e.g., "node_modules", ".venv").
+   * See workspace/share.ts for the safety rules.
+   */
+  share: string[];
   /** Install dependencies (e.g., ["bun install"]). */
   install: string[];
   /** Code generation (e.g., ["prisma generate", "bun run codegen"]). */

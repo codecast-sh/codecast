@@ -1,8 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { copyFiles } from "./copy.js";
+import { copyFileMode, copyFiles } from "./copy.js";
 import type { WorkspaceManifest } from "./types.js";
 
 let mainDir: string;
@@ -30,7 +30,7 @@ function readWt(rel: string): string {
 
 function manifest(copy: string[]): WorkspaceManifest {
   return {
-    setup: { copy, install: [], generate: [], migrate: [] },
+    setup: { copy, share: [], install: [], generate: [], migrate: [] },
     ports: {},
     services: {},
     env: {},
@@ -130,5 +130,86 @@ describe("copyFiles", () => {
     expect(r.copied).toEqual([]);
     expect(r.skippedExisting).toEqual([".env"]);
     expect(readWt(".env")).toBe("X");
+  });
+});
+
+/**
+ * Record the mode each copyFileSync call asks for, still writing the file so
+ * the copier behaves normally. `refuseClone` makes the cloning call fail the
+ * way a filesystem without reflinks does.
+ */
+function recordCopyModes(opts: { refuseClone?: boolean } = {}) {
+  const seen: (number | undefined)[] = [];
+  const real = fs.copyFileSync;
+  const spy = spyOn(fs, "copyFileSync").mockImplementation(((
+    src: fs.PathLike,
+    dest: fs.PathLike,
+    mode?: number,
+  ) => {
+    seen.push(mode);
+    if (opts.refuseClone && mode) throw new Error("ENOTSUP: clone refused");
+    real(src, dest);
+  }) as typeof fs.copyFileSync);
+  return { seen, restore: () => spy.mockRestore() };
+}
+
+describe("copy-on-write clones", () => {
+  test("asks for a clone on macOS and a plain copy elsewhere", () => {
+    expect(copyFileMode("darwin")).toBe(fs.constants.COPYFILE_FICLONE);
+    expect(copyFileMode("linux")).toBe(0);
+    expect(copyFileMode("win32")).toBe(0);
+  });
+
+  test("passes the clone flag to copyFileSync on darwin", () => {
+    writeMain(".env", "FOO=1");
+    const modes = recordCopyModes();
+    try {
+      copyFiles(manifest([".env"]), mainDir, wtDir, { log: silent, platform: "darwin" });
+    } finally {
+      modes.restore();
+    }
+    expect(modes.seen).toEqual([fs.constants.COPYFILE_FICLONE]);
+    expect(readWt(".env")).toBe("FOO=1");
+  });
+
+  test("copies with no flags on other platforms", () => {
+    writeMain(".env", "FOO=1");
+    const modes = recordCopyModes();
+    try {
+      copyFiles(manifest([".env"]), mainDir, wtDir, { log: silent, platform: "linux" });
+    } finally {
+      modes.restore();
+    }
+    expect(modes.seen).toEqual([0]);
+    expect(readWt(".env")).toBe("FOO=1");
+  });
+
+  test("a refused clone falls back to a plain copy", () => {
+    writeMain(".env", "FOO=1");
+    const modes = recordCopyModes({ refuseClone: true });
+    try {
+      const r = copyFiles(manifest([".env"]), mainDir, wtDir, {
+        log: silent,
+        platform: "darwin",
+      });
+      expect(r.copied).toEqual([".env"]);
+    } finally {
+      modes.restore();
+    }
+    expect(modes.seen).toEqual([fs.constants.COPYFILE_FICLONE, 0]);
+    expect(readWt(".env")).toBe("FOO=1");
+  });
+
+  test("directories clone too, and keep their contents", () => {
+    writeMain("secrets/key.pem", "KEY");
+    writeMain("secrets/nested/inner.txt", "INNER");
+
+    const r = copyFiles(manifest(["secrets"]), mainDir, wtDir, {
+      log: silent,
+      platform: "darwin",
+    });
+    expect(r.copied).toEqual(["secrets"]);
+    expect(readWt("secrets/key.pem")).toBe("KEY");
+    expect(readWt("secrets/nested/inner.txt")).toBe("INNER");
   });
 });

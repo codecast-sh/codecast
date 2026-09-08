@@ -557,3 +557,61 @@ run = ["touch ${repoRoot}/tornDown.txt"]
     // no throw
   });
 });
+
+describe("shared directories", () => {
+  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+
+  /** Commit a gitignore and install a dependency directory in the main checkout. */
+  function installShared(): string {
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), "node_modules/\n");
+    execSync("git add . && git commit -q -m ignore", { cwd: repoRoot });
+    const dep = path.join(repoRoot, "node_modules", "dep");
+    fs.mkdirSync(dep, { recursive: true });
+    fs.writeFileSync(path.join(dep, "index.js"), "module.exports = 1;\n");
+    return dep;
+  }
+
+  test("acquire links the detected directory, release unlinks it and spares the original", async () => {
+    const dep = installShared();
+
+    const r = await acquireWorkspace(repoRoot, "shared", opts);
+    expect(r.workspace.manifest.setup.share).toEqual(["node_modules"]);
+    const link = path.join(r.workspace.path, "node_modules");
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(link)).toBe(fs.realpathSync(path.join(repoRoot, "node_modules")));
+
+    await releaseWorkspace(repoRoot, "shared");
+    expect(fs.existsSync(r.workspace.path)).toBe(false);
+    // The unlink ran before the removal: the install the link pointed at is
+    // still there, and nothing followed the link out of the worktree.
+    expect(fs.existsSync(dep)).toBe(true);
+  });
+
+  test("the manifest's list wins over detection", async () => {
+    installShared();
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      '[setup]\nshare = ["missing_dir"]\n',
+    );
+
+    const r = await acquireWorkspace(repoRoot, "declared", opts);
+    expect(r.workspace.manifest.setup.share).toEqual(["missing_dir"]);
+    expect(fs.existsSync(path.join(r.workspace.path, "node_modules"))).toBe(false);
+  });
+
+  test("a directory that is not gitignored is never linked", async () => {
+    fs.mkdirSync(path.join(repoRoot, "vendor"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, "vendor/lib.txt"), "tracked\n");
+    execSync("git add . && git commit -q -m vendor", { cwd: repoRoot });
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      '[setup]\nshare = ["vendor"]\n',
+    );
+
+    const r = await acquireWorkspace(repoRoot, "tracked", opts);
+    // The checkout materialized its own copy; a link there would read as a diff.
+    expect(fs.lstatSync(path.join(r.workspace.path, "vendor")).isSymbolicLink()).toBe(false);
+  });
+});
