@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { injectViaTmux } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
+import { hasBinary } from "./test-helpers/binaryProbe.js";
 
 // Regression test for "clicking an AskUserQuestion option in the web card doesn't go
 // through" (root-caused 2026-06-05 against Claude Code 2.1.166).
@@ -20,16 +20,10 @@ import { tmuxRun } from "./tmux.js";
 // behaviors, and asserts the selection lands in each. It needs tmux + python3; it skips
 // (rather than fails) where they're unavailable so CI without them stays green.
 
-function have(bin: string): boolean {
-  try {
-    execFileSync("which", [bin], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const CAN_RUN = have("tmux") && have("python3");
+// hasBinary, not a bare `which` in a try/catch: a probe that fails to spawn
+// under load is not evidence that the binary is missing, and skipping on it
+// turns this suite into a green run that tested nothing (ct-49770).
+const CAN_RUN = hasBinary("tmux") && hasBinary("python3");
 
 // A fake interactive menu. Uses the alternate screen + raw mode so it behaves like the
 // Claude TUI: capture-pane sees the menu while it runs and the bare shell once it exits.

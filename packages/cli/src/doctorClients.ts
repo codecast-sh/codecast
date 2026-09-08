@@ -74,7 +74,11 @@ export function clientFixture(id: AgentClientId): ClientFixture {
         transcript:
           `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":${JSON.stringify(PROBE)}}]}}\n` +
           `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}}\n`,
-        readySample: "> ",
+        // The composer line codex really paints (`› Ask Codex to do anything`),
+        // not the `> ` the fresh-launch pattern used to look for — codex's footer
+        // sits BELOW the composer, so no line of a ready codex pane ends in `>`
+        // (ct-49754).
+        readySample: "› Ask Codex to do anything",
         // codex: nested dated dirs; the session id is the filename's trailing uuid.
         watchRelPath: path.join("2026", "01", "01", `rollout-${uuid()}.jsonl`),
       };

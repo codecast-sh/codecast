@@ -1,3 +1,7 @@
+// FIRST import: it moves this process onto a private tmux server, and daemon.js
+// snapshots the environment at module load — imported after it, the daemon's tmux
+// calls keep talking to the machine's shared server (ct-49770).
+import "./test-helpers/isolatedTmuxServer.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -79,7 +83,10 @@ describe.skipIf(!hasTmux())("hibernation with real panes", () => {
       const sessionId = crypto.randomUUID();
       const shim = writeShimScript({ sessionId });
       shims.push(shim);
-      harnesses.push(spawnHarness({ sessionId, tmuxPrefix: `cc-e1-${process.pid}`, command: `exec '${shim}' --session-id ${sessionId}` }));
+// home: this process's own. The hibernation pass finds a pane's transcript through
+// the daemon's session file index, which is rooted at process.env.HOME — a pane
+// writing into a home of its own is invisible to it (ct-49770).
+      harnesses.push(spawnHarness({ sessionId, home: os.homedir(), tmuxPrefix: `cc-e1-${process.pid}`, command: `exec '${shim}' --session-id ${sessionId}` }));
     }
     // The teardown re-checks the pane is idle in the instant before the kill,
     // so every pane must have reached its prompt before the pass runs.

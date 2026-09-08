@@ -1,3 +1,7 @@
+// FIRST import: it moves this process onto a private tmux server, and daemon.js
+// snapshots the environment at module load — imported after it, the daemon's tmux
+// calls keep talking to the machine's shared server (ct-49770).
+import "./test-helpers/isolatedTmuxServer.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -34,7 +38,10 @@ async function fixture() {
   const registry = path.join(root, "registry"); fs.mkdirSync(registry);
   const script = path.join(root, "claude");
   fs.writeFileSync(script, buildShimScript({ sessionId: id }), { mode: 0o755 });
-  const h = spawnHarness({ sessionId: id, tmuxPrefix: `cc-e1-fix2-${process.pid}`, command: `exec '${script}' --session-id ${id}` }); harnesses.push(h);
+// home: this process's own. The hibernation pass finds a pane's transcript through
+// the daemon's session file index, which is rooted at process.env.HOME — a pane
+// writing into a home of its own is invisible to it (ct-49770).
+  const h = spawnHarness({ sessionId: id, home: os.homedir(), tmuxPrefix: `cc-e1-fix2-${process.pid}`, command: `exec '${script}' --session-id ${id}` }); harnesses.push(h);
   await waitFor(() => h.paneHasPrompt(), { timeoutMs: 5000 });
   trackSessionPaneForTests(id, h.tmuxSession, { status: "idle" });
   const pid = Number(tmuxRun(["display-message", "-p", "-t", `=${h.tmuxSession}:`, "#{pane_pid}"]).stdout.trim());

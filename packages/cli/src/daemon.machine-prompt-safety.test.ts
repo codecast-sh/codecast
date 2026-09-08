@@ -185,16 +185,22 @@ function fixture(transport = "tmux", cached = true) {
     checkForInteractivePrompt: async () => {},
   };
   const names = [
-    "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "classifyTmuxLiveState", "isResumeCwdPicker",
-    "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText",
-    "tmuxWatchablePrefix", "awaitTmuxComposerPayload", "normalizePromptText", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "verifyTmuxSubmitAfterPaste",
+    "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
+    "classifyTmuxLiveState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
+    "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+    "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
+    "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
+    "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
     "pasteTextIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
     "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
     "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
     "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
     "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
   ];
-  const constants = ["RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerWs", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE"].map(name => {
+  const constants = [
+    "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
+    "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
+  ].map(name => {
     const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
     if (!line) throw new Error(`Missing constant ${name}`);
     return line.replace("export ", "");
@@ -213,12 +219,19 @@ function fixture(transport = "tmux", cached = true) {
     return `async function propagation${i}(error) { ${resumeScope} try { throw error; } ${handler} return "fallback"; }`;
   });
   const fatalStart = source.indexOf("const STARTED_PANE_FATAL_ERRORS =");
+  // Multi-line array constants: the one-line reader above cannot take these.
+  const arrayConst = (name: string): string => {
+    const start = source.indexOf(`const ${name} =`);
+    if (start < 0) throw new Error(`Missing constant ${name}`);
+    return source.slice(start, source.indexOf("];", start) + 2);
+  };
   const code = [
     source.slice(parserStart, parserEnd),
     blockAt(source, source.indexOf("class MachineInputBlockedError")).text,
     blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
     "class UndeliverableMessageError extends Error {}",
     source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
+    arrayConst("CODEX_PERMISSION_PATTERNS"),
     ...constants,
     ...names.map(name => functionBlock(source, name).text),
     `const scheduleMessageRetry = ((setTimeout) => { ${functionBlock(source, "scheduleMessageRetry").text}; return scheduleMessageRetry; })(recordTimer);`,
