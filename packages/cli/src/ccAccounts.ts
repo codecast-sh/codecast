@@ -1002,7 +1002,12 @@ export function accountSourcePrefix(name: string | undefined, warn?: (msg: strin
   if (info.expires_at <= Date.now()) {
     warn?.(`cc_account "${name}" setup-token is past its one-year lifetime — re-mint with: claude setup-token | cast accounts token ${name}`);
   }
-  return sourceFilePrefix(info.file);
+  // The name rides along in the env so the statusLine hook can say which
+  // account its live usage belongs to: the setup-token is scope-less, so
+  // nothing else in the payload distinguishes a pinned session from one on the
+  // keychain login. Safe on the command line — accountTokenFilePath already
+  // refused anything but a profile name, and the token stays inside the file.
+  return `${sourceFilePrefix(info.file)}export CODECAST_CC_ACCOUNT=${name}; `;
 }
 
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its
@@ -2140,7 +2145,7 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
           email,
           tier,
           subscription,
-          usage: usage[uuid || email || ""] ?? undefined,
+          usage: publishableUsage(usage[uuid || email || ""]),
           ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
           ...(login_expired_at ? { login_expired_at } : {}),
         };
@@ -2162,6 +2167,15 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
 
 export function invalidateAccountsCache(): void {
   accountsCache.invalidate();
+}
+
+/** A cached snapshot as the heartbeat may send it. `source` and `polled_at` are
+ *  local markers and Convex's `ccUsageValidator` accepts no unknown field, so a
+ *  daemon that sent one would have every heartbeat's inventory rejected. */
+function publishableUsage(snap: CcUsageSnapshot | undefined): CcUsageSnapshot | undefined {
+  if (!snap) return undefined;
+  const { source, polled_at, ...rest } = snap;
+  return rest;
 }
 
 export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
