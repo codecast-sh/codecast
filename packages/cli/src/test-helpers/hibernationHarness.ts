@@ -56,8 +56,7 @@ export function createHibernationHarness() {
   const maps = [
     "resumeSessionCache", "lastSentAgentStatus", "lastResumeAt", "lastHeartbeatLogged", "subagentActivityByParent",
     "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
-    "lastAgentStatusSentAt",
-    "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt", "turnCompletedAtBySession",
+    "lastAgentStatusSentAt", "turnCompletedAtBySession",
     "pendingOpenTaskReports", "lastOpenTasksSentAt", "lastOpenTasksSentJson", "tmuxTargetLocks",
     "hibernationInFlight", "hibernationEvidenceJobs", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared",
   ].map((name) => `const ${name} = new Map();`).join("\n");
