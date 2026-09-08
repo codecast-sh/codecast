@@ -45,6 +45,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   4: "7af701cea3a64c02",
   5: "5c58a1d04036be6a",
   6: "838995f0ac3d38ba",
+  // v7: agent_status_boundary — a settle produced by a resume, a clear or a
+  // manual compact carries no verdict of its own (ct-49533).
+  7: "aa6af9ced0a0d0d2",
 };
 
 type Expected = {
