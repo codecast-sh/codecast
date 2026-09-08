@@ -34,6 +34,8 @@ import { browserHome } from "./profile.js";
 import type { PageSession } from "./instance.js";
 import { readSharedConfig, writeSharedConfig } from "../config/sharedConfig.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
+import { agentTempPath, TEMP_FILE_MODE } from "../tempFiles.js";
+import { SHOT_TEMP_KIND } from "./shotFile.js";
 
 export const AUTO_SHOT_MAX_WIDTH = 800;
 const AUTO_SHOT_JPEG_QUALITY = 60;
@@ -175,8 +177,11 @@ export async function maybeAutoShot(source: AutoShotSource, shotFlag?: boolean):
     if (buf.length > MAX_IMAGE_SIZE) return null; // never inline something sync would drop
     const hash = crypto.createHash("sha256").update(buf).digest("hex");
     if (!recordIfChanged(source.tabKey, hash)) return null;
-    const out = path.join(os.tmpdir(), `cast-autoshot-${Date.now()}-${process.pid}.jpg`);
-    fs.writeFileSync(out, buf);
+    // 0700 directory, 0600 file, swept after a day — an auto shot is the
+    // page as it looked, and /tmp made that readable to every account on
+    // the machine, forever (tempFiles.ts, ct-49556).
+    const out = agentTempPath(SHOT_TEMP_KIND, `cast-autoshot-${Date.now()}-${process.pid}.jpg`);
+    fs.writeFileSync(out, buf, { mode: TEMP_FILE_MODE });
     return out;
   } catch {
     return null;

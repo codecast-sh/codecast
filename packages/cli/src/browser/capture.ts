@@ -37,6 +37,8 @@ import { runEngine, runEngineJson, type EngineOptions } from "./engine.js";
 import { downscaleWithSips } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
+import { agentTempPath, TEMP_FILE_MODE } from "../tempFiles.js";
+import { SHOT_TEMP_KIND } from "./shotFile.js";
 import { fmt } from "../colors.js";
 
 // Bounds. The block lands in a conversation, not a log file: enough entries to
@@ -249,7 +251,7 @@ export function engineSource(opts: EngineOptions = {}): FailureSource {
       };
     },
     screenshot: async () => {
-      const out = path.join(os.tmpdir(), `cast-fail-engine-${Date.now()}.png`);
+      const out = agentTempPath(SHOT_TEMP_KIND, `cast-fail-engine-${Date.now()}.png`);
       const res = runEngine(["screenshot", out], quiet);
       if (res.status !== 0 || !fs.existsSync(out)) throw new Error("engine screenshot failed");
       const buf = fs.readFileSync(out);
@@ -315,8 +317,8 @@ async function emitScreenshot(source: FailureSource): Promise<void> {
       const smaller = downscaleWithSips(bytes, "image/png");
       if (smaller && smaller.length < bytes.length) bytes = smaller;
     }
-    const out = path.join(os.tmpdir(), `cast-fail-${Date.now()}.png`);
-    fs.writeFileSync(out, bytes);
+    const out = agentTempPath(SHOT_TEMP_KIND, `cast-fail-${Date.now()}.png`);
+    fs.writeFileSync(out, bytes, { mode: TEMP_FILE_MODE });
     console.log(fmt.muted(`screenshot: ${out}`));
     if (bytes.length <= MAX_IMAGE_SIZE) console.log(inlineImageMarker(out));
   } catch {

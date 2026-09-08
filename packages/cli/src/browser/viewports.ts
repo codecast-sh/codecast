@@ -14,13 +14,13 @@
  * sees the difference.
  */
 
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   clearViewport, DEVICES, evaluate, screenshot, setViewport, type DeviceProfile, type ShotOptions,
 } from "./actions.js";
 import { settle, type PageSession } from "./instance.js";
-import { writeShotFile } from "./shotFile.js";
+import { SHOT_TEMP_KIND, writeShotFile } from "./shotFile.js";
+import { agentTempPath } from "../tempFiles.js";
 import { uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import type { PublishDeps } from "../publish.js";
@@ -235,7 +235,7 @@ export async function runViewportRow(
     // `--out row.png` fans out to row-desktop.png, row-mobile.png, …
     const out = o.out
       ? path.join(path.dirname(o.out), `${path.basename(o.out, path.extname(o.out))}-${vp.name}${path.extname(o.out) || `.${ext}`}`)
-      : path.join(os.tmpdir(), `cast-shot-${stamp}-${vp.name}.${ext}`);
+      : agentTempPath(SHOT_TEMP_KIND, `cast-shot-${stamp}-${vp.name}.${ext}`);
     const abs = writeShotFile(bytes, out, { ...o, jpeg });
     if (abs) markers.push(inlineImageMarker(abs));
     // --share has a real caption channel, so the viewport name goes there too.
