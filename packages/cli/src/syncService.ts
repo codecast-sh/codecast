@@ -1887,6 +1887,22 @@ export class SyncService {
     } catch {}
   }
 
+  /** The Codex account a pane just launched under. Codex binds its login at
+   * process start, so this is the only durable record of which account a live
+   * session is spending — the web compares it against the machine's current
+   * login to name the panes a switch left behind (ct-49528). Undefined clears
+   * the record: an unattributed pane must not read as stale. */
+  async recordCodexAccount(conversationId: string, account: string | undefined): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate("accountSwitch:recordCodexAccount" as any, {
+        conversation_id: conversationId,
+        api_token: this.apiToken,
+        ...(account ? { codex_account: account } : {}),
+      });
+    } catch {}
+  }
+
   /** The per-session account a RESUME must source, resolved by the server
    * (accountSwitch.pinForResume): the row's pin, unless the session is
    * parked on a limit/auth banner under a pin this device would not
