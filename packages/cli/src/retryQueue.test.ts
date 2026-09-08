@@ -3,6 +3,27 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { RetryQueue } from "./retryQueue.js";
+import { withTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { serializeTranscript } from "./workers/ingestClient.js";
+
+it("durable retries get a fresh transaction after the enqueueing ingest expires", async () => {
+  const queue = new RetryQueue({ initialDelayMs: 30, maxDelayMs: 30, maxAttempts: 2 });
+  let completed = 0;
+  queue.setExecutor(async () => serializeTranscript("retry-deadline-regression", async () => {
+    completed++;
+    return true;
+  }));
+  try {
+    await withTranscriptDeadline(async () => {
+      queue.add("createConversation", { sessionId: "retry-deadline-regression" });
+    }, { timeoutMs: 5 });
+    expect(await queue.waitForCompletion(1000)).toBe(true);
+    expect(completed).toBe(1);
+    expect(queue.getDroppedOperationCount()).toBe(0);
+  } finally {
+    queue.stop();
+  }
+});
 
 // Poll until the queue reaches the expected STATE instead of asserting counts
 // after a fixed sleep — fixed windows flake under load (a parallel suite can
