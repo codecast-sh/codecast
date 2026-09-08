@@ -1768,9 +1768,18 @@ function sendAgentStatus(
   pendingOpenTaskReports.delete(sessionId);
   const withTasks = openTasks !== undefined && SETTLE_STATUSES_WITH_TASKS.has(status);
   const payload: PendingStatusPayload = { conversationId, status, permissionMode, openTasks: withTasks ? openTasks : undefined };
+  // The turn stamp rides EVERY settle of that turn, not only the Stop that
+  // minted it: a session the harness keeps alive for background work settles as
+  // "waiting" and then re-publishes that same status on the reconciles, so
+  // without the stamp the server sees one unchanging status across two turns
+  // and the second turn never announces its completion (ct-49533).
+  const settled = status === "idle" || SETTLE_VERDICT_STATUSES.has(status);
+  const settle = { sessionBoundary: opts?.sessionBoundary, turnCompletedAt: settled ? turnCompletedAtBySession.get(sessionId) : undefined };
   void serializeSessionStatus(sessionId, async () => {
     if (status === "hibernated" && !hibernatedSessions.has(sessionId)) return false;
-    const acknowledged = await syncService.updateSessionAgentStatus(conversationId, status, clientTs, payload.permissionMode, payload.openTasks, presumed, opts?.hibernatedAt);
+    const acknowledged = await syncService.updateSessionAgentStatus(
+      conversationId, status, clientTs, payload.permissionMode, payload.openTasks, presumed, opts?.hibernatedAt, settle,
+    );
     if (acknowledged && payload.openTasks !== undefined) {
       lastOpenTasksSentAt.set(sessionId, Date.now());
       lastOpenTasksSentJson.set(sessionId, JSON.stringify(payload.openTasks));
@@ -1781,16 +1790,6 @@ function sendAgentStatus(
     lastOpenTasksSentAt.set(sessionId, Date.now());
     lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
   }
-  // The turn stamp rides EVERY settle of that turn, not only the Stop that
-  // minted it: a session the harness keeps alive for background work settles as
-  // "waiting" and then re-publishes that same status on the reconciles, so
-  // without the stamp the server sees one unchanging status across two turns
-  // and the second turn never announces its completion (ct-49533).
-  const settled = status === "idle" || SETTLE_VERDICT_STATUSES.has(status);
-  syncService.updateSessionAgentStatus(
-    conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt,
-    { sessionBoundary: opts?.sessionBoundary, turnCompletedAt: settled ? turnCompletedAtBySession.get(sessionId) : undefined },
-  ).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:

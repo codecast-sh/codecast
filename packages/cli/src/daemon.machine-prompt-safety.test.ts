@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
+import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { formatSessionUpdateBatch } from "../../shared/contracts/sessionUpdates";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
@@ -129,7 +130,7 @@ function fixture(transport = "tmux", cached = true) {
   };
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
-    isMachineDeliveredMessage, AGENT_CLIENTS, PendingDeliveryHeldError, createDeliveryAdmission,
+    isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {
@@ -186,12 +187,11 @@ function fixture(transport = "tmux", cached = true) {
   };
   const names = [
     "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
-    "classifyTmuxLiveState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
+    "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
     "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
     "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
     "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
     "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
-    "pasteTextIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
     "deliverIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
     "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
     "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
