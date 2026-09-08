@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { insertSwitchCommands } from "./accountSwitch";
+import { insertSwitchCommands, codexResetCreditOffer } from "./accountSwitch";
 import { makeFakeDb } from "./testDb";
 import {
   isBlockedConversation,
@@ -11,6 +11,7 @@ import {
   isValidProfileName,
   shouldSweepStaleFlag,
   decideAutoSwitch,
+  resetCreditAttemptKey,
   splitAuthParks,
   AUTO_SWITCH_AUTH_RESTART_KEY,
   resolveDeviceProfile,
@@ -60,12 +61,31 @@ describe("isBlockedConversation", () => {
     expect(isBlockedConversation({ ...base, pending_api_error_kind: undefined })).toBe(false);
   });
 
-  test("ignores healthy conversations and other agents", () => {
+  test("ignores healthy conversations and agents with no recovery chain", () => {
     expect(isBlockedConversation({ ...base, pending_api_error: false })).toBe(false);
     expect(isBlockedConversation({ agent_type: "claude_code" })).toBe(false);
-    // The account swap only affects claude's credential — codex/cursor banners
-    // are someone else's login problem.
-    expect(isBlockedConversation({ ...base, agent_type: "codex" })).toBe(false);
+    // Cursor and friends have no account machinery at all: their banners are
+    // someone else's login problem.
+    expect(isBlockedConversation({ ...base, agent_type: "cursor" })).toBe(false);
+    expect(isBlockedConversation({ ...base, agent_type: undefined })).toBe(false);
+  });
+
+  // ct-49676. A codex row is admitted for the kinds codex can actually recover
+  // from, which is what lets a parked Codex session reach autoSwitchCheck.
+  test("codex is blocked on the kinds its own recovery chain can act on", () => {
+    const codex = { ...base, agent_type: "codex" };
+    expect(isBlockedConversation(codex)).toBe(true); // limit: continue, or a reset credit
+    expect(isBlockedConversation({ ...codex, pending_api_error_kind: "throttle" })).toBe(true); // paced continue
+    expect(isBlockedConversation({ ...codex, pending_api_error_kind: "safety" })).toBe(true); // badge + hint only
+  });
+
+  test("codex is NOT blocked on kinds only a Claude credential could fix", () => {
+    const codex = { ...base, agent_type: "codex" };
+    // The auth branch swaps a CLAUDE credential; routing a codex login failure
+    // into it would spend a Claude account on a session it cannot reach.
+    expect(isBlockedConversation({ ...codex, pending_api_error_kind: "auth" })).toBe(false);
+    expect(isBlockedConversation({ ...codex, pending_api_error_kind: "connection" })).toBe(false);
+    expect(isBlockedConversation({ ...codex, pending_api_error_kind: "fatal" })).toBe(false);
   });
 });
 
@@ -752,6 +772,130 @@ describe("decideAutoSwitch", () => {
         parkedAt: resetSoon - 60_000,
       }),
     ).toEqual({ action: "continue" });
+  });
+
+  // A Codex reset credit clears the active account's windows in place, so it
+  // beats moving the machine to another account. It is only ever on the table
+  // when the human opted in — the caller passes `resetCredit` or it doesn't.
+  describe("Codex reset credits", () => {
+    const spent = {
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(100) },
+        { name: "b", email: "b@x.com", usage: mkUsage(10) },
+      ],
+      attempts: [],
+    };
+
+    test("redeems instead of switching when a credit is on the table", () => {
+      expect(decideAutoSwitch(spent)).toEqual({ action: "switch", profile: "b" });
+      expect(
+        decideAutoSwitch({ ...spent, resetCredit: { profile: "a", available: 1 } }),
+      ).toEqual({ action: "redeem_reset_credit", profile: "a" });
+    });
+
+    test("no opt-in, no offer: absent or empty is a plain switch", () => {
+      expect(decideAutoSwitch({ ...spent, resetCredit: null }).action).toBe("switch");
+      expect(
+        decideAutoSwitch({ ...spent, resetCredit: { profile: "a", available: 0 } }).action,
+      ).toBe("switch");
+    });
+
+    test("a free continue still wins — a credit is only spent when it has to be", () => {
+      expect(
+        decideAutoSwitch({
+          ...spent,
+          activeParkedAt: null, // no park implicates the active account
+          profiles: [{ name: "a", email: "a@x.com", usage: mkUsage(20) }],
+          resetCredit: { profile: "a", available: 1 },
+        }),
+      ).toEqual({ action: "continue" });
+    });
+
+    test("one redeem per park, then the switch takes over", () => {
+      const attempts = [{ profile: resetCreditAttemptKey("a"), at: parkedAt + 1000 }];
+      expect(
+        decideAutoSwitch({ ...spent, attempts, resetCredit: { profile: "a", available: 1 } }),
+      ).toEqual({ action: "switch", profile: "b" });
+      // A park NEWER than the redeem is a fresh incident: offer it again.
+      expect(
+        decideAutoSwitch({
+          ...spent,
+          attempts,
+          parkedAt: parkedAt + 60_000,
+          resetCredit: { profile: "a", available: 1 },
+        }),
+      ).toEqual({ action: "redeem_reset_credit", profile: "a" });
+    });
+
+    test("redeems even with switching turned off — it keeps the machine where it is", () => {
+      expect(
+        decideAutoSwitch({
+          ...spent,
+          allowSwitch: false,
+          resetCredit: { profile: "a", available: 1 },
+        }),
+      ).toEqual({ action: "redeem_reset_credit", profile: "a" });
+    });
+
+    // What the loop is allowed to put on the table in the first place.
+    describe("codexResetCreditOffer", () => {
+      const device: any = {
+        settings: { codex_reset_credit_auto: true },
+        codex_accounts: {
+          active_email: "a@x.com",
+          profiles: [
+            { name: "codex-a", email: "a@x.com", usage: { fetched_at: now, reset_credits: { available: 2 } } },
+            { name: "codex-b", email: "b@x.com", usage: { fetched_at: now, reset_credits: { available: 5 } } },
+          ],
+        },
+      };
+      const codexPark = [{ agent_type: "codex" }];
+
+      test("offers the ACTIVE Codex account's credit", () => {
+        expect(codexResetCreditOffer(device, codexPark)).toEqual({ profile: "codex-a", available: 2 });
+      });
+
+      test("never on a Claude park — a Codex credit cannot un-park a Claude session", () => {
+        expect(codexResetCreditOffer(device, [{ agent_type: "claude_code" }])).toBeNull();
+        expect(codexResetCreditOffer(device, [])).toBeNull();
+      });
+
+      test("nothing without the opt-in", () => {
+        expect(codexResetCreditOffer({ ...device, settings: {} }, codexPark)).toBeNull();
+        expect(codexResetCreditOffer({ ...device, settings: undefined }, codexPark)).toBeNull();
+      });
+
+      test("a dormant account's credit is not an offer — reaching it needs the switch this avoids", () => {
+        const dormantOnly = {
+          ...device,
+          codex_accounts: {
+            ...device.codex_accounts,
+            profiles: [
+              { name: "codex-a", email: "a@x.com", usage: { fetched_at: now } },
+              device.codex_accounts.profiles[1],
+            ],
+          },
+        };
+        expect(codexResetCreditOffer(dormantOnly, codexPark)).toBeNull();
+      });
+
+      test("nothing when the machine reports no Codex inventory", () => {
+        expect(codexResetCreditOffer({ ...device, codex_accounts: undefined }, codexPark)).toBeNull();
+      });
+    });
+
+    test("a dead login gets a switch — a credit cannot revive a revoked grant", () => {
+      expect(
+        decideAutoSwitch({
+          ...spent,
+          activeDead: true,
+          resetCredit: { profile: "a", available: 1 },
+        }),
+      ).toEqual({ action: "switch", profile: "b" });
+    });
   });
 
   test("exhausted carries the earliest future reset (plus settle margin)", () => {

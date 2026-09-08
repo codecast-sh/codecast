@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { autoSwitchCheck, onFreshApiErrorPark, reviveAuthBlockedOnRemotes, throttleContinueCheck } from "./accountSwitch";
-import { authRestartAttemptKey } from "./ccAccountsShared";
+import { AUTO_SWITCH_CODEX_CONTINUE_KEY, AUTO_SWITCH_CONTINUE_KEY, authRestartAttemptKey, resetCreditAttemptKey } from "./ccAccountsShared";
 import { classifyApiErrorBanner } from "./inboxFilters";
 import { makeFakeDb } from "./testDb";
 
@@ -154,5 +154,147 @@ describe("auth recovery through the backend handler", () => {
     expect(f.tables.pending_messages).toHaveLength(1);
     expect(f.tables.pending_messages[0]).toMatchObject({ conversation_id: "conversations_remote", content: "continue" });
     expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+});
+
+// ct-49676. Before this, isBlockedConversation admitted a codex row only for a
+// safety banner, so a Codex session parked on its plan limit never reached
+// autoSwitchCheck at all: no continue, no reset-credit redeem, nothing. These
+// drive the real handler to prove the park now arrives AND that it is decided
+// against Codex's own account rather than the Claude one sitting next to it.
+describe("Codex limit parks through the backend handler", () => {
+  function codexFixture(opts: { credit?: number; optIn?: boolean; codexResetsAt?: number } = {}) {
+    const f = fixture();
+    (f.device as any).codex_accounts = {
+      active_email: "codex@example.com",
+      active_since: f.now - 600_000,
+      profiles: [{
+        name: "codex-a",
+        email: "codex@example.com",
+        usage: {
+          fetched_at: f.now - 1_000,
+          session: { percent: 100, resets_at: opts.codexResetsAt ?? f.now + 3_600_000 },
+          ...(opts.credit ? { reset_credits: { available: opts.credit } } : {}),
+        },
+      }],
+    } as any;
+    if (opts.optIn) (f.device as any).settings = { codex_reset_credit_auto: true };
+    // A codex session never carries `cc_account`: the daemon gates that pin on
+    // agentType "claude", so a plain continue always reaches it.
+    const park = (id = "conversations_codex") =>
+      f.conversation(id, "limit", { agent_type: "codex", cc_account: undefined });
+    return { ...f, park };
+  }
+  const commandArgs = (f: any) => f.tables.daemon_commands.map((c: any) => JSON.parse(c.args));
+
+  test("a parked Codex row reaches the loop instead of falling out as 'nothing blocked'", async () => {
+    const f = codexFixture();
+    f.tables.conversations.push(f.park());
+    const res = await f.run();
+    // The park is SEEN: the loop decided about it (its window is pegged and
+    // there is nothing else to try) rather than reporting nothing blocked.
+    expect(res).toMatchObject({ acted: "exhausted" });
+    expect((res as any).next_check_at).toBe(f.now + 3_600_000 + 2 * 60_000); // Codex's reset, not Claude's
+    expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+
+  test("the reset credit is offered only with the opt-in on", async () => {
+    const off = codexFixture({ credit: 2 });
+    off.tables.conversations.push(off.park());
+    expect(await off.run()).toMatchObject({ acted: "exhausted" });
+    expect(off.tables.daemon_commands).toHaveLength(0);
+
+    const on = codexFixture({ credit: 2, optIn: true });
+    const park = on.park();
+    on.tables.conversations.push(park);
+    expect(await on.run()).toMatchObject({ acted: "redeem_reset_credit", profile: "codex-a", conversations: 1 });
+    expect(commandArgs(on)[0]).toMatchObject({
+      codex_reset_credit: { profile: "codex-a" },
+      conversation_ids: [park._id],
+      continue_blocked: true,
+    });
+    expect(on.device.cc_auto_switch_state.attempts).toContainEqual({ profile: resetCreditAttemptKey("codex-a"), at: expect.any(Number) });
+    // Once per park: a redeem still settling must not trigger a second one.
+    expect(await on.run()).toEqual({ acted: "cooldown" });
+    expect(on.tables.daemon_commands).toHaveLength(1);
+  });
+
+  test("a Codex park never spends a Claude account — a Claude swap cannot reach it", async () => {
+    const f = codexFixture();
+    f.device.cc_auto_switch = true;
+    f.device.cc_accounts.profiles.push({
+      name: "spare", email: "spare@example.com", token: { expires_at: f.now + 86_400_000 },
+      usage: { fetched_at: f.now, session: { percent: 4, resets_at: f.now + 3_600_000 } },
+    } as any);
+    f.tables.conversations.push(f.park());
+    expect(await f.run()).toMatchObject({ acted: "exhausted" });
+    // The idle Claude account with 4% used is right there and must stay put.
+    expect(commandArgs(f).some((a: any) => a.profile === "spare")).toBe(false);
+    expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+
+  test("the free continue reads CODEX's window, not the healthy Claude one beside it", async () => {
+    // Claude's account has headroom the whole time; only the codex window
+    // moving is allowed to un-park a codex session. Continuing on Claude's
+    // meter would send it straight back into its own spent window.
+    const pegged = codexFixture();
+    pegged.device.cc_accounts.profiles[0].usage = { fetched_at: pegged.now, session: { percent: 5, resets_at: pegged.now + 3_600_000 } } as any;
+    pegged.tables.conversations.push(pegged.park());
+    expect(await pegged.run()).toMatchObject({ acted: "exhausted" });
+    expect(pegged.db._inserted.filter((i: any) => i.table === "pending_messages")).toHaveLength(0);
+
+    // Same machine, codex's own window has now rolled: continue for free.
+    const rolled = codexFixture({ codexResetsAt: Date.now() - 10_000 });
+    const park = rolled.park();
+    rolled.tables.conversations.push(park);
+    expect(await rolled.run()).toMatchObject({ acted: "codex_continue", conversations: 1 });
+    const sent = rolled.db._inserted.filter((i: any) => i.table === "pending_messages");
+    expect(sent.map((i: any) => i.doc.conversation_id)).toEqual([park._id]);
+    expect(sent[0].doc.content).toBe("continue");
+    expect(rolled.tables.daemon_commands).toHaveLength(0); // a message, not a restart: codex carries no pin
+  });
+
+  test("the two providers' free continues are independent", async () => {
+    // A Claude continue moments ago must not consume Codex's one free continue.
+    const f = codexFixture({ codexResetsAt: Date.now() - 10_000 });
+    f.device.cc_auto_switch_state = { attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: f.now }] } as any;
+    f.tables.conversations.push(f.park());
+    expect(await f.run()).toMatchObject({ acted: "codex_continue" });
+    expect(f.device.cc_auto_switch_state.attempts).toContainEqual({ profile: AUTO_SWITCH_CODEX_CONTINUE_KEY, at: expect.any(Number) });
+
+    // And its own key does hold it back, so the codex continue is once per park.
+    const already = codexFixture({ codexResetsAt: Date.now() - 10_000 });
+    already.device.cc_auto_switch_state = { attempts: [{ profile: AUTO_SWITCH_CODEX_CONTINUE_KEY, at: already.now }] } as any;
+    already.tables.conversations.push(already.park());
+    expect(await already.run()).toMatchObject({ acted: "exhausted" });
+  });
+
+  test("with both parked, the next look is booked on whichever window rolls first", async () => {
+    // Codex resets in 30 minutes, Claude in three hours, and neither can act
+    // yet. Sleeping the Codex park on Claude's clock is the 2026-09-03 "booked
+    // at the wrong account's reset" gap one provider over.
+    const f = codexFixture({ codexResetsAt: Date.now() + 30 * 60_000 });
+    f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now, session: { percent: 100, resets_at: f.now + 3 * 3_600_000 } } as any;
+    f.tables.conversations.push(f.park(), f.conversation("conversations_claude", "limit", { cc_account: undefined }));
+    const res = await f.run();
+    expect(res).toMatchObject({ acted: "exhausted" });
+    expect((res as any).next_check_at).toBe(f.now + 30 * 60_000 + 2 * 60_000);
+    expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+
+  test("a Claude action books the follow-up that comes back for the Codex park", async () => {
+    // Both parked, Claude's window rolled: Claude recovers first (one action
+    // per cooldown), and the Codex rows are already stamped, so nothing else
+    // would ever wake the loop for them.
+    const f = codexFixture();
+    f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now, session: { percent: 100, resets_at: f.now - 5_000 } } as any;
+    f.tables.conversations.push(f.park(), f.conversation("conversations_claude", "limit", { cc_account: undefined }));
+    expect(await f.run()).toMatchObject({ acted: "continue", conversations: 1 });
+    // Only the Claude row was continued.
+    const sent = f.db._inserted.filter((i: any) => i.table === "pending_messages");
+    expect(sent.map((i: any) => i.doc.conversation_id)).toEqual(["conversations_claude"]);
+    const followUp = f.now + 3 * 60_000 + 5_000;
+    expect(f.device.cc_auto_switch_state.next_check_at).toBe(followUp);
+    expect(f.scheduled.some((s) => s.at === followUp)).toBe(true);
   });
 });

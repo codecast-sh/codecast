@@ -24,7 +24,9 @@ import {
   decideAutoSwitch,
   splitAuthParks,
   AUTO_SWITCH_CONTINUE_KEY,
+  AUTO_SWITCH_CODEX_CONTINUE_KEY,
   AUTO_SWITCH_PROBE_RETRY_MS,
+  resetCreditAttemptKey,
   authRestartAttemptKey,
   AUTO_CONTINUE_WINDOW_MS,
   isAutoContinueEnabled,
@@ -927,6 +929,43 @@ const AUTO_SWITCH_COOLDOWN_MS = 3 * 60 * 1000;
 const AUTO_SWITCH_DEBOUNCE_MS = 45 * 1000;
 const MAX_ATTEMPT_HISTORY = 64;
 
+/**
+ * The Codex reset credit this device may spend instead of switching accounts,
+ * or null when there is nothing to offer. Three conditions, all required.
+ *
+ * A Codex session is among the parked ones. A reset credit clears a CODEX
+ * account's windows, so redeeming one because a Claude session parked would
+ * spend something finite on nothing AND delay the switch that would have
+ * helped. Since ct-49676 the caller is the Codex pass of autoSwitchCheck,
+ * which is handed the Codex parks alone — so this check now guards the seam
+ * rather than holding the whole branch shut, and it stays because the offer
+ * must be impossible to make for a set that has no Codex row in it.
+ *
+ * The human turned redemption on for this machine (`codex_reset_credit_auto` in
+ * its config, reported through the heartbeat's device settings). A credit is
+ * something they earned, so it is never spent for them by default.
+ *
+ * And the ACTIVE Codex login — the one the parked sessions are running — holds
+ * at least one. A dormant profile's credit would need a switch to reach, which
+ * is the thing this exists to avoid.
+ *
+ * The daemon re-checks its own config before spending, so a stale device row
+ * can only ever propose.
+ */
+export function codexResetCreditOffer(
+  device: Pick<Doc<"devices">, "settings" | "codex_accounts">,
+  parked: Array<{ agent_type?: string }>,
+): { profile: string; available: number } | null {
+  if (!parked.some((c) => c.agent_type === "codex")) return null;
+  if (device.settings?.codex_reset_credit_auto !== true) return null;
+  const accounts = device.codex_accounts;
+  const activeEmail = accounts?.active_email;
+  if (!accounts || !activeEmail) return null;
+  const active = accounts.profiles.find((p) => p.email === activeEmail);
+  const available = active?.usage?.reset_credits?.available ?? 0;
+  return active && available > 0 ? { profile: active.name, available } : null;
+}
+
 /** Schedule an auto-switch check for this user. Called from the message paths
  * that stamp a limit-kind banner — the event that makes a check worth running.
  * The check is idempotent and self-gating (no-ops without the device flag), so
@@ -1286,6 +1325,17 @@ export const autoSwitchCheck = internalMutation({
     const recentEnough = (c: Doc<"conversations">): boolean =>
       allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS;
     const limitBlocked = blocked.filter((c) => c.pending_api_error_kind === "limit" && recentEnough(c));
+    // A park is evidence about the account the session RAN on, and a Codex
+    // session does not run on a Claude account: its window, its reset time and
+    // its reset credit are all Codex's. So each provider gets its own pass of
+    // the SAME decision (decideAutoSwitch), fed its own inventory — never one
+    // decision reading Claude meters for every park. Feeding a Codex park to
+    // the Claude pass would continue it the moment ANY Claude account had
+    // headroom, straight back into its own spent window (a re-park every
+    // cooldown, forever), and could spend a Claude account's week on sessions
+    // a Claude switch cannot reach.
+    const codexLimit = limitBlocked.filter((c) => c.agent_type === "codex");
+    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex");
     const authParks = blocked.filter((c) => c.pending_api_error_kind === "auth" && recentEnough(c) &&
       (!c.owner_device_id || c.owner_device_id === primary.device_id));
     const { restart: authRestart, dead: authDead } = splitAuthParks(
@@ -1295,8 +1345,8 @@ export const autoSwitchCheck = internalMutation({
     );
     const activeDead = authDead.length > 0;
     const authSwitch = allowSwitch && activeDead ? authParks : [];
-    const targets = [...limitBlocked, ...authSwitch];
-    if (targets.length === 0 && authRestart.length === 0) {
+    const targets = [...claudeLimit, ...authSwitch];
+    if (targets.length === 0 && authRestart.length === 0 && codexLimit.length === 0) {
       if (authParks.length > 0 && !activeDead) {
         const retryAt = now + AUTO_SWITCH_PROBE_RETRY_MS;
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
@@ -1344,6 +1394,116 @@ export const autoSwitchCheck = internalMutation({
       });
     };
 
+    // A Codex park waits its turn behind a Claude action — one recovery at a
+    // time per machine, which is what the cooldown is for. Book the follow-up
+    // when we take that Claude action, because nothing else will: the Codex
+    // rows are already stamped, so no new banner will schedule a check and
+    // they would sit parked until something unrelated woke the loop.
+    const bookCodexFollowUp = async (): Promise<number | undefined> => {
+      if (codexLimit.length === 0) return undefined;
+      const at = now + AUTO_SWITCH_COOLDOWN_MS + 5_000;
+      await ctx.scheduler.runAt(at, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+      return at;
+    };
+
+    // The Codex pass: the same decision, the Codex inventory, switching OFF.
+    // Codex account switching does not exist yet, so Codex's only recoveries
+    // are a plain continue once its own window rolls and the reset credit the
+    // active Codex account already holds — both local, neither spending
+    // another account's week. That is why it runs BEFORE the Claude flow: a
+    // Claude switch is the expensive move, and it cannot help a Codex session
+    // anyway. With no Codex park this is a no-op and the Claude flow below
+    // behaves exactly as it did.
+    //
+    // No parkedOnActiveAccount filter here: `cc_account` is only ever set on
+    // Claude sessions (the daemon gates the pin on agentType), so a Codex row
+    // never carries one and every Codex park is read — correctly, and as the
+    // only reading available — as the active Codex login's own.
+    //
+    // Returns null only when the Claude flow still has parks of its own to
+    // decide; when Codex is all that is parked it always answers, so the
+    // caller never reaches decideAutoSwitch with an empty target list.
+    const runCodexPass = async () => {
+      const soleParks = targets.length === 0;
+      const codexDecision = decideAutoSwitch({
+        now,
+        resetCredit: codexResetCreditOffer(primary, codexLimit),
+        parkedAt: Math.max(...codexLimit.map((c) => c.updated_at ?? 0)),
+        activeEmail: primary.codex_accounts?.active_email,
+        activeSince: primary.codex_accounts?.active_since,
+        profiles: primary.codex_accounts?.profiles ?? [],
+        attempts,
+        allowSwitch: false,
+        continueKey: AUTO_SWITCH_CODEX_CONTINUE_KEY,
+      });
+
+      if (codexDecision.action === "redeem_reset_credit") {
+        // Spend the credit on the machine that holds the login, then revive the
+        // parked sessions on the SAME account. The daemon owns both halves (it
+        // re-checks its own config before spending and skips the revive when
+        // the redeem refused), so this is one command.
+        const commandId = await ctx.db.insert("daemon_commands", {
+          user_id: args.user_id,
+          command: "switch_account" as const,
+          args: JSON.stringify({
+            codex_reset_credit: { profile: codexDecision.profile },
+            conversation_ids: codexLimit.map((c) => c._id),
+            session_ids: Object.fromEntries(codexLimit.map((c) => [c._id, c.session_id])),
+            continue_blocked: true,
+          }),
+          created_at: now,
+          target_device_id: primary.device_id,
+        });
+        const retryAt = now + AUTO_SWITCH_COOLDOWN_MS + 5_000;
+        await recordAction(
+          `redeem_reset_credit:${codexDecision.profile}`,
+          [resetCreditAttemptKey(codexDecision.profile)],
+          retryAt,
+        );
+        // A redeem that buys nothing must not strand the sessions.
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+        console.log(
+          `autoSwitchCheck: redeeming a Codex reset credit on "${codexDecision.profile}" for ${codexLimit.length} parked conversation(s)`,
+        );
+        return { acted: "redeem_reset_credit", profile: codexDecision.profile, conversations: codexLimit.length, commandId };
+      }
+
+      if (codexDecision.action === "continue") {
+        const bucket = Math.floor(now / 60_000);
+        const res = await insertSwitchCommands(ctx, args.user_id, {
+          profile: undefined,
+          blocked: codexLimit,
+          online,
+          primary,
+          continueBlocked: true,
+          now,
+          continueClientIds: Object.fromEntries(
+            codexLimit.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
+          ),
+        });
+        await recordAction("codex_continue", [AUTO_SWITCH_CODEX_CONTINUE_KEY]);
+        console.log(`autoSwitchCheck: continuing ${codexLimit.length} Codex limit-parked conversation(s)`);
+        return { acted: "codex_continue", conversations: codexLimit.length, restarted: res.restarted };
+      }
+
+      // Nothing to do for Codex right now, so hand back WHEN to look again:
+      // Codex's own window reset, or the probe cadence.
+      const retryAt = codexDecision.action === "wait" || codexDecision.action === "exhausted"
+        ? codexDecision.retry_at
+        : now + AUTO_SWITCH_PROBE_RETRY_MS;
+      // With Claude parks still to decide, that flow answers and owns the
+      // booking — but it must book on the EARLIER of the two clocks. A Codex
+      // park slept on the Claude account's reset would wait hours for a window
+      // that says nothing about it (the 2026-09-03 "booked at the wrong
+      // account's reset" gap, one provider over).
+      if (!soleParks) return { retry_at: retryAt };
+      if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+        await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, next_check_at: retryAt } });
+      }
+      return { acted: codexDecision.action, next_check_at: retryAt };
+    };
+
     if (authRestart.length > 0) {
       await insertSwitchCommands(ctx, args.user_id, {
         profile: undefined,
@@ -1362,6 +1522,15 @@ export const autoSwitchCheck = internalMutation({
       return { acted: "auth_restart", conversations: authRestart.length };
     }
 
+    let codexRetryAt: number | undefined;
+    if (codexLimit.length > 0) {
+      const viaCodex = await runCodexPass();
+      if ("acted" in viaCodex) return viaCodex;
+      codexRetryAt = viaCodex.retry_at;
+    }
+    // The soonest either provider is worth another look.
+    const withCodexRetry = (at: number): number => Math.min(at, codexRetryAt ?? at);
+
     // A park is read as a fact about the account the session ran on: the
     // owning device's active login unless the row pins another account's
     // token. Only the former can wait on the active account's windows.
@@ -1371,6 +1540,10 @@ export const autoSwitchCheck = internalMutation({
     );
     const decision = decideAutoSwitch({
       now,
+      // No resetCredit: a Codex reset credit clears a CODEX account's windows
+      // and does nothing for a Claude session. The Codex pass above is the only
+      // place it can be offered, so the wrong-provider redeem is impossible by
+      // construction rather than by a filter that could be dropped.
       parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
       activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.updated_at ?? 0)) : null,
       activeEmail: primary.cc_accounts?.active_email,
@@ -1387,15 +1560,16 @@ export const autoSwitchCheck = internalMutation({
       // The active account just changed and its meter hasn't been read since.
       // The daemon probes right after a switch; look again once that lands.
       // Not an action: no cooldown, no attempt, exhausted_at untouched.
-      if (!state.next_check_at || state.next_check_at <= now || decision.retry_at < state.next_check_at) {
-        await ctx.scheduler.runAt(decision.retry_at, internal.accountSwitch.autoSwitchCheck, {
+      const retryAt = withCodexRetry(decision.retry_at);
+      if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
           user_id: args.user_id,
         });
         await ctx.db.patch(primary._id, {
-          cc_auto_switch_state: { ...state, next_check_at: decision.retry_at },
+          cc_auto_switch_state: { ...state, next_check_at: retryAt },
         });
       }
-      return { acted: "wait", next_check_at: decision.retry_at };
+      return { acted: "wait", next_check_at: retryAt };
     }
 
     if (decision.action === "continue") {
@@ -1404,19 +1578,19 @@ export const autoSwitchCheck = internalMutation({
       const bucket = Math.floor(now / 60_000);
       const res = await insertSwitchCommands(ctx, args.user_id, {
         profile: undefined,
-        blocked: limitBlocked,
+        blocked: claudeLimit,
         online,
         primary,
         continueBlocked: true,
         now,
         continueClientIds: Object.fromEntries(
-          limitBlocked.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
+          claudeLimit.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
         ),
       });
-      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY]);
+      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp());
       return {
         acted: "continue",
-        conversations: limitBlocked.length,
+        conversations: claudeLimit.length,
         restarted: res.restarted,
       };
     }
@@ -1431,11 +1605,20 @@ export const autoSwitchCheck = internalMutation({
         continueBlocked: true,
         now,
       });
-      await recordAction(`switch:${decision.profile}`, [decision.profile]);
+      await recordAction(`switch:${decision.profile}`, [decision.profile], await bookCodexFollowUp());
       console.log(
-        `autoSwitchCheck: switching to "${decision.profile}" for ${limitBlocked.length} limit-parked + ${authSwitch.length} auth-parked conversation(s)`,
+        `autoSwitchCheck: switching to "${decision.profile}" for ${claudeLimit.length} limit-parked + ${authSwitch.length} auth-parked conversation(s)`,
       );
       return { acted: "switch", profile: decision.profile, conversations: switched.length };
+    }
+
+    if (decision.action === "redeem_reset_credit") {
+      // Unreachable: the Claude decision is taken without a resetCredit, because
+      // a Codex credit clears a Codex account's windows and cannot un-park a
+      // Claude session. Named rather than cast away, so a future caller that
+      // starts passing one fails loudly instead of quietly redeeming a credit
+      // on behalf of the wrong provider.
+      throw new Error("autoSwitchCheck: a reset-credit redeem reached the Claude pass");
     }
 
     // Every account is spent. Mark it for the UI and wake up at the earliest
@@ -1449,15 +1632,16 @@ export const autoSwitchCheck = internalMutation({
       exhausted_at: allowSwitch ? state.exhausted_at ?? now : state.exhausted_at,
       next_check_at: state.next_check_at,
     };
+    const exhaustedRetryAt = withCodexRetry(decision.retry_at);
     if (
       !state.next_check_at ||
       state.next_check_at <= now ||
-      decision.retry_at < state.next_check_at
+      exhaustedRetryAt < state.next_check_at
     ) {
-      await ctx.scheduler.runAt(decision.retry_at, internal.accountSwitch.autoSwitchCheck, {
+      await ctx.scheduler.runAt(exhaustedRetryAt, internal.accountSwitch.autoSwitchCheck, {
         user_id: args.user_id,
       });
-      nextState.next_check_at = decision.retry_at;
+      nextState.next_check_at = exhaustedRetryAt;
     }
     await ctx.db.patch(primary._id, { cc_auto_switch_state: nextState });
     return { acted: "exhausted", next_check_at: nextState.next_check_at };

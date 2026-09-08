@@ -198,6 +198,67 @@ export function readProfileAuth(name: string): string | null {
   }
 }
 
+/** One account, resolved to everything a per-account backend call needs. */
+export interface CodexAccountTarget {
+  /** Machine-local profile name; undefined when the active login is not
+   *  enrolled yet (a fresh `codex login` before the daemon's auto-save). */
+  name?: string;
+  /** Account identity — account_id, email fallback. The key the usage cache and
+   *  the reset-credit ledger both use, because a profile name can be renamed
+   *  and the account cannot. */
+  account: string;
+  email?: string;
+  /** The CODEX_HOME whose auth.json speaks for this account: the real ~/.codex
+   *  for the active login, that profile's snapshot dir for a dormant one — the
+   *  same seam every other per-account probe uses, and never the other way
+   *  round (a snapshot of the live grant goes stale the moment codex rotates). */
+  home: string;
+  active: boolean;
+  usage?: CodexUsageSnapshot;
+}
+
+/**
+ * Resolve `name` (a saved profile) or, with no name, the account this machine
+ * is currently logged into. Throws CodexAccountError when there is no such
+ * account or no usable login behind it.
+ */
+export function resolveCodexAccount(name?: string): CodexAccountTarget {
+  const active = activeCodexSummary();
+  const index = readProfileIndex();
+  const usage = readUsageCache().accounts;
+  const isActive = (meta: CodexProfileMeta): boolean =>
+    !!((active.account_id && meta.account_id === active.account_id) ||
+      (active.email && meta.email === active.email));
+
+  if (name) {
+    const meta = index.profiles[name];
+    if (!meta) throw new CodexAccountError(`No saved Codex profile "${name}"`);
+    const account = meta.account_id || meta.email;
+    if (!account) throw new CodexAccountError(`Profile "${name}" has no account identity`);
+    const activeHere = isActive(meta);
+    return {
+      name,
+      account,
+      email: meta.email,
+      home: activeHere ? codexHome() : profileDir(name),
+      active: activeHere,
+      usage: usage[account],
+    };
+  }
+
+  if (!active.usable) throw new CodexAccountError("No Codex account is signed in here (run `codex login`)");
+  const account = active.account_id || active.email;
+  if (!account) throw new CodexAccountError("The active Codex login carries no account identity");
+  return {
+    name: Object.entries(index.profiles).find(([, meta]) => isActive(meta))?.[0],
+    account,
+    email: active.email,
+    home: codexHome(),
+    active: true,
+    usage: usage[account],
+  };
+}
+
 /** Enroll the active login as a profile iff none covers it yet (matched by
  * account_id, email fallback) — the daemon calls this so `codex login` is the
  * only manual step, ever. Mirrors autoSaveActiveProfile. */

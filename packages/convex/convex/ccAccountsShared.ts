@@ -3,7 +3,7 @@
 
 import { v } from "convex/values";
 import {
-  BLOCKED_BANNER_KINDS,
+  blockedKindsForAgent,
   fallbackProfiles,
   isUsageExhausted,
   isWindowRolled,
@@ -304,6 +304,12 @@ export const AUTO_SWITCH_PROBE_GRACE_MS = 6 * 60 * 1000;
 export const AUTO_SWITCH_PROBE_RETRY_MS = 60 * 1000;
 // The attempt-history key for a same-account "continue" (no profile involved).
 export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
+// The same key for the CODEX decision. The attempt history is one list on the
+// device, and the free-continue guard is "have I already continued for this
+// park" — so the two providers must not share a key: a Claude continue would
+// otherwise count as having continued the Codex parks, and neither provider
+// would ever get its own free continue while the other was recovering.
+export const AUTO_SWITCH_CODEX_CONTINUE_KEY = "__continue_codex__";
 export const AUTO_SWITCH_AUTH_RESTART_KEY = "__auth_restart__";
 
 export function authRestartAttemptKey(conversationId: string): string {
@@ -443,9 +449,19 @@ export function targetAccountEmail(
 
 export type AutoSwitchDecision =
   | { action: "continue" } // active account's window rolled — plain continue un-parks for free
+  // Spend one of the Codex account's rate-limit reset credits instead of moving
+  // the machine to another account. `profile` is the machine-local Codex
+  // profile name; the daemon resolves it to that account's CODEX_HOME.
+  | { action: "redeem_reset_credit"; profile: string }
   | { action: "switch"; profile: string }
   | { action: "wait"; retry_at: number } // active account just changed; its meter hasn't been read since
   | { action: "exhausted"; retry_at: number }; // every account spent — when to look again
+
+// Attempt-history key for a redeem, so one park can't trigger a second one
+// while the first is still settling. Same shape as AUTO_SWITCH_CONTINUE_KEY.
+export function resetCreditAttemptKey(profile: string): string {
+  return `reset-credit:${profile}`;
+}
 
 /**
  * Pick the cheapest recovery for limit-parked sessions:
@@ -511,6 +527,15 @@ export function decideAutoSwitch(input: {
   // An auth park proves the active login is DEAD (refresh token revoked, not a
   // spent window), so "continue" can never un-park — a switch is the only cure.
   activeDead?: boolean;
+  // An unspent rate-limit reset credit on the Codex account this machine is
+  // currently running. Present ONLY when the human turned redemption on for
+  // that device (it spends something they earned), so this function never has
+  // to know about the flag: absent means "not on the table".
+  resetCredit?: { profile: string; available: number } | null;
+  // Which attempt-history key records this decision's "continue". Defaults to
+  // the Claude one; the Codex pass passes its own so the two providers' free
+  // continues are independent (see AUTO_SWITCH_CODEX_CONTINUE_KEY).
+  continueKey?: string;
 }): AutoSwitchDecision {
   const { now, parkedAt, activeEmail, activeSince, profiles, attempts } = input;
   const allowSwitch = input.allowSwitch !== false;
@@ -532,7 +557,7 @@ export function decideAutoSwitch(input: {
     return { action: "wait", retry_at: now + AUTO_SWITCH_PROBE_RETRY_MS };
   }
   const sessionResetAt = active?.usage?.session?.resets_at;
-  const lastContinue = lastAttemptAt(AUTO_SWITCH_CONTINUE_KEY);
+  const lastContinue = lastAttemptAt(input.continueKey ?? AUTO_SWITCH_CONTINUE_KEY);
   const activeParkedAt = input.activeParkedAt === undefined ? parkedAt : input.activeParkedAt;
   // No park implicates the active account: its meters are the only evidence
   // needed, and a pegged one is caught by isUsageExhausted below.
@@ -550,6 +575,23 @@ export function decideAutoSwitch(input: {
     (!lastContinue || lastContinue < parkedAt)
   ) {
     return { action: "continue" };
+  }
+
+  // A reset credit beats a switch outright: it clears the windows on the
+  // account the sessions are already pinned to, so nothing moves and no other
+  // account's week is spent. It is offered only when the human opted in, and
+  // only once per park — a redeem whose effect hasn't landed yet must not
+  // trigger a second one, and if it did not un-park the sessions the next pass
+  // falls through to the switch below.
+  // A dead login is excluded: a credit clears rate-limit windows, and a revoked
+  // refresh token is not one — spending a credit there would burn it and leave
+  // every session exactly as parked.
+  const resetCredit = input.activeDead ? null : input.resetCredit;
+  if (resetCredit && resetCredit.available > 0) {
+    const lastRedeem = lastAttemptAt(resetCreditAttemptKey(resetCredit.profile));
+    if (!lastRedeem || lastRedeem < parkedAt) {
+      return { action: "redeem_reset_credit", profile: resetCredit.profile };
+    }
   }
 
   if (allowSwitch) {
@@ -595,13 +637,11 @@ export function isDeviceOnline(device: { last_seen: number }, now: number): bool
 }
 
 // Selection predicate for the revive actions: a conversation parked on a
-// LIMIT, AUTH, CONNECTION, or FATAL banner — the states where the session
-// won't heal itself and a switch/continue is the cure. kind "connection" (the
-// provider never replied: "Connection closed mid-response", "Connection
-// error.") and kind "fatal" (a statusful failure the CLI won't retry, e.g. a
-// 400) both mean the turn died at the prompt — a plain continue retries it,
-// same as limit. kind "error" (statusful 429/5xx provider failures) is
-// deliberately OUT: the CLI retries those itself and they must not paint a
+// banner its own agent's recovery chain can act on. Which kinds those are per
+// agent is blockedKindsForAgent (apiErrorBanner.ts) — for Claude Code every
+// blocked kind, for Codex the ones needing no Claude credential. kind "error"
+// (statusful 429/5xx provider failures) is deliberately OUT of the blocked set
+// for everyone: the CLI retries those itself and they must not paint a
 // mid-retry session as blocked (a mid-conversation 500 otherwise throws the
 // active session into the fleet banner). Dismissed is an explicit user "go
 // away" — never auto-revive.
@@ -613,8 +653,7 @@ export function isBlockedConversation(conv: {
 }): boolean {
   return (
     conv.pending_api_error === true &&
-    BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind ?? "") &&
-    (conv.agent_type === "claude_code" || (conv.agent_type === "codex" && conv.pending_api_error_kind === "safety")) &&
+    blockedKindsForAgent(conv.agent_type).has(conv.pending_api_error_kind ?? "") &&
     !conv.inbox_dismissed_at
   );
 }

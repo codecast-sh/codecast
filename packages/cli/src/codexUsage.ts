@@ -47,8 +47,12 @@ export interface CodexUsageSnapshot {
 }
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-// A window under a day is the "session" bar; anything longer is weekly-ish.
-const SESSION_WINDOW_MAX_MINUTES = 24 * 60;
+// The two window durations ChatGPT reports: a five-hour session bucket and a
+// seven-day one. Tolerance absorbs the one-minute drift older Codex builds
+// report without swallowing any other duration.
+const SESSION_WINDOW_MINUTES = 300;
+const WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
+const WINDOW_DURATION_TOLERANCE_MINUTES = 1;
 // How much of a rollout file's tail we scan. token_count events recur every
 // turn, so the info we need is always near the end.
 const TAIL_BYTES = 256 * 1024;
@@ -80,20 +84,72 @@ export function prettyCodexModel(name: string): string {
 
 // ---- shared limit fold ------------------------------------------------------
 
-/** One rate limit in the canonical shape both wire formats normalize into. */
-interface CanonicalLimit {
+/** One rate-limit window in the canonical shape every wire format normalizes
+ * into. `resets_at` is epoch SECONDS, as all three sources send it. */
+export interface CanonicalWindow {
+  used_percent?: number;
+  window_minutes?: number;
+  resets_at?: number;
+}
+
+/** One rate limit in the canonical shape every wire format normalizes into.
+ * The two windows keep their slots rather than collapsing into an array: when
+ * a duration is missing, position is the only thing left to classify them by. */
+export interface CanonicalLimit {
   limit_id?: string;
   limit_name?: string | null;
   plan_type?: string | null;
-  windows: { used_percent?: number; window_minutes?: number; resets_at?: number }[];
+  primary?: CanonicalWindow | null;
+  secondary?: CanonicalWindow | null;
   credits?: { has_credits?: boolean; unlimited?: boolean; balance?: string | null } | null;
+}
+
+/** A window worth showing: it carries a real used_percent. */
+function mappable(w: CanonicalWindow | null | undefined): CanonicalWindow | null {
+  return w && typeof w.used_percent === "number" && Number.isFinite(w.used_percent) ? w : null;
+}
+
+function windowKind(w: CanonicalWindow): "session" | "weekly" | null {
+  const mins = w.window_minutes;
+  if (typeof mins !== "number" || !Number.isFinite(mins)) return null;
+  if (Math.abs(mins - SESSION_WINDOW_MINUTES) <= WINDOW_DURATION_TOLERANCE_MINUTES) return "session";
+  if (Math.abs(mins - WEEKLY_WINDOW_MINUTES) <= WINDOW_DURATION_TOLERANCE_MINUTES) return "weekly";
+  return null;
+}
+
+/**
+ * Sort a limit's two windows into the session bar and the weekly bar.
+ *
+ * Duration decides: 300 minutes is the session window, 10080 the weekly one
+ * (one minute of tolerance, because older Codex buckets are off by that much).
+ * A duration that matches neither — or is missing entirely, as it is on some
+ * rollout-log readings — falls back to position, which is what the wire format
+ * has always meant by "primary" and "secondary".
+ */
+function classifyCodexWindows(limit: {
+  primary?: CanonicalWindow | null;
+  secondary?: CanonicalWindow | null;
+}): { session: CanonicalWindow | null; weekly: CanonicalWindow | null } {
+  const primary = mappable(limit.primary);
+  const secondary = mappable(limit.secondary);
+  let session: CanonicalWindow | null = null;
+  let weekly: CanonicalWindow | null = null;
+  for (const w of [primary, secondary]) {
+    if (!w) continue;
+    const kind = windowKind(w);
+    if (kind === "session" && !session) session = w;
+    else if (kind === "weekly" && !weekly) weekly = w;
+  }
+  if (!session && primary && windowKind(primary) === null) session = primary;
+  if (!weekly && secondary && windowKind(secondary) === null) weekly = secondary;
+  return { session, weekly };
 }
 
 /** Fold canonical limits into the limit-window half of a snapshot: plan-type
  * capture, model-scoped rows, session/weekly routing, credits merge. */
-function foldLimits(limits: CanonicalLimit[], now: number): Omit<CodexUsageSnapshot, "models"> {
+export function foldCodexLimits(limits: CanonicalLimit[], now: number): Omit<CodexUsageSnapshot, "models"> {
   const snap: Omit<CodexUsageSnapshot, "models"> = { fetched_at: now };
-  const toWindow = (w: CanonicalLimit["windows"][number]) => ({
+  const toWindow = (w: CanonicalWindow) => ({
     percent: Math.max(0, Math.min(100, w.used_percent ?? 0)),
     // resets_at arrives in epoch seconds; 0 means "unknown".
     ...(w.resets_at ? { resets_at: w.resets_at * 1000 } : {}),
@@ -102,15 +158,13 @@ function foldLimits(limits: CanonicalLimit[], now: number): Omit<CodexUsageSnaps
     if (rl.plan_type && !snap.plan_type) snap.plan_type = rl.plan_type;
     if (rl.limit_name) {
       // Model-scoped limit (e.g. "GPT-5.3-Codex-Spark"): one labeled row.
-      const w = rl.windows[0];
+      const w = mappable(rl.primary) ?? mappable(rl.secondary);
       if (w) (snap.scoped ??= []).push({ label: prettyCodexModel(rl.limit_name), ...toWindow(w) });
     } else {
-      for (const w of rl.windows) {
-        const mins = w.window_minutes ?? 0;
-        if (mins > 0 && mins <= SESSION_WINDOW_MAX_MINUTES) snap.session = toWindow(w);
-        // Prefer the base "codex" limit for the weekly bar over exotic ids.
-        else if (!snap.weekly || rl.limit_id === "codex") snap.weekly = toWindow(w);
-      }
+      const { session, weekly } = classifyCodexWindows(rl);
+      if (session) snap.session = toWindow(session);
+      // Prefer the base "codex" limit for the weekly bar over exotic ids.
+      if (weekly && (!snap.weekly || rl.limit_id === "codex")) snap.weekly = toWindow(weekly);
     }
     const c = rl.credits;
     if (c && (c.has_credits || c.unlimited || (c.balance && c.balance !== "0"))) {
@@ -126,6 +180,13 @@ function foldLimits(limits: CanonicalLimit[], now: number): Omit<CodexUsageSnaps
 }
 
 // ---- account/rateLimits/read (app-server RPC) ------------------------------
+
+/** The RPC's camelCase window in the canonical (snake_case) shape. */
+function toCanonicalRpcWindow(w: any): CanonicalWindow | null {
+  return w && typeof w === "object"
+    ? { used_percent: w.usedPercent, window_minutes: w.windowDurationMins, resets_at: w.resetsAt }
+    : null;
+}
 
 /** Parse the `account/rateLimits/read` result (camelCase wire shape) into the
  * limit-window half of a snapshot. `rateLimitsByLimitId` carries every window
@@ -151,9 +212,8 @@ export function parseRateLimitsReadResult(
       limit_id: rl.limitId,
       limit_name: rl.limitName,
       plan_type: rl.planType,
-      windows: [rl.primary, rl.secondary]
-        .filter((w) => w && typeof w.usedPercent === "number")
-        .map((w) => ({ used_percent: w.usedPercent, window_minutes: w.windowDurationMins, resets_at: w.resetsAt })),
+      primary: toCanonicalRpcWindow(rl.primary),
+      secondary: toCanonicalRpcWindow(rl.secondary),
       credits: rl.credits
         ? {
             has_credits: rl.credits.hasCredits,
@@ -163,7 +223,7 @@ export function parseRateLimitsReadResult(
         : undefined,
     });
   }
-  const snap = foldLimits(limits, now);
+  const snap = foldCodexLimits(limits, now);
   // Grantable "full reset" credits exist only on the RPC shape — the rollout
   // fallback never populates reset_credits.
   const available = result.rateLimitResetCredits?.availableCount;
@@ -269,15 +329,14 @@ export function snapshotFromRateLimits(
       limit_id: rl.limit_id,
       limit_name: rl.limit_name,
       plan_type: rl.plan_type,
-      windows: [rl.primary, rl.secondary].filter(
-        (w): w is NonNullable<typeof w> => !!w && typeof w.used_percent === "number",
-      ),
+      primary: rl.primary,
+      secondary: rl.secondary,
       // Rollout events carry credits on the base limit only; a scoped limit's
       // credits block (if any) has always been ignored here.
       credits: rl.limit_name ? undefined : rl.credits,
     });
   }
-  return foldLimits(limits, now);
+  return foldCodexLimits(limits, now);
 }
 
 /** Scan raw jsonl text for token_count events; returns the newest rate_limits

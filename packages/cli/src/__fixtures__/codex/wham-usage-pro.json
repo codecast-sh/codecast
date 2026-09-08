@@ -1,0 +1,23 @@
+{
+  "plan_type": "pro",
+  "rate_limit": {
+    "primary_window": {
+      "used_percent": 37.5,
+      "limit_window_seconds": 18000,
+      "reset_at": 1786011679
+    },
+    "secondary_window": {
+      "used_percent": 61.2,
+      "limit_window_seconds": 604800,
+      "reset_at": 1786443679
+    }
+  },
+  "rate_limit_reset_credits": {
+    "available_count": 2,
+    "total_earned_count": 5,
+    "credits": [
+      { "status": "available", "expires_at": "2026-09-30T00:00:00Z", "granted_at": "2026-09-01T00:00:00Z" },
+      { "status": "redeemed", "expires_at": null, "granted_at": "2026-08-01T00:00:00Z" }
+    ]
+  }
+}
