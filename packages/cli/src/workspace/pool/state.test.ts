@@ -5,8 +5,11 @@ import * as path from "node:path";
 import {
   deletePoolState,
   initPool,
+  markStaleByAge,
   markStaleByHead,
   POOL_DIR,
+  POOL_MAX_AGE_MS,
+  resizePool,
   PoolTransitionError,
   readPoolState,
   transitionSlot,
@@ -168,5 +171,66 @@ describe("markStaleByHead", () => {
     expect(p.slots[0]!.state).toBe("empty");
     expect(p.slots[1]!.state).toBe("claimed");
     expect(p.slots[2]!.state).toBe("stale");
+  });
+});
+
+describe("markStaleByAge — a tree that only LOOKS current", () => {
+  test("a ready slot past the max age goes stale even with a matching fingerprint", () => {
+    const state = initPool(1);
+    transitionSlot(state, "pool-0", "warming", { workspaceName: "pool-0" });
+    transitionSlot(state, "pool-0", "ready", { headSha: "abc", lockHash: "def" });
+    const born = Date.parse(state.slots[0]!.updatedAt);
+
+    markStaleByAge(state, POOL_MAX_AGE_MS, born + POOL_MAX_AGE_MS - 1);
+    expect(state.slots[0]!.state).toBe("ready");
+
+    markStaleByAge(state, POOL_MAX_AGE_MS, born + POOL_MAX_AGE_MS + 1);
+    expect(state.slots[0]!.state).toBe("stale");
+  });
+
+  test("a warming slot is left alone: its age is the build still running", () => {
+    const state = initPool(1);
+    transitionSlot(state, "pool-0", "warming", { workspaceName: "pool-0" });
+    const born = Date.parse(state.slots[0]!.updatedAt);
+    markStaleByAge(state, POOL_MAX_AGE_MS, born + POOL_MAX_AGE_MS * 10);
+    expect(state.slots[0]!.state).toBe("warming");
+  });
+});
+
+describe("resizePool — never forgets a slot that holds a worktree", () => {
+  test("growing appends empty slots with fresh ids", () => {
+    const state = initPool(1);
+    resizePool(state, 3);
+    expect(state.size).toBe(3);
+    expect(state.slots.map((s) => s.slotId)).toEqual(["pool-0", "pool-1", "pool-2"]);
+    expect(state.slots.every((s) => s.state === "empty")).toBe(true);
+  });
+
+  test("shrinking marks a surplus ready slot stale so it gets torn down", () => {
+    const state = initPool(2);
+    for (const id of ["pool-0", "pool-1"]) {
+      transitionSlot(state, id, "warming", { workspaceName: id });
+      transitionSlot(state, id, "ready", { headSha: "abc" });
+    }
+    resizePool(state, 1);
+    // The tree is still named, so maintainPool can remove it.
+    expect(state.slots.find((s) => s.slotId === "pool-1")!.state).toBe("stale");
+    expect(state.slots.find((s) => s.slotId === "pool-1")!.workspaceName).toBe("pool-1");
+    expect(state.slots.find((s) => s.slotId === "pool-0")!.state).toBe("ready");
+  });
+
+  test("shrinking to zero drops empty slots outright", () => {
+    const state = initPool(3);
+    resizePool(state, 0);
+    expect(state.slots).toEqual([]);
+  });
+
+  test("a claimed slot survives a shrink: it is already out of the pool", () => {
+    const state = initPool(1);
+    transitionSlot(state, "pool-0", "warming", { workspaceName: "pool-0" });
+    transitionSlot(state, "pool-0", "ready", {});
+    transitionSlot(state, "pool-0", "claimed");
+    resizePool(state, 0);
+    expect(state.slots[0]!.state).toBe("claimed");
   });
 });

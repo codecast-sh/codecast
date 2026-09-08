@@ -9,12 +9,17 @@ import {
   maintainPool,
   waitForReadySlot,
 } from "./manager.js";
-import { readPoolState } from "./state.js";
+import { readPoolState, writePoolState } from "./state.js";
 import { listWorkspaces, releaseWorkspace } from "../lifecycle.js";
+import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
 
 let repoRoot: string;
+let home: IsolatedCodecastDir;
 
 beforeEach(() => {
+  // acquireWorkspace reserves ports under CODECAST_DIR; without this the suite
+  // writes into the human's real ~/.codecast (ct-49576).
+  home = isolateCodecastDir();
   repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ws-pool-mgr-"));
   execSync("git init -q -b main", { cwd: repoRoot });
   execSync("git config user.email t@t.t && git config user.name t", { cwd: repoRoot });
@@ -25,19 +30,20 @@ beforeEach(() => {
 afterEach(() => {
   try { execSync("git worktree prune", { cwd: repoRoot, stdio: "ignore" }); } catch {}
   fs.rmSync(repoRoot, { recursive: true, force: true });
+  home.restore();
 });
 
 describe("currentRepoFingerprint", () => {
-  test("returns head sha + empty lock for repo without lockfile", () => {
-    const fp = currentRepoFingerprint(repoRoot);
+  test("returns head sha + empty lock for repo without lockfile", async () => {
+    const fp = await currentRepoFingerprint(repoRoot);
     expect(fp.headSha).toMatch(/^[0-9a-f]{40}$/);
     expect(fp.lockHash).toBe("");
   });
 
-  test("hashes bun.lock when present", () => {
+  test("hashes bun.lock when present", async () => {
     fs.writeFileSync(path.join(repoRoot, "bun.lock"), "lockfile v1\n");
     execSync("git add . && git commit -q -m lockfile", { cwd: repoRoot });
-    const fp = currentRepoFingerprint(repoRoot);
+    const fp = await currentRepoFingerprint(repoRoot);
     expect(fp.lockHash).toMatch(/^[0-9a-f]{16}$/);
   });
 });
@@ -210,4 +216,128 @@ describe("maintainPool — stale handling", () => {
     const ready = final.slots.find((x) => x.state === "ready");
     expect(ready?.headSha).toBe(newHead);
   }, 45000);
+});
+
+describe("maintainPool — the cap and the max age", () => {
+  test("a request above the cap is clamped to three slots", async () => {
+    const state = await maintainPool(repoRoot, 99);
+    expect(state.size).toBe(3);
+    expect(state.slots.length).toBe(3);
+  }, 30000);
+
+  test("a ready slot past the max age is torn down and replaced", async () => {
+    await maintainPool(repoRoot, 1);
+    const ready = await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+    expect(ready).not.toBeNull();
+    const wornPath = path.join(repoRoot, ".codecast/worktrees", ready!.workspaceName!);
+    expect(fs.existsSync(wornPath)).toBe(true);
+
+    // Age the slot without touching HEAD or the lockfile, so ONLY the age bar
+    // can evict it.
+    const aged = readPoolState(repoRoot)!;
+    const agedStamp = new Date(Date.now() - 60 * 60_000).toISOString();
+    aged.slots.find((s) => s.slotId === ready!.slotId)!.updatedAt = agedStamp;
+    writePoolState(repoRoot, aged);
+
+    await maintainPool(repoRoot, 1, { maxAgeMs: 30 * 60_000 });
+    const after = readPoolState(repoRoot)!;
+    const slot = after.slots.find((s) => s.slotId === ready!.slotId)!;
+    // Evicted, then immediately re-warmed on the same slot id.
+    expect(slot.state === "warming" || slot.state === "ready").toBe(true);
+    expect(slot.updatedAt > agedStamp).toBe(true);
+  }, 45000);
+
+  test("an unexpired slot survives the same pass", async () => {
+    await maintainPool(repoRoot, 1);
+    const ready = await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+    await maintainPool(repoRoot, 1, { maxAgeMs: 30 * 60_000 });
+    const slot = readPoolState(repoRoot)!.slots.find((s) => s.slotId === ready!.slotId)!;
+    expect(slot.state).toBe("ready");
+    expect(slot.workspaceName).toBe(ready!.workspaceName);
+  }, 45000);
+
+  test("shrinking the pool removes the surplus worktree from disk", async () => {
+    await maintainPool(repoRoot, 2);
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const s = readPoolState(repoRoot);
+      if (s && s.slots.length === 2 && s.slots.every((x) => x.state === "ready")) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(readPoolState(repoRoot)!.slots.filter((s) => s.state === "ready").length).toBe(2);
+
+    await maintainPool(repoRoot, 1);
+    const after = readPoolState(repoRoot)!;
+    expect(after.slots.length).toBe(1);
+    expect(listWorkspaces(repoRoot).filter((w) => w.name.startsWith("pool-")).length).toBeLessThanOrEqual(1);
+  }, 60000);
+});
+
+describe("drainPool", () => {
+  test("removes every slot, its worktree and the demand history", async () => {
+    const { drainPool } = await import("./manager.js");
+    const { recordWorkspaceCreate, readDemand } = await import("./demand.js");
+    await recordWorkspaceCreate(repoRoot);
+    await maintainPool(repoRoot, 1);
+    const ready = await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+    const wtPath = path.join(repoRoot, ".codecast/worktrees", ready!.workspaceName!);
+
+    const removed = await drainPool(repoRoot);
+    expect(removed).toBe(1);
+    expect(fs.existsSync(wtPath)).toBe(false);
+    expect(readPoolState(repoRoot)).toBeNull();
+    expect(readDemand(repoRoot)).toEqual([]);
+  }, 30000);
+
+  test("is a no-op on a repo that never had a pool", async () => {
+    const { drainPool } = await import("./manager.js");
+    expect(await drainPool(repoRoot)).toBe(0);
+  });
+});
+
+describe("acquireWorkspace — records demand so the pool can re-arm", () => {
+  test("a real create is recorded; a --skip-pool create is not", async () => {
+    const { acquireWorkspace, releaseWorkspace: release } = await import("../lifecycle.js");
+    const { readDemand } = await import("./demand.js");
+
+    await acquireWorkspace(repoRoot, "skipped", { skipPool: true });
+    expect(readDemand(repoRoot)).toEqual([]);
+    await release(repoRoot, "skipped");
+
+    await acquireWorkspace(repoRoot, "counted");
+    expect(readDemand(repoRoot).length).toBe(1);
+    await release(repoRoot, "counted");
+
+    await acquireWorkspace(repoRoot, "counted-again");
+    expect(readDemand(repoRoot).length).toBe(2);
+    await release(repoRoot, "counted-again");
+  }, 45000);
+});
+
+describe("maintainPool — a recycled slot is checked out at the CURRENT head", () => {
+  test("the re-warmed worktree is on the new commit, not the branch's old tip", async () => {
+    await maintainPool(repoRoot, 1);
+    const first = await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+    expect(first).not.toBeNull();
+
+    fs.writeFileSync(path.join(repoRoot, "second.txt"), "x");
+    execSync("git add . && git commit -q -m second", { cwd: repoRoot });
+    const newHead = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+
+    await maintainPool(repoRoot, 1);
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const s = readPoolState(repoRoot);
+      if (s?.slots.some((x) => x.state === "ready" && x.headSha === newHead)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const ready = readPoolState(repoRoot)!.slots.find((s) => s.state === "ready")!;
+    expect(ready.headSha).toBe(newHead);
+
+    // The fingerprint says "current"; check the tree actually is. Reusing the
+    // surviving codecast/pool-N branch would leave it one commit behind.
+    const slotPath = path.join(repoRoot, ".codecast/worktrees", ready.workspaceName!);
+    const slotHead = execSync("git rev-parse HEAD", { cwd: slotPath, encoding: "utf-8" }).trim();
+    expect(slotHead).toBe(newHead);
+  }, 60000);
 });
