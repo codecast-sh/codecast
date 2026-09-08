@@ -6,7 +6,7 @@ import { mergeManifests, resolveManifest, MANIFEST_REL_PATH } from "./resolver.j
 import type { WorkspaceManifest } from "./types.js";
 
 const emptyManifest = (): WorkspaceManifest => ({
-  setup: { copy: [], install: [], generate: [], migrate: [] },
+  setup: { copy: [], share: [], install: [], generate: [], migrate: [] },
   ports: {},
   services: {},
   env: {},
@@ -23,7 +23,7 @@ describe("mergeManifests", () => {
   test("null override returns base unchanged", () => {
     const base: WorkspaceManifest = {
       ...emptyManifest(),
-      setup: { copy: [".env"], install: ["bun install"], generate: [], migrate: [] },
+      setup: { copy: [".env"], share: [], install: ["bun install"], generate: [], migrate: [] },
       detected: "bun",
     };
     expect(mergeManifests(base, null)).toBe(base);
@@ -32,12 +32,13 @@ describe("mergeManifests", () => {
   test("non-empty override array replaces detection", () => {
     const base: WorkspaceManifest = {
       ...emptyManifest(),
-      setup: { copy: [], install: ["bun install"], generate: [], migrate: [] },
+      setup: { copy: [], share: [], install: ["bun install"], generate: [], migrate: [] },
     };
     const override: WorkspaceManifest = {
       ...emptyManifest(),
       setup: {
         copy: [],
+        share: [],
         install: ["bun install", "bun run setup"],
         generate: [],
         migrate: [],
@@ -52,12 +53,12 @@ describe("mergeManifests", () => {
   test("absent (empty) override array keeps detection's value", () => {
     const base: WorkspaceManifest = {
       ...emptyManifest(),
-      setup: { copy: [".env"], install: ["bun install"], generate: [], migrate: [] },
+      setup: { copy: [".env"], share: [], install: ["bun install"], generate: [], migrate: [] },
     };
     const override: WorkspaceManifest = {
       ...emptyManifest(),
       // copy and install both empty (absent in TOML)
-      setup: { copy: [], install: [], generate: ["bun run codegen"], migrate: [] },
+      setup: { copy: [], share: [], install: [], generate: ["bun run codegen"], migrate: [] },
     };
     const merged = mergeManifests(base, override);
     expect(merged.setup.copy).toEqual([".env"]);

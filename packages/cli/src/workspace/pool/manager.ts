@@ -283,6 +283,9 @@ async function warmSlot(repoRoot: string, slotId: string): Promise<void> {
     skipBrowser: true,
     skipHooks: true, // hooks fire on real claim, not on pool pre-warm
     skipPool: true, // avoid infinite recursion: pool warming MUST be fresh
+    // Warming runs the repo's setup commands off a timer, with nobody
+    // watching. It must never be what approves them (ct-49543).
+    agentDriven: true,
   });
   if (result.workspace.state !== "ready") {
     throw new Error(`pool slot ${slotId}: workspace not ready`);

@@ -11,15 +11,24 @@ import {
   validateWorkspace,
 } from "./lifecycle.js";
 import { readState, setState, writeState } from "./contract.js";
+import { AGENT_CONTEXT_ENV_VARS } from "./trust.js";
 
 let repoRoot: string;
 let codecastDir: string | undefined;
+const agentEnv: Record<string, string | undefined> = {};
 const extraRepos: string[] = [];
 
 beforeEach(() => {
   repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ws-lifecycle-"));
   codecastDir = process.env.CODECAST_DIR;
   process.env.CODECAST_DIR = path.join(repoRoot, "host-state");
+  // The trust gate reads these to tell an agent from a person (trust.ts). Left
+  // alone, these acquires would run as an agent locally and as a human on CI;
+  // clearing them pins every one to the human path.
+  for (const v of AGENT_CONTEXT_ENV_VARS) {
+    agentEnv[v] = process.env[v];
+    delete process.env[v];
+  }
   // Init a git repo with one commit so worktrees work.
   execSync("git init -q -b main", { cwd: repoRoot });
   execSync("git config user.email t@t.t && git config user.name t", { cwd: repoRoot });
@@ -38,6 +47,10 @@ afterEach(() => {
   for (const repo of extraRepos.splice(0)) fs.rmSync(repo, { recursive: true, force: true });
   if (codecastDir === undefined) delete process.env.CODECAST_DIR;
   else process.env.CODECAST_DIR = codecastDir;
+  for (const [k, v] of Object.entries(agentEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 describe("workspace port reservations", () => {

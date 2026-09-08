@@ -11,7 +11,7 @@
  *   5. Persist initial state = "creating"
  *   6. Run before-create hook
  *   7. Create git worktree + branch
- *   8. Copy gitignored files
+ *   8. Copy gitignored files; symlink setup.share directories
  *   9. Run setup (install → generate → migrate)
  *  10. Run after-create hook
  *  11. Validate contract; persist state = "ready" | "broken"
@@ -42,7 +42,9 @@ import { buildHookEnv, runHook } from "./hooks.js";
 import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
 import { withPortReservations, withWorkspaceOperation } from "./portReservations.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
+import { linkSharedDirectories, unlinkSharedDirectories } from "./share.js";
 import { runSetup } from "./setup.js";
+import { TEARDOWN_TARGET_ID, enforceWorkspaceTrust, untrustedTargetIds } from "./trust.js";
 import type {
   AcquireOptions,
   ChromeBinding,
@@ -99,6 +101,21 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     const ws = await backend.acquire(repoRoot, name, opts);
     return { workspace: ws, created: true };
   }
+
+  // Why above everything: each path below can execute code the repo carries —
+  // its hook scripts, its manifest commands — and that includes claiming a
+  // warm pool slot, which runs no setup of its own but hands over a worktree
+  // built from those same files. Checking here is what keeps a slot warmed
+  // before a hook changed from being handed out unchecked (ct-49543).
+  enforceWorkspaceTrust({
+    repoRoot,
+    hooksRoot: repoRoot,
+    manifestRoot: inputRoot ?? repoRoot,
+    hooks: !opts.skipHooks,
+    commands: !opts.skipSetup,
+    grant: opts.trust,
+    agentDriven: opts.agentDriven,
+  });
 
   const branch = opts.branch ?? `${BRANCH_PREFIX}${name}`;
 
@@ -183,6 +200,10 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     // Copy gitignored files from main worktree.
     copyWorkspaceFiles(manifest, repoRoot, worktreePath, inputRoot, freshWorktree);
 
+    // Borrow the shared dependency directories before setup runs, so an
+    // install in the worktree finds them already there (ct-49541).
+    linkSharedDirectories(inputRoot ?? repoRoot, worktreePath, manifest.setup.share);
+
     // Run setup commands.
     if (!opts.skipSetup) {
       await runSetup(manifest, worktreePath, {
@@ -252,8 +273,14 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
     await stopChrome(state.chrome.pid, { timeoutMs: 3000 });
   }
 
-  // Best-effort teardown commands.
-  if (state.manifest.teardown.run.length > 0) {
+  // Best-effort teardown commands. They are manifest-authored code like the
+  // rest, so an unapproved change skips them — refusing the destroy instead
+  // would strand the worktree, and teardown already never blocks it (ct-49543).
+  const teardownChanged = untrustedTargetIds(repoRoot, {
+    hooksRoot: repoRoot,
+    hooks: false,
+  }).has(TEARDOWN_TARGET_ID);
+  if (state.manifest.teardown.run.length > 0 && !teardownChanged) {
     try {
       const env = buildWorkspaceEnv(state.manifest, state.ports);
       await runSetup(
@@ -275,6 +302,11 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
       // Teardown errors are logged but don't block destruction.
     }
   }
+
+  // Why first: a shared directory is a symlink git reports as untracked, so
+  // removing the worktree while it is there needs --force and a rename into
+  // the trash would carry the link along (ct-49541).
+  unlinkSharedDirectories(state.path, state.manifest.setup.share);
 
   // git worktree remove
   try {
@@ -326,6 +358,14 @@ async function healWorkspaceUnlocked(repoRoot: string, name: string): Promise<Wo
   if (!state) {
     throw new Error(`workspace '${name}' not found; nothing to heal`);
   }
+  // Heal re-runs the manifest's setup commands, so it needs the same approval
+  // acquire needed (ct-49543).
+  enforceWorkspaceTrust({
+    repoRoot,
+    hooksRoot: repoRoot,
+    manifestRoot: state.env.CODECAST_WORKSPACE_INPUT_ROOT ?? repoRoot,
+    hooks: false,
+  });
   setState(repoRoot, name, "creating");
   // Re-copy gitignored files (idempotent) then re-run setup.
   copyWorkspaceFiles(state.manifest, repoRoot, state.path, state.env.CODECAST_WORKSPACE_INPUT_ROOT);

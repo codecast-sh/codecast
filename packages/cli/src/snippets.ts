@@ -58,8 +58,7 @@ import {
   type SnippetInstallResult,
   type TargetCandidate,
 } from "@platform/snippets";
-import { defaultConfigDir } from "./config/readAuthConfig.js";
-import { sharedConfigFile } from "./config/sharedConfig.js";
+import { defaultConfigDir, sharedConfigFile } from "./config/sharedConfig.js";
 import { getMessagingVersion, getVersion } from "./update.js";
 
 export {
