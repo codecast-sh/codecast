@@ -14,6 +14,7 @@
 
 import type { Command } from "commander";
 import { commandGroup } from "../commandGroups.js";
+import { commandTree, unknownCommandNextStep } from "../commandSuggestion.js";
 import type { ComputerOptions, ComputerRunDeps, ComputerVerb } from "./run.js";
 
 /** Injected by the tests so a verb can run against a fake helper client. */
@@ -49,6 +50,21 @@ function observeFlags<T extends Command>(cmd: T): T {
 }
 
 export function registerComputerCommand(program: Command, deps: ComputerCommandDeps = {}): void {
+  // Every other group hands its unknown subcommand to the guarded suggester
+  // through commander's unknownCommand hook (index.ts). That hook fires only
+  // for a group with NO action handler, and this group has one — so without
+  // this call a typo under `cast computer` is the one place in the tree that
+  // gets no next step at all. The suggester is what keeps the recovery safe:
+  // it offers siblings only, and `computer setup` (the destructive verb here)
+  // only to a token one edit away from it. ct-49879.
+  const failUnknownVerb = (typed: string): void => {
+    console.error(`error: unknown command 'computer ${typed}'`);
+    const nextStep = unknownCommandNextStep(commandTree(program), ["computer", typed]);
+    if (nextStep) console.error(nextStep);
+    console.error("Run 'cast computer --help' for the list of verbs.");
+    (deps.exit ?? process.exit)(1);
+  };
+
   const computer = program
     .command("computer")
     .description(commandGroup("computer").description)
@@ -92,9 +108,7 @@ release than the one about to run.
     .action(() => {
       const operands = computer.args.filter((arg) => !arg.startsWith("-"));
       if (!operands.length) return computer.outputHelp();
-      console.error(`error: unknown command 'computer ${operands[0]}'`);
-      console.error("Run 'cast computer --help' for the list of verbs.");
-      (deps.exit ?? process.exit)(1);
+      failUnknownVerb(operands[0]!);
     });
 
   computer
@@ -214,11 +228,7 @@ release than the one about to run.
       const target = computer.commands.find(
         (c) => c.name() === verb || c.aliases().includes(verb),
       );
-      if (!target) {
-        console.error(`error: unknown command 'computer ${verb}'`);
-        console.error("Run 'cast computer --help' for the list of verbs.");
-        return void (deps.exit ?? process.exit)(1);
-      }
+      if (!target) return failUnknownVerb(verb);
       target.outputHelp();
     });
 }
