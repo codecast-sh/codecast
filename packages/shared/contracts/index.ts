@@ -49,7 +49,6 @@ export * from "./sanitizeText";
 // Machine-delivered message detection: web/mobile previews and the convex
 // send classifier must agree on what a human-typed message is.
 export * from "./machineMessages";
-export * from "./sessionUpdates";
 export * from "./mcpRegistry";
 export * from "./usageLimits";
 // The connectable-apps catalog (the /capabilities Apps tab): Convex answers

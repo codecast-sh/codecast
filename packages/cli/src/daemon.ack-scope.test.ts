@@ -18,8 +18,8 @@ const okSync = () => ({
 
 describe("collectPastedInjectedIds", () => {
   test("reports a pasted message for its conversation and no other", async () => {
-    await markInjectedBestEffort(okSync(), "m_scope_1", 5000, { conversationId: "conv_scope_a", retryDelaysMs: [] });
-    await markInjectedBestEffort(okSync(), "m_scope_2", 5000, { conversationId: "conv_scope_b", retryDelaysMs: [] });
+    await markInjectedBestEffort(okSync(), "m_scope_1", 5000, { conversationId: "conv_scope_a", retryDelaysMs: [], pasteVerified: true });
+    await markInjectedBestEffort(okSync(), "m_scope_2", 5000, { conversationId: "conv_scope_b", retryDelaysMs: [], pasteVerified: true });
 
     expect(collectPastedInjectedIds("conv_scope_a")).toEqual(["m_scope_1"]);
     expect(collectPastedInjectedIds("conv_scope_b")).toEqual(["m_scope_2"]);
@@ -33,8 +33,25 @@ describe("collectPastedInjectedIds", () => {
     expect(collectPastedInjectedIds("conv_scope_fresh")).toEqual([]);
   });
 
+  test("a pre-paste mark vouches nothing until the paste is verified", async () => {
+    // The mark lands BEFORE the guard and the paste; an ack on it would
+    // terminalize a row whose paste was refused (a lost cast send, 2026-09-08).
+    await markInjectedBestEffort(okSync(), "m_scope_pre", 5000, { conversationId: "conv_scope_pre", retryDelaysMs: [] });
+    expect(collectPastedInjectedIds("conv_scope_pre")).toEqual([]);
+    await markInjectedBestEffort(okSync(), "m_scope_pre", 5000, { conversationId: "conv_scope_pre", retryDelaysMs: [], pasteVerified: true });
+    expect(collectPastedInjectedIds("conv_scope_pre")).toEqual(["m_scope_pre"]);
+  });
+
+  test("the verified mark carries the paste_verified stamp to the server", async () => {
+    const writes: any[] = [];
+    const sync = { updateMessageStatus: async (args: any) => { writes.push(args); } };
+    await markInjectedBestEffort(sync as any, "m_scope_stamp", 5000, { conversationId: "conv_scope_stamp", retryDelaysMs: [] });
+    await markInjectedBestEffort(sync as any, "m_scope_stamp", 5000, { conversationId: "conv_scope_stamp", retryDelaysMs: [], pasteVerified: true });
+    expect(writes.map(w => !!w.pasteVerified)).toEqual([false, true]);
+  });
+
   test("a pane-death clear withdraws the vouching for confirmed pastes", async () => {
-    await markInjectedBestEffort(okSync(), "m_scope_3", 5000, { conversationId: "conv_scope_c", retryDelaysMs: [] });
+    await markInjectedBestEffort(okSync(), "m_scope_3", 5000, { conversationId: "conv_scope_c", retryDelaysMs: [], pasteVerified: true });
     expect(collectPastedInjectedIds("conv_scope_c")).toEqual(["m_scope_3"]);
     clearMessageDeliveryStateForConversation("conv_scope_c");
     // Confirmed entry cleared → the row was reset to pending server-side; the
@@ -44,7 +61,7 @@ describe("collectPastedInjectedIds", () => {
 
   test("an UNCONFIRMED paste keeps its vouching through a clear (storm guard parity)", async () => {
     const jammed = { updateMessageStatus: (_: unknown) => new Promise<void>(() => {}) };
-    await markInjectedBestEffort(jammed as any, "m_scope_4", 10, { conversationId: "conv_scope_d", retryDelaysMs: [] });
+    await markInjectedBestEffort(jammed as any, "m_scope_4", 10, { conversationId: "conv_scope_d", retryDelaysMs: [], pasteVerified: true });
     clearMessageDeliveryStateForConversation("conv_scope_d");
     // The unconfirmed entry survives the clear (its row is still `pending`
     // server-side), so it remains in the vouch list — harmless: the scoped ack

@@ -193,9 +193,9 @@ import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdow
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
 import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent } from "../lib/messageNavigator";
-import { parseInboundSessionMessage, isSessionUpdateBatch, parseSessionUpdateBatch, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
+import { parseInboundSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
-import { parseSessionUpdateSend } from "./sessionUpdateSend";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
@@ -243,7 +243,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionSuggestion } from "./editor/MentionSuggestion";
 import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -2949,8 +2949,10 @@ type UserMessageKind =
   | { kind: 'scheduled_task' }
   | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
   | { kind: 'agent_switch'; toLabel: string; fromLabel?: string }
-  | { kind: 'session_message'; from: string; body: string; name?: string }
-  | { kind: 'session_updates'; batch: ReturnType<typeof parseSessionUpdateBatch> }
+  // `variant: 'agent'` is a subagent's report to the session that launched it
+  // (<agent-message from="…">): the same card, chrome that says so, and a sender
+  // that is an agent name rather than a session short id.
+  | { kind: 'session_message'; from: string; body: string; name?: string; variant?: 'agent' }
   // A person typed this into the session from the dashboard (<user-message
   // from="Name">): a normal user bubble attributed to that person.
   | { kind: 'direct_user'; from: string; body: string }
@@ -3006,7 +3008,6 @@ function classifyUserMessage(
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const directUser = parseUserMessage(t);
   if (directUser) return { kind: 'direct_user', from: directUser.from, body: directUser.body };
-  if (isSessionUpdateBatch(t)) return { kind: 'session_updates', batch: parseSessionUpdateBatch(t) };
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) {
     // A huddle that ended in this session's room: the digest rides the
@@ -3014,6 +3015,12 @@ function classifyUserMessage(
     const huddle = parseHuddleSummaryTag(sessionMsg.body);
     if (huddle) return { kind: 'huddle_summary', huddle };
     return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
+  }
+  // A subagent reporting back to its parent arrives in the same shape under its
+  // own tag, so it rides the same rail instead of reading as the human's words.
+  if (isAgentMessage(t)) {
+    const report = parseAgentAuthoredMessage(t);
+    if (report) return { kind: 'session_message', from: report.from, body: report.body, variant: 'agent' };
   }
   {
     const huddle = parseHuddleSummaryTag(tNoReminders);
@@ -5127,17 +5134,14 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
   const [expanded, setExpanded] = useState(false);
 
   if (cat === "send") {
-    const update = parseSessionUpdateSend(args, output);
-    const { body, kind } = update ?? extractSendBody(args);
+    const { body, kind } = extractSendBody(args);
     return (
       <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
         <div className="flex items-center gap-2 px-3 pt-2 pb-1">
           <CornerUpRight className="w-3.5 h-3.5 text-sol-blue/70 shrink-0" />
-          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">{update ? "Update to" : "Message to"}</span>
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
           <EntityIdPill shortId={target} />
-          {update ? (
-            <span className="text-sol-yellow text-[10px] ml-auto shrink-0">{update.status}</span>
-          ) : isError ? (
+          {isError ? (
             <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">failed</span>
           ) : (
             <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
@@ -5157,12 +5161,6 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
               components={MESSAGE_MD_COMPONENTS}
             >{body}</ReactMarkdown>
           </div>
-        )}
-        {update && output && (
-          <details className="px-3 pb-2 text-[11px] text-sol-text-muted">
-            <summary className="cursor-pointer">Update receipt</summary>
-            <pre className="mt-1 whitespace-pre-wrap break-all">{renderAnsi(output)}</pre>
-          </details>
         )}
       </div>
     );
@@ -7445,65 +7443,77 @@ function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCall; resu
   );
 }
 
-function SessionUpdateBatchBlock({ batch, pendingStatus }: { batch: ReturnType<typeof parseSessionUpdateBatch>; pendingStatus?: string }) {
-  const count = batch?.members.length;
-  const deliveryLabel = !pendingStatus ? null : pendingStatus === "failed" ? "Delivery failed" : pendingStatus === "undeliverable" ? "Undeliverable" : "Queued for delivery";
-  return (
-    <section aria-label="Session updates" className="mb-3">
-      <div className="mx-1 px-3 py-1.5 flex flex-wrap items-center gap-2 text-[11px] text-sol-text-dim">
-        <span>{count === undefined ? "Session updates" : `${count} session update${count === 1 ? "" : "s"}`}</span>
-        {deliveryLabel && <span className="text-sol-yellow">{deliveryLabel}</span>}
-      </div>
-      {batch ? batch.members.map(member => (
-        <SessionMessageBlock key={member.id} variant="update" from={member.from} body={member.body} timestamp={member.sent_at} />
-      )) : <p className="mx-4 text-sm text-sol-text-muted">This update batch could not be read.</p>}
-    </section>
-  );
-}
-
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate" | "update"; color?: string; summary?: string; linkToConversationId?: string }) {
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; recipientActive?: boolean; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
+  // pendingReason is the daemon's own word for a hold (the terminal is waiting for a
+  // human answer), which beats the guess from the recipient's status.
   const isPending = !!pendingStatus;
   const queueLabel = !isPending
     ? null
     : pendingStatus === "failed" || pendingStatus === "undeliverable"
     ? "queued · retrying"
+    : pendingReason
+    ? `queued · ${pendingReason}`
     : recipientActive === false
     ? "queued · recipient offline"
     : "queued · recipient busy";
-  // The SAME card renders an inter-agent teammate broadcast — only slightly distinct: a Users
-  // icon + "From teammate" + the sender's own color, vs. cast send's CornerDownRight +
-  // "Message from" + fixed cyan. A teammate's id isn't a real session, so it's a plain badge
-  // (not an EntityIdPill), and its summary attribute rides in the header as a secondary label.
+  // The SAME card renders an inter-agent teammate broadcast and a subagent's report to the
+  // session that launched it — only slightly distinct: a Users icon + "From teammate" + the
+  // sender's own color, or a Bot icon + "Report from" + violet, vs. cast send's
+  // CornerDownRight + "Message from" + fixed cyan. Neither a teammate id nor a subagent name
+  // is a real session, so both render as a plain badge (not an EntityIdPill) that clicks
+  // through when the sender resolves to a conversation. A teammate's summary attribute rides
+  // in the header as a secondary label.
   const isTeammate = variant === "teammate";
-  const HeaderIcon = isTeammate ? Users : CornerDownRight;
+  const isAgentReport = variant === "agent";
+  const namedSender = isTeammate || isAgentReport;
+  const HeaderIcon = isTeammate ? Users : isAgentReport ? Bot : CornerDownRight;
+  const badgeColor = isAgentReport
+    ? agentColorMap.purple
+    : agentColorMap[color || "blue"] || agentColorMap.blue;
   const accent = isPending
     ? "border-amber-500/50 bg-amber-500/5"
     : isTeammate
     ? `${agentBorderMap[color || "blue"] || agentBorderMap.blue} bg-sol-bg-alt/30`
+    : isAgentReport
+    ? "border-sol-violet/60 bg-sol-violet/5"
     : "border-sol-cyan/60 bg-sol-cyan/5";
-  const labelText = isPending ? "text-amber-400/80" : isTeammate ? "text-sol-text-dim/70" : "text-sol-cyan/70";
-  const iconText = isPending ? "text-amber-400/70" : isTeammate ? "text-sol-text-dim/60" : "text-sol-cyan/70";
+  const labelText = isPending ? "text-amber-400/80" : isTeammate ? "text-sol-text-dim/70" : isAgentReport ? "text-sol-violet/70" : "text-sol-cyan/70";
+  const iconText = isPending ? "text-amber-400/70" : isTeammate ? "text-sol-text-dim/60" : isAgentReport ? "text-sol-violet/70" : "text-sol-cyan/70";
+  // Where the message was WRITTEN. A named sender carries its conversation on
+  // linkToConversationId; a `cast send` names its sender by short id, which the
+  // server resolves. Either way the jump lands on the turn that ran the send,
+  // not at the tail of the sender's thread — see useJumpToSendingMessage.
+  const senderRef = linkToConversationId ?? (!namedSender && from && from !== "unknown" ? from : undefined);
+  const jumpToSendingMessage = useJumpToSendingMessage(senderRef, timestamp, body);
+  const linkText = isPending
+    ? "text-amber-400"
+    : isTeammate
+    ? agentTextMap[color || "blue"] || agentTextMap.blue
+    : isAgentReport
+    ? "text-sol-violet"
+    : "text-sol-cyan";
   return (
     <div className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : variant === "update" ? "Update from" : "Message from"}</span>
-        {isTeammate ? (
-          // A teammate's name isn't a session id, so it can't be an EntityIdPill —
-          // but when the sender is resolvable (team-lead → this conversation's
-          // spawned_by parent) the badge clicks through to that session.
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
+        {namedSender ? (
+          // A teammate id or a subagent name isn't a session id, so it can't be an
+          // EntityIdPill — but when the sender is resolvable (team-lead → this
+          // conversation's spawned_by parent, a subagent name → its child conversation)
+          // the badge clicks through to that session.
           linkToConversationId ? (
             <button
-              onClick={() => useInboxStore.getState().navigateToSession(linkToConversationId)}
-              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}
-              title="View the sender's session"
+              onClick={() => { void jumpToSendingMessage(); }}
+              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${badgeColor}`}
+              title="Open the sender's session at the message that sent this"
             >
               {from}
             </button>
           ) : (
-            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${badgeColor}`}>{from}</span>
           )
         ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
@@ -7511,6 +7521,20 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
           <span className="text-xs font-medium text-sol-cyan/90">{name}</span>
         ) : (
           <span className="text-xs text-sol-text-muted">another session</span>
+        )}
+        {/* The sender's identity says WHO wrote this; this says WHERE. Naming a
+            session alone lands a reader at its tail, which is almost never the
+            moment the message was written — so the card offers the turn itself,
+            plainly, rather than hiding it behind the badge. */}
+        {senderRef && (
+          <button
+            onClick={() => { void jumpToSendingMessage(); }}
+            className={`inline-flex items-center gap-0.5 text-[11px] font-medium shrink-0 underline underline-offset-2 decoration-dotted hover:decoration-solid ${linkText}`}
+            title="Open the sender's session at the message that sent this"
+          >
+            <ArrowUpRight className="w-3 h-3" />
+            Open the sending message
+          </button>
         )}
         {isTeammate && summary && (
           <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
@@ -7530,7 +7554,7 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
         <div className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
           {/* The header just named the sender, so its mentions in the body are
               repeats and render as the short name. */}
-          <EstablishedRefsProvider ids={[isTeammate ? null : from]}>
+          <EstablishedRefsProvider ids={[namedSender ? null : from]}>
             <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
               components={MESSAGE_MD_COMPONENTS}
             >{body}</ReactMarkdown>
@@ -7869,6 +7893,19 @@ const agentColorMap: Record<string, string> = {
   pink: "bg-pink-500/20 text-pink-400 border-pink-500/30",
 };
 
+// Text-only companion to agentColorMap, for chrome that carries the sender's
+// color without a chip around it.
+const agentTextMap: Record<string, string> = {
+  blue: "text-blue-400",
+  red: "text-red-400",
+  green: "text-emerald-400",
+  yellow: "text-amber-400",
+  purple: "text-violet-400",
+  cyan: "text-cyan-400",
+  orange: "text-orange-400",
+  pink: "text-pink-400",
+};
+
 const agentBorderMap: Record<string, string> = {
   blue: "border-blue-500/30",
   red: "border-red-500/30",
@@ -7880,13 +7917,13 @@ const agentBorderMap: Record<string, string> = {
   pink: "border-pink-500/30",
 };
 
-function TeammateEventsBlock({ content, timestamp, spawnedByConversationId }: { content: string; timestamp: number; spawnedByConversationId?: string }) {
+function TeammateEventsBlock({ content, timestamp, spawnedByConversationId, agentNameToChildMap }: { content: string; timestamp: number; spawnedByConversationId?: string; agentNameToChildMap?: Record<string, string> }) {
   const parts = parseTeammateMessages(content);
   return (
     <div className="my-1 space-y-1">
       {parts.map((part, i) => {
         if (part.type === 'teammate') {
-          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} spawnedByConversationId={spawnedByConversationId} />;
+          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} spawnedByConversationId={spawnedByConversationId} agentNameToChildMap={agentNameToChildMap} />;
         }
         // Drop the harness's framing boilerplate ("Another Claude session sent a
         // message:" / the "permission laundering" disclaimer) — it's machine instruction
@@ -7899,7 +7936,7 @@ function TeammateEventsBlock({ content, timestamp, spawnedByConversationId }: { 
   );
 }
 
-function TeammateMessageCard({ teammateId, color, summary, content, timestamp, spawnedByConversationId }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number; spawnedByConversationId?: string }) {
+function TeammateMessageCard({ teammateId, color, summary, content, timestamp, spawnedByConversationId, agentNameToChildMap }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number; spawnedByConversationId?: string; agentNameToChildMap?: Record<string, string> }) {
   const safeContent = content || '';
   let parsed: any = null;
   try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
@@ -7984,7 +8021,9 @@ function TeammateMessageCard({ teammateId, color, summary, content, timestamp, s
   // A substantive teammate broadcast reuses the cast-send card (SessionMessageBlock) via its
   // teammate variant — the same format and code, only slightly distinct.
   return (
-    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} linkToConversationId={teammateId === "team-lead" ? spawnedByConversationId : undefined} />
+    // Both directions resolve: the lead a worker reports to is this session's
+    // spawned_by parent, and a sibling worker's name is in the team's roster.
+    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} linkToConversationId={teammateId === "team-lead" ? spawnedByConversationId : agentNameToChildMap?.[teammateId]} />
   );
 }
 
@@ -8707,9 +8746,9 @@ type ReceiptEntry = { messageId: string; messageUuid?: string; timestamp: number
 type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: () => void };
 
 // One distinct receipt standing in for a segment's tool activity in the
-// condensed feed. Closed, it is a faint footnote under the prose, with no box
-// of its own so the eye reads the agent's text and skips the receipts: a busy
-// segment counts ("read 3 files · ran 2 commands · 1 search"); one or two
+// condensed feed. Closed, it is a faint footnote under the prose — a dashed
+// outline at reduced opacity, so the eye reads the agent's text and skips the
+// receipts: a busy segment counts ("read 3 files · ran 2 commands · 1 search"); one or two
 // tools fit their real subject in the same space, so they say it ("ran npm
 // test", "read lib/foo.ts"). Screenshots taken by the folded tools ride along as clickable
 // thumbnails, so images stay reachable without opening the group — which is
@@ -8777,10 +8816,26 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-      className={`flex items-center flex-wrap gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer -ml-1 pl-1 pr-2 py-0.5 rounded-md text-[11px] transition-colors ${
+      // One box in both states — same padding, same border width, the outline
+      // starting on the text column's own left edge — so only colour changes
+      // when it opens and the click target never moves or resizes. The open
+      // state carries a transparent border to hold that geometry.
+      //
+      // Closed, the dashed outline says "something is folded here" without
+      // claiming the weight of a real block: no fill, dim text, and 60% opacity
+      // over the WHOLE row, so the browser pills and the screenshot thumbnails
+      // fade with it and the receipt reads under the reply it sits below rather
+      // than beside it. The pointer brings it all back.
+      //
+      // Every colour here is a whole token: an opacity modifier on sol-border /
+      // sol-text-dim / sol-bg-alt emits NO rule at all, because tailwind.config
+      // maps those to a bare var() with no <alpha-value> slot. Only the hex
+      // accents (cyan, blue…) take one, which is why the fade is an opacity on
+      // the row rather than alpha on each colour.
+      className={`flex items-center flex-wrap gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border px-2 py-1 text-[11px] transition ${
         expanded
-          ? "text-sol-text-secondary hover:bg-sol-bg-alt/70"
-          : "text-sol-text-dim/70 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70"
+          ? "border-transparent text-sol-text-secondary hover:bg-[var(--cc-panel-head-bg)]"
+          : "border-dashed border-sol-border text-sol-text-dim opacity-60 hover:opacity-100 hover:text-sol-text-secondary hover:border-sol-cyan/35 hover:bg-[var(--cc-panel-head-bg)]"
       }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
@@ -13563,6 +13618,7 @@ const ConversationViewInner = (
           timestamp: serverPending.created_at,
           _isOptimistic: true,
           _serverPendingStatus: serverPending.status,
+          _serverPendingReason: serverPending.hold_reason,
         });
       }
     }
@@ -13774,7 +13830,7 @@ const ConversationViewInner = (
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'session_updates', 'chat_wake', 'agent_switch']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'chat_wake', 'agent_switch']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -15729,7 +15785,7 @@ const ConversationViewInner = (
   // Where relative file mentions in this conversation resolve (FilePathLink):
   // the session's working directory, and the home it implies for `~/…`.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
-  const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]) }), [filePathBase]);
+  const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository }), [filePathBase, codeRepository]);
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16118,9 +16174,7 @@ const ConversationViewInner = (
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
-          return <SessionMessageBlock key={msg._id} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
-        case 'session_updates':
-          return <SessionUpdateBatchBlock key={msg._id} batch={kind.batch} pendingStatus={(msg as any)._serverPendingStatus} />;
+          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} recipientActive={conversation?.status === "active"} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} />;
         case 'huddle_summary':
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
@@ -16132,7 +16186,7 @@ const ConversationViewInner = (
         case 'plan':
           return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
-          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
+          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} agentNameToChildMap={agentNameToChildMap} />;
         case 'direct_user':
         case 'decision_answer':
         case 'normal': {
@@ -17064,6 +17118,11 @@ const ConversationViewInner = (
                 {(() => {
                   const kind = userMsgKindMap.get(activeStickyMsg.id);
                   if (kind?.kind === "session_message") {
+                    // A subagent's report names an agent, not a session — a pill would
+                    // resolve nothing, so it keeps the badge the card gives it.
+                    if (kind.variant === "agent") {
+                      return <><Bot className="w-4 h-4 text-sol-violet" /><span className="text-sol-violet text-xs">Report from</span><span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap.purple}`}>{kind.from}</span></>;
+                    }
                     return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
                   }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;

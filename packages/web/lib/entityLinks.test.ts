@@ -18,6 +18,10 @@ import {
   parseRepoObjectId,
   repoObjectId,
   parseGitHubLocationUrl,
+  contextualPrRefRegex,
+  contextualPrRefPayload,
+  parseContextualPrRef,
+  splitContextualPrRefs,
 } from "./entityLinks";
 
 const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
@@ -442,5 +446,45 @@ describe("parseGitHubLocationUrl", () => {
     expect(parseGitHubLocationUrl("https://github.com/codecast-sh/codecast/issues/4")).toBeNull();
     expect(parseGitHubLocationUrl("https://gitlab.com/codecast-sh/codecast/tree/main")).toBeNull();
     expect(parseGitHubLocationUrl("/repo/codecast-sh/codecast")).toBeNull();
+  });
+});
+
+describe("contextual pull request references", () => {
+  // A number alone names a pull request only inside a conversation bound to a
+  // repository, so the scanner reports the number and the words before it,
+  // and the payload carries the text as written so no surface alters prose.
+  const all = (text: string) => [...text.matchAll(contextualPrRefRegex())].map((m) => [m[1], m[2]]);
+  const numbers = (text: string) =>
+    [...text.matchAll(contextualPrRefRegex())].flatMap((m) => splitContextualPrRefs(m[1], m[2], m[3] ?? "")).flatMap((t) => ("number" in t ? [t.label] : []));
+
+  test("finds a hash number, PR with and without a hash, and pull request", () => {
+    expect(all("see #3263 and PR 3247 and PR #3230, also pull request 12 and PRs 5")).toEqual([
+      ["#", "3263"], ["PR ", "3247"], ["PR #", "3230"], ["pull request ", "12"], ["PRs ", "5"],
+    ]);
+  });
+
+  test("a hash glued to a word, a path, an entity or a longer number is not one", () => {
+    expect(all("open page.html#12 and &#123; and #1234567 and a#3")).toEqual([]);
+    expect(all("issue#12")).toEqual([]);
+  });
+
+  test("a list after the first number continues the reference, same digit count only", () => {
+    expect(numbers("PRs 3263 (rescheduled card), 3262 (verbal yes on a call), 3254 and 3253 (feedback), 3261 (sim write leak) all trace")).toEqual(
+      ["3263", "3262", "3254", "3253", "3261"],
+    );
+    expect(numbers("PRs 3252 (reconciler timeouts), 3260, 3259, 3251 come from here")).toEqual(["3252", "3260", "3259", "3251"]);
+    expect(numbers("PR 3263 (x), 3 items and #482, #483")).toEqual(["3263", "#482", "#483"]);
+    // The prose between the numbers is kept, character for character.
+    const m = contextualPrRefRegex().exec("PRs 3254 and 3253 (feedback), 3261 next")!;
+    expect(splitContextualPrRefs(m[1], m[2], m[3]).map((t) => ("text" in t ? t.text : `<${t.label}>`)).join("")).toBe("PRs <3254> and <3253> (feedback), <3261>");
+    expect(m[0]).toBe("PRs 3254 and 3253 (feedback), 3261");
+  });
+
+  test("the payload round-trips number and label", () => {
+    expect(contextualPrRefPayload(3263, "#3263")).toBe("pr:#3263|#3263");
+    expect(parseContextualPrRef("pr:#3263|#3263")).toEqual({ number: 3263, label: "#3263" });
+    expect(parseContextualPrRef("pr:#3247|3247")).toEqual({ number: 3247, label: "3247" });
+    expect(parseContextualPrRef("pr:3247")).toBeNull();
+    expect(parseContextualPrRef("doc:abc")).toBeNull();
   });
 });

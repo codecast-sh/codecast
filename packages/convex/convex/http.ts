@@ -4233,9 +4233,6 @@ cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
-cliRoute("/cli/messages/update", async (ctx, body) => ctx.runMutation(api.sessionUpdates.queueUpdate, body));
-cliRoute("/cli/messages/update-status", async (ctx, body) => ctx.runQuery(api.sessionUpdates.getUpdateStatus, body));
-cliRoute("/cli/messages/update-cancel", async (ctx, body) => ctx.runMutation(api.sessionUpdates.cancelUpdate, body));
 
 // Session labels (personal filing). List the catalog, file/unfile a session,
 // and manage the label catalog itself.

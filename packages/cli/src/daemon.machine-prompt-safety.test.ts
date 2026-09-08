@@ -5,17 +5,17 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
-import { formatSessionUpdateBatch } from "../../shared/contracts/sessionUpdates";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
+import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, pasteAndSubmitText, pasteTextIntoPane as pasteTextIntoPaneWith, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
-afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); clearPromptHolds(); setPendingRedrive(null); });
 const poll = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Deploy" });
 const session = (body: string) => `<session-message from="jxsrc01">\n${body}\n</session-message>`;
-const batch = (body: string) => formatSessionUpdateBatch("batch-1", [{ id: "update-1", from: "jxsrc01", sent_at: 1, body }]);
+const batch = session;
 const menu = "Ship the change?\n❯ 1. Deploy\n  2. Deny\nEnter to select · Esc to cancel";
 const cursorMenu = "Ship the change?\n❯ 1. Deploy\n  2. Deny";
 const confirmation = "Confirm deployment\nPress Enter to continue · Esc to cancel";
@@ -117,19 +117,20 @@ function fixture(transport = "tmux", cached = true) {
   const closed: unknown[][] = [];
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
-  const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean }>();
+  const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
   const syncService = {
     getConversationOwnerInfo: async () => null,
     claimPendingMessageForDelivery: async (id: string) => messages.get(id) ?? { _id: id, conversation_id: "conv" },
     updateMessageStatus: async (args: any) => { statuses.push(args); },
     updateSessionAgentStatus: async () => {},
-    retryMessage: async (id: string) => { events.push(`retry:${id}`); },
+    retryMessage: async (id: string, opts?: { holdReason?: string }) => { events.push(opts?.holdReason ? `hold:${id}` : `retry:${id}`); },
     setSessionError: async () => {},
     cancelPendingMessage: fail("cancel pending"),
   };
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, PendingDeliveryHeldError, createDeliveryAdmission,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold,
     clientAcceptsBracketedPaste, pasteAndSubmitText, pasteTextIntoPaneWith, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {
@@ -173,7 +174,7 @@ function fixture(transport = "tmux", cached = true) {
       : { tmuxTarget: null, proc: { tty: "ttys-test", termProgram: transport } },
     markInjectedBestEffort: (_sync: unknown, id: string) => {
       statuses.push({ messageId: id, status: "injected" });
-      injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false });
+      injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false, pasted: false });
     },
     clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
     autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
@@ -388,18 +389,40 @@ describe("machine prompt delivery safety", () => {
     await f.scan([{ _id: "update", content }, { _id: "answer", content: poll }]);
     expect(f.state.menu).toBeNull();
     expect(f.bodies).toEqual([]);
-    expect(f.events).toEqual(["Enter"]);
+    // The refused update is HELD (re-pended without spending a retry), the
+    // human's answer is never held, and delivering it releases the hold.
+    expect(f.events).toEqual(["hold:update", "Enter"]);
+    expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBe(0);
     expect(f.deps.messagesInFlight.size).toBe(0);
     expect(f.deps.conversationDeliveryActive.size).toBe(0);
     expect(f.deps.tmuxTargetLocks.size).toBe(0);
     expect(f.deps.injectedMessageTs.has("update")).toBe(false);
     expect(f.statuses.filter((s: { status: string }) => s.status === "delivered" || s.status === "undeliverable")).toEqual([]);
-    const retry = f.timers.find((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)!;
-    expect(retry).toBeDefined();
-    await retry.fn();
     await f.scan([{ _id: "update", content }]);
     expect(f.bodies).toEqual([content]);
     await f.scan([{ _id: "update", content }]);
+    expect(f.bodies).toEqual([content]);
+  });
+
+  test("a held conversation is skipped without touching the pane until the prompt closes", async () => {
+    const f = fixture();
+    const content = session("status update");
+    await f.scan([{ _id: "held", content }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:held"]);
+    expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    const captures = f.state.captures;
+    await f.scan([{ _id: "held", content }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:held"]);
+    let redriven = 0;
+    setPendingRedrive(() => { redriven++; });
+    f.state.menu = null;
+    expect(releasePromptHold("conv")).toBe(true);
+    expect(redriven).toBe(1);
+    await f.scan([{ _id: "held", content }]);
     expect(f.bodies).toEqual([content]);
   });
 

@@ -1787,12 +1787,16 @@ export class SyncService {
     messageId: string;
     status: "pending" | "injected" | "delivered" | "failed" | "undeliverable";
     deliveredAt?: number;
+    // The paste was seen in the composer and the Enter accepted: the only
+    // "injected" a status ack may terminalize (managedSessions.ackableInjectedRow).
+    pasteVerified?: boolean;
   }): Promise<void> {
     return this.guarded(async () => {
       await this.mutate("pendingMessages:updateMessageStatus" as any, {
         message_id: params.messageId,
         status: params.status,
         delivered_at: params.deliveredAt,
+        ...(params.pasteVerified ? { paste_verified: true } : {}),
         api_token: this.apiToken,
         device_id: deviceId(),
       });
@@ -1810,10 +1814,13 @@ export class SyncService {
     });
   }
 
-  async retryMessage(messageId: string): Promise<void> {
+  // With holdReason the row is re-pended WITHOUT spending a retry: the paste was
+  // refused because the terminal waits for a human, not because it failed.
+  async retryMessage(messageId: string, opts?: { holdReason?: string }): Promise<void> {
     return this.guarded(async () => {
       await this.mutate("pendingMessages:retryMessage" as any, {
         message_id: messageId,
+        ...(opts?.holdReason ? { hold_reason: opts.holdReason } : {}),
         api_token: this.apiToken,
         device_id: deviceId(),
       });

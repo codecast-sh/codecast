@@ -447,6 +447,48 @@ describe("parseInteractivePrompt rejects prose answers with numbered sections", 
 // visible BELOW the candidate options proves the pane is NOT blocked. Two real
 // incidents (conv jx730d3, 2026-06-11): a 4-item chord spec minted a poll, and prose
 // mentioning "enter to confirm"/"esc to cancel" minted a Continue/Cancel card.
+// A message queued behind a running turn (Claude Code 2.1.263, captured live on
+// 2026-09-08): the queued text renders above the composer as a "❯" block with
+// indented continuation lines, the composer row reads "Press up to edit queued
+// messages", and the footer bar is replaced by "paste again to expand". Neither
+// variant may read it as a dialog — the machine guard would refuse every cast
+// send behind it, and the health check would mint a card whose "question" is
+// another session's message.
+describe("parseInteractivePrompt ignores a queued message above the composer", () => {
+  const queuedPane = [
+    "❯ Without using any tools, write a 3000 word essay about the history of the C programming language. Do not stop early.",
+    "",
+    "✻ Cultivating…",
+    "  ⎿  Tip: Running multiple Claude sessions? Use /color and /rename to tell them apart at a glance.",
+    "",
+    "  ❯ Hold fix is on the shared checkout at e750d83a03, working tree, four files:",
+    "    - outreach/backend/src/lib/agent/prompts/templates/partials/engagement-ladder.njk",
+    "    - outreach/backend/src/lib/agent/prompts/templates/partials/daily-review.njk",
+    "    - outreach/backend/tests/unit/__fixtures__/promptTemplateFidelity/playbook-review-due.txt",
+    "    - outreach/backend/tests/unit/__fixtures__/promptTemplateFidelity/playbook-review-idle.txt",
+    "    Six lines changed, promptTemplateFidelity green against them. The two ops files in the tree (agents/ops.ts, tools/postSlackMessage.ts) are someone else,",
+    "    not mine. timedMemory numbers follow when the three runs land.",
+    "─".repeat(160),
+    "❯ Press up to edit queued messages",
+    "─".repeat(160),
+    "  paste again to expand                                                                                                                                    /rc",
+  ].join("\n");
+
+  test("the health check sees no prompt", () => {
+    expect(parseInteractivePrompt(queuedPane)).toBeNull();
+  });
+
+  test("the machine guard sees no prompt", () => {
+    expect(parseInteractivePrompt(queuedPane, true)).toBeNull();
+  });
+
+  test("a queued message with a paste chip still open reads the same", () => {
+    const chip = queuedPane.replace("❯ Press up to edit queued messages", "❯ [Pasted text #1 +8 lines]");
+    expect(parseInteractivePrompt(chip)).toBeNull();
+    expect(parseInteractivePrompt(chip, true)).toBeNull();
+  });
+});
+
 describe("parseInteractivePrompt rejects prose when the live composer is below it", () => {
   const composerChrome = [
     "✢ Actualizing… (3m 6s · ↓ 14.4k tokens · thought for 2s)",

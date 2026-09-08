@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
+import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { isCodexSafetyError, isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
@@ -174,7 +175,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
@@ -1321,7 +1322,10 @@ const compactionRedeliveryBypass = new Set<string>(); // messageIds that should 
 // 'gogo' processed 7x, ct-38507). The hard cap is the last-resort redelivery deadline when
 // confirmation never arrives.
 const messagesInFlight = new Map<string, { ts: number; conversationId: string }>();
-const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean }>();
+// `pasted` flips once the paste was SEEN in the composer and submitted: only
+// such an entry is vouched to the server (collectPastedInjectedIds, the
+// paste_verified stamp). A pre-paste entry exists solely for dedup.
+const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
 const INJECTION_DEDUP_TTL_MS = 60_000;
 const UNCONFIRMED_INJECTION_DEDUP_MAX_MS = 30 * 60_000;
@@ -1351,7 +1355,7 @@ export function markInjectedBestEffort(
   syncService: Pick<SyncService, "updateMessageStatus">,
   messageId: string,
   timeoutMs: number = MARK_INJECTED_TIMEOUT_MS,
-  opts?: { conversationId?: string; retryDelaysMs?: readonly number[] },
+  opts?: { conversationId?: string; retryDelaysMs?: readonly number[]; pasteVerified?: boolean },
 ): Promise<void> {
   // Register the dedup entry BEFORE the first attempt: the paste follows within ms of this
   // call, so from here on a pending-scanner pass must treat the message as injected. The
@@ -1362,12 +1366,17 @@ export function markInjectedBestEffort(
       ts: Date.now(),
       conversationId: opts.conversationId,
       confirmed: prior?.confirmed ?? false,
+      pasted: (prior?.pasted ?? false) || !!opts.pasteVerified,
     });
   }
+  // The write carries the paste_verified stamp once the entry says the paste
+  // landed — read at attempt time so a retry loop started by the pre-paste
+  // mark carries it too.
   const attempt = (): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const pasteVerified = injectedMessageTs.get(messageId)?.pasted === true;
     return Promise.race([
-      syncService.updateMessageStatus({ messageId, status: "injected" }).then(() => true),
+      syncService.updateMessageStatus({ messageId, status: "injected", ...(pasteVerified ? { pasteVerified: true } : {}) }).then(() => true),
       new Promise<boolean>((_, reject) => {
         timer = setTimeout(() => reject(new Error("mark_injected_timeout")), timeoutMs);
       }),
@@ -1423,6 +1432,9 @@ export function collectPastedInjectedIds(conversationId: string): string[] {
   for (const [id, entry] of injectedMessageTs) {
     if (entry.conversationId !== conversationId) continue;
     if (messagesInFlight.has(id)) continue;
+    // A pre-paste mark is not a paste: an ack on it would terminalize a row
+    // whose paste was refused or never showed (a lost cast send, 2026-09-08).
+    if (!entry.pasted) continue;
     ids.push(id);
   }
   return ids;
@@ -6705,7 +6717,7 @@ interface GitInfo {
 // reconciliation loop and `cast doctor` can share the EXACT same rules without
 // importing this giant daemon module. Imported at the top and re-exported here
 // for backward compatibility with tests that import them from "./daemon.js".
-export { TEST_SCRATCH_DIRNAME, isTestScratchPath, isProjectAllowedToSync };
+export { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync };
 
 // Eight git child processes per call, and `git diff` / `git status` on a busy
 // repo take seconds when the disk is contended (8s and 14s on 2026-09-02, a
@@ -7024,6 +7036,7 @@ async function observeTranscriptAckWindow(sessionId: string, file: string): Prom
   const pasted = new Map<string, string[]>();
   for (const [id, entry] of injectedMessageTs) {
     if (messagesInFlight.has(id)) continue;
+    if (!entry.pasted) continue;
     const ids = pasted.get(entry.conversationId) ?? [];
     ids.push(id); pasted.set(entry.conversationId, ids);
   }
@@ -11906,6 +11919,9 @@ export async function closeSyntheticPrompt(
   syncService: SyncService,
   resolution: string,
 ): Promise<void> {
+  // Whatever card this closes, the terminal no longer waits for a human:
+  // machine messages held behind it may deliver now.
+  releasePromptHold(conversationId);
   const promptUuid = lastEmittedSyntheticPrompt.get(sessionId);
   if (!promptUuid || !promptUuid.startsWith("interactive-prompt-")) return;
   lastEmittedSyntheticPrompt.delete(sessionId);
@@ -21204,6 +21220,9 @@ async function deliverMessage(
   if (!isMachineDeliveredMessage(content)) {
     const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
     pendingInteractivePrompts.delete(sessionId || conversationId);
+    // A person is answering the terminal: machine messages held behind the
+    // prompt may go after this one.
+    releasePromptHold(conversationId);
 
     // If there's an active poll and the message is plain text (not already a poll response),
     // check if it matches one of the poll options and convert to a poll response
@@ -21694,6 +21713,9 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   };
 
   for (const dir of projectDirs) {
+    // Never repair a path the sync gates refuse: the dir belongs to a test run,
+    // its tmpdir is usually already deleted, and the scan only logs ENOENT.
+    if (isTestArtifactPath(dir)) continue;
     const dirPath = path.join(claudeProjectsDir, dir);
     const sessionFiles = fs.readdirSync(dirPath)
       .filter(f => f.endsWith(".jsonl") && f !== "sessions-index.json");
@@ -25978,6 +26000,15 @@ async function main(): Promise<void> {
           syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" }).catch(logConvexFailure);
           continue;
         }
+        // The terminal is waiting for a human answer: a paste would answer it,
+        // so the conversation is skipped until the prompt closes or the hold
+        // window lapses (see pendingPromptHold). Not a retry, not an attempt.
+        // A human's own answer is never held: it is what closes the prompt.
+        const holdMs = isMachineDeliveredMessage(msg.content) ? promptHoldRemainingMs(msg.conversation_id) : 0;
+        if (holdMs > 0) {
+          logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - conv=${msg.conversation_id.slice(0, 12)} is waiting for a human answer (next try in ${Math.ceil(holdMs / 1000)}s)`);
+          continue;
+        }
         const inFlight = messagesInFlight.get(msg._id);
         if (inFlight !== undefined) {
           const age = Date.now() - inFlight.ts;
@@ -26037,7 +26068,7 @@ async function main(): Promise<void> {
         if (lastInjected && (Date.now() - lastInjected.ts) < injectionDedupWindowMs(lastInjected) && !isCompactionRecovery) {
           logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjected.ts) / 1000)}s ago${lastInjected.confirmed ? "" : " (unconfirmed)"}, updating status only`);
           try {
-            await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
+            await syncService.updateMessageStatus({ messageId: msg._id, status: "injected", ...(lastInjected.pasted ? { pasteVerified: true } : {}) });
             lastInjected.confirmed = true; // a served status write IS the confirmation
           } catch {}
           messagesInFlight.delete(msg._id);
@@ -26085,12 +26116,16 @@ async function main(): Promise<void> {
               syncService.updateSessionAgentStatus(msg.conversation_id, "thinking", undefined, undefined, undefined, true).catch(logConvexFailure);
             }
             // Restamp ts but keep the confirmed flag: markInjectedBestEffort registered the
-            // entry pre-paste and may have already confirmed the status write.
+            // entry pre-paste and may have already confirmed the status write. The paste
+            // was seen and submitted, so the entry is now vouchable and the server row
+            // gets its paste_verified stamp (a status ack may terminalize it from here).
             injectedMessageTs.set(msg._id, {
               ts: Date.now(),
               conversationId: msg.conversation_id,
               confirmed: injectedMessageTs.get(msg._id)?.confirmed ?? false,
+              pasted: true,
             });
+            markInjectedBestEffort(syncService, msg._id, undefined, { conversationId: msg.conversation_id, pasteVerified: true });
             // Track for post-compaction recovery: if CC compacts and goes idle,
             // we can re-inject this message. Skip on recovery re-injections to
             // prevent infinite compaction->recovery loops.
@@ -26122,6 +26157,14 @@ async function main(): Promise<void> {
           injectedMessageTs.delete(msg._id);
           if (err instanceof PendingDeliveryHeldError) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} no longer admitted; preserving it without retry`);
+          } else if (err instanceof MachineInputBlockedError || /terminal is waiting for a human answer/.test(errMsg)) {
+            // Not a failed attempt: the pane shows a menu or confirmation a
+            // human must answer, and a paste would answer it. Re-pend without
+            // spending the retry budget, skip the conversation for a short
+            // hold, and re-drive when the prompt closes.
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
+            holdConversationForPrompt(msg.conversation_id);
+            syncService.retryMessage(msg._id, { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
           } else if (err instanceof UndeliverableMessageError) {
             // Terminal by construction: cancel (a status the server never
             // re-pends) instead of burning the retry ladder.
@@ -26224,7 +26267,7 @@ async function main(): Promise<void> {
   // (see handlePendingMessagesUpdate).
   const PENDING_POLL_INTERVAL_MS = 60_000;
   let pendingPollInFlight = false;
-  setInterval(() => {
+  const pollPendingNow = () => {
     if (pendingPollInFlight) return;
     pendingPollInFlight = true;
     (async () => {
@@ -26241,7 +26284,10 @@ async function main(): Promise<void> {
     }).finally(() => {
       pendingPollInFlight = false;
     });
-  }, PENDING_POLL_INTERVAL_MS);
+  };
+  setInterval(pollPendingNow, PENDING_POLL_INTERVAL_MS);
+  // A closed human prompt re-drives held messages through the same scan.
+  setPendingRedrive(pollPendingNow);
 
   const setupPermissionSubscription = () => {
     try {

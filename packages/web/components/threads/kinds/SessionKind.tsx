@@ -6,7 +6,7 @@ import { threadStateView } from "../../../lib/threadState";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import { classifyFeedMessage } from "../../../lib/conversationProcessor";
 import { useConversationMessages, type Message } from "../../../hooks/useConversationMessages";
-import { parseInboundSessionMessage, isSessionMessage } from "../../sessionMessage";
+import { parseAgentAuthoredMessage } from "../../sessionMessage";
 import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
 import { AgentIcon } from "../../ConversationList";
 import { MessageInput } from "../../ConversationView";
@@ -76,10 +76,12 @@ function toRows(messages: Message[]): SessionRow[] {
   for (const m of messages) {
     const key = m._id;
     if (m.role === "user") {
-      if (isSessionMessage(m.content)) {
-        const parsed = parseInboundSessionMessage(m.content);
-        const text = parsed?.body || (m.content ?? "").trim();
-        if (text) rows.push({ key, role: "user", text, from: parsed?.from || undefined, mine: false });
+      // A `cast send` from another session and a subagent's report both name
+      // their sender on the wire; either way the row is not the human's words.
+      const envelope = parseAgentAuthoredMessage(m.content);
+      if (envelope) {
+        const text = envelope.body || (m.content ?? "").trim();
+        if (text) rows.push({ key, role: "user", text, from: envelope.from || undefined, mine: false });
         continue;
       }
       const d = classifyFeedMessage(m.content);

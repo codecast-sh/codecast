@@ -101,6 +101,10 @@ export interface FilePathContextValue {
   base?: string;
   /** Home directory for `~/…`, inferred from the session's own paths. */
   home?: string;
+  /** The GitHub repository the session works in (`owner/name`), which is what
+   *  a bare `#3263` or `PR 3263` in its prose refers to. Absent, those stay
+   *  the text they were written as. */
+  repository?: string | null;
 }
 
 /** Provided once per conversation (ConversationView) with the session's
