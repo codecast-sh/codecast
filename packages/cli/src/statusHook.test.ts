@@ -169,3 +169,89 @@ describe("codecast-status hook AskUserQuestion sidecar", () => {
     expect(sidecarExists("sidecar-bash")).toBe(false);
   });
 });
+
+// The sidecar's file name is built out of the session id the hook payload carries,
+// so an id that walks out of ~/.codecast/ask-input drops the questions payload
+// wherever it points (ct-49677). These run the real bash + python3 the hook emits.
+describe("codecast-status hook rejects a traversing session id", () => {
+  let scratch: string;
+  let script: string;
+
+  function run(sessionId: string): number {
+    const res = Bun.spawnSync({
+      cmd: ["bash", script],
+      stdin: Buffer.from(JSON.stringify({
+        session_id: sessionId,
+        hook_event_name: "PreToolUse",
+        tool_name: "AskUserQuestion",
+        tool_input: { questions: [{ question: "Which?", options: [{ label: "A" }] }] },
+      })),
+      env: { ...process.env, HOME: scratch, CODECAST_DIR: path.join(scratch, ".codecast") },
+    });
+    return res.exitCode ?? -1;
+  }
+
+  beforeAll(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-hook-traversal-"));
+    script = path.join(scratch, "codecast-status.sh");
+    fs.writeFileSync(script, CODECAST_STATUS_HOOK, { mode: 0o755 });
+    // An EXISTING directory outside ~/.codecast — os.replace onto a missing
+    // directory would fail on its own, which would hide the hole.
+    fs.mkdirSync(path.join(scratch, "target"), { recursive: true });
+    fs.mkdirSync(path.join(scratch, ".codecast", "ask-input"), { recursive: true });
+  });
+
+  afterAll(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  test("../../target/evil writes nothing, in or out of the ask-input dir", () => {
+    // Claude Code discards a hook that fails, so the exit status must stay 0.
+    expect(run("../../target/evil")).toBe(0);
+    expect(fs.readdirSync(path.join(scratch, "target"))).toEqual([]);
+    expect(fs.readdirSync(path.join(scratch, ".codecast", "ask-input"))).toEqual([]);
+  });
+
+  test("a leading dot, a separator and an over-long id are all refused", () => {
+    for (const id of [".hidden", "a/b", "..", "x".repeat(129)]) {
+      expect(run(id), id).toBe(0);
+    }
+    expect(fs.readdirSync(path.join(scratch, ".codecast", "ask-input"))).toEqual([]);
+  });
+
+  test("a uuid-shaped id still gets its sidecar", () => {
+    const id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+    expect(run(id)).toBe(0);
+    const sc = JSON.parse(fs.readFileSync(path.join(scratch, ".codecast", "ask-input", `${id}.json`), "utf-8"));
+    expect(sc.questions[0].question).toBe("Which?");
+  });
+
+  // The check has to run before the path is built, not after: a guard placed on
+  // the write itself would still leave the mkstemp/os.replace pair reachable.
+  test("the id check precedes the sidecar's os.replace in the emitted script", () => {
+    const checkAt = CODECAST_STATUS_HOOK.indexOf("safe_sid = bool(re.fullmatch(");
+    const replaceAt = CODECAST_STATUS_HOOK.indexOf("os.replace(");
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(replaceAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeLessThan(replaceAt);
+    // …and the sidecar block is actually gated on it.
+    expect(CODECAST_STATUS_HOOK).toContain("if safe_sid and ev in ('PreToolUse', 'PermissionRequest')");
+  });
+
+  // Three copies of one rule now decide the same question: this python check, the
+  // shell guard on the status-file fallback, and isSafeStatusSessionId in the
+  // daemon. A copy that drifts is a hole, so pin them to one character class.
+  // Read from source rather than imported, so the hook suite stays free of the
+  // daemon's module graph.
+  test("python, shell and daemon spell the id rule the same way", () => {
+    const CLASS = "[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}";
+    expect(CODECAST_STATUS_HOOK).toContain(`re.fullmatch('${CLASS}', sid)`);
+    expect(CODECAST_STATUS_HOOK).toContain('""|[!A-Za-z0-9_-]*|*[!A-Za-z0-9._-]*) exit 0 ;;');
+    // ct-49531 moves the const from daemon.ts into statusSpool.ts; accept either home.
+    const homes = ["daemon.ts", "statusSpool.ts"]
+      .map(f => path.join(import.meta.dir, f))
+      .filter(p => fs.existsSync(p))
+      .map(p => fs.readFileSync(p, "utf-8"));
+    expect(homes.some(src => src.includes(`SAFE_STATUS_SESSION_ID = /^${CLASS}$/`))).toBe(true);
+  });
+});
