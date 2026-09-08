@@ -41,7 +41,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("session_pin", target.is_pinned ? "Unpin session" : "Pin session", target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? "Remove from favorites" : "Add to favorites", Star, "v", "conv.favorite"),
       row("bucket", "Label session…", Tag, "l", "session.moveToBucket"),
-      row("device", single ? "Move to machine…" : `Move ${targets.length} sessions to machine…`, ArrowRightLeft, "e"),
+      row("device", single ? "Move to machine…" : `Move ${targets.length} sessions to machine…`, ArrowRightLeft, "w"),
       ...(!target.inbox_killed_at ? [row("snooze", "Snooze session…", Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
       ...((target.dismissed || target.inbox_stashed_at || target.inbox_killed_at || target.inbox_dismissed_at) ? [row("session_restore", "Restore session to inbox", RefreshCw, "u")] : [
