@@ -47,6 +47,7 @@ import { forbidden, notFound } from "./lib/auth";
 import { insertTaskComment, recalcPlanProgress, resolveAssigneeToUserId } from "./tasks";
 import { verifyApiToken } from "./apiTokens";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
+import { inlineForeignText } from "@codecast/shared/contracts";
 
 /** A provider issue normalized to one shape before it touches a task (S2). */
 export const normalizedIssueValidator = v.object({
@@ -650,7 +651,10 @@ async function maybeDelegate(ctx: any, source: SourceDoc | null, task: any, issu
   await ctx.scheduler.runAfter(0, internal.tasks.spawnSessionForTaskInternal, {
     task_id: task._id,
     user_id: source.user_id,
-    initial_message: `Picked up from ${issue.identifier}: ${issue.url}`,
+    // Why: this is the one spawn with no human in the loop — a labelled issue
+    // launches an agent by itself — and identifier/url come from the provider,
+    // so they are escaped before they lead the prompt (ct-49559).
+    initial_message: `Picked up from ${inlineForeignText(issue.identifier)}: ${inlineForeignText(issue.url)}`,
   });
 }
 
