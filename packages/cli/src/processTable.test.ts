@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { descendantPids, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, tmuxServerRows } from "./processTable.js";
+import { descendantRows, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, tmuxServerRows } from "./processTable.js";
 import { hasTmux } from "./tmux.js";
 
 const table = parseProcessTable(`
@@ -25,9 +25,9 @@ describe("processTable", () => {
     expect(procs[1].command).toBe("/bin/bash -c eval 'cd /a\nnpm run dev' < /dev/null");
   });
 
-  test("descendantPids walks the whole subtree, root excluded", () => {
-    expect(descendantPids(table, 90449).sort()).toEqual([92000, 92001, 92002, 92003, 92004].sort());
-    expect(descendantPids(table, 92003)).toEqual([]);
+  test("descendantRows walks the whole subtree, root excluded", () => {
+    expect(descendantRows(table, 90449).map((p) => p.pid).sort()).toEqual([92000, 92001, 92002, 92003, 92004].sort());
+    expect(descendantRows(table, 92003)).toEqual([]);
   });
 
   test("tmuxServerRows: daemonized tmux on the default socket only", () => {
@@ -47,7 +47,7 @@ describe("processTable", () => {
     const stale = findStaleTmuxServers(table, 45451);
     expect(stale).toHaveLength(1);
     expect(stale[0]).toMatchObject({ pid: 90449, command: table.find((p) => p.pid === 90449)!.command, agents: 2 });
-    expect([...stale[0].tree].sort((a, b) => a - b)).toEqual([92000, 92001, 92002, 92003, 92004]);
+    expect(stale[0].tree.map((p) => p.pid).sort((a, b) => a - b)).toEqual([92000, 92001, 92002, 92003, 92004]);
     expect(findStaleTmuxServers(table, 90449).map((s) => s.pid)).toEqual([45451]);
   });
 
@@ -103,6 +103,16 @@ describe("staleTmuxServerKillPlan", () => {
     const plan = staleTmuxServerKillPlan(ownedTable, 45451, 501);
     expect(plan.refused).toBeNull();
     expect(plan.kill.map((s) => s.pid)).toEqual([90449]);
+  });
+
+  // A non-atomic `ps` can show one pid twice after a rollover. The tree walk
+  // then has no root it can trust, so "holds nothing" is indistinguishable from
+  // "holds this daemon" and the sweep must spare the server.
+  test("a server the table reports twice is spared, not killed", () => {
+    const doubled = [...ownedTable, { ...ownedTable[1], command: "tmux new-session -d -s recycled" }];
+    const plan = staleTmuxServerKillPlan(doubled, 45451, 501);
+    expect(plan.kill).toEqual([]);
+    expect(plan.selfHosted.map((s) => s.pid)).toEqual([90449, 90449]);
   });
 
   test("another user's stale server is not in the plan", () => {

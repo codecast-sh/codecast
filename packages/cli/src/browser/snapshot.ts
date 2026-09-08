@@ -655,3 +655,60 @@ export function nearMatches<T extends Named>(items: T[], query: string, limit = 
     .slice(0, limit)
     .map((s) => s.item);
 }
+
+// ---------------------------------------------------------------------------
+// The machine-readable shape
+// ---------------------------------------------------------------------------
+
+/**
+ * `snapshot --json`: the refs an agent can act on plus the tree as text.
+ *
+ * One shape whichever driver produced it, so a caller that parses the engine's
+ * answer parses the built-in driver's too. Refs carry the string form the
+ * agent types (`e12` → `#e12`), never the internal number.
+ */
+export interface SnapshotJson {
+  url: string;
+  title?: string;
+  refs: Array<{ ref: string; role: string; name: string }>;
+  text: string;
+  truncated: boolean;
+}
+
+/** The built-in CDP driver's snapshot, as JSON. */
+export function snapshotJson(s: Snapshot): SnapshotJson {
+  return {
+    url: s.url,
+    title: s.title,
+    refs: s.refs.map((r) => ({ ref: `e${r.ref}`, role: r.role, name: r.name })),
+    text: s.text,
+    truncated: s.truncated,
+  };
+}
+
+/** The browser engine's own `snapshot --json` payload. */
+export interface EngineSnapshotPayload {
+  origin?: string;
+  refs?: Record<string, { role?: string; name?: string }>;
+  snapshot?: string;
+}
+
+/**
+ * The engine's snapshot payload in our shape.
+ *
+ * The engine answers `{origin, refs: {e1: {role, name}}, snapshot}` wrapped in
+ * a lifecycle envelope that says how the browser was launched — true, and of
+ * no use to anyone reading a page. Drop it and keep the two things asked for.
+ */
+export function engineSnapshotJson(data: EngineSnapshotPayload): SnapshotJson {
+  return {
+    url: data.origin ?? "",
+    refs: Object.entries(data.refs ?? {}).map(([ref, r]) => ({
+      ref,
+      role: r?.role ?? "",
+      name: r?.name ?? "",
+    })),
+    text: data.snapshot ?? "",
+    truncated: false,
+  };
+}

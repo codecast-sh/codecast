@@ -89,7 +89,7 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
-import { c, fmt, icons } from "./colors.js";
+import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
@@ -4553,7 +4553,7 @@ accountsCmd
     for (const r of rows) {
       const mark =
         r.verdict === "ok" ? `${c.green}✓${c.reset}` :
-        r.verdict === "unverifiable" ? `${c.dim}?${c.reset}` : `${c.red}✗${c.reset}`;
+        r.verdict === "unverifiable" ? UNVERIFIABLE_MARK : `${c.red}✗${c.reset}`;
       const detail =
         r.verdict === "ok" ? `${c.dim}${r.actual_email ?? ""}${c.reset}` :
         r.verdict === "unverifiable" ? `${c.dim}${r.reason ?? "could not verify"}${c.reset}` :

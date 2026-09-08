@@ -39,7 +39,8 @@ import { grantTab } from "./bridge/host.js";
 import { cdpHttpUrl } from "./cdp.js";
 import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
-import { matchRefs, nearMatches } from "./snapshot.js";
+import { matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
+import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
 import { ensurePinnedTab } from "./pinnedTab.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
@@ -584,29 +585,28 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   const shot = !args.includes("--no-shot");
   const forwarded = args.filter((a) => a !== "--no-capture" && a !== "--no-shot");
 
-  // Did translate() have to reach for the last find? Then a failure may just
-  // be that ref going stale (a re-render, a route change since the find) —
-  // re-find by the remembered words and retry once before reporting.
+  // Did translate() have to reach for the last find? Then the remembered words
+  // are also available to a stale-ref retry, as a fallback behind the ordinal.
   const positionals = forwarded.filter((x) => !x.startsWith("--")).length;
   const usedLastFind =
     TARGETED.has(verb) && (TARGET_PLUS_VALUE.has(verb) ? positionals === 1 : positionals === 0);
 
-  let calls = translate(verb, forwarded, recallFind(session));
-  let refound = false;
+  const calls = translate(verb, forwarded, recallFind(session));
+  let retried = false;
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i];
     let res = runEngine(call.args, o);
-    if (res.status !== 0 && usedLastFind && !refound && i === 0 && !/tab_gone/.test(res.stderr + res.stdout)) {
-      const query = recallFindQuery(session);
-      if (query) {
-        refound = true;
-        const again = findRefs(query, o, { lenient: true }); // re-snapshots and re-remembers
-        const fresh = recallFind(session);
-        if (again.hits.length && fresh && fresh !== call.args.find((x) => /^@e\d+$/.test(x))) {
-          console.log(fmt.muted(`  ref went stale — re-found ${JSON.stringify(query)} as ${fresh.replace("@", "#")}`));
-          calls = translate(verb, forwarded, fresh);
-          res = runEngine(calls[i].args, o);
-        }
+    // A ref the engine cannot resolve any more — the page re-rendered, or the
+    // route changed since the snapshot. Re-find it and retry once. Gated on
+    // the engine's own "no such element" wording, because a retry re-runs the
+    // command and must never follow a failure that already touched the page.
+    const target = call.args.find((x) => /^@e\d+$/.test(x));
+    if (res.status !== 0 && target && !retried && i === 0 && isStaleRefFailure(res.stderr + res.stdout)) {
+      retried = true;
+      const again = recoverStaleRef(target, o, usedLastFind ? recallFindQuery(session) : null);
+      if (again) {
+        console.log(fmt.muted(`  ${again.note}`));
+        res = runEngine(call.args.map((x) => (x === target ? again.ref : x)), o);
       }
     }
     // The session is pinned to one tab. When that tab is gone (closed by the
@@ -619,6 +619,14 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
       } else {
         res = { ...res, stderr: `this session's tab is gone — \`cast browser open <url>\` starts a new one\n`, stdout: "" };
       }
+    }
+    // A snapshot is the one output we rewrite: names that repeat get their
+    // ordinal so the agent can say which one it means, and the ref table is
+    // remembered so a stale ref can be recovered by it (refMemory.ts).
+    if (res.status === 0 && res.stdout && call.args[0] === "snapshot" && !call.args.includes("--json")) {
+      const items = parseEngineRefs(res.stdout);
+      if (items.length) rememberSnapshotRefs(session, items);
+      res = { ...res, stdout: withOrdinals(res.stdout, items) };
     }
     if (res.stdout) process.stdout.write(res.stdout);
     if (res.stderr) process.stderr.write(res.stderr);
@@ -820,15 +828,50 @@ async function passthrough(verb: string, args: string[]): Promise<never> {
  *  prefix filter silently hid every expanded/checked/disabled element). */
 const REF_IN_LINE = /[[ ]ref=(e\d+)\]/;
 
-export function parseEngineRefs(stdout: string): Array<{ line: string; role: string; name: string }> {
-  return stdout
+/** One line of an engine snapshot, split into the parts we act on. */
+export interface EngineRef {
+  line: string;
+  ref: string;
+  role: string;
+  name: string;
+  /** Position among same role and name; set only when the name repeats. */
+  nth?: number;
+}
+
+export function parseEngineRefs(stdout: string): EngineRef[] {
+  const items = stdout
     .split("\n")
     .filter((l) => REF_IN_LINE.test(l))
     .map((line) => ({
       line: line.trim(),
+      ref: line.match(REF_IN_LINE)?.[1] ?? "",
       role: line.match(/^\s*- (\w+)/)?.[1] ?? "",
       name: line.match(/"([^"]*)"/)?.[1] ?? "",
     }));
+  // The engine prints three identical lines for three "Delete" buttons. Their
+  // position among the namesakes is the only thing that tells them apart, in
+  // the printed snapshot and on a stale-ref recovery (ct-49555).
+  const ords = ordinalsFor(items);
+  return items.map((it, i) => (ords[i].duplicated ? { ...it, nth: ords[i].nth } : it));
+}
+
+/** The engine's snapshot with `(2nd)`, `(3rd)` … on names that repeat. The ref
+ *  and the raw name are untouched, so `find "Delete"` still matches all of
+ *  them and the suffix is purely what the agent reads. */
+export function withOrdinals(stdout: string, items = parseEngineRefs(stdout)): string {
+  const labels = new Map<string, string>();
+  for (const r of items) {
+    const label = refLabel(r);
+    if (label !== r.name) labels.set(r.ref, label);
+  }
+  if (!labels.size) return stdout;
+  return stdout
+    .split("\n")
+    .map((line) => {
+      const label = labels.get(line.match(REF_IN_LINE)?.[1] ?? "");
+      return label ? line.replace(/"[^"]*"/, JSON.stringify(label)) : line;
+    })
+    .join("\n");
 }
 
 /** Reorder ambiguous matches so on-screen elements come first, given each
@@ -860,14 +903,18 @@ function findRefs(text: string, o: Ctx, opts: { lenient?: boolean } = {}): { hit
     die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
   }
   const items = parseEngineRefs(res.stdout);
-  let hits = matchRefs(items, text);
+  if (items.length) rememberSnapshotRefs(o.session, items);
+  // `find "Delete (2nd)"` asks for the second of the namesakes the snapshot
+  // printed that way — one match, so the ranking below has nothing to do.
+  const { text: query, nth } = splitOrdinalQuery(text);
+  const matched = matchRefs(items, query);
+  let hits = nth ? pickOrdinal(items, matched, nth) : matched;
   if (hits.length > 1) {
     const boxes = new Map<string, { width: number; height: number } | null>();
     for (const h of hits.slice(0, 5)) {
-      const ref = h.line.match(REF_IN_LINE)?.[1];
-      if (!ref) continue;
+      if (!h.ref) continue;
       try {
-        const box = runEngineJson<{ width?: number; height?: number }>(["get", "box", `@${ref}`], o);
+        const box = runEngineJson<{ width?: number; height?: number }>(["get", "box", `@${h.ref}`], o);
         boxes.set(h.line, box?.width !== undefined ? { width: box.width ?? 0, height: box.height ?? 0 } : null);
       } catch {
         boxes.set(h.line, null);
@@ -876,10 +923,45 @@ function findRefs(text: string, o: Ctx, opts: { lenient?: boolean } = {}): { hit
     const { ordered, hidden } = rankByVisibility(hits, (h) => boxes.get(h.line) ?? null);
     hits = ordered.map((h) => (hidden.has(h) ? { ...h, line: `${h.line}  (hidden)` } : h));
   }
-  const near = hits.length ? [] : nearMatches(items, text);
-  const ref = hits[0]?.line.match(REF_IN_LINE)?.[1];
-  if (ref) rememberFind(o.session, `@${ref}`, text);
-  return { hits: hits.map((h) => h.line), near: near.map((h) => h.line), total: items.length };
+  const near = hits.length ? [] : nearMatches(items, query);
+  if (hits[0]?.ref) rememberFind(o.session, `@${hits[0].ref}`, text);
+  return { hits: hits.map(findLine), near: near.map(findLine), total: items.length };
+}
+
+/**
+ * A ref the engine could not resolve, looked up again on a fresh snapshot.
+ *
+ * The ordinal first: the last snapshot wrote down what this ref was and which
+ * of its namesakes it was, so the retry lands on the row the agent chose rather
+ * than the first element that answers to the name — the difference between
+ * deleting the third row and deleting the first (refMemory.ts). The remembered
+ * words are the fallback, and only exist when the ref came from a `find`.
+ */
+function recoverStaleRef(target: string, o: Ctx, query: string | null): { ref: string; note: string } | null {
+  const was = recallSnapshotRef(o.session, target);
+  if (!was && !query) return null; // nothing to look up: don't pay for a snapshot
+  const res = runEngine(["snapshot"], o);
+  if (res.status === 0 && res.stdout) {
+    const items = parseEngineRefs(res.stdout);
+    if (items.length) rememberSnapshotRefs(o.session, items);
+    const plan = recoverRefPlan(was, items);
+    if (plan && was) {
+      const which = was.nth ? `the ${ordinal(was.nth)} ` : "";
+      return { ref: `@${plan}`, note: `ref went stale — retried ${which}${was.role} ${JSON.stringify(was.name)} as #${plan}` };
+    }
+  }
+  if (!query) return null;
+  const again = findRefs(query, o, { lenient: true }); // re-snapshots and re-remembers
+  const fresh = recallFind(o.session);
+  if (!again.hits.length || !fresh || fresh === target) return null;
+  return { ref: fresh, note: `ref went stale — re-found ${JSON.stringify(query)} as ${fresh.replace("@", "#")}` };
+}
+
+/** A find result as the agent reads it: the engine's own line, with the
+ *  ordinal added when the name is one of several. */
+function findLine(h: EngineRef): string {
+  const label = refLabel(h);
+  return label === h.name ? h.line : h.line.replace(/"[^"]*"/, JSON.stringify(label));
 }
 
 /** `shot`: screenshot to a file, inline in the conversation, optionally shared. */

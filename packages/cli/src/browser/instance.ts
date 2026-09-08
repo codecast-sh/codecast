@@ -18,10 +18,11 @@ import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isCdpAlive, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
-import { enablePageDomains, TabUnresponsive, type EnablePatience } from "./recovery.js";
+import { enablePageDomains, isReachable, TabUnresponsive, type EnablePatience } from "./recovery.js";
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
 import { findChromeBinary, chromeBinaryProbes, isPidAlive, ChromeNotFoundError } from "../workspace/chrome.js";
 import { acquireFileLock } from "../lockFile.js";
+import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 export interface InstanceState {
   pid: number;
@@ -151,36 +152,36 @@ export function clearState(): void {
   }
 }
 
-export type Liveness = "live" | "unresponsive" | "dead";
-
 /**
- * Three-state liveness, because "not answering" and "gone" demand opposite
- * reactions and conflating them is what caused the shared-browser restart
+ * The browser's liveness, in the machine's one vocabulary
+ * (`LivenessVerdict`, @codecast/shared/contracts). It used to be a local
+ * `"live" | "unresponsive" | "dead"`, born of the shared-browser restart
  * stampede of 2026-08-14: under machine load a single short CDP probe timed
- * out, every agent read that as "dead", and each ran the only recovery the CLI
- * offered — stop/start — killing the healthy browser under all the others.
+ * out, every agent read that as death, and each ran the only recovery the CLI
+ * offered — stop/start — killing the healthy browser under all the others. The
+ * daemon learned the same lesson about tmux panes, so the words are now shared
+ * and the rule is one function (ct-49625).
  *
- * "dead" means the browser process is gone and relaunching is safe.
- * "unresponsive" means the process EXISTS but CDP did not answer within
- * `patienceMs`; the browser is probably just overloaded, and killing or
- * replacing it would destroy every other agent's tabs. Callers must not treat
- * "unresponsive" as permission to relaunch.
+ * `exited` means the browser process is gone and relaunching is safe — the only
+ * verdict `authorizesTeardown`. `unverifiable` means the process EXISTS but CDP
+ * did not answer within `patienceMs`; the browser is probably just overloaded,
+ * and killing or replacing it would destroy every other agent's tabs.
  */
-export async function probeLiveness(state: InstanceState | null, patienceMs = 4000): Promise<Liveness> {
-  if (!state || !isPidAlive(state.pid)) return "dead";
+export async function probeLiveness(state: InstanceState | null, patienceMs = 4000): Promise<LivenessVerdict> {
+  if (!state || !isPidAlive(state.pid)) return "exited";
   const deadline = Date.now() + patienceMs;
   for (;;) {
     const left = deadline - Date.now();
-    if (left <= 0) return "unresponsive";
+    if (left <= 0) return "unverifiable";
     if (await isCdpAlive(state.port, Math.min(Math.max(left, 250), 2000))) return "live";
-    if (!isPidAlive(state.pid)) return "dead";
+    if (!isPidAlive(state.pid)) return "exited";
     if (deadline - Date.now() > 0) await sleep(Math.min(400, deadline - Date.now()));
   }
 }
 
 /** Is the recorded instance actually alive and answering CDP? */
 export async function isLive(state: InstanceState | null, patienceMs?: number): Promise<boolean> {
-  return (await probeLiveness(state, patienceMs)) === "live";
+  return isReachable(await probeLiveness(state, patienceMs));
 }
 
 function chromeBinaryFor(channel: ChromeChannel): string {
@@ -385,7 +386,7 @@ export function strayPids(userDataDir: string): number[] {
  * never going to listen. Any orphan therefore has to go before we launch, or
  * the profile is wedged until the user finds it in Activity Monitor.
  *
- * Callers must only reach this after `probeLiveness` said "dead": on a loaded
+ * Callers must only reach this after `authorizesTeardown(probeLiveness(…))`: on a loaded
  * machine a live shared browser answers CDP slowly, and killing it here is how
  * one agent's "recovery" destroyed five other agents' sessions.
  */
