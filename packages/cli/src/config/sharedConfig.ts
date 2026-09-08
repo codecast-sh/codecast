@@ -12,6 +12,14 @@ import * as path from "node:path";
 import type { Config } from "./types.js";
 import { atomicWriteFile } from "../atomicWrite.js";
 
+/** Where the config lives when no one names a directory. Here rather than in
+ *  readAuthConfig.ts because that module decrypts tokens and is deliberately
+ *  kept off index.ts's import graph, while this one is already on it: a caller
+ *  that wants only the path should not drag the auth reader along. */
+export function defaultConfigDir(): string {
+  return process.env.HOME + "/.codecast";
+}
+
 export function sharedConfigFile(configDir: string): string {
   return path.join(configDir, "config.json");
 }

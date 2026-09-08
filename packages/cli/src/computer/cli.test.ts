@@ -487,7 +487,13 @@ describe("registration cost", () => {
     // A static import of the client, the permission probe or the embedded
     // helper bundle would put that graph on the cost of `cast --help` and of
     // every unrelated verb.
-    expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual([]);
+    //
+    // commandGroups.js is the one exception, and it is free: it holds this
+    // group's description (the single copy, which the registration below reads
+    // back), bootGraph.guard.test.ts proves it imports no repo module at all,
+    // and it is already loaded before this file can be — its `load()` is what
+    // imports this file. ct-49848.
+    expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual(["../commandGroups.js"]);
   });
 
   test("nothing on the CLI's startup path pulls the computer feature in", () => {

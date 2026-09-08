@@ -64,7 +64,7 @@ let stderrBytes = 0;
 const digest = createHash('sha256');
 const prefix = Buffer.alloc(16384);
 let prefixLength = 0;
-configureDaemonWorkers(true, {}, {}, {
+await configureDaemonWorkers(true, {}, {}, {
   invocation: { command: process.execPath, args: [entry] },
   spawnChild: (command, args, env) => {
     assert.equal(children.length, 0, 'only one owned ingest child');

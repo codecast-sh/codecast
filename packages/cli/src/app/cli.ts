@@ -34,7 +34,8 @@ import { readState } from "../browser/instance.js";
 import { defaultShotPath } from "../browser/shotFile.js";
 import { secureTempFile, TEMP_FILE_MODE } from "../tempFiles.js";
 import { repoRootFor } from "../gitPlane.js";
-import type { PublishDeps } from "../publish.js";
+import type { PublishDeps } from "../castApi.js";
+import { commandGroup } from "../commandGroups.js";
 
 const OK = `${c.green}✓${c.reset}`;
 const BAD = `${c.red}✗${c.reset}`;
@@ -830,7 +831,7 @@ function targetFlags<T extends Command>(cmd: T): T {
 export function registerAppCommand(program: Command, deps: PublishDeps): void {
   const app = program
     .command("app")
-    .description("Drive and verify the codecast app itself: doctor, goto, sweep, wait-settle, as-user")
+    .description(commandGroup("app").description)
     .addHelpText("after", `
 The loop: doctor (is this page worth driving?), goto a surface or conversation,
 wait-settle, then prove with cast browser (snapshot, get text, shot) or eval.

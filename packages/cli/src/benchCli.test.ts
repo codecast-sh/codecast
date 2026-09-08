@@ -9,10 +9,23 @@ const start = source.indexOf(anchor);
 if (start < 0 || source.indexOf(anchor, start + 1) >= 0) throw new Error("expected one registered bench command");
 const action = blockAt(source, source.indexOf("  .action(", start));
 const registration = source.split("\n").slice(source.slice(0, start + 1).split("\n").length - 1, action.endLine).join("\n");
-const moduleImport = 'await import("./bench/daemonBench.js")';
-if (registration.split(moduleImport).length !== 2) throw new Error("expected one bench module import");
-const isolated = registration.replace(moduleImport, "await loadBenchModule()");
+// The action reaches each bench through its own `await import()`, so the graph
+// stays off `cast --help` (ct-49546). Each one is swapped for an injected
+// loader so this test can run the registration without loading either module;
+// `import.meta.url` goes the same way, because a `new Function` body is not a
+// module. Anything left unaccounted for fails here rather than at call time.
+const substitutions = [
+  { source: 'await import("./bench/daemonBench.js")', isolated: "await loadBenchModule()" },
+  { source: 'await import("./bench/bootBench.js")', isolated: "await loadBootModule()" },
+  { source: "import.meta.url", isolated: "moduleUrl" },
+];
+let isolated = registration;
+for (const { source: needle, isolated: stub } of substitutions) {
+  if (isolated.split(needle).length !== 2) throw new Error(`expected exactly one ${needle} in the bench action`);
+  isolated = isolated.replace(needle, stub);
+}
 if (/\bimport\s*\(/.test(isolated)) throw new Error("unexpected dynamic import in bench action");
+if (/\bimport\s*\.\s*meta\b/.test(isolated)) throw new Error("unexpected import.meta in bench action");
 const code = new Bun.Transpiler({ loader: "ts" }).transformSync(isolated);
 
 for (const fixture of [
@@ -34,10 +47,11 @@ for (const fixture of [
       renderMarkdown: () => { throw new Error("unexpected markdown output"); },
     };
   };
-  new Function("program", "process", "console", "doctorDeps", "requireAuthedConfig", "loadBenchModule", code)(
+  const loadBootModule = async () => { throw new Error("bench daemon must not load the boot bench"); };
+  new Function("program", "process", "console", "doctorDeps", "requireAuthedConfig", "loadBenchModule", "loadBootModule", "moduleUrl", code)(
     program, { exit: (value: number) => { exits.push(value); throw exit; } },
     { log: (value: string) => output.push(value), error: (value: string) => { throw new Error(value); } },
-    () => deps, () => ({}), loadBenchModule,
+    () => deps, () => ({}), loadBenchModule, loadBootModule, import.meta.url,
   );
   await expect(program.parseAsync(["bench", "daemon", "--json"], { from: "user" })).rejects.toBe(exit);
   expect(exits).toEqual([fixture.exit]); expect(imports).toBe(1); expect(calls).toHaveLength(1);

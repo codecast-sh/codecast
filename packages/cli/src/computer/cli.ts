@@ -13,6 +13,7 @@
  */
 
 import type { Command } from "commander";
+import { commandGroup } from "../commandGroups.js";
 import type { ComputerOptions, ComputerRunDeps, ComputerVerb } from "./run.js";
 
 /** Injected by the tests so a verb can run against a fake helper client. */
@@ -50,7 +51,7 @@ function observeFlags<T extends Command>(cmd: T): T {
 export function registerComputerCommand(program: Command, deps: ComputerCommandDeps = {}): void {
   const computer = program
     .command("computer")
-    .description("Drive a native macOS app through its accessibility tree (cast browser is still the tool for web pages)")
+    .description(commandGroup("computer").description)
     .addHelpText(
       "after",
       `
@@ -58,6 +59,7 @@ The loop: read an indexed tree, act on an element by its index, read the tree
 the action returns. Indexes are sparse and go stale — never infer one from
 elementCount, and take a fresh snapshot after navigation, scrolling or a delay.
 
+  cast computer setup                                grant the two permissions, once, with a human
   cast computer list-apps                            what is running
   cast computer get-app-state --app com.apple.TextEdit
   cast computer set-value --app com.apple.TextEdit --element-index 12 --value hi
@@ -100,6 +102,12 @@ release than the one about to run.
     .description("What this helper supports on this machine (materializes it on first run)")
     .option("--json", "as JSON")
     .action((o) => run("capabilities", o, deps));
+
+  computer
+    .command("setup")
+    .description("Set the helper up and walk a human through both grants (idempotent; nothing opens until they confirm)")
+    .option("--yes", "skip the confirm and open the panes — for a script, since nobody is there to answer")
+    .action((o) => run("setup", o, deps));
 
   computer
     .command("permissions")

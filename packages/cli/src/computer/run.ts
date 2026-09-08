@@ -33,6 +33,7 @@ import { formatAction, formatApps, formatCapabilities, formatSnapshot, formatWin
 import { ensureScreenshotDir, rewriteScreenshotForJson, screenshotFileName, sweepScreenshots } from "./screenshotFile.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ComputerSetupDeps } from "./setup.js";
 import type {
   ComputerActionMethod,
   ComputerActionResult,
@@ -46,6 +47,7 @@ import type {
 export type ComputerVerb =
   | "capabilities"
   | "permissions"
+  | "setup"
   | "list-apps"
   | "list-windows"
   | "get-app-state"
@@ -83,6 +85,7 @@ export interface ComputerOptions {
   id?: string;
   reset?: boolean;
   openSettings?: boolean;
+  yes?: boolean;
   elementIndex?: string;
   x?: string;
   y?: string;
@@ -123,6 +126,10 @@ export interface ComputerRunDeps {
   permissions?: () => Promise<ComputerPermissionApi>;
   readStdin?: () => string;
   stdinIsTty?: () => boolean;
+  /** What `setup` talks to besides the permission api: the materialize step,
+   *  the confirm, the clock, the Ctrl C. Production overrides none of it; a
+   *  test overrides all of it and drives the flow without a Mac. */
+  setup?: Partial<ComputerSetupDeps>;
   /** Injected so a test can assert the exit code without ending the runner. */
   exit?: (code: number) => never;
 }
@@ -432,6 +439,7 @@ async function defaultPermissions(): Promise<ComputerPermissionApi> {
 export async function runComputerVerb(verb: ComputerVerb, o: ComputerOptions, deps: ComputerRunDeps = {}): Promise<void> {
   try {
     if (verb === "permissions") return await runPermissions(o, deps);
+    if (verb === "setup") return await runSetup(o, deps);
     // Flags are validated first, so a bad chord or an out-of-range number costs
     // neither a helper launch nor the client module it would be launched from.
     const params = verb === "capabilities" || verb === "list-apps" ? {} : buildParams(verb, o, deps);
@@ -473,6 +481,18 @@ export async function runComputerVerb(verb: ComputerVerb, o: ComputerOptions, de
   } catch (err) {
     fail(err, o, deps);
   }
+}
+
+/**
+ * The grant flow. It is the only verb that both reads permissions and can put
+ * a window on screen, so the raise lives behind its confirm and nowhere else
+ * (design 11.2, 13; `focusRaise.guard.test.ts` holds the split).
+ */
+async function runSetup(o: ComputerOptions, deps: ComputerRunDeps): Promise<void> {
+  const api = await (deps.permissions ?? defaultPermissions)();
+  const { defaultSetupDeps, runComputerSetup } = await import("./setup.js");
+  const isTty = deps.stdinIsTty ?? (() => !!process.stdin.isTTY);
+  await runComputerSetup({ yes: !!o.yes }, { ...defaultSetupDeps(api, isTty), ...deps.setup });
 }
 
 async function runPermissions(o: ComputerOptions, deps: ComputerRunDeps): Promise<void> {

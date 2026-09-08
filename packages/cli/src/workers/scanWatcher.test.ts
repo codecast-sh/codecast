@@ -17,7 +17,7 @@ const id='12345678-1234-1234-1234-123456789abc';
 for(const mode of ['native','chokidar'] as const)for(const enabled of [false,true])test.skipIf(mode==='native'&&process.platform!=='darwin')(`${mode} worker=${enabled} primes sorted, observes real changes and preserves pruning across restart`,async()=>{
  const base=root();const cfg=transcriptDirWatcherConfig('gemini',base);write(base,'hash/chats/old.json');write(base,'hash/checkpoints/no.json');
  const seen:string[]=[];let primes=0,existing:string[]=[];
- start(enabled);
+ await start(enabled);
  const w=new RecursiveWatcher({path:base,mode,filter:cfg.watchFilter,dirFilter:cfg.dirFilter,scanPolicy:cfg.scanPolicy,maxDepth:cfg.maxDepth,debounceMs:30,rescanIntervalMs:150,onExisting:files=>{primes++;existing=files.sort((a,b)=>b.stat.mtimeMs-a.stat.mtimeMs).map(f=>f.rel);},callback:(f,event)=>seen.push(`${event}:${path.relative(base,f)}`)});watchers.push(w);
  w.start();await w.whenPrimed();expect(primes).toBe(1);expect(existing).toEqual(['hash/chats/old.json']);if(enabled)expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);
  await pause(250);seen.length=0;write(base,'hash/checkpoints/rejected.json');write(base,'hash/chats/new.json');await until(()=>seen.includes('add:hash/chats/new.json'));
@@ -30,7 +30,7 @@ for(const mode of ['native','chokidar'] as const)for(const enabled of [false,tru
 test('both watcher backends discard delayed priming after stop; crash fallback publishes existing files once',async()=>{
  for(const mode of ['native','chokidar'] as const){
   if(mode==='native'&&process.platform!=='darwin')continue;
-  const base=root();for(let i=0;i<350;i++)write(base,`p/${i}.jsonl`);start(true);
+  const base=root();for(let i=0;i<350;i++)write(base,`p/${i}.jsonl`);await start(true);
   let primes=0;let existing:string[]=[];const policy:ScanPolicy={files:'jsonl'};
   const w=new RecursiveWatcher({path:base,mode,...{filter:scanPredicates(base,policy).fileFilter},scanPolicy:policy,callback:()=>{},onExisting:files=>{primes++;existing=files.map(f=>f.path);},rescanIntervalMs:5000});watchers.push(w);
   w.start();w.stop();await w.whenPrimed();expect(primes).toBe(0);
@@ -48,12 +48,12 @@ test('production Claude, Codex, Pi, Grok and vault policies prime actual watcher
  {policy:transcriptDirWatcherConfig('grok').scanPolicy!,depth:3,good:`slug/${id}/updates.jsonl`,bad:'slug/not-uuid/updates.jsonl'},
  {policy:{dirs:'vault',files:'vault'},depth:6,good:'notes/a.md',bad:'node_modules/a.md'},
  ];
- for(const layout of layouts){const base=root();write(base,layout.good);write(base,layout.bad);start(true);const predicates=scanPredicates(base,layout.policy);let rows:string[]=[];const w=new RecursiveWatcher({path:base,filter:predicates.fileFilter,dirFilter:predicates.dirFilter,scanPolicy:layout.policy,maxDepth:layout.depth,callback:()=>{},onExisting:files=>{rows=files.map(f=>f.rel);}});watchers.push(w);w.start();await w.whenPrimed();expect(rows).toEqual([layout.good]);expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);w.stop();closeDaemonWorkers();}
+ for(const layout of layouts){const base=root();write(base,layout.good);write(base,layout.bad);await start(true);const predicates=scanPredicates(base,layout.policy);let rows:string[]=[];const w=new RecursiveWatcher({path:base,filter:predicates.fileFilter,dirFilter:predicates.dirFilter,scanPolicy:layout.policy,maxDepth:layout.depth,callback:()=>{},onExisting:files=>{rows=files.map(f=>f.rel);}});watchers.push(w);w.start();await w.whenPrimed();expect(rows).toEqual([layout.good]);expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);w.stop();closeDaemonWorkers();}
 },15000);
 
 test.skipIf(process.platform!=='darwin')('native idle cadence stays serial; rejected events cannot accelerate it; stop removes all work',async()=>{
  for(const enabled of [false,true]){
-  const base=root();write(base,'hash/chats/a.json');write(base,'hash/checkpoints/a.json');start(enabled);
+  const base=root();write(base,'hash/chats/a.json');write(base,'hash/checkpoints/a.json');await start(enabled);
   const cfg=transcriptDirWatcherConfig('gemini',base);const w=new RecursiveWatcher({path:base,mode:'native',filter:cfg.watchFilter,dirFilter:cfg.dirFilter,scanPolicy:cfg.scanPolicy,maxDepth:cfg.maxDepth,callback:()=>{},rescanIntervalMs:180,debounceMs:10});watchers.push(w);
   const internals=w as any,walk=internals.walkTree.bind(w);let active=0,maxActive=0;const starts:number[]=[],ends:number[]=[];
   internals.walkTree=async(...args:any[])=>{starts.push(Date.now());active++;maxActive=Math.max(active,maxActive);try{await pause(35);await walk(...args);}finally{active--;ends.push(Date.now());}};

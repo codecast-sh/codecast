@@ -12,6 +12,11 @@
 // or launches the settings window, is an unstamped, unasked-for front switch —
 // the failure our focus memories exist to prevent.
 //
+// `setup` opens the same pane and is the one place where the ask is a question
+// rather than a flag, so the allowlist alone cannot describe it. The runs at
+// the bottom of this file do: a human who declines, and a run with nobody to
+// decline, both end with no window on screen.
+//
 // `permissions` with no flag is a status read and must stay silent: six error
 // recoveries send an agent there to diagnose, and it used to take the screen
 // on every one of them (ct-49667).
@@ -27,6 +32,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { codeLines } from "../test-helpers/sourceRegion.js";
+import { NONE, setupHarness } from "../test-helpers/computerSetupHarness.js";
+import { runComputerSetup, type ComputerSetupDeps } from "./setup.js";
 
 const COMPUTER = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(COMPUTER, "..");
@@ -50,6 +57,7 @@ const ALLOWED: Record<string, string> = {
   "computer/run.ts": "routes those flags, and only those flags, to the raising call",
   "computer/client.ts": "stamps the deliberate raise before the request goes out, so the sentinel spares it",
   "computer/permissions.ts": "opens the settings window for --open-settings, stamped the same way",
+  "computer/setup.ts": "opens each missing pane only past the confirm a human answered, or an explicit --yes",
 };
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "__fixtures__", "test-helpers"]);
@@ -90,5 +98,37 @@ describe("no cast computer verb raises a window over the human", () => {
 
   test("every allowlist entry still raises (no stale entries)", () => {
     expect(Object.keys(ALLOWED).filter((rel) => !seenAllowed.has(rel))).toEqual([]);
+  });
+});
+
+/**
+ * The allowlist can only say that a file is allowed to raise. `setup` is the
+ * one file where the raise is conditional, so what matters is the condition,
+ * and only a run can show it. Three ways in, and a window opens in exactly one
+ * of them (ct-49790).
+ */
+describe("cast computer setup opens nothing until it is allowed to", () => {
+  const opened = (calls: string[]) => calls.filter((c) => c.startsWith("open:"));
+
+  test("a human who says no gets no window", async () => {
+    const harness = setupHarness({ isTty: true, confirm: false, grants: [NONE] });
+    await runComputerSetup({}, harness.deps as ComputerSetupDeps);
+    expect(opened(harness.calls)).toEqual([]);
+  });
+
+  test("no terminal and no --yes gets no window, and is not even asked", async () => {
+    const harness = setupHarness({ isTty: false, confirm: true, grants: [NONE] });
+    await runComputerSetup({}, harness.deps as ComputerSetupDeps);
+    expect(harness.calls).toEqual(["materialize", "read"]);
+  });
+
+  test("the raise comes after the answer, never before it", async () => {
+    const harness = setupHarness({
+      isTty: true,
+      confirm: true,
+      grants: [NONE, { accessibility: "granted", screenshots: "granted" }],
+    });
+    await runComputerSetup({}, harness.deps as ComputerSetupDeps);
+    expect(harness.calls.indexOf("confirm")).toBeLessThan(harness.calls.indexOf("open:accessibility"));
   });
 });

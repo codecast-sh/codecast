@@ -30,6 +30,8 @@ export interface BootSample {
 
 export interface BootBenchReport {
   entry: string;
+  /** What was actually timed — the source entry under bun, or a compiled binary. */
+  runner: string[];
   graph: { modules: number; kilobytes: number; packages: number };
   heaviest: Array<{ file: string; exclusiveModules: number }>;
   samples: BootSample[];
@@ -97,12 +99,13 @@ export function runBootBench(opts: {
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
-  return { entry: opts.entry, ...summary, samples };
+  return { entry: opts.entry, runner: [...opts.runner], ...summary, samples };
 }
 
 export function renderBootBench(report: BootBenchReport): string {
   const lines = [
     `entry     ${report.entry}`,
+    `runner    ${report.runner.join(" ")}`,
     `graph     ${report.graph.modules} source files, ${report.graph.kilobytes} KB, ${report.graph.packages} packages`,
     "",
     "| command | runs | median cpu ms | min | max |",

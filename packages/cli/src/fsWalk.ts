@@ -3,7 +3,7 @@ import * as path from "path";
 import { timeSyncFs } from "./slowSync.js";
 import { scanPredicates } from "./workers/scanPolicy.js";
 import { scanWorkerHost } from "./workers/bridge.js";
-import { visitScan, scanCanFallback, ScanCancelled, yieldScanBatch } from "./workers/scanClient.js";
+import { ScanCancelled, yieldScanBatch } from "./scanBatch.js";
 import type { ScanPolicy, ScanFile } from "./workers/scanTypes.js";
 
 /**
@@ -70,6 +70,11 @@ export async function walkEntryBatches(root: string, opts: WalkOptions, onBatch:
     }
   };
   if (!opts.policy || !scanWorkerHost()) return walkDirs(root, opts, apply);
+  // Only a process that configured the scan worker gets here, which is the
+  // daemon. Loading the client on this branch keeps it — and the frame
+  // protocol and payload validators behind it — off every other entry's static
+  // graph (ct-49758).
+  const { visitScan, scanCanFallback } = await import("./workers/scanClient.js");
   const seen = new Set<string>();
   try {
     await visitScan({ name: "walk", root, policy: opts.policy, ...(Number.isFinite(opts.maxDepth) ? { maxDepth: opts.maxDepth } : {}), stats: false, ...(opts.requireComplete ? { requireComplete: true } : {}) }, async rows => {
@@ -173,6 +178,7 @@ export async function walkFiles(
   onFile: (file: WalkFile) => void,
 ): Promise<void> {
   if (opts.policy && scanWorkerHost()) {
+    const { visitScan, scanCanFallback } = await import("./workers/scanClient.js");
     const seen = new Map<string, string>();
     try {
       await visitScan({ name: "walk", root, policy: opts.policy, ...(Number.isFinite(opts.maxDepth) ? { maxDepth: opts.maxDepth } : {}), stats: true, ...(opts.requireComplete ? { requireComplete: true } : {}), ...(opts.observeCwd ? { observeCwd: true } : {}), ...(opts.excludeCodexAppServer ? { excludeCodexAppServer: true } : {}) }, rows => {

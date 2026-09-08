@@ -66,9 +66,10 @@ import { buildHostsCommand } from "../hosts/cli.js";
 import { downscaleWithSips, uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
-import type { PublishDeps } from "../publish.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
+import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
+import { commandGroup } from "../commandGroups.js";
 
 // colors.ts exposes semantic helpers, not raw colour names.
 const OK = `${fmt.success(icons.check)}`;
@@ -227,7 +228,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   const br = program
     .command("browser")
     .alias("br")
-    .description("Drive a real Chrome: snapshot pages, click, type, screenshot, read console");
+    .description(commandGroup("browser").description);
 
   // The host group is shared with the top-level `cast hosts`: same builder,
   // two mount points, so the documented `cast browser hosts ...` keeps working.
