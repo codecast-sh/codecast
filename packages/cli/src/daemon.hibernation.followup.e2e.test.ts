@@ -16,7 +16,7 @@ import {
 } from "./daemon.js";
 import { buildShimScript } from "./test-helpers/fakeClaudeShim.js";
 import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
-import { descendantPids, snapshotProcessTableAsync } from "./processTable.js";
+import { descendantRows, snapshotProcessTableAsync } from "./processTable.js";
 import { hasTmux, tmuxRun, tmuxRunAsync } from "./tmux.js";
 import type { SyncService } from "./syncService.js";
 import type { AgentStatus } from "@codecast/shared/contracts";
@@ -124,7 +124,7 @@ for (const mode of ["pass", "manual"] as const) describe.skipIf(!hasTmux())(`${m
   for (const evidence of ["old-overflow", "recent-overflow", "already-full", "cold-files", "cold-history", "cold-unreadable", "cold-malformed"] as const) test(`preserves a parent with detached live sidecar and ${evidence}`, async () => {
     const f = await fixture();
     const child = spawn("/bin/sleep", ["120"], { detached: true, stdio: "ignore" }); children.push(child);
-    expect(descendantPids(await snapshotProcessTableAsync(), f.pid)).not.toContain(child.pid!);
+    expect(descendantRows(await snapshotProcessTableAsync(), f.pid)).not.toContain(child.pid!);
     const childPath = `/fake/${f.id}/subagents/sidecar.jsonl`;
     if (evidence === "old-overflow" || evidence === "recent-overflow") {
       noteSubagentActivity(childPath, Date.now() - (evidence === "old-overflow" ? 3600_000 : 0));

@@ -25,8 +25,7 @@ import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
-import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
-import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
+import { descendantRows, findOtherDaemonRows, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, type ProcRow } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
@@ -56,6 +55,16 @@ import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState }
 import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, type LocalReadRequest } from "./repoMirror.js";
 import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
+import {
+  hasLiveClaudeOnActiveCredential,
+  liveClaudeSessions,
+  markClaudeSessionEnded,
+  markClaudeSessionLive,
+  onLiveClaudeDrained,
+  reconcileLiveClaudeSessions,
+  seedLiveClaudeSessions,
+  type LiveClaudeSession,
+} from "./ccLiveGate.js";
 import {
   useProfile,
   saveProfile,
@@ -189,10 +198,12 @@ import {
   repairDiscrepancies,
 } from "./reconciliation.js";
 import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
+import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
-import { collectScan, visitScan, scanCanFallback, ScanCancelled, yieldScanBatch } from "./workers/scanClient.js";
+import { collectScan, visitScan, scanCanFallback } from "./workers/scanClient.js";
+import { ScanCancelled, yieldScanBatch } from "./scanBatch.js";
 import { recentScan } from "./workers/scanJobs.js";
 import type { ScanJob, ScanRow } from "./workers/scanTypes.js";
 import { SUSPEND_GAP_MIN_MS, clocksDisagree, sawSuspend } from "./suspendClock.js";
@@ -710,53 +721,62 @@ function validateTmuxTarget(target: string): boolean {
   return /^[a-zA-Z0-9_.:-]+$/.test(target);
 }
 
-// SIGKILL a process AND every descendant. `tmux kill-session` only SIGHUPs the
+// Terminate one or more process trees. `tmux kill-session` only SIGHUPs the
 // pane's foreground group, so claude's children — MCP servers, `caffeinate`,
 // tool subprocesses in their own process groups — routinely survive, orphaned to
-// init. Walk the parent→child tree with `pgrep -P` and kill leaves-first so a
-// dying parent can't reparent a child out from under us before we reach it.
-async function reapPidTree(rootPid: number): Promise<number> {
-  if (!Number.isInteger(rootPid) || rootPid <= 1 || rootPid === process.pid) return 0;
-  const ordered: number[] = [];
-  const queue = [rootPid];
-  const seen = new Set<number>([rootPid]);
-  while (queue.length) {
-    const pid = queue.shift()!;
-    ordered.push(pid);
-    try {
-      const { stdout } = await execAsync(`pgrep -P ${pid}`, { timeout: 3000, killSignal: "SIGKILL" });
-      for (const tok of stdout.trim().split(/\s+/)) {
-        const child = parseInt(tok, 10);
-        if (Number.isInteger(child) && child > 1 && child !== process.pid && !seen.has(child)) {
-          seen.add(child);
-          queue.push(child);
-        }
-      }
-    } catch {}
+// init.
+//
+// The tree is snapshotted ONCE, from a single `ps`, before anything is
+// signalled: the parent links only exist while the roots are alive, and a
+// descendant whose parent dies first reparents to pid 1 and leaves any later
+// walk. killProcessTree then SIGTERMs the whole snapshot at once and hard kills
+// only the survivors the table still identifies (ct-49537). Descendants are
+// signalled leaves first, roots last.
+//
+// Returns how many processes were confirmed dead.
+async function reapPidTrees(rootPids: number[]): Promise<number> {
+  const roots = rootPids.filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
+  if (roots.length === 0) return 0;
+  const procs = await snapshotProcessTableAsync({ timeout: 10_000 });
+  const targets: ProcRow[] = [];
+  const seen = new Set<number>();
+  for (const root of roots) {
+    const rootRow = procs.find((p) => p.pid === root);
+    if (!rootRow) continue; // already gone; its ppid links mean nothing now
+    for (const row of [...descendantRows(procs, root).reverse(), rootRow]) {
+      if (seen.has(row.pid)) continue;
+      seen.add(row.pid);
+      targets.push(row);
+    }
   }
-  let killed = 0;
-  for (const pid of ordered.reverse()) {
-    try { process.kill(pid, "SIGKILL"); killed++; } catch {}
+  if (targets.length === 0) return 0;
+  const { terminated, killed, unverified } = await killProcessTree(targets);
+  if (unverified > 0) {
+    log(`[REAP] ${unverified} of ${targets.length} process(es) under ${roots.join(", ")} survived SIGTERM and could not be identified for SIGKILL`);
   }
-  return killed;
+  return terminated + killed;
 }
 
-// Fully terminate a tmux session: reap each pane's whole process tree (so no
-// orphaned claude/MCP/caffeinate survives), THEN kill the session. Order matters
-// — once the session is gone we can't enumerate its pane pids.
-async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
+const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]);
+
+// Fully terminate a tmux session: reap every pane's process tree (so no orphaned
+// claude/MCP/caffeinate survives), THEN kill the session. Order matters — once
+// the session is gone we can't enumerate its pane pids. All panes go into one
+// reap so the whole session costs one `ps` and one grace window.
+export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
   if (!validateTmuxTarget(tmuxSession)) return;
   try {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
       { timeout: 3000, killSignal: "SIGKILL" },
     );
-    for (const tok of stdout.trim().split(/\s+/)) {
-      const panePid = parseInt(tok, 10);
-      if (Number.isInteger(panePid)) await reapPidTree(panePid);
-    }
+    await reapPidTrees(stdout.trim().split(/\s+/).map((tok) => parseInt(tok, 10)));
   } catch {}
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  // Release the OAuth refresh gate now rather than on the next reconcile: when
+  // this was the last claude on the keychain login, the drain listener fires a
+  // usage refetch, and a ten minute wait for it is a stale meter (ct-49526).
+  markClaudeSessionEnded(tmuxSession);
 }
 
 // A gap shorter than this is neither a suspend nor a freeze worth recovering
@@ -3355,10 +3375,15 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
 //
 // Primary devices only (same gate as the remote push): remotes run a pushed
 // COPY of this credential and must never rotate the shared refresh token, or
-// they'd invalidate the laptop's. The expiry threshold is itself the idle
-// detector — a live claude keeps expiry ~8h out, so we almost always act only
-// in idle gaps; a rare race with an active session self-heals because CC
-// re-reads the credential store on a 401.
+// they'd invalidate the laptop's.
+//
+// The second gate is the live one. The expiry threshold was doing that job by
+// accident — a live claude keeps expiry ~8h out, so the daemon usually acted
+// only in idle gaps — but "usually" is not a rule, and the race it loses is not
+// cosmetic: a refresh token is single use, so the second of two refreshes is
+// refused and one of the two copies is stranded. So when a live claude holds
+// the active credential the daemon stands back and reads back what the CLI
+// rotated instead (ccLiveGate.ts, resnapshotIfActiveFresher).
 const CC_TOKEN_MAINT_INTERVAL_MS = 10 * 60 * 1000;
 const CC_TOKEN_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
 let ccTokenMaintInFlight = false;
@@ -3367,28 +3392,84 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
   if (isRemoteDevice() || ccTokenMaintInFlight) return;
   ccTokenMaintInFlight = true;
   try {
+    // Ids restored from disk hold the gate closed until this proves their pane
+    // is gone, so the reconcile runs before the gate is read, not after.
+    await reconcileLiveClaudeGate();
     const expiresAt = await activeCredentialExpiresAt();
     if (expiresAt != null && expiresAt - Date.now() < CC_TOKEN_REFRESH_THRESHOLD_MS) {
-      const res = await refreshActiveCredential();
-      if (res.refreshed) {
-        const mins = Math.round(((res.expiresAt ?? Date.now()) - Date.now()) / 60000);
-        log(`[CC-AUTH] Refreshed active login (${mins}m to next expiry; ${reason})`);
-        // The remotes run a pushed copy — hand them the fresh token now rather
-        // than on the next tick.
-        pushCredentialToRemoteHosts("token_refresh").catch(() => {});
+      if (hasLiveClaudeOnActiveCredential()) {
+        const holders = liveClaudeSessions().filter((s) => !s.account);
+        log(
+          `[CC-AUTH] Refresh deferred: ${holders.length} live claude session(s) hold the active credential ` +
+            `(${holders.map((s) => s.id).join(", ")}) — reading back what the CLI rotates (${reason})`,
+        );
       } else {
-        log(`[CC-AUTH] Proactive refresh skipped: ${res.reason} (${reason})`);
+        const res = await refreshActiveCredential();
+        if (res.refreshed) {
+          const mins = Math.round(((res.expiresAt ?? Date.now()) - Date.now()) / 60000);
+          log(`[CC-AUTH] Refreshed active login (${mins}m to next expiry; ${reason})`);
+          // The remotes run a pushed copy — hand them the fresh token now rather
+          // than on the next tick.
+          pushCredentialToRemoteHosts("token_refresh").catch(() => {});
+        } else {
+          log(`[CC-AUTH] Proactive refresh skipped: ${res.reason} (${reason})`);
+        }
       }
     }
-    // Propagate a fresher active credential (a manual /login OR the refresh
-    // above) into its saved profile. Cheap no-op when already in step.
-    const updated = await resnapshotIfActiveFresher();
+    // Propagate a fresher active credential into its saved profile: a manual
+    // /login, the refresh above, or — when the gate deferred — the rotation a
+    // live claude performed. Cheap no-op when already in step.
+    const updated = await resnapshotIfActiveFresher({ warn: (m) => log(`[CC-AUTH] ${m}`) });
     if (updated) log(`[CC-AUTH] Re-snapshotted profile "${updated}" from fresher active login`);
   } catch (err) {
     log(`[CC-AUTH] Token maintenance failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     ccTokenMaintInFlight = false;
   }
+}
+
+// The tmux session name, the agent type stamp, and the per-session Claude
+// account stamp — everything the gate needs to rebuild itself from tmux alone,
+// including for panes a previous daemon started. Built on call because
+// REAP_FIELD_SEP is declared further down the module.
+function ccGateListFormat(): string {
+  return `#{session_name}${REAP_FIELD_SEP}#{@codecast_agent_type}${REAP_FIELD_SEP}#{@codecast_cc_account}`;
+}
+
+/** Parse `tmux list-sessions -F ccGateListFormat()` into the claude panes.
+ *  A tmux too old to expand `#{@opt}` hands the placeholder back verbatim and
+ *  an unset option expands to nothing; both read as "not stamped", so such a
+ *  row is skipped rather than misattributed to the keychain login. */
+export function parseLiveClaudeSessions(stdout: string): LiveClaudeSession[] {
+  const out: LiveClaudeSession[] = [];
+  for (const row of stdout.split("\n")) {
+    const parts = row.split(REAP_FIELD_SEP);
+    if (parts.length < 3) continue;
+    const expanded = (v: string) => (v.includes("#{") ? "" : v.trim());
+    const account = expanded(parts.pop()!);
+    const agentType = expanded(parts.pop()!);
+    const name = parts.join(REAP_FIELD_SEP).trim();
+    if (!name || agentType !== "claude") continue;
+    out.push({ id: name, ...(account ? { account } : {}) });
+  }
+  return out;
+}
+
+/** Reconcile the gate against the live tmux pane list.
+ *
+ *  A tmux that could not be reached is not evidence of an empty machine, so the
+ *  gate is left as it stands — except when tmux says it has no server at all,
+ *  which IS that evidence and is what opens the gate after a reboot. */
+async function reconcileLiveClaudeGate(): Promise<void> {
+  let stdout: string;
+  try {
+    ({ stdout } = await tmuxExec(["list-sessions", "-F", ccGateListFormat()], { timeout: 5000 }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/no server running|no such file or directory/i.test(msg)) return;
+    stdout = "";
+  }
+  reconcileLiveClaudeSessions(parseLiveClaudeSessions(stdout));
 }
 
 // Per-account usage snapshots: probe the OAuth usage API for the active login
@@ -4859,6 +4940,10 @@ async function executeRemoteCommand(
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
         // Same file-not-argv rule for the per-session Claude account token.
         const accountPrefix = accountSourcePrefix(requestedAccount, log);
+        // An empty prefix means the account did not resolve to a token file and
+        // the launch falls back to the keychain login — which the OAuth refresh
+        // gate must then treat as held. Attribute what runs, not what was asked.
+        const launchedAccount = accountPrefix ? requestedAccount : undefined;
         // Launch through the disclaim wrapper so the agent is TCC
         // self-responsible: privacy prompts name the agent (its own signed
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
@@ -4961,6 +5046,17 @@ async function executeRemoteCommand(
           }
           await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType).catch(() => {});
           await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
+          if (agentType === "claude") {
+            // The OAuth refresh gate: this pane holds the machine's active
+            // credential unless it was pinned to a profile's setup-token. The
+            // stamp carries the same account name accountSourcePrefix exports as
+            // CODECAST_CC_ACCOUNT, so the gate survives a daemon restart even for
+            // panes started by an older build (ct-49526).
+            if (launchedAccount) {
+              await setTmuxSessionOption(tmuxSession, "@codecast_cc_account", launchedAccount).catch(() => {});
+            }
+            markClaudeSessionLive(tmuxSession, launchedAccount);
+          }
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
@@ -14150,7 +14246,7 @@ async function reapOrphanedAgent(sessionId: string, pid: number, pane: string, s
     const newest = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
     if (claims.some(claim => claim.ts >= initial.startSec - 5 && claim.ts === newest && claim.sessionId !== sessionId)) return;
     const root = procs.find(proc => proc.pid === pid);
-    if (!root || root.ppid !== 1 || root.uid !== initial.uid || root.command !== initial.command || descendantPids(procs, pid).length) return;
+    if (!root || root.ppid !== 1 || root.uid !== initial.uid || root.command !== initial.command || descendantRows(procs, pid).length) return;
     const panes = stdout.trim().split("\n");
     if (panes.some(value => !/^\d+$/.test(value) || Number(value) <= 1 || Number(value) === pid)) return;
     if (!await sameIdentity() || performance.now() - observedAt > 1000 || !current()) return;
@@ -18671,7 +18767,7 @@ export async function inspectHibernationTarget(sessionId: string, tmux: string, 
   const procs = await snapshotProcessTableAsync({ timeout: 3000 });
   const root = procs.find(p => p.pid === pid);
   if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return null;
-  if (descendantPids(procs, pid).length > 0) return null;
+  if (descendantRows(procs, pid).length > 0) return null;
   return { session, pane, pid, start: match[1], stamp, conversationStamp };
 }
 
@@ -20869,6 +20965,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // Per-session account twin of the effort fallback below: set from the
   // conversation row inside the claude branch, sourced on the resume line.
   let resumeAccountPrefix = "";
+  // The account this resume actually runs on, for the OAuth refresh gate.
+  let resumeAccount: string | undefined;
   let stableRulesFile: string | undefined;
   if (agentType === "grok") {
     try {
@@ -20976,10 +21074,13 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     const resumePin = conversationId && syncServiceRef
       ? await syncServiceRef.pinForResume(conversationId)
       : null;
-    resumeAccountPrefix = accountSourcePrefix(
-      resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined,
-      log,
-    );
+    const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
+    resumeAccountPrefix = accountSourcePrefix(pinnedAccount, log);
+    // An empty prefix means the pin did not resolve to a token file, so this
+    // resume lands on the keychain login after all — and then it DOES hold the
+    // credential the refresh gate protects. Attribute what happens, not what
+    // was asked for.
+    resumeAccount = resumeAccountPrefix ? pinnedAccount : undefined;
     resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
@@ -21015,6 +21116,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
+    if (agentType === "claude") {
+      // Same gate registration as a fresh launch: a resumed claude holds the
+      // active credential just as firmly (ct-49526).
+      if (resumeAccount) {
+        await setTmuxSessionOption(tmuxSession, "@codecast_cc_account", resumeAccount).catch(() => {});
+      }
+      markClaudeSessionLive(tmuxSession, resumeAccount);
+    }
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
@@ -23183,16 +23292,16 @@ async function sweepOrphanDaemons(): Promise<void> {
   try {
     const holder = readPidFile(PID_FILE);
     const protectedPid = holder && holder !== process.pid && isProcessRunning(holder) ? holder : null;
-    const pids = findOtherDaemonPids(await snapshotProcessTableAsync({ timeout: 15_000 }))
-      .filter((pid) => pid !== protectedPid)
-      .filter(isProcessRunning);
-    if (pids.length === 0) return;
-    log(`Sweeping ${pids.length} orphan daemon process(es): ${pids.join(", ")}`);
+    const daemons = findOtherDaemonRows(await snapshotProcessTableAsync({ timeout: 15_000 }))
+      .filter((p) => p.pid !== protectedPid)
+      .filter((p) => isProcessRunning(p.pid));
+    if (daemons.length === 0) return;
+    log(`Sweeping ${daemons.length} orphan daemon process(es): ${daemons.map((p) => p.pid).join(", ")}`);
     // The same budget `cast stop` gives a daemon, because the victim runs the
     // same shutdown: it drains the retry queue and gives its command leases
     // back, and both of those have to finish before the hard kill. This sweep
     // runs off the boot path, so waiting longer costs nothing.
-    const { killed } = await killProcessTree(pids, DAEMON_STOP_SIGKILL_MS);
+    const { killed } = await killProcessTree(daemons, DAEMON_STOP_SIGKILL_MS);
     if (killed > 0) log(`Orphan daemon sweep hard killed ${killed} process(es)`);
   } catch {}
 }
@@ -23231,7 +23340,7 @@ async function sweepStaleTmuxServers(): Promise<void> {
     }
     for (const server of stale) {
       log(`[TMUX-SWEEP] WARNING: killing stale tmux server pid ${server.pid} holding ${server.tree.length} process(es), ${server.agents} agent(s) (live server is ${livePid})`);
-      await killProcessTree([...server.tree, server.pid]);
+      await killProcessTree([...server.tree, server.row]);
     }
   } catch (err) {
     log(`[TMUX-SWEEP] sweep error: ${(err as Error)?.message ?? err}`);
@@ -24849,6 +24958,22 @@ async function main(): Promise<void> {
   } catch (err) {
     log(`[REMOTE-KEYS] could not watch the provider-key store: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  // Restore the OAuth refresh gate before the first maintenance tick can read
+  // it. Panes that outlived the daemon keep it closed until that tick's
+  // reconcile confirms them against tmux; without the seed the daemon would
+  // come back believing the machine is idle and rotate the single-use refresh
+  // token out from under a running claude (ct-49526).
+  seedLiveClaudeSessions()
+    .then((restored) => {
+      if (restored.length) log(`[CC-AUTH] Restored ${restored.length} live claude session(s) into the refresh gate`);
+    })
+    .catch(() => {});
+  // The gate's 1 to 0 transition: the account those sessions were spending is
+  // worth re-reading now, not up to five minutes from now.
+  onLiveClaudeDrained(() => {
+    maintainCcUsageSnapshots("live claude drained", { force: true }).catch(() => {});
+  });
 
   // Keep THIS machine's login from lapsing during idle gaps + propagate a
   // manual /login into its saved profile (primary devices only).
