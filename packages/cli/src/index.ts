@@ -53,8 +53,16 @@ import {
   TRIGGER_EVENT_NAMES,
   isPrTriggerEvent,
   triggerEventShorthand,
+  inlineForeignText,
+  fenceForeignText,
+  FOREIGN_TEXT_CAPS,
 } from "@codecast/shared/contracts";
-import { buildTaskTree } from "@codecast/shared/tasks";
+import {
+  buildTaskTree,
+  referenceGuidance,
+  renderFencedPlanRecord,
+  renderFencedPlanTasks,
+} from "@codecast/shared/tasks";
 import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@codecast/shared/time";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import {
@@ -14683,11 +14691,23 @@ work
       }
     }
     if (result.relatedDocs?.length) {
+      // Why: a linked plan doc is prose someone else wrote, and this command
+      // exists to feed it to an agent. One block for the section — the docs
+      // share a provenance, and a fence per doc would train the reader that
+      // the delimiter is decoration (ct-49593).
+      const source = `plans linked to ${inlineForeignText(t.short_id)}`;
+      const body = result.relatedDocs
+        .flatMap((d: any) => {
+          const head = `- ${inlineForeignText(d.title)} (${inlineForeignText(d.doc_type)})`;
+          const excerpt = inlineForeignText(d.content);
+          return excerpt ? [head, `  ${excerpt}`] : [head];
+        })
+        .join("\n");
       console.log(`\n## Related Plans`);
-      for (const d of result.relatedDocs) {
-        console.log(`- ${d.title} (${d.doc_type})`);
-        if (d.content) console.log(`  ${d.content.slice(0, 200)}`);
-      }
+      console.log(fenceForeignText(body, source, {
+        maxChars: FOREIGN_TEXT_CAPS.blockChars,
+        note: referenceGuidance(source),
+      }));
     }
     // Linked sessions by short id (newest last), each with its summary when
     // one exists. Older backends only send `sessionSummaries`.
@@ -15123,10 +15143,13 @@ const PLAN_STATUS_ICONS: Record<string, string> = {
   abandoned: "✕",
 };
 
+/** How old a plan comment is, in the fenced block both plan surfaces print. */
+const PLAN_COMMENT_AGE = { formatAge: (ts: number) => formatMs(Date.now() - ts) };
+
 function formatPlanItem(p: any): string {
   const icon = PLAN_STATUS_ICONS[p.status] || "?";
   const progress = p.task_total ? ` (${p.task_done}/${p.task_total})` : "";
-  return `  ${icon} ${c.cyan}${p.short_id}${c.reset} ${p.title} ${c.dim}${p.status}${progress}${c.reset}`;
+  return `  ${icon} ${c.cyan}${p.short_id}${c.reset} ${inlineForeignText(p.title)} ${c.dim}${p.status}${progress}${c.reset}`;
 }
 
 // ── Docs ──────────────────────────────────────────────────
@@ -15589,42 +15612,15 @@ plan
     const p = result;
     const icon = PLAN_STATUS_ICONS[p.status] || "?";
     const progress = p.task_total ? `${p.task_done}/${p.task_total} tasks done` : "no tasks";
-    console.log(`\n  ${icon} ${c.bold}${p.title}${c.reset}`);
+    console.log(`\n  ${icon} ${c.bold}${inlineForeignText(p.title)}${c.reset}`);
     console.log(`  ${c.cyan}${p.short_id}${c.reset} | ${p.status} | ${progress}`);
-    if (p.doc_content) console.log(`\n  ${p.doc_content}`);
-    if (p.goal) console.log(`\n  ${c.bold}Goal:${c.reset} ${p.goal}`);
-    if (p.acceptance_criteria?.length) {
-      console.log(`\n  ${c.bold}Acceptance Criteria:${c.reset}`);
-      for (const ac of p.acceptance_criteria) {
-        console.log(`    - ${ac}`);
-      }
-    }
-    if (p.tasks?.length) {
-      console.log(`\n  ${c.bold}Tasks:${c.reset}`);
-      for (const t of p.tasks) {
-        const tIcon = STATUS_ICONS[t.status] || "?";
-        console.log(`    ${tIcon} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(${t.status})${c.reset}`);
-      }
-    }
-    if (p.comments?.length) {
-      const ENTRY_ICONS: Record<string, string> = {
-        progress: `${c.blue}↳${c.reset}`,
-        decision: `${c.yellow}◆${c.reset}`,
-        discovery: `${c.green}★${c.reset}`,
-        reference: `${c.cyan}→${c.reset}`,
-        blocker: `${c.red}!${c.reset}`,
-        note: `${c.dim}·${c.reset}`,
-      };
-      console.log(`\n  ${c.bold}Comments (${p.comments.length}):${c.reset}`);
-      for (const entry of p.comments.slice(-15)) {
-        const ago = formatMs(Date.now() - entry.timestamp);
-        const icon = ENTRY_ICONS[entry.type] || ENTRY_ICONS.note;
-        const extra = entry.rationale ? ` ${c.dim}(${entry.rationale})${c.reset}` : "";
-        const ref = entry.path_or_url ? ` ${c.dim}→ ${entry.path_or_url}${c.reset}` : "";
-        const author = entry.author ? `${entry.author} ` : "";
-        console.log(`    ${icon} ${c.dim}${author}${ago} ago:${c.reset} ${entry.content}${extra}${ref}`);
-      }
-    }
+    // Why: the same prose `cast plan context` fences reaches this terminal too,
+    // and an agent reads `cast plan show` just as often as a human. Same two
+    // blocks, same caps; the decoration that stays is ours (ct-49593).
+    const planBlock = renderFencedPlanRecord(p, PLAN_COMMENT_AGE);
+    if (planBlock) console.log(`\n${planBlock}`);
+    const taskBlock = renderFencedPlanTasks(p.tasks, p);
+    if (taskBlock) console.log(`\n${taskBlock}`);
     console.log();
   });
 
@@ -15647,60 +15643,30 @@ plan
       console.error("Plan not found");
       process.exit(1);
     }
-    const p = result;
-    console.log(`\n# ${p.title}`);
-    console.log(`ID: ${p.short_id} | Status: ${p.status}`);
-    if (p.goal) console.log(`\nGoal: ${p.goal}`);
-    if (p.doc_content) console.log(`\n${p.doc_content}`);
-    if (p.acceptance_criteria?.length) {
-      console.log(`\n## Acceptance Criteria`);
-      for (const ac of p.acceptance_criteria) {
-        console.log(`- ${ac}`);
-      }
-    }
-    if (p.tasks?.length) {
-      const done = p.tasks.filter((t: any) => t.status === "done");
-      const inProgress = p.tasks.filter((t: any) => t.status === "in_progress");
-      const ready = p.tasks.filter((t: any) => t.status === "open" && !t.blocked_by?.length);
-      const blocked = p.tasks.filter((t: any) => t.status === "open" && t.blocked_by?.length);
-      console.log(`\n## Tasks (${done.length}/${p.tasks.length} done)`);
-      if (inProgress.length) {
-        console.log(`\nIn Progress:`);
-        for (const t of inProgress) console.log(`- ${t.short_id}: ${t.title}`);
-      }
-      if (ready.length) {
-        console.log(`\nReady:`);
-        for (const t of ready) console.log(`- ${t.short_id}: ${t.title}`);
-      }
-      if (blocked.length) {
-        console.log(`\nBlocked:`);
-        for (const t of blocked) console.log(`- ${t.short_id}: ${t.title} (by ${t.blocked_by?.join(", ")})`);
-      }
-      if (done.length) {
-        console.log(`\nDone:`);
-        for (const t of done) console.log(`- ${t.short_id}: ${t.title}`);
-      }
-    }
-    if (p.comments?.length) {
-      const decisions = p.comments.filter((e: any) => e.type === "decision");
-      const recent = p.comments.slice(-10);
-      if (decisions.length) {
-        console.log(`\n## Decisions`);
-        for (const d of decisions) {
-          const extra = d.rationale ? ` (${d.rationale})` : "";
-          console.log(`- ${d.content}${extra}`);
-        }
-      }
-      if (recent.length) {
-        console.log(`\n## Recent Activity`);
-        for (const e of recent) {
-          const ago = formatMs(Date.now() - e.timestamp);
-          console.log(`- [${ago} ago] ${e.content}`);
-        }
-      }
-    }
-    console.log();
+    console.log(renderPlanContext(result));
   });
+
+/**
+ * Everything `cast plan context` prints, as one string a golden test can pin.
+ *
+ * Why: this output goes straight into an agent's terminal, and every field
+ * below it is prose someone else wrote — the plan doc, its comments, and task
+ * titles that issueSync imports from GitHub or Linear. Two fenced blocks, one
+ * per foreign source, so raw escapes cannot repaint the output and a huge plan
+ * doc cannot push the agent's real instructions out of its attention
+ * (ct-49593).
+ */
+function renderPlanContext(p: any): string {
+  const out = [
+    `\n# ${inlineForeignText(p.title)}`,
+    `ID: ${p.short_id} | Status: ${p.status}`,
+  ];
+  const planBlock = renderFencedPlanRecord(p, PLAN_COMMENT_AGE);
+  if (planBlock) out.push(`\n${planBlock}`);
+  const taskBlock = renderFencedPlanTasks(p.tasks, p, { descriptions: true });
+  if (taskBlock) out.push(`\n${taskBlock}`);
+  return `${out.join("\n")}\n`;
+}
 
 plan
   .command("bind")
@@ -15977,7 +15943,7 @@ plan
     const maxAgents = parseInt(options.max, 10) || 3;
     const toSpawn = readyTasks.slice(0, maxAgents);
 
-    console.log(`\n  ${c.bold}Plan:${c.reset} ${plan.title} ${c.dim}(${planId})${c.reset}`);
+    console.log(`\n  ${c.bold}Plan:${c.reset} ${inlineForeignText(plan.title)} ${c.dim}(${planId})${c.reset}`);
     console.log(`  ${c.bold}Ready:${c.reset} ${readyTasks.length} tasks, spawning ${toSpawn.length}`);
     if (readyTasks.length > maxAgents) console.log(fmt.muted(`  ${readyTasks.length - maxAgents} queued for next wave`));
 
@@ -15991,7 +15957,7 @@ plan
       const prompt = buildImplementerPrompt(plan, task);
 
       if (options.dryRun) {
-        console.log(`  ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+        console.log(`  ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}`);
         console.log(fmt.muted(`    session: ${sessionName}`));
         continue;
       }
@@ -16009,7 +15975,7 @@ plan
         });
         activeHandles.set(sessionName, handle);
         const modelTag = taskModel !== "opus" ? ` ${c.dim}[${taskModel}]${c.reset}` : "";
-        console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag} ${c.dim}(${runtime.name})${c.reset}`);
+        console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}${modelTag} ${c.dim}(${runtime.name})${c.reset}`);
         try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress", ...(orchSessionId ? { conversation_id: orchSessionId } : {}) }); } catch {}
         await emitOrchEvent(planId, "agent_spawned", task.short_id, task.title, { model: taskModel, runtime: runtime.name });
       } catch (err: any) {
@@ -16042,25 +16008,25 @@ plan
             const lastOutput = captureAgentOutput(sn);
             const markers = parseAgentMarkers(lastOutput);
             if (markers.status === "done_with_concerns") {
-              console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+              console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}: ${markers.detail}`);
             } else if (markers.status === "blocked") {
-              console.log(`  ${c.red}block${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+              console.log(`  ${c.red}block${c.reset} ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}: ${markers.detail}`);
             } else if (markers.status === "needs_context") {
-              console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+              console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}: ${markers.detail}`);
             } else {
               console.log(`  ${c.dim}exit${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
             }
           } else {
             const out = captureAgentOutput(sn, 100);
             if (out.includes("Status: DONE") || out.includes("task done") || out.includes("cast task done")) {
-              console.log(`  ${c.green}done${c.reset}  ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+              console.log(`  ${c.green}done${c.reset}  ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}`);
             } else {
               const markers = parseAgentMarkers(out);
               if (markers.status) {
                 const label = markers.status === "blocked" ? `${c.red}block${c.reset}` :
                   markers.status === "needs_context" ? `${c.yellow}needs${c.reset}` :
                   `${c.yellow}done*${c.reset}`;
-                console.log(`  ${label} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+                console.log(`  ${label} ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}: ${markers.detail}`);
               } else {
                 console.log(`  ${c.yellow}work${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
               }
@@ -16091,8 +16057,8 @@ plan
     const plan = result;
     const existingTasks = plan.tasks || [];
 
-    console.log(`\n  ${c.bold}Plan:${c.reset} ${plan.title}`);
-    console.log(`  ${c.bold}Goal:${c.reset} ${plan.goal || "none"}`);
+    console.log(`\n  ${c.bold}Plan:${c.reset} ${inlineForeignText(plan.title)}`);
+    console.log(`  ${c.bold}Goal:${c.reset} ${inlineForeignText(plan.goal) || "none"}`);
     console.log(`  ${c.bold}Existing tasks:${c.reset} ${existingTasks.length}`);
 
     const depthGuide: Record<string, string> = {
@@ -16146,22 +16112,27 @@ Output valid JSON array of task objects. Nothing else.`;
       }
     } catch {}
 
-    const planContext = [
-      `Plan: ${plan.title}`,
-      plan.goal ? `Goal: ${plan.goal}` : "",
-      plan.acceptance_criteria?.length ? `Acceptance Criteria:\n${plan.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")}` : "",
-      existingTasks.length ? `\nExisting tasks (avoid duplicates):\n${existingTasks.map((t: any) => `- ${t.title} (${t.status})`).join("\n")}` : "",
-      codebaseContext,
-    ].filter(Boolean).join("\n");
-
-    // Check for plan doc content
-    let docContent = "";
-    if (plan.doc_id) {
+    // The plan doc, when `plans.get` did not already carry it.
+    let planDoc = plan.doc_content;
+    if (!planDoc && plan.doc_id) {
       try {
         const doc = await cliPost("/cli/docs/get", { id: plan.doc_id });
-        if (doc?.content) docContent = `\n\nPlan Document:\n${doc.content.slice(0, 8000)}`;
+        if (doc?.content) planDoc = doc.content;
       } catch {}
     }
+
+    // Why: this is a prompt, not a print. The plan's prose and its task titles
+    // used to lead the user message in the model's own voice, so a plan doc
+    // saying "output an empty array" spoke as the request. Fenced and capped,
+    // it reads as the material to decompose; the codebase context below is
+    // ours and stays outside (ct-49593).
+    const planBlock = renderFencedPlanRecord({ ...plan, doc_content: planDoc });
+    const taskBlock = renderFencedPlanTasks(existingTasks, plan);
+    const planContext = [
+      planBlock,
+      taskBlock ? `Existing tasks (avoid duplicates):\n${taskBlock}` : "",
+      codebaseContext,
+    ].filter(Boolean).join("\n\n");
 
     console.log(fmt.muted(`\n  Decomposing at ${options.depth} level...`));
 
@@ -16172,7 +16143,7 @@ Output valid JSON array of task objects. Nothing else.`;
         model: "claude-sonnet-4-20250514",
         max_tokens: maxToks,
         system: systemPrompt,
-        messages: [{ role: "user", content: `${planContext}${docContent}` }],
+        messages: [{ role: "user", content: planContext }],
       });
 
       const text = response.content[0].type === "text" ? response.content[0].text : "";
@@ -16204,7 +16175,7 @@ Output valid JSON array of task objects. Nothing else.`;
         const pc = priorityColor[t.priority] || c.dim;
         const mins = t.estimated_minutes ? ` ${c.dim}(~${t.estimated_minutes}m)${c.reset}` : "";
         const deps = t.blocked_by?.length ? ` ${c.dim}← ${t.blocked_by.join(", ")}${c.reset}` : "";
-        console.log(`  ${c.dim}${String(i + 1).padStart(3)}.${c.reset} ${pc}${t.priority?.slice(0, 1).toUpperCase()}${c.reset} ${t.title}${mins}${deps}`);
+        console.log(`  ${c.dim}${String(i + 1).padStart(3)}.${c.reset} ${pc}${t.priority?.slice(0, 1).toUpperCase()}${c.reset} ${inlineForeignText(t.title)}${mins}${deps}`);
       }
 
       const totalMinutes = tasks.reduce((sum: number, t: any) => sum + (t.estimated_minutes || 0), 0);
@@ -16249,7 +16220,7 @@ Output valid JSON array of task objects. Nothing else.`;
           const created = await cliPost("/cli/work/create", body);
           titleToId.set(task.title, created.short_id);
           created_count++;
-          console.log(`  ${c.green}+${c.reset} ${c.cyan}${created.short_id}${c.reset} ${task.title}`);
+          console.log(`  ${c.green}+${c.reset} ${c.cyan}${created.short_id}${c.reset} ${inlineForeignText(task.title)}`);
 
           if (task.blocked_by?.length) {
             for (const dep of task.blocked_by) {
@@ -16330,7 +16301,7 @@ plan
       console.log(`\n  ${c.bold}Autopilot dry-run${c.reset} for ${c.cyan}${planId}${c.reset}`);
       console.log(`  ${ready.length} ready tasks, would spawn ${Math.min(ready.length, maxAgents)} agents:\n`);
       for (const t of ready.slice(0, maxAgents)) {
-        console.log(`  ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+        console.log(`  ${c.cyan}${t.short_id}${c.reset} ${inlineForeignText(t.title)}`);
       }
       if (ready.length > maxAgents) console.log(fmt.muted(`  ... and ${ready.length - maxAgents} queued`));
       return;
@@ -16361,7 +16332,7 @@ plan
         const agentAlive = handle ? runtime.isAlive(handle) : tmuxRun(["has-session", "-t", sn]).status === 0;
 
         if (task?.status === "done") {
-          console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
+          console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${inlineForeignText(info.task.title)}`);
           totalCompleted++;
           await emitOrchEvent(planId, "task_completed", shortId, info.task.title);
           if (agentAlive && handle) runtime.kill(handle);
@@ -16450,19 +16421,19 @@ plan
           const maxRetries = task?.max_retries || 3;
 
           if (markers.status === "blocked") {
-            console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${inlineForeignText(info.task.title)}: ${markers.detail}`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked", ...orchCtx });
               await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
             } catch {}
           } else if (markers.status === "needs_context") {
-            console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${inlineForeignText(info.task.title)}: ${markers.detail}`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context", ...orchCtx });
               await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
             } catch {}
           } else if (markers.status === "done_with_concerns") {
-            console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${shortId}${c.reset} ${inlineForeignText(info.task.title)}: ${markers.detail}`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, status: "done", execution_status: "done_with_concerns", execution_concerns: markers.detail, ...orchCtx });
             } catch {}
@@ -16487,7 +16458,7 @@ plan
           const markers = parseAgentMarkers(lastOutput);
           const killAgent = () => { if (handle) runtime.kill(handle); activeHandles.delete(sn); };
           if (markers.status === "blocked") {
-            console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${inlineForeignText(info.task.title)}: ${markers.detail}`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked", ...orchCtx });
               await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
@@ -16495,7 +16466,7 @@ plan
             killAgent();
             activeAgents.delete(shortId);
           } else if (markers.status === "needs_context") {
-            console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${inlineForeignText(info.task.title)}: ${markers.detail}`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context", ...orchCtx });
               await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
@@ -16607,7 +16578,7 @@ plan
           activeAgents.set(task.short_id, { task, spawnedAt: Date.now() });
           totalSpawned++;
           const modelTag = taskModel !== "opus" ? ` [${taskModel}]` : "";
-          console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag}`);
+          console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${inlineForeignText(task.title)}${modelTag}`);
           try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress", ...(orchSessionId ? { conversation_id: orchSessionId } : {}) }); } catch {}
           await emitOrchEvent(planId, "agent_spawned", task.short_id, task.title, { model: taskModel });
         } catch (err: any) {
@@ -16686,7 +16657,7 @@ plan
     const filled = Math.round(barWidth * pct / 100);
     const bar = `${c.green}${"█".repeat(filled)}${c.dim}${"░".repeat(barWidth - filled)}${c.reset}`;
 
-    console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${plan.short_id})${c.reset}`);
+    console.log(`\n  ${c.bold}${inlineForeignText(plan.title)}${c.reset} ${c.dim}(${plan.short_id})${c.reset}`);
     console.log(`  ${bar} ${pct}%\n`);
     console.log(`  ${c.green}${done.length}${c.reset} done  ${c.yellow}${inProgress.length}${c.reset} in-progress  ${c.blue}${ready.length}${c.reset} ready  ${c.dim}${blocked.length}${c.reset} blocked  ${c.dim}${dropped.length}${c.reset} dropped`);
 
@@ -16699,7 +16670,7 @@ plan
     if (totalRetries > 0 || exceededMax.length > 0) {
       console.log(`\n  ${c.dim}Retries:${c.reset} ${totalRetries} total${exceededMax.length > 0 ? `  ${c.red}${exceededMax.length}${c.reset} exceeded max` : ""}`);
       for (const t of exceededMax) {
-        console.log(`  ${c.red}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(${t.retry_count}/${t.max_retries} retries)${c.reset}`);
+        console.log(`  ${c.red}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${inlineForeignText(t.title)} ${c.dim}(${t.retry_count}/${t.max_retries} retries)${c.reset}`);
       }
     }
 
@@ -16727,7 +16698,7 @@ plan
             if (match) {
               const taskId = match[1];
               const task = tasks.find((t: any) => t.short_id === taskId);
-              console.log(`  ${c.green}*${c.reset} ${c.cyan}${taskId}${c.reset} ${task ? task.title : ""}`);
+              console.log(`  ${c.green}*${c.reset} ${c.cyan}${taskId}${c.reset} ${task ? inlineForeignText(task.title) : ""}`);
             }
           }
         }
@@ -16737,8 +16708,8 @@ plan
     if (withConcerns.length > 0) {
       console.log(`\n  ${c.bold}Concerns:${c.reset}`);
       for (const t of withConcerns) {
-        console.log(`  ${c.yellow}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
-        if (t.execution_concerns) console.log(`    ${c.dim}${t.execution_concerns.slice(0, 100)}${c.reset}`);
+        console.log(`  ${c.yellow}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${inlineForeignText(t.title)}`);
+        if (t.execution_concerns) console.log(`    ${c.dim}${inlineForeignText(t.execution_concerns)}${c.reset}`);
       }
     }
 
@@ -16781,7 +16752,7 @@ plan
           attempt_count: 0,
           ...(sessionId ? { conversation_id: sessionId } : {}),
         });
-        console.log(`  ${c.green}reset${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(was ${t.execution_status})${c.reset}`);
+        console.log(`  ${c.green}reset${c.reset} ${c.cyan}${t.short_id}${c.reset} ${inlineForeignText(t.title)} ${c.dim}(was ${t.execution_status})${c.reset}`);
         resetCount++;
       } catch (e: any) {
         console.error(`  ${c.red}fail${c.reset}  ${t.short_id}: ${e.message || e}`);
