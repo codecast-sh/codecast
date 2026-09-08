@@ -11,7 +11,7 @@
 // ./update.ts re-exports every getter here, so existing importers are unchanged.
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
-const TASK_VERSION = "6"; // bumped: issue_* events on --on (Linear and GitHub issues)
+const TASK_VERSION = "7"; // bumped: --precheck, a shell gate that skips a firing instead of spending a session
 const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";

@@ -1511,6 +1511,18 @@ export interface CcUsageSnapshot {
   weekly?: CcUsageWindow; // 7d, all models
   weekly_scoped?: CcUsageWindow; // 7d, model-scoped (the /usage screen's third bar)
   extra?: { percent: number; enabled: boolean }; // overflow usage credits
+  // The two fields below are LOCAL ONLY — stripped before the heartbeat,
+  // because Convex's ccUsageValidator rejects unknown fields and a daemon that
+  // sent one would have every heartbeat's account inventory refused.
+  //
+  // Where this reading came from. Absent means the OAuth usage endpoint;
+  // "live-session" means a running session's statusLine command forwarded the
+  // windows the Messages API had just reported (statuslineHook.ts).
+  source?: "live-session";
+  // When the usage endpoint last answered for this account, carried across live
+  // updates. The live payload has no model-scoped window, so this is what
+  // bounds how long a live feed may hold the poll off.
+  polled_at?: number;
 }
 
 /** Normalize the usage API response to the compact snapshot we store/publish.
@@ -1548,11 +1560,44 @@ export function parseUsageResponse(data: any, now: number): CcUsageSnapshot {
   return snap;
 }
 
+/** A usage-endpoint refusal, carrying what the response said about coming back.
+ *  `retryAfterMs` is set only when the server named a wait (429 Retry-After);
+ *  otherwise the caller picks its own delay. */
+export class CcUsageHttpError extends CcAccountError {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`usage endpoint ${status}`);
+  }
+}
+
+// Why: a corrupt or hostile Retry-After would otherwise hold every automated
+// usage poll off for years, freezing the meters auto-switch reads (ct-49527).
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/** Retry-After (RFC 9110) in ms: either delta-seconds or an HTTP date. Capped
+ *  at 24h. Undefined when the header is absent, unparseable, or already past —
+ *  the caller then falls back to its own backoff. Exported for tests. */
+export function parseRetryAfter(header: string | null | undefined, now: number): number | undefined {
+  const raw = header?.trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) {
+    return seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS) : undefined;
+  }
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return undefined;
+  const delta = at - now;
+  return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : undefined;
+}
+
 export async function fetchUsageSnapshot(
   accessToken: string,
   opts: { fetchImpl?: typeof fetch; now?: number } = {},
 ): Promise<CcUsageSnapshot> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const now = opts.now ?? Date.now();
   const resp = await fetchImpl(CC_USAGE_URL, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -1563,25 +1608,80 @@ export async function fetchUsageSnapshot(
     signal: AbortSignal.timeout(15_000),
   });
   if (!resp.ok) {
-    throw new CcAccountError(`usage endpoint ${resp.status}`);
+    throw new CcUsageHttpError(
+      resp.status,
+      resp.status === 429 ? parseRetryAfter(resp.headers.get("retry-after"), now) : undefined,
+    );
   }
-  return parseUsageResponse(await resp.json(), opts.now ?? Date.now());
+  return parseUsageResponse(await resp.json(), now);
+}
+
+// ---------------------------------------------------------------------------
+// Per-account poll backoff
+// ---------------------------------------------------------------------------
+// The poll used to treat every refusal alike: throw, and try again on the next
+// five-minute tick. That reads a 429's Retry-After as noise and hammers a rate-
+// limited endpoint, and it makes a hard outage cost one request per account per
+// five minutes for as long as it lasts. So a failure now records when this
+// account may be asked again: what the server named on a 429, else 30s doubling
+// per consecutive failure. The stale snapshot always survives — a meter that
+// flapped to empty on a transient 500 would read as headroom.
+
+const USAGE_BACKOFF_BASE_MS = 30_000;
+const USAGE_BACKOFF_MAX_MS = 15 * 60 * 1000;
+
+export interface UsageRetryState {
+  retry_at: number; // no automated probe of this account before then
+  failures: number; // consecutive failures; drives the delay
+  reason: string; // the last failure, as `cast usage` prints it
+  failed_at: number;
+  status?: number; // HTTP status, when the endpoint answered at all
+  retry_after?: boolean; // the server named the wait; not our own guess
+}
+
+/** The backoff state after one failed probe. */
+function nextUsageRetry(
+  prev: UsageRetryState | undefined,
+  err: unknown,
+  now: number,
+): UsageRetryState {
+  const failures = (prev?.failures ?? 0) + 1;
+  const http = err instanceof CcUsageHttpError ? err : undefined;
+  const named = http?.retryAfterMs;
+  const backoff = Math.min(USAGE_BACKOFF_BASE_MS * 2 ** (failures - 1), USAGE_BACKOFF_MAX_MS);
+  return {
+    retry_at: now + (named ?? backoff),
+    failures,
+    reason: err instanceof Error ? err.message : String(err),
+    failed_at: now,
+    ...(http && { status: http.status }),
+    ...(named !== undefined && { retry_after: true }),
+  };
 }
 
 function usageCachePath(): string {
   return path.join(codecastDir(), "cc-usage.json");
 }
 
-interface UsageCache {
+export interface UsageCache {
   // Keyed by account uuid (email fallback) — the same identity the profile
   // index carries, so a profile covering the active login shares one entry.
   accounts: Record<string, CcUsageSnapshot>;
+  // Backoff after a failed probe, same keys. Kept beside the snapshots rather
+  // than inside one because Convex's ccUsageValidator is a closed object: a
+  // snapshot carrying an extra field would have every heartbeat's whole account
+  // inventory rejected. So this stays local — `cast usage` reads it, the
+  // heartbeat never sends it.
+  retries?: Record<string, UsageRetryState>;
 }
 
 export function readUsageCache(): UsageCache {
   try {
     const parsed = JSON.parse(fs.readFileSync(usageCachePath(), "utf-8"));
-    if (parsed && typeof parsed.accounts === "object") return parsed;
+    if (parsed && typeof parsed.accounts === "object") {
+      if (!parsed.retries || typeof parsed.retries !== "object") delete parsed.retries;
+      return parsed;
+    }
   } catch {}
   return { accounts: {} };
 }
@@ -1645,6 +1745,173 @@ export interface UsageRefreshSummary {
  * Per-account probes are throttled by `minIntervalMs` (0 = probe everything
  * now) so callers can invoke this freely.
  */
+// ---------------------------------------------------------------------------
+// Live usage from a session's statusLine command
+// ---------------------------------------------------------------------------
+// Every turn of every Claude session carries the account's rate-limit windows,
+// and the statusLine hook forwards them (statuslineHook.ts). That feed is
+// fresher AND cheaper than the OAuth usage endpoint, so while it is running it
+// takes precedence: the poll skips an account with a fresh live reading, and a
+// poll that fails or arrives late never overwrites one.
+
+// How long a live reading stands in for a poll.
+const LIVE_USAGE_FRESH_MS = 5 * 60 * 1000;
+
+// But never for longer than this. The statusLine payload carries the two
+// unified windows and no model-scoped one, so an account whose sessions post
+// continuously would keep its Fable meter frozen at whatever the last poll saw
+// — and auto-switch reads that meter. It would then send sessions to an account
+// whose scoped window pegged hours ago, and continue them there each time they
+// park. One poll every half hour is enough to keep that window honest and still
+// cuts the endpoint's traffic for a busy account roughly sixfold.
+const LIVE_USAGE_POLL_FLOOR_MS = 30 * 60 * 1000;
+
+// A live post lands every 15s per active session. Rewriting the cache each time
+// would invalidate the accounts payload and re-push the whole inventory on the
+// next heartbeat for no new information, so an unchanged reading is only
+// re-stamped this often.
+const LIVE_USAGE_RESTAMP_MS = 60 * 1000;
+
+/** A live reading recent enough to stand in for a usage poll. */
+function isLiveUsageFresh(snap: CcUsageSnapshot | undefined, now: number): boolean {
+  return snap?.source === "live-session" && now - snap.fetched_at < LIVE_USAGE_FRESH_MS;
+}
+
+/** The floor above. A live feed keeps `fetched_at` moving, so it holds off the
+ *  ordinary throttle just as surely as the live skip — this is the one
+ *  condition that overrides both. An account that has never been polled has no
+ *  scoped window at all, so it is overdue from the start. */
+function isLivePollOverdue(snap: CcUsageSnapshot | undefined, now: number): boolean {
+  return snap?.source === "live-session" && now - (snap.polled_at ?? 0) >= LIVE_USAGE_POLL_FLOOR_MS;
+}
+
+/**
+ * The usage windows out of a Claude Code statusLine payload, or null when it
+ * carries none. Verified against 2.1.263: `rate_limits.five_hour` and
+ * `.seven_day`, each `{ used_percentage, resets_at }` with `resets_at` in epoch
+ * SECONDS (the usage endpoint answers ISO strings, hence the conversion).
+ */
+export function parseStatusLineUsage(payload: unknown, now: number): CcUsageSnapshot | null {
+  const limits = (payload as any)?.rate_limits;
+  if (!limits || typeof limits !== "object") return null;
+  const window = (raw: any): CcUsageWindow | undefined => {
+    if (typeof raw?.used_percentage !== "number" || !Number.isFinite(raw.used_percentage)) return undefined;
+    const secs = raw.resets_at;
+    const w: CcUsageWindow = { percent: raw.used_percentage };
+    if (typeof secs === "number" && Number.isFinite(secs) && secs > 0) w.resets_at = Math.round(secs * 1000);
+    return w;
+  };
+  const session = window(limits.five_hour);
+  const weekly = window(limits.seven_day);
+  if (!session && !weekly) return null;
+  return { fetched_at: now, source: "live-session", ...(session && { session }), ...(weekly && { weekly }) };
+}
+
+/**
+ * The live reading folded onto whatever the last poll left, or null when it
+ * says nothing new.
+ *
+ * The statusLine payload carries only the two unified windows, so the model-
+ * scoped window and the usage-credit block are carried over — dropping them
+ * would read as headroom on an account whose Fable window is pegged, and
+ * auto-switch would send sessions there. The tradeoff is that `fetched_at`
+ * advances while `weekly_scoped` stays as old as the last poll, which is why
+ * the live feed only holds the poll off for five minutes at a time and never
+ * past the half-hour floor.
+ *
+ * Null for an unchanged reading: a post lands every 15s per active session, and
+ * rewriting the cache each time would invalidate the accounts payload and
+ * re-push the whole inventory on the next heartbeat for no new information.
+ */
+function mergeLiveUsage(
+  prev: CcUsageSnapshot | undefined,
+  snap: CcUsageSnapshot,
+): CcUsageSnapshot | null {
+  const merged: CcUsageSnapshot = {
+    ...snap,
+    ...(prev?.weekly_scoped && { weekly_scoped: prev.weekly_scoped }),
+    ...(prev?.extra && { extra: prev.extra }),
+    ...(prev?.polled_at !== undefined && { polled_at: prev.polled_at }),
+    ...(!snap.weekly && prev?.weekly && { weekly: prev.weekly }),
+    ...(!snap.session && prev?.session && { session: prev.session }),
+  };
+  const unchanged =
+    prev?.source === "live-session" &&
+    snap.fetched_at - prev.fetched_at < LIVE_USAGE_RESTAMP_MS &&
+    prev.session?.percent === merged.session?.percent &&
+    prev.weekly?.percent === merged.weekly?.percent;
+  return unchanged ? null : merged;
+}
+
+export interface StatusLineIngest {
+  key: string;
+  snapshot: CcUsageSnapshot;
+  wrote: boolean;
+}
+
+// Read-modify-write of one file from a route that can fire several times a
+// second: without a chain two posts arriving together would both read the old
+// cache and the second would erase the first.
+let liveUsageWriteChain: Promise<void> = Promise.resolve();
+
+/**
+ * The whole /hook/statusline body -> the usage cache, so the daemon route stays
+ * a parser and this stays testable. Null when the payload carries no windows or
+ * no account can be named for it.
+ *
+ * Every filesystem call here is async on purpose: this runs on the daemon's
+ * loopback server, where one synchronous read stalls delivery, injection, the
+ * heartbeat and the watchdog alike (daemon.loopBudget.guard.test.ts).
+ */
+export async function ingestStatusLineUsage(
+  payload: unknown,
+  opts: { account?: string; now?: number } = {},
+): Promise<StatusLineIngest | null> {
+  const now = opts.now ?? Date.now();
+  const snapshot = parseStatusLineUsage(payload, now);
+  if (!snapshot) return null;
+  const key = await usageKeyForSessionAsync(opts.account);
+  if (!key) return null;
+
+  let wrote = false;
+  liveUsageWriteChain = liveUsageWriteChain.then(async () => {
+    const stored = await readJsonAsync<UsageCache>(usageCachePath());
+    const cache: UsageCache = stored?.accounts ? stored : { accounts: {} };
+    const merged = mergeLiveUsage(cache.accounts[key], snapshot);
+    if (!merged) return;
+    cache.accounts[key] = merged;
+    await writeJsonAsync(usageCachePath(), cache);
+    wrote = true;
+  });
+  await liveUsageWriteChain;
+  return { key, snapshot, wrote };
+}
+
+async function usageKeyForSessionAsync(account: string | undefined): Promise<string | undefined> {
+  if (account) {
+    if (!VALID_PROFILE_NAME.test(account)) return undefined;
+    // The index is read for two strings, so the validating reader
+    // (readProfileIndex) would only add a synchronous file read here.
+    const index = await readJsonAsync<ProfileIndex>(indexPath());
+    const meta = index?.profiles?.[account];
+    return meta?.uuid || meta?.email || undefined;
+  }
+  return (await readJsonAsync<ActiveStamp>(activeStampPath()))?.key;
+}
+async function readJsonAsync<T>(file: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fs.promises.readFile(file, "utf-8")) as T;
+  } catch {
+    return null;
+  }
+}
+async function writeJsonAsync(file: string, value: unknown): Promise<void> {
+  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  await fs.promises.writeFile(temp, JSON.stringify(value, null, 2), { mode: 0o644 });
+  await fs.promises.rename(temp, file);
+}
+
 export async function refreshUsageSnapshots(
   opts: { fetchImpl?: typeof fetch; now?: number; minIntervalMs?: number } = {},
 ): Promise<UsageRefreshSummary> {
@@ -1714,6 +1981,10 @@ export async function refreshUsageSnapshots(
   }
   if (activeKey) knownKeys.add(activeKey);
 
+  const retries: Record<string, UsageRetryState> = { ...cache.retries };
+  let retriesChanged = false;
+
+  const probed = new Map<string, CcUsageSnapshot>();
   for (const [key, job] of jobs) {
     const prev = cache.accounts[key];
     // A just-activated account is probed regardless of the throttle: its last
@@ -1721,24 +1992,70 @@ export async function refreshUsageSnapshots(
     // account until one fetched after the activation lands.
     const predatesActivation =
       key === activeKey && activeSince !== undefined && !!prev && prev.fetched_at < activeSince;
-    if (prev && !predatesActivation && now - prev.fetched_at < minInterval) {
+    const backoff = retries[key];
+    // Why: the endpoint named a wait (429 Retry-After) or we picked one after a
+    // refusal; asking again before it earns another refusal and, on a 429, can
+    // extend the block. This outranks both the activation probe and the live
+    // feed's overdue stamp — no local urgency makes a rate-limited endpoint
+    // answer. A human pressing refresh comes in with minInterval 0 and is let
+    // through; only the poll is held (ct-49527).
+    if (minInterval > 0 && backoff && now < backoff.retry_at) {
+      summary.skipped.push(job.label);
+      continue;
+    }
+    const mustProbe = predatesActivation || isLivePollOverdue(prev, now);
+    // A session of this account feeds the windows every turn, so a poll would
+    // spend the usage endpoint's tight budget for a staler answer (ct-49525).
+    if (!mustProbe && (isLiveUsageFresh(prev, now) || (prev && now - prev.fetched_at < minInterval))) {
       summary.skipped.push(job.label);
       continue;
     }
     try {
-      cache.accounts[key] = await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now });
+      // polled_at is what bounds the live feed's hold on this poll; it rides
+      // the snapshot so a later live update can carry it forward.
+      probed.set(key, { ...(await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now })), polled_at: now });
       summary.probed.push(job.label);
+      if (retries[key]) {
+        delete retries[key]; // recovered — the next failure starts at 30s again
+        retriesChanged = true;
+      }
     } catch (err) {
+      retries[key] = nextUsageRetry(retries[key], err, now);
+      retriesChanged = true;
       summary.failed.push({ name: job.label, reason: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  if (summary.probed.length > 0) {
-    // Drop entries for deleted profiles so the cache can't grow unbounded.
-    for (const key of Object.keys(cache.accounts)) {
-      if (!knownKeys.has(key)) delete cache.accounts[key];
+  if (probed.size > 0 || retriesChanged) {
+    // Re-read rather than write back the copy taken before the probes: a live
+    // statusLine post can land during them (keychain reads and the endpoint
+    // together run for seconds), and writing the stale copy would erase it.
+    const latest = readUsageCache();
+    for (const [key, snap] of probed) {
+      const disk = latest.accounts[key];
+      // A live post landed while this pass ran. Its unified windows are newer,
+      // so keep them and take from the endpoint only what it alone can say —
+      // including the stamp that lets the feed hold off the next poll.
+      latest.accounts[key] =
+        disk && disk.fetched_at > snap.fetched_at
+          ? {
+              ...disk,
+              polled_at: snap.polled_at,
+              ...(snap.weekly_scoped && { weekly_scoped: snap.weekly_scoped }),
+              ...(snap.extra && { extra: snap.extra }),
+            }
+          : snap;
     }
-    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
+    // Drop entries for deleted profiles so the cache can't grow unbounded.
+    for (const key of Object.keys(latest.accounts)) {
+      if (!knownKeys.has(key)) delete latest.accounts[key];
+    }
+    for (const key of Object.keys(retries)) {
+      if (!knownKeys.has(key)) delete retries[key];
+    }
+    if (Object.keys(retries).length > 0) latest.retries = retries;
+    else delete latest.retries;
+    atomicWriteFile(usageCachePath(), JSON.stringify(latest, null, 2), { mode: 0o644 });
   }
   return summary;
 }

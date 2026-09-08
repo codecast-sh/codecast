@@ -517,6 +517,14 @@ export type InboxSession = {
   // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
   // decay flip locally without a server re-execution.
   agent_status_updated_at?: number | null;
+  // The settle's own facts (ct-49533): agent_status_boundary says the status
+  // settled the row on a resume / clear / manual compact rather than on a turn
+  // ending — a placement input, and the signal any completion-reactive surface
+  // (a chime, unread) must ignore. turn_completed_at is when the lead turn
+  // ended, the per-turn identity for a session the harness keeps alive for
+  // background work, whose status then stops moving between turns.
+  agent_status_boundary?: boolean | null;
+  turn_completed_at?: number | null;
   hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
@@ -2589,6 +2597,10 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     awaiting_input: live.awaiting_input,
     last_turn_allows_park: s.last_turn_allows_park ?? null,
     agent_status_updated_at: s.agent_status_updated_at ?? null,
+    // The settle's own kind: a boundary settle (a resume, a clear, a manual
+    // compact) carries no verdict, so the replica must place it exactly as the
+    // server does (ct-49533).
+    agent_status_boundary: s.agent_status_boundary ?? null,
     last_heartbeat: s.last_heartbeat ?? null,
     last_role_is_user: s.last_role_is_user ?? null,
     auq_open: s.auq_open ?? null,

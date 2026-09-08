@@ -3557,6 +3557,7 @@ http.route({
         model: body.model,
         project_path: body.project_path,
         max_runtime_ms: body.max_runtime_ms,
+        precheck: body.precheck,
       });
       return new Response(JSON.stringify({ success: result.ok, changed: result.changed }), {
         status: 200,

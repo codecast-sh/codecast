@@ -64,6 +64,13 @@ const ROWS: Row[] = [
   { file: D, name: "logHealthSummary", kind: "function", minLines: 10, mustContain: "getSystemMetrics" },
   { file: D, name: "ensureWatchdogSupervised", kind: "function", minLines: 10, mustContain: "watchdogSupervisionAction" },
   { file: D, name: "startHookServer", kind: "function", minLines: 40, mustContain: "handleTerminalHttp" },
+  // /hook/statusline: a live usage post per turn per session, so its whole
+  // read-modify-write of the usage cache has to stay off the loop.
+  { file: D, name: "handleStatusLinePost", kind: "function", minLines: 20, mustContain: "ingestStatusLineUsage" },
+  { file: "ccAccounts.ts", name: "ingestStatusLineUsage", kind: "function", minLines: 15, mustContain: "usageKeyForSessionAsync" },
+  { file: "ccAccounts.ts", name: "usageKeyForSessionAsync", kind: "function", minLines: 8, mustContain: "readJsonAsync" },
+  { file: "ccAccounts.ts", name: "readJsonAsync", kind: "function", minLines: 3, mustContain: "JSON.parse" },
+  { file: "ccAccounts.ts", name: "writeJsonAsync", kind: "function", minLines: 3, mustContain: "rename" },
   { file: D, name: "startEventLoopMonitor", kind: "function", minLines: 10, mustContain: "saveDaemonState" },
   { file: D, name: "startLoopFreezeProbe", kind: "function", minLines: 10, mustContain: "loopFreezes.record" },
   { file: D, name: "startVersionChecker", kind: "function", minLines: 8, mustContain: "checkForForcedUpdate" },
@@ -95,7 +102,16 @@ const ROWS: Row[] = [
   // Nested in main().
   { file: D, name: "handleStatusData", kind: "function", from: MAIN, minLines: 100, mustContain: "resolveTurnEndStatus" },
   { file: D, name: "handleStatusFile", kind: "function", from: MAIN, minLines: 5, mustContain: "handleStatusData" },
+  { file: D, name: "handleStatusSpoolFile", kind: "function", from: MAIN, minLines: 5, mustContain: "drainStatusSpool" },
   { file: D, name: "queueAgentStatusWrite", kind: "function", minLines: 5, mustContain: "AGENT_STATUS_DIR" },
+  { file: D, name: "queueAgentStatusSpoolAppend", kind: "function", minLines: 5, mustContain: "appendStatusSpool" },
+  // The spool the watcher, the boot replay and the retention interval all run
+  // on: one burst of hook events is one drain, and a sync read of a 5 MB file
+  // on the watcher would stall delivery for the whole fleet.
+  { file: "statusSpool.ts", name: "drainStatusSpool", kind: "function", minLines: 20, mustContain: "lastIndexOf" },
+  { file: "statusSpool.ts", name: "appendStatusSpool", kind: "function", minLines: 4, mustContain: "appendFile" },
+  { file: "statusSpool.ts", name: "listStatusSpools", kind: "function", minLines: 10, mustContain: "SPOOL_EXT" },
+  { file: "statusSpool.ts", name: "sweepStatusSpools", kind: "function", minLines: 20, mustContain: "SPOOL_TTL_MS" },
   { file: D, name: "handlePlanFile", kind: "function", from: MAIN, minLines: 15, mustContain: "syncPlanFromPlanMode" },
   { file: D, name: "findMostRecentSessionId", kind: "function", from: MAIN, minLines: 5, mustContain: "listFilesByMtime" },
   { file: D, name: 'watcher.on("session")', find: 'watcher.on("session"', kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
