@@ -72,6 +72,17 @@ test("native addons are unpacked from the asar", () => {
   }
 });
 
+test("every tray image is packaged", () => {
+  // Same allowlist, same failure, quieter symptom: an image left out of
+  // build.files does not crash the app, it just leaves a blank mark in the menu
+  // bar. The retina companions are named by AppKit rather than by the code, so
+  // no require scan would find them.
+  const { TRAY_ASSET_FILES } = require("./trayIcon");
+  const allowed = new Set(pkg.build.files);
+  const missing = TRAY_ASSET_FILES.filter((f) => !allowed.has(f));
+  assert.deepEqual(missing, [], `Add these to build.files in packages/electron/package.json:\n  ${missing.join("\n  ")}`);
+});
+
 test("the entry points themselves are packaged", () => {
   const allowed = new Set(pkg.build.files);
   assert.ok(allowed.has("main.js"));
