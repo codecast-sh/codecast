@@ -36,6 +36,7 @@ import {
   type SessionsProjectionSlot,
 } from "./inboxStore";
 import { lastSyncApplyMono, monotonicNow, syncInflightCount } from "./syncActivity";
+import type { CodecastEventName, CodecastEventProps } from "@codecast/shared/analytics";
 
 // ── Constants (the pinned contract) ─────────────────────────────────────────
 
@@ -288,8 +289,14 @@ export function emptyHeartbeatCounters(): InboxHeartbeatCounters {
 }
 
 export type InboxDigestComparerIO = {
-  platform: string;
-  track: (event: string, properties: Record<string, unknown>) => void;
+  /** The surface label the event catalog accepts, not a free string: every
+   *  event below carries it, so a wider type here would fail at each call. */
+  platform: CodecastEventProps<"inbox_drift">["platform"];
+  /** The typed catalog emitter (lib/analytics `track`). Typed as the catalog
+   *  itself so an event this file emits must exist in it with matching props
+   *  (ct-49565); a looser signature here would silently opt the whole comparer
+   *  out of that check. */
+  track: <N extends CodecastEventName>(event: N, properties: CodecastEventProps<N>) => void;
   /** Hydrate exactly these ids into the store (the missing-bodies heal). */
   fetchByIds: (ids: string[]) => Promise<void>;
   /** One sessionsLiveness `_probe` applied through the overlay applier. */
