@@ -23,7 +23,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 // A unix socket path is capped at ~104 bytes, and tmux adds `tmux-<uid>/default`

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync } from "../../proc.js";
+import { type ChildProcess } from "../../proc.js";
 import { createHash } from 'node:crypto';
 import { mock } from 'bun:test';
 import { EventEmitter } from 'node:events';

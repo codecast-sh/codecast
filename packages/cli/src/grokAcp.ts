@@ -12,7 +12,8 @@
 //
 // Not yet wired into the daemon's launch/delivery/kill paths (that is the codex
 // integration's 250-site footprint); see ct-49358.
-import { spawn, type ChildProcess } from "child_process";
+import { spawn } from "./proc.js";
+import { type ChildProcess } from "./proc.js";
 import { EventEmitter } from "events";
 import * as readline from "readline";
 

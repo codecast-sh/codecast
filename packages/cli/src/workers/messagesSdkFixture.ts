@@ -2,7 +2,7 @@ import { PayloadBudget } from './payloadBudget.js';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn } from "../proc.js";
 import { writeSync } from 'node:fs';
 import { ConvexHttpClient } from 'convex/browser';
 import { ConvexError, convexToJson } from 'convex/values';

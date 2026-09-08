@@ -10,7 +10,7 @@
  * and refuses a bundle over the size cap naming the roots that filled it.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isCodecastOwnedHomePath } from "../../codecastOwned.js";

@@ -7,6 +7,7 @@ import {
   classifyChangedPaths,
   formatScope,
   jobFlag,
+  touchesPlatform,
 } from "./changed-path-scope";
 
 const flags = (files: string[]) => classifyChangedPaths(files).flags;
@@ -17,7 +18,8 @@ describe("areaOf", () => {
     expect(areaOf("packages/web/components/DiffView.tsx")).toBe("web");
     expect(areaOf("packages/convex/convex/tasks.ts")).toBe("convex");
     expect(areaOf("packages/shared/contracts/agentClients.ts")).toBe("shared");
-    expect(areaOf("platform/packages/engine/src/index.ts")).toBe("shared");
+    expect(areaOf("platform/packages/engine/src/index.ts")).toBe("platform");
+    expect(areaOf("platform/vendor-manifest.txt")).toBe("platform");
     expect(areaOf("packages/electron/main.js")).toBe("electron");
     expect(areaOf("packages/desktop/src-tauri/tauri.conf.json")).toBe("electron");
     expect(areaOf("packages/mobile/app/index.tsx")).toBe("mobile");
@@ -38,6 +40,24 @@ describe("areaOf", () => {
     expect(areaOf(".github/workflows/ci.yml")).toBeNull();
     expect(areaOf("scripts/ci/changed-path-scope.ts")).toBeNull();
     expect(areaOf("infra/nginx.conf")).toBeNull();
+  });
+});
+
+describe("touchesPlatform", () => {
+  test("claims the mirror and the manifests the mirror is derived from", () => {
+    expect(touchesPlatform("platform/packages/keys/src/index.ts")).toBe(true);
+    expect(touchesPlatform("platform/vendor-manifest.txt")).toBe(true);
+    expect(touchesPlatform("packages/web/package.json")).toBe(true);
+    expect(touchesPlatform("packages/cli/package.json")).toBe(true);
+  });
+
+  test("claims nothing else", () => {
+    expect(touchesPlatform("packages/web/components/DiffView.tsx")).toBe(false);
+    // Only a workspace root manifest declares an @platform dep; one nested
+    // inside a package is a fixture or a bundled copy.
+    expect(touchesPlatform("packages/cli/src/fixtures/package.json")).toBe(false);
+    expect(touchesPlatform("package.json")).toBe(false);
+    expect(touchesPlatform("docs/architecture/sync-host.md")).toBe(false);
   });
 });
 
@@ -81,6 +101,38 @@ describe("classifyChangedPaths", () => {
     expect(result.run_test_convex).toBe(true);
     // Only packages/web has a lint script, so a shared change leaves it out.
     expect(result.run_lint).toBe(false);
+  });
+
+  // The vendored mirror is a dependency of every package, so a change to it has
+  // to keep reaching the jobs that used to see it through "shared" — and now
+  // also reach the job that tests the mirror itself (ct-49675).
+  test("a vendored platform change runs every job that reads the mirror", () => {
+    const result = flags(["platform/packages/engine/src/store.ts"]);
+    expect(result.platform).toBe(true);
+    expect(result.shared).toBe(false);
+    expect(result.run_test_platform).toBe(true);
+    expect(result.run_build).toBe(true);
+    expect(result.run_typecheck).toBe(true);
+    expect(result.run_test_cli).toBe(true);
+    expect(result.run_test_web).toBe(true);
+    expect(result.run_test_convex).toBe(true);
+    expect(result.run_lint).toBe(false);
+  });
+
+  test("a workspace manifest re-checks the mirror it declares", () => {
+    // The mirror's package set is read out of these files, so adopting or
+    // dropping an @platform dep here is what makes the mirror wrong.
+    const result = flags(["packages/web/package.json"]);
+    expect(result.run_test_platform).toBe(true);
+    expect(result.web).toBe(true);
+    expect(result.run_lint).toBe(true);
+  });
+
+  test("changes that cannot touch the mirror leave its job alone", () => {
+    expect(flags(["packages/web/components/DiffView.tsx"]).run_test_platform).toBe(false);
+    expect(flags(["packages/cli/src/daemon.ts"]).run_test_platform).toBe(false);
+    expect(flags(["packages/shared/contracts/agentClients.ts"]).run_test_platform).toBe(false);
+    expect(flags(["docs/architecture/sync-host.md"]).run_test_platform).toBe(false);
   });
 
   test("a convex change runs typecheck, build and the convex tests", () => {

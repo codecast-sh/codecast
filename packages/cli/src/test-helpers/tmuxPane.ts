@@ -8,7 +8,7 @@
 // run. messagingHarness.ts re-exports both functions with the isolation guard
 // applied, which is what the test suites use.
 
-import { execSync } from "node:child_process";
+import { execSync } from "../proc.js";
 import { tmuxRun as defaultTmuxRun } from "../tmux.js";
 
 /** Wrap a value in single quotes for a `bash -c` body. */
