@@ -222,4 +222,27 @@ describe("applyTaskUpdate", () => {
       expect(revisionsOf(rows)).toHaveLength(0);
     }
   });
+
+  // The precheck is an editable field like any other, so `cast trigger update
+  // --precheck` must be versioned and audited — not a quiet patch that leaves
+  // no record of when the gate changed or who changed it.
+  test("setting, changing and clearing the precheck is versioned like any edit", async () => {
+    const task = editable();
+    const { db, rows } = fakeDb([task, home()]);
+
+    const set = await applyTaskUpdate({ db } as any, task as any, { precheck: "make check" }, ACTOR);
+    expect(set).toEqual({ ok: true, changed: ["precheck"] });
+    expect(task.precheck).toBe("make check");
+    expect(revisionsOf(rows)[0].before.precheck).toBeUndefined();
+
+    const same = await applyTaskUpdate({ db } as any, task as any, { precheck: "  make check  " }, ACTOR);
+    expect(same.changed).toEqual([]);
+    expect(revisionsOf(rows)).toHaveLength(1);
+
+    // "" is how the CLI removes the gate.
+    const cleared = await applyTaskUpdate({ db } as any, task as any, { precheck: "" }, ACTOR);
+    expect(cleared.changed).toEqual(["precheck"]);
+    expect(task.precheck).toBeUndefined();
+    expect(revisionsOf(rows)[1].before.precheck).toBe("make check");
+  });
 });

@@ -19,7 +19,7 @@ export function useSyncTriggers(enabled = true) {
 // The fields trigger surfaces render; a change to anything else on the row
 // (lease stamps, retry counters) doesn't wake them.
 export const triggerSig = (t: any) =>
-  `${t.status}|${t.run_at ?? 0}|${t.last_run_at ?? 0}|${t.run_count ?? 0}|${t.display_title ?? t.title}|${t.display_summary ?? ""}|${t.last_run_needs_attention ? 1 : 0}|${t.last_run_failed ? 1 : 0}|${t.last_run_summary ?? ""}|${t.last_run_conversation_id ?? ""}|${t.schedule_type}|${t.interval_ms ?? 0}|${t.mode}|${t.prompt}`;
+  `${t.status}|${t.run_at ?? 0}|${t.last_run_at ?? 0}|${t.run_count ?? 0}|${t.display_title ?? t.title}|${t.display_summary ?? ""}|${t.last_run_needs_attention ? 1 : 0}|${t.last_run_failed ? 1 : 0}|${t.last_run_summary ?? ""}|${t.last_run_conversation_id ?? ""}|${t.schedule_type}|${t.interval_ms ?? 0}|${t.mode}|${t.prompt}|${t.precheck ?? ""}|${t.last_precheck_skip_at ?? 0}|${t.last_precheck_skip_reason ?? ""}`;
 const newestFirst = (a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0);
 
 // Which conversations the viewer sees carry an armed trigger their own roster
@@ -96,7 +96,7 @@ export function useSyncTriggerRuns(taskId: string | null | undefined) {
   );
 }
 
-const runSig = (r: any) => `${r.status}|${r.title}|${r.idle_summary ?? ""}`;
+const runSig = (r: any) => `${r.status}|${r.title}|${r.idle_summary ?? ""}|${r.kind}`;
 
 /** Reader: one trigger's runs, newest first, from the store. Pass null to
  *  skip (a collapsed row costs no query). Returns undefined only while the

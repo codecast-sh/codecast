@@ -52,6 +52,7 @@ import {
   Pencil,
   Play,
   RotateCcw,
+  ShieldCheck,
   X,
   XCircle,
   Zap,
@@ -230,7 +231,10 @@ export default function TriggerDetailPage() {
       : null;
   const brief = t.display_summary?.trim();
   const title = taskDisplayTitle(t);
-  const totalRuns = Math.max(t.run_count ?? 0, runs?.length ?? 0);
+  // Skipped firings are runs in the history, but not runs of the agent — the
+  // "Runs" vital counts sessions, which is what run_count means.
+  const sessionRuns = runs?.filter((r) => r.kind !== "skipped_precheck");
+  const totalRuns = Math.max(t.run_count ?? 0, sessionRuns?.length ?? 0);
   // triggerEventLabel reads a raw webhook filter as well as a derived name, so
   // an old trigger armed on "pull_request" still reads as words.
   const eventLabel =
@@ -413,6 +417,39 @@ export default function TriggerDetailPage() {
                 {t.last_run_summary && (
                   <p className="mt-1 text-[11px] leading-relaxed text-sol-text-muted">
                     {t.last_run_summary}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── Precheck: the gate that decides whether a firing spends a
+                 session at all. Shown whenever one is set, because "this
+                 trigger sometimes does nothing" is otherwise invisible — a
+                 skipped firing leaves no session behind. ── */}
+            {t.precheck && (
+              <div
+                data-testid="trigger-precheck"
+                className="mt-4 rounded-lg border border-sol-border/40 bg-sol-bg-alt/20 px-3.5 py-2.5"
+              >
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Precheck
+                  {t.schedule_type === "event" && (
+                    <span className="font-normal normal-case tracking-normal text-sol-text-dim/80">
+                      · not run for event triggers
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-sol-text break-all">
+                  {t.precheck}
+                </p>
+                <p className="mt-1 text-[10px] text-sol-text-dim">
+                  Runs before each firing. Exit 0 runs the trigger; anything else records a
+                  skipped run.
+                </p>
+                {t.last_precheck_skip_at && (
+                  <p className="mt-1.5 text-[11px] text-sol-yellow">
+                    Last skipped {fmtDuration(Math.max(0, now - t.last_precheck_skip_at))} ago
+                    {t.last_precheck_skip_reason ? ` — ${t.last_precheck_skip_reason}` : ""}
                   </p>
                 )}
               </div>
