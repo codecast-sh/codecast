@@ -18,7 +18,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 OUT=$(printf '%s' "$INPUT" | python3 -c "
-import sys, json, os, tempfile, time, urllib.parse
+import sys, json, os, re, tempfile, time, urllib.parse
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -26,6 +26,15 @@ except Exception:
 sid = str(d.get('session_id') or '')
 if not sid:
     sys.exit(0)
+# Why: the AskUserQuestion sidecar further down names its file after this id, so
+# an id of ../../elsewhere/evil drops the questions payload wherever it points
+# (ct-49677). Same rule as the shell guard on the fallback below and as
+# isSafeStatusSessionId in the daemon: the first character from [A-Za-z0-9_-] so
+# no id starts with a dot, the rest from [A-Za-z0-9._-] so no id carries a
+# separator, 128 characters at most. Real ids are uuids, so no real caller is
+# turned away. Only the sidecar is gated: the status line still goes out, and
+# the daemon's route answers an unsafe id with 400 before anything reads it.
+safe_sid = bool(re.fullmatch('[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}', sid))
 ev = str(d.get('hook_event_name') or '')
 tool = str(d.get('tool_name') or '')
 status = ''
@@ -46,6 +55,12 @@ elif ev == 'PreCompact':
     status = 'compacting'
 elif ev == 'Stop':
     status = 'idle'
+    # The lead turn ended, whatever the daemon then makes of the settle. A
+    # session the harness keeps alive for background work reports 'waiting'
+    # from here on, and its status stops moving; this stamp is the per-turn
+    # identity every completion-reactive consumer keys on so a second turn
+    # under one unchanged status still announces once.
+    extra['turn_completed_at'] = str(int(time.time()))
 elif ev == 'PermissionRequest':
     # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the
     # generic Notification ('Claude needs your permission', no tool name), it
@@ -78,15 +93,33 @@ elif ev == 'Notification':
     elif nt == 'idle_prompt':
         status = 'idle'
 elif ev == 'SessionStart':
-    if str(d.get('source') or '') == 'compact':
+    src = str(d.get('source') or '')
+    if src == 'compact':
+        # An auto-compact runs INSIDE a turn that then resumes: the agent is
+        # working, not settling.
         status = 'working'
+    elif src in ('startup', 'resume', 'clear'):
+        # The only signal a resumed or cleared session emits before its first
+        # prompt. It lands the pane at an idle prompt with no turn behind it,
+        # so it settles the row as a SESSION BOUNDARY: the daemon and the
+        # server read the flag and keep every completion-reactive consumer
+        # (the needs-input push, the settle classifier, unread) out of it.
+        status = 'idle'
+        extra['session_boundary'] = '1'
+elif ev == 'PostCompact':
+    # A manual /compact swallows the turn boundary: it ends at an idle prompt
+    # and emits no Stop, so this is the pane's only clearing signal. An auto
+    # compact runs inside a turn that emits its own Stop, so it claims nothing.
+    if str(d.get('trigger') or '') == 'manual':
+        status = 'idle'
+        extra['session_boundary'] = '1'
 # A pending AskUserQuestion buffers its whole turn (the reasoning prose AND the
 # tool_use) out of the JSONL until it is answered, so the daemon cannot read the
 # real questions from the transcript. Drop the full tool_input in a per-session
 # sidecar (too large for the status URL) so the daemon builds a full-fidelity
 # card — option descriptions, headers, multiSelect — instead of scraping the
 # box-art menu. Written atomically; best-effort.
-if ev in ('PreToolUse', 'PermissionRequest') and tool == 'AskUserQuestion':
+if safe_sid and ev in ('PreToolUse', 'PermissionRequest') and tool == 'AskUserQuestion':
     try:
         qs = (d.get('tool_input') or {}).get('questions')
         if qs:
@@ -102,13 +135,21 @@ if not status:
     sys.exit(0)
 ts = int(time.time())
 pm = str(d.get('permission_mode') or '')
+# Which LAUNCH this process is: the daemon stamps it into the pane env at every
+# spawn and resume and drops posts that carry a superseded one, so an orphan
+# left behind by a kill or a resume stops speaking for the pane (ct-49532).
+lt = str(os.environ.get('CODECAST_LAUNCH_TOKEN') or '')
 q = {'session_id': sid, 'status': status, 'ts': str(ts)}
 if pm:
     q['permission_mode'] = pm
+if lt:
+    q['launch_token'] = lt
 q.update(extra)
 fb = {'status': status, 'ts': ts}
 if pm:
     fb['permission_mode'] = pm
+if lt:
+    fb['launch_token'] = lt
 fb.update(extra)
 print(sid + '\\t' + status + '\\t' + urllib.parse.urlencode(q) + '\\t' + json.dumps(fb))
 " 2>/dev/null)
@@ -126,9 +167,35 @@ if [ -f "$HOOK_PORT_FILE" ]; then
   fi
 fi
 
-# Fallback: write status file (existing path, daemon polls via chokidar)
+# Fallback: the daemon is unreachable (restart, port change, the boot window
+# before its handler registers), so the event waits on disk. The spool is the
+# append-only history the daemon replays in order and truncates; the single
+# status file below is what a daemon from before the spool reads. That file
+# alone used to be the whole fallback, so a burst during a restart collapsed
+# to its last entry and lost any Stop behind it.
+#
+# "working" is PreToolUse, one per tool call: it stays out of the spool so a
+# long turn cannot fill it with progress, and the file below still carries it.
+# Both writes are shell builtins — one extra process per event is what blew
+# Claude Code's hook timeout before (see the note at the top of this file).
+
+# Both paths are built out of the session id, which arrives in the hook payload:
+# an id of ../../elsewhere/evil writes them wherever it points, and the single
+# status file has had that hole for as long as it has existed. Validate first,
+# builtins only, against the shape the daemon enforces (isSafeStatusSessionId in
+# statusSpool.ts): first character from [A-Za-z0-9_-] so no id starts with a
+# dot, the rest from [A-Za-z0-9._-] so no id holds a separator, 128 characters
+# at most. Real ids are uuids, so no real caller is turned away.
+case "$SESSION_ID" in
+  ""|[!A-Za-z0-9_-]*|*[!A-Za-z0-9._-]*) exit 0 ;;
+esac
+[ \${#SESSION_ID} -le 128 ] || exit 0
+
 STATUS_DIR="$HOME/.codecast/agent-status"
 mkdir -p "$STATUS_DIR"
+if [ "$STATUS" != "working" ]; then
+  printf '%s\\n' "$FALLBACK" >> "$STATUS_DIR/$SESSION_ID.jsonl"
+fi
 printf '%s\\n' "$FALLBACK" > "$STATUS_DIR/$SESSION_ID.json"
 exit 0
 `;
