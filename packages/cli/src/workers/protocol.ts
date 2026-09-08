@@ -4,11 +4,8 @@ import { WORKER_KINDS, validProbePayload, validProbeResult, type WorkerKind } fr
 import { validScanPayload, validScanPage } from "./scanTypes.js";
 import { validIngestPayload, validIngestPage } from "./ingestTypes.js";
 import { validPreparationPayload, validPreparationPage } from "./preparationTypes.js";
-export const PROTOCOL_VERSION = 1;
-export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
-export const MAX_INFLIGHT = 4;
-export const MAX_QUEUE = 32;
-export const MAX_DEADLINE_MS = 60_000;
+import { PROTOCOL_VERSION, MAX_FRAME_BYTES } from "./limits.js";
+export { PROTOCOL_VERSION, MAX_FRAME_BYTES, MAX_INFLIGHT, MAX_QUEUE, MAX_DEADLINE_MS } from "./limits.js";
 export type WorkerFrame = { v: 1; kind: WorkerKind; type: "request" | "result" | "error" | "heartbeat" | "cancel"; id?: string; operation?: "ping" | "read" | "scan" | "ingest" | "prepare" | "messagesSdk" | "payloadCodec"; payload?: unknown; deadline?: number; result?: unknown; error?: string; pid?: number };
 export function validateFrame(value: unknown): asserts value is WorkerFrame {
   const f = value as WorkerFrame;

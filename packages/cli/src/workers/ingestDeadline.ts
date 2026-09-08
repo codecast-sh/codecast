@@ -1,4 +1,4 @@
-import { MAX_DEADLINE_MS } from './protocol.js';
+import { MAX_DEADLINE_MS } from './limits.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export class IngestCancelled extends Error {}

@@ -80,8 +80,38 @@ describe("command groups stay off the boot graph", () => {
     // Before lifting either number, find out WHY the graph grew. A group coming
     // back, or a whole subsystem arriving sideways through a leaf, is what this
     // exists to catch; a genuinely new module is not.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(188);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2663);
+    //
+    // Now 211 files and 2,932 KB, measured on b7153536d — the landing of all
+    // four merge bases, where ct-49848's 188 was only one of them. What grew,
+    // and why each is paid rather than removed (ct-49900):
+    //
+    // Both things this guard exists to catch were found and removed, not paid
+    // for. `pr` came back onto index.ts as a static import of prCommand.js and
+    // `state` onto daemon.ts as a static import of stateCommand.js: both are
+    // gone, and assertOffGraph above is what proves it. Two whole subsystems
+    // were also arriving sideways through a leaf. syncService.ts needs
+    // `currentTranscriptDeadline` from workers/ingestDeadline.ts, which took
+    // one number from workers/protocol.ts and so dragged the eight worker
+    // payload type modules with it; the numbers now live in workers/limits.ts.
+    // And lockFile.ts needs `isPidAlive`, which lived in workspace/chrome.ts
+    // and so put the Chrome launcher and workspace/ports.ts on the graph; it
+    // now lives in pidAlive.ts. Those two moves took index.ts from 220 to 211.
+    //
+    // The 23 files that remain over ct-49848's number are genuinely new modules
+    // the other three bases added, and index.ts imports most of them directly:
+    // castApi.ts (missingRouteError), daemonMarkers.ts, config/configDir.ts,
+    // statuslineHook.ts with capabilities/hooks.ts and capabilities/ownedJson.ts,
+    // codexAccounts.ts with codexUsage.ts, codexBackendUsage.ts and
+    // agentSpawnPath.ts, codexResetCredit.ts with lockFile.ts and pidAlive.ts,
+    // plus one-hop leaves of modules already here (update.ts -> codecastDir.ts,
+    // workspace/detect.ts -> workspace/share.ts, workers/limits.ts) and six new
+    // members of barrels index.ts already loads (shared/contracts fence,
+    // liveness, sessionRead, triggerPrecheck; shared/tasks foreignText,
+    // planForeignText). ct-49905 tracks moving the codex-accounts, statusline
+    // and capabilities clusters behind their commands, which is worth about ten
+    // of these files.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(211);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2932);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -95,7 +125,18 @@ describe("command groups stay off the boot graph", () => {
     // the workers, so all 26 `workers/*` modules are work it actually does
     // rather than a graph it carries by accident (ct-49758) — but the command
     // groups are not its work, which is what assertOffGraph checks above.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(273);
+    //
+    // 292 on b7153536d, the landing of all four merge bases (ct-49900). The
+    // `state` group came back as a static import of stateCommand.js and is
+    // gone again — that edge is what assertOffGraph proves. The rest are
+    // modules the daemon itself runs, added by the other three bases:
+    // launchToken.ts, ccLiveGate.ts, gitCapability.ts, precheckRunner.ts,
+    // statusSpool.ts, codexPaneRegistry.ts, codexResetCredit.ts,
+    // codexBackendUsage.ts, daemonMarkers.ts, statuslineHook.ts,
+    // config/configDir.ts, codecastDir.ts, workspace/share.ts, the four new
+    // shared/contracts members, and the two leaves this task split out
+    // (workers/limits.ts, pidAlive.ts).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(292);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

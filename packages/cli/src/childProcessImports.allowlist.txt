@@ -25,6 +25,4 @@ src/doctor.ts 1
 src/hosts/cli.ts 1
 src/inputIdle.ts 1
 src/prCommand.ts 1
-src/test-helpers/messagingHarness.ts 1
 src/vault/vaultServer.ts 1
-src/worktreeGc.ts 1

@@ -22,6 +22,7 @@ import { spawn } from "../proc.js";
 import * as fs from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isPortFree } from "./ports.js";
+import { isPidAlive } from "../pidAlive.js";
 
 export interface ChromeInstance {
   /** OS process id of the spawned Chromium. */
@@ -246,16 +247,4 @@ export async function stopChrome(
   if (isPidAlive(pid)) throw new ChromeStopError(pid, killTimeoutMs);
 }
 
-/** Returns true if a process with `pid` is alive. Cheap; uses signal 0. */
-export function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fff_ffff) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ESRCH") return false;
-    if (code === "EPERM" || code === "EACCES") return true;
-    throw err;
-  }
-}
+export { isPidAlive } from "../pidAlive.js";

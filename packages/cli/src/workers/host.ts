@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "../proc.js";
 import { FrameDecoder, encodeFrame, MAX_QUEUE, MAX_INFLIGHT, MAX_DEADLINE_MS, type WorkerFrame } from "./protocol.js";
 import { killWorkerGroup, workerEnv, workerInvocation } from "./invocation.js";
 import { sawSuspend } from "../suspendClock.js";

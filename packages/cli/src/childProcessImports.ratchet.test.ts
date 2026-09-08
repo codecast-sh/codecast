@@ -24,8 +24,13 @@ const ALLOWLIST = join(import.meta.dir, "childProcessImports.allowlist.txt");
 // Static import, re-export, bare require and dynamic import alike.
 const CHILD_PROCESS_IMPORT = /(?:from\s*["'](?:node:)?child_process["']|(?:require|import)\s*\(\s*["'](?:node:)?child_process["'])/;
 
-/** How many files import node:child_process directly. May only fall. */
-const PIN = 23;
+/** How many files import node:child_process directly. May only fall.
+ *  23 when the ratchet landed (ct-49563); 21 after ct-49901 routed the
+ *  nineteen call sites the four merge bases had added through the wrapper —
+ *  the cloud mirror, `cast review`, `cast fs browse`, the Grok ACP client,
+ *  the worker host, the `cast bench` harness and the fixtures the e2e tests
+ *  spawn. Nothing was exempted to get there. */
+const PIN = 21;
 
 const result = checkRatchet({
   name: "direct child_process import",

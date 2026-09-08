@@ -17,7 +17,7 @@
 // gate whose failure mode is silence hides broken suites, and a skipped run
 // counts as a passing run in every tally that matters.
 
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 
 /** What one probe attempt reports. Mirrors the fields of `spawnSync`. */
 export interface ProbeResult {

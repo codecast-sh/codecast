@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {execFile} from 'node:child_process';
+import {execFile} from '../../proc.js';
 import {promisify} from 'node:util';
 import {RetryQueue} from '../../retryQueue.js';
 const backend=path.resolve(import.meta.dir,'../../../../convex/convex');

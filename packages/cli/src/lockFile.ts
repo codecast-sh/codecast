@@ -20,7 +20,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isPidAlive } from "./workspace/chrome.js";
+import { isPidAlive } from "./pidAlive.js";
 
 // How long a lock file may stay unreadable before it counts as a corpse rather
 // than a holder that has not finished writing its stamp. Generous next to the

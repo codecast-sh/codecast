@@ -11,7 +11,7 @@
 // scoped to the worktree: two worktrees of one repository hold different
 // diffs, so they hold different batches.
 
-import { execFileSync } from "child_process";
+import { execFileSync } from "./proc.js";
 import path from "path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
