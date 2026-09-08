@@ -1,0 +1,7 @@
+# direct subscription to a registered store feed: the files that still break this rule.
+#
+# THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
+# fix. Read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection) and mount the feeder hook in hooks/.
+#
+# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+#   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/registeredFeeds.guard.test.ts

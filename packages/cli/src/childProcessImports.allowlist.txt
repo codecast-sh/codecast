@@ -1,0 +1,30 @@
+# direct child_process import: the files that still break this rule.
+#
+# THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
+# fix. Import the same names from src/proc.ts instead — identical signatures, plus windowsHide and the slow-sync spawn report.
+#
+# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+#   cd packages/cli && RATCHET_WRITE=prune bun test src/childProcessImports.ratchet.test.ts
+src/attachTui.tsx 1
+src/browser/appIdentity.ts 1
+src/browser/cloudHost.ts 1
+src/browser/credentials.ts 1
+src/browser/instance.ts 4
+src/browser/liveView.ts 1
+src/browser/localChrome.ts 1
+src/browser/profile.ts 1
+src/browser/provisionLinux.ts 1
+src/browser/raiseApp.ts 1
+src/browser/remote.ts 1
+src/capabilities/equip.ts 1
+src/cloud/cli.ts 1
+src/cloud/prepare.ts 1
+src/cloud/transfer.ts 2
+src/disclaim.ts 2
+src/doctor.ts 1
+src/hosts/cli.ts 1
+src/inputIdle.ts 1
+src/prCommand.ts 1
+src/test-helpers/messagingHarness.ts 1
+src/vault/vaultServer.ts 1
+src/worktreeGc.ts 1
