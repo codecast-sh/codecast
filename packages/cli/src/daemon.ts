@@ -1096,6 +1096,10 @@ interface DaemonState {
   // Hang marker left by the PREVIOUS daemon and consumed at this boot, so the
   // stall survives the process that suffered it (see daemonMarkers.ts).
   lastHang?: HangMarker;
+  // Repo roots this daemon has created worktrees in, so the warm pool
+  // maintainers come back after a restart instead of waiting for the next
+  // create to rediscover them (registerWorktreePool).
+  worktreePoolRepos?: string[];
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -7267,6 +7271,61 @@ async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
 
 const CODECAST_WORKTREE_DIR = ".codecast/worktrees";
 
+// --------------------------------------------------------------------------
+// Warm worktree pools
+// --------------------------------------------------------------------------
+// A worktree create on a real repo costs a checkout plus a full install — 51
+// seconds on codecast — and it happens while a human waits for `cast spawn` to
+// answer. The pool module builds those trees ahead of time; this is what
+// starts it. One maintainer per repo the daemon has actually created a
+// worktree in, remembered across restarts, so the pool follows the machine's
+// real work instead of every repo it has ever synced. The maintainer sizes
+// itself from recent create demand (workspace/pool/demand.ts), so a repo that
+// sees one isolated spawn holds no warm trees at all. (ct-49540)
+
+type PoolMaintainerHandle = import("./workspace/pool/maintainer.js").PoolMaintainerHandle;
+
+const worktreePoolMaintainers = new Map<string, PoolMaintainerHandle>();
+
+/**
+ * Start (once) the warm-pool maintainer for a repo. Only repos that opted in
+ * with a workspace manifest get one: without it a worktree create is a bare
+ * `git worktree add`, which the pool cannot make faster, and warming would run
+ * an auto-detected `install` the repo's owner never asked for.
+ */
+async function registerWorktreePool(repoRoot: string): Promise<void> {
+  if (worktreePoolMaintainers.has(repoRoot)) return;
+  try {
+    await fs.promises.access(path.join(repoRoot, ".codecast/workspace.toml"));
+  } catch {
+    return;
+  }
+  const { startPoolMaintainer } = await import("./workspace/pool/maintainer.js");
+  if (worktreePoolMaintainers.has(repoRoot)) return; // raced during the import
+  worktreePoolMaintainers.set(
+    repoRoot,
+    startPoolMaintainer({ repoRoot, log: (msg) => log(`[POOL] ${repoRoot}: ${msg}`) }),
+  );
+  log(`[POOL] maintaining warm worktree pool for ${repoRoot}`);
+  const known = readDaemonState().worktreePoolRepos ?? [];
+  if (!known.includes(repoRoot)) {
+    saveDaemonState({ worktreePoolRepos: [...known, repoRoot].slice(-32) });
+  }
+}
+
+/** Resume the maintainers this daemon ran before its last restart. */
+function startWorktreePools(): void {
+  for (const repoRoot of readDaemonState().worktreePoolRepos ?? []) {
+    void registerWorktreePool(repoRoot).catch(() => {});
+  }
+}
+
+async function stopWorktreePools(): Promise<void> {
+  const handles = [...worktreePoolMaintainers.values()];
+  worktreePoolMaintainers.clear();
+  await Promise.all(handles.map((h) => h.stop().catch(() => {})));
+}
+
 interface WorktreeResult {
   worktreePath: string;
   worktreeName: string;
@@ -7294,6 +7353,11 @@ async function createWorktree(
   const manifestPath = path.join(repoRoot, ".codecast/workspace.toml");
   if (fs.existsSync(manifestPath)) {
     try {
+      // This repo creates worktrees, so it earns a warm pool. Registering here
+      // (not from a repo scan) is how the daemon learns which repos are worth
+      // pre-building for; acquireWorkspace below claims a warm slot when one is
+      // ready and records this create so the pool re-arms for a burst.
+      void registerWorktreePool(repoRoot).catch(() => {});
       const ws = await import("./workspace/index.js");
       const result = await ws.acquireWorkspace(repoRoot, name);
       log(
@@ -26542,6 +26606,7 @@ async function main(): Promise<void> {
 
   const versionCheckInterval = startVersionChecker(syncService);
   const reconciliationInterval = startReconciliation(syncService, retryQueue, conversationCache, config);
+  startWorktreePools();
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
@@ -27798,6 +27863,7 @@ async function main(): Promise<void> {
     clearInterval(reconciliationInterval);
     clearInterval(eventLoopMonitorInterval);
     clearInterval(statusCleanupInterval);
+    await stopWorktreePools();
     log("Watchdog and reconciliation stopped");
 
     stopHookServer();

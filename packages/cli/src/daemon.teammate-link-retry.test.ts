@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { processSessionFile, TEST_SCRATCH_DIRNAME } from "./daemon.js";
 import type { SyncService } from "./syncService.js";
 import type { RetryQueue } from "./retryQueue.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
 
 const TEAM = "session-7406f3cf";
 const AGENT = "fm-sending-3";
@@ -67,6 +68,9 @@ afterAll(() => {
   process.env.HOME = savedHome;
   fs.rmSync(base, { recursive: true, force: true });
 });
+
+const isolatedCodecastDir = isolateCodecastDir("daemon-sync-state-");
+afterAll(() => isolatedCodecastDir.restore());
 
 describe("teammate lead link survives a create that fell to the retry queue", () => {
   test("no link on the failed-create pass, link on the next pass once the retry minted the row", async () => {

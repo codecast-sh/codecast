@@ -1,5 +1,5 @@
 import { daemonWorkersEnabled } from "./workers/bridge.js";
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -7,6 +7,10 @@ import { Database } from "bun:sqlite";
 import { findStaleCursorSessions, isAppServerManagedCodexSessionHead, shouldTreatClaudeFileAsStale } from "./daemon.js";
 import { clearPosition, setPosition } from "./positionTracker.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+const isolatedCodecastDir = isolateCodecastDir("daemon-sync-state-");
+afterAll(() => isolatedCodecastDir.restore());
 
 describe("shouldTreatClaudeFileAsStale", () => {
   test("marks file stale when there is no sync record", () => {
