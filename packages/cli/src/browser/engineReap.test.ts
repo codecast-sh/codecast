@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { closeSessionTab, closeTargetLater, ownerState, reapEngineOrphans, sessionEndpoint, type LiveOwners } from "./engineReap.js";
+import type { LivenessVerdict } from "@codecast/shared/contracts";
 import { writeBridgeState } from "./bridge/host.js";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
 import { targetIdOfTab } from "./bridge/protocol.js";
@@ -87,7 +88,7 @@ describe("reapEngineOrphans in real mode", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  const owners = (state: "alive" | "dead" | "unknown"): LiveOwners => ({ panes: new Set(), session: () => state });
+  const owners = (state: LivenessVerdict): LiveOwners => ({ panes: new Set(), session: () => state });
   const files = () => fs.readdirSync(stateDir).sort();
 
   test("a dead -real session with no daemon has its tab closed on the bridge and its files removed", async () => {
@@ -96,7 +97,7 @@ describe("reapEngineOrphans in real mode", () => {
       const key = realSessionKey("env-gone");
       writeBoundTarget(key, targetIdOfTab(7), stateDir);
       fs.writeFileSync(path.join(stateDir, `${key}.config`), "{}");
-      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("dead") });
+      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("exited") });
       expect(closes()).toEqual([7]);
       expect(files()).toEqual([]);
       expect(report.cleaned).toEqual([key]);
@@ -112,7 +113,7 @@ describe("reapEngineOrphans in real mode", () => {
     try {
       const key = realSessionKey("env-busy");
       writeBoundTarget(key, targetIdOfTab(7), stateDir);
-      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("alive") });
+      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("live") });
       expect(closes()).toEqual([]);
       expect(files()).toEqual([`${key}.target`]);
       expect(report.cleaned).toEqual([]);
@@ -126,13 +127,13 @@ describe("reapEngineOrphans in real mode", () => {
     try {
       writeBoundTarget(realSessionKey("env-me"), targetIdOfTab(7), stateDir);
       writeBoundTarget("env-me", targetIdOfTab(8), stateDir);
-      await reapEngineOrphans({ force: true, stateDir, keep: "env-me", live: owners("dead") });
+      await reapEngineOrphans({ force: true, stateDir, keep: "env-me", live: owners("exited") });
       expect(closes()).toEqual([]);
       expect(files()).toEqual(["env-me-real.target", "env-me.target"]);
-      await reapEngineOrphans({ force: true, stateDir, keep: realSessionKey("env-me"), live: owners("dead") });
+      await reapEngineOrphans({ force: true, stateDir, keep: realSessionKey("env-me"), live: owners("exited") });
       expect(closes()).toEqual([]);
       // With nothing kept, both go.
-      await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("dead") });
+      await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("exited") });
       expect(closes().sort()).toEqual([7]);
       expect(files()).toEqual([]);
     } finally {
@@ -169,19 +170,19 @@ describe("sessionEndpoint", () => {
 describe("ownerState reads the agent off a -real key", () => {
   const live: LiveOwners = {
     panes: new Set(["%12"]),
-    session: (id) => (id === "abc" ? "alive" : "unknown"),
+    session: (id) => (id === "abc" ? "live" : "unverifiable"),
   };
 
   test("the same session id owns both its clone and its real session", () => {
-    expect(ownerState("env-abc", live)).toBe("alive");
-    expect(ownerState("env-abc-real", live)).toBe("alive");
-    expect(ownerState("env-other-real", live)).toBe("unknown");
+    expect(ownerState("env-abc", live)).toBe("live");
+    expect(ownerState("env-abc-real", live)).toBe("live");
+    expect(ownerState("env-other-real", live)).toBe("unverifiable");
   });
 
   test("a pane key keeps working with the suffix", () => {
-    expect(ownerState("pane--12", live)).toBe("alive");
-    expect(ownerState("pane--12-real", live)).toBe("alive");
-    expect(ownerState("pane--13-real", live)).toBe("dead");
+    expect(ownerState("pane--12", live)).toBe("live");
+    expect(ownerState("pane--12-real", live)).toBe("live");
+    expect(ownerState("pane--13-real", live)).toBe("exited");
   });
 });
 

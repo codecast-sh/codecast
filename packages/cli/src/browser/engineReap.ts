@@ -31,9 +31,10 @@ import {
   type EngineOptions,
 } from "./engine.js";
 import { CdpConnection, type CdpEndpoint } from "./cdp.js";
+import { authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
 import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
 
-/** How long a browser with an unknowable owner may sit untouched. */
+/** How long a browser whose owner is `unverifiable` may sit untouched. */
 export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
 /** Startup-path reaps are throttled to this; `stop --all` and tests force. */
 const THROTTLE_MS = 5 * 60 * 1000;
@@ -90,22 +91,24 @@ function isAlive(pid: number): boolean {
 /**
  * How to tell whether the agent behind a session key is still around.
  *
+ * Answers in the tree's one liveness vocabulary (contracts/liveness.ts): `live`
+ * is positive contact, `exited` an observed absence, `unverifiable` a question
+ * this machine could not answer.
+ *
  * Two independent signals, either of which proves life: the daemon's session
  * registry (`~/.codecast/session-registry/<id>.json`, written by the
  * SessionStart hook with the agent's pid) names a pid that is alive, or the
  * agent's transcript (`~/.claude/projects/<slug>/<id>.jsonl`) was written
  * recently — an agent doing anything at all appends to it. Neither signal is
- * trusted to prove DEATH: registry entries go stale when a session is resumed
+ * trusted to prove an EXIT: registry entries go stale when a session is resumed
  * under a new pid (seen 2026-08-15, and it cost a live agent its tab), so a
- * session that shows no sign of life is merely "unknown" and falls to the idle
- * rule. Tmux panes are checked against `tmux list-panes`.
+ * session that shows no sign of life is merely `unverifiable` and falls to the
+ * idle rule. Tmux panes are checked against `tmux list-panes`.
  */
 export interface LiveOwners {
-  session(id: string): OwnerState;
+  session(id: string): LivenessVerdict;
   panes: Set<string> | null;
 }
-
-export type OwnerState = "alive" | "dead" | "unknown";
 
 export function sessionRegistryDir(): string {
   return path.join(process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast"), "session-registry");
@@ -146,16 +149,16 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
   }
   return {
     panes,
-    session(id: string): OwnerState {
+    session(id: string): LivenessVerdict {
       try {
         const reg = JSON.parse(fs.readFileSync(path.join(registryDir, `${id}.json`), "utf-8"));
         const pid = Number(reg?.pid);
-        if (pid > 0 && isAlive(pid)) return "alive";
+        if (pid > 0 && isAlive(pid)) return "live";
       } catch {
         /* no registry entry */
       }
-      if (now - transcriptMtime(id, opts.projectsDir) < TRANSCRIPT_FRESH_MS) return "alive";
-      return "unknown";
+      if (now - transcriptMtime(id, opts.projectsDir) < TRANSCRIPT_FRESH_MS) return "live";
+      return "unverifiable";
     },
   };
 }
@@ -165,19 +168,44 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
  * the key is ownerKey() with `:` and other punctuation turned into `-`, so
  * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane--12`.
  */
-export function ownerState(key: string, live: LiveOwners): OwnerState {
+export function ownerState(key: string, live: LiveOwners): LivenessVerdict {
   // A real-mode session is the same agent under a suffixed key (engine.ts).
   key = baseSessionKey(key);
   const env = /^(?:env|session)-(.+)$/.exec(key);
   if (env) return live.session(env[1]);
   const pane = /^pane-(.+)$/.exec(key);
   if (pane) {
-    if (!live.panes) return "unknown";
+    // A pane list we could not read says nothing; a pane list we DID read and
+    // that lacks this pane is an observed exit.
+    if (!live.panes) return "unverifiable";
     const flat = (s: string) => s.replace(/[^A-Za-z0-9_-]+/g, "-");
-    for (const p of live.panes) if (flat(p) === pane[1]) return "alive";
-    return "dead";
+    for (const p of live.panes) if (flat(p) === pane[1]) return "live";
+    return "exited";
   }
-  return "unknown";
+  return "unverifiable";
+}
+
+/**
+ * May this session lose its tab? The one place in the tree where `unverifiable`
+ * buys a teardown, and it is deliberate.
+ *
+ * Everywhere else an unanswerable probe protects: `authorizesTeardown` alone
+ * decides, so a tmux hiccup never kills a live agent. A tab reaper cannot
+ * afford only that rule. Keys that name no findable owner — `default`, a test
+ * key, a registry entry gone stale under a resume — are permanently
+ * unverifiable, so on the strict rule their tab and daemon would live for ever;
+ * one night of that left 217 Chrome processes and a load average of 400. Two
+ * hours untouched is the evidence standing in for the probe we could not run.
+ *
+ * An owner we CAN see is never softened: `live` keeps its tab however long it
+ * sits, and only idleness is added, never subtracted.
+ *
+ * Why: keeps the softening in one named, explained place instead of a bare
+ * literal beside the reap, and liveness.guard.test.ts pins it to this shape and
+ * to this one site (ct-49683).
+ */
+export function authorizesReap(owner: LivenessVerdict, idle: boolean): boolean {
+  return authorizesTeardown(owner) || (owner === "unverifiable" && idle);
 }
 
 export interface ReapReport {
@@ -348,8 +376,7 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
     if (keep && baseSessionKey(s.key) === baseSessionKey(keep)) continue;
     const owner = ownerState(s.key, live);
     const idle = now - s.lastSeen > idleMs;
-    const doomed = owner === "dead" || (owner === "unknown" && idle);
-    if (!doomed) continue;
+    if (!authorizesReap(owner, idle)) continue;
     if (s.running) {
       await close(s.key);
       report.closed.push(s.key);

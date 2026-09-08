@@ -32,16 +32,17 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { onWsUpgrade } from "../../terminal/terminalServer.js";
 import { CdpConnection, listTargetsVia, type CdpEvent } from "../cdp.js";
 import {
-  attachToTarget, probeLiveness, readState, type InstanceState, type Liveness, type PageSession,
+  attachToTarget, probeLiveness, readState, type InstanceState, type PageSession,
 } from "../instance.js";
 import { armRecorder } from "../observe.js";
 import { setViewport } from "../actions.js";
-import { isStaleSession, TabUnresponsive } from "../recovery.js";
+import { isReachable, isStaleSession, livenessProblem, TabUnresponsive } from "../recovery.js";
 import {
   RESIDENT_HTTP_PREFIX, RESIDENT_PROTOCOL_VERSION, RESIDENT_WS_PATH,
   type AttachParams, type AttachResult, type HelloResult, type ResidentStatus, type TargetsResult,
   type WireCall, type WireMessage,
 } from "./protocol.js";
+import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 export interface ResidentHostOptions {
   log: (msg: string) => void;
@@ -72,7 +73,7 @@ class BrowserLink {
    * than throwing so callers can hand the CLI the SAME "gone" vs "not
    * answering" message the direct path gives (recovery.ts).
    */
-  async ensure(): Promise<{ conn: CdpConnection; state: InstanceState } | { liveness: Liveness; state: InstanceState | null }> {
+  async ensure(): Promise<{ conn: CdpConnection; state: InstanceState } | { liveness: LivenessVerdict; state: InstanceState | null }> {
     const state = readState();
     if (this.conn?.isOpen() && state && state.port === this.port) return { conn: this.conn, state };
     if (this.connecting && state && state.port === this.port) {
@@ -85,7 +86,7 @@ class BrowserLink {
     // Different browser than the one we held (restarted under us), or none yet.
     this.drop();
     const liveness = await probeLiveness(state);
-    if (liveness !== "live" || !state) return { liveness, state };
+    if (!isReachable(liveness) || !state) return { liveness, state };
     this.port = state.port;
     this.connecting = CdpConnection.fromPort(state.port).then((conn) => {
       this.conn = conn;
@@ -288,8 +289,11 @@ function handleClient(ws: WebSocket, link: BrowserLink, opts: ResidentHostOption
  * message.
  */
 export class BrowserUnavailable extends Error {
-  constructor(public readonly liveness: Liveness) {
-    super(`browser ${liveness}`);
+  constructor(public readonly liveness: LivenessVerdict, state: InstanceState | null = null) {
+    // Phrased by recovery.ts, the same words the direct path uses. Why: the
+    // verdict is now a shared token, and `browser unverifiable` is not a
+    // sentence anyone can act on (ct-49625).
+    super(livenessProblem(liveness, state)?.message ?? `browser ${liveness}`);
     this.name = "BrowserUnavailable";
   }
 }
@@ -307,7 +311,7 @@ async function dispatch(call: WireCall, link: BrowserLink, mine: Set<string>): P
   if (call.method === "cast.status") return residentStatus();
 
   const r = await link.ensure();
-  if (!("conn" in r)) throw new BrowserUnavailable(r.liveness);
+  if (!("conn" in r)) throw new BrowserUnavailable(r.liveness, r.state);
   const { conn, state } = r;
 
   if (call.method === "cast.targets") {

@@ -13,7 +13,8 @@
 
 import { setTimeout as sleep } from "node:timers/promises";
 import { CdpTimeout, type CdpClient } from "./cdp.js";
-import type { InstanceState, Liveness } from "./instance.js";
+import type { InstanceState } from "./instance.js";
+import { authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
 
 /** Raised when a tab's renderer will not answer, with the way out. */
 export class TabUnresponsive extends Error {
@@ -114,12 +115,12 @@ export interface Problem {
 
 /**
  * Thrown when a command needs a live browser and there is none. Carries the
- * verdict so the CLI can print the matching guidance and, for "dead", offer to
- * start one — the reaction differs by verdict, so the verdict must travel.
+ * verdict so the CLI can print the matching guidance and, when it is gone, offer
+ * to start one — the reaction differs by verdict, so the verdict must travel.
  */
 export class BrowserNotLive extends Error {
   constructor(
-    public readonly liveness: Liveness,
+    public readonly liveness: LivenessVerdict,
     public readonly state: InstanceState | null,
   ) {
     super(livenessProblem(liveness, state)?.message ?? `browser is ${liveness}`);
@@ -131,15 +132,28 @@ export class BrowserNotLive extends Error {
 }
 
 /**
+ * Positive contact: the browser answered, so a command may proceed.
+ *
+ * The counterpart to `authorizesTeardown`, and with it the ONLY way browser code
+ * reads a verdict. Between them no caller has to name a verdict, so a silent
+ * browser can never fall into the branch that relaunches — the stampede shape.
+ * Why: liveness.guard.test.ts fails any other file under browser/ that compares
+ * a verdict word (ct-49625).
+ */
+export function isReachable(verdict: LivenessVerdict): boolean {
+  return verdict === "live";
+}
+
+/**
  * What to tell the agent when the browser is not usable. "gone" and "not
- * answering" get different messages on purpose: a dead browser should be
+ * answering" get different messages on purpose: an exited browser should be
  * restarted, while an overloaded one must NOT be — the recovery agents reach
  * for on "no browser is running" is stop/start, which kills every other
  * agent's tabs. Returns null when the browser is fine.
  */
-export function livenessProblem(liveness: Liveness, state: InstanceState | null): Problem | null {
-  if (liveness === "live") return null;
-  if (liveness === "unresponsive") {
+export function livenessProblem(liveness: LivenessVerdict, state: InstanceState | null): Problem | null {
+  if (isReachable(liveness)) return null;
+  if (!authorizesTeardown(liveness)) {
     return {
       message: `the managed browser (pid ${state?.pid}) is not answering CDP right now`,
       hint: "it is likely overloaded, not gone — retry in a few seconds. Do not stop/start it: other agents' tabs die with it.",

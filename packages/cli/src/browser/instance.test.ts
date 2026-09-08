@@ -13,6 +13,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { acquireStartLock, probeLiveness, readState, writeState, type InstanceState, chromeLaunchArgs} from "./instance.js";
+import { authorizesTeardown } from "@codecast/shared/contracts";
 import { browserHome } from "./profile.js";
 
 const cleanups: Array<() => void> = [];
@@ -60,15 +61,15 @@ async function fakeCdp(): Promise<number> {
 }
 
 describe("probeLiveness", () => {
-  test("no state is dead", async () => {
-    expect(await probeLiveness(null)).toBe("dead");
+  test("no state is exited", async () => {
+    expect(await probeLiveness(null)).toBe("exited");
   });
 
-  test("a dead pid is dead, immediately", async () => {
+  test("a dead pid is exited, immediately", async () => {
     // A pid from the ephemeral range that cannot be running.
     const started = Date.now();
     const res = await probeLiveness(fakeState({ pid: 2 ** 22 - 3 }));
-    expect(res).toBe("dead");
+    expect(res).toBe("exited");
     expect(Date.now() - started).toBeLessThan(500);
   });
 
@@ -77,11 +78,22 @@ describe("probeLiveness", () => {
     expect(await probeLiveness(fakeState({ port }))).toBe("live");
   });
 
-  test("an alive pid whose CDP never answers is unresponsive, NOT dead", async () => {
-    // This distinction is the whole point: "dead" licenses a relaunch that
-    // kills the browser under every other agent; a busy browser must not
-    // qualify. Port 1 refuses connections, standing in for a wedged CDP.
-    expect(await probeLiveness(fakeState({ port: 1 }), 600)).toBe("unresponsive");
+  test("an alive pid whose CDP never answers is unverifiable, NOT exited", async () => {
+    // This distinction is the whole point: only `exited` licenses a relaunch,
+    // and that relaunch kills the browser under every other agent; a busy
+    // browser must not qualify. Port 1 refuses connections, standing in for a
+    // wedged CDP.
+    expect(await probeLiveness(fakeState({ port: 1 }), 600)).toBe("unverifiable");
+  });
+
+  // The verdicts above in the terms every caller reads them through, so the
+  // rename to the shared vocabulary cannot quietly change who may relaunch.
+  test("only a browser observed gone authorizes a relaunch", async () => {
+    const port = await fakeCdp();
+    expect(authorizesTeardown(await probeLiveness(null))).toBe(true);
+    expect(authorizesTeardown(await probeLiveness(fakeState({ pid: 2 ** 22 - 3 })))).toBe(true);
+    expect(authorizesTeardown(await probeLiveness(fakeState({ port })))).toBe(false);
+    expect(authorizesTeardown(await probeLiveness(fakeState({ port: 1 }), 600))).toBe(false);
   });
 });
 

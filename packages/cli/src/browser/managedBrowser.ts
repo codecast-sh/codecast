@@ -27,6 +27,8 @@ import { startRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { readHosts, ensureUp, toRemoteHost } from "./cloudHost.js";
 import { fmt, icons } from "../colors.js";
+import { isReachable } from "./recovery.js";
+import { authorizesTeardown } from "@codecast/shared/contracts";
 
 const OK = `${fmt.success(icons.check)}`;
 const WARN = `${fmt.warning("!")}`;
@@ -89,10 +91,10 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
   const release = await acquireStartLock(undefined, waitingOnLaunch);
   try {
     const existing = readState();
-    // Patient on purpose: this is the one probe whose false "dead" leads to
+    // Patient on purpose: this is the one probe whose false `exited` leads to
     // killing a live browser. 8s of waiting is cheap; the stampede was not.
     const live = await probeLiveness(existing, 8000);
-    if (live === "live") {
+    if (isReachable(live)) {
       if (!o.quiet) {
         console.log(`${OK} already running on port ${existing!.port} (pid ${existing!.pid})`);
         console.log(fmt.muted("  `cast browser stop` first if you want a different profile"));
@@ -106,7 +108,10 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       }
       return existing!;
     }
-    if (live === "unresponsive") {
+    // Only an observed exit may launch over the recorded browser. A browser we
+    // could not reach is `unverifiable` and stops here, because relaunching it
+    // kills every other agent's tabs — the 2026-08-14 stampede (ct-49625).
+    if (!authorizesTeardown(live)) {
       die(
         `a managed browser (pid ${existing!.pid}) exists but CDP is not answering`,
         "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
@@ -257,10 +262,11 @@ export async function startRemoteManagedBrowser(o: StartOptions): Promise<Instan
   try {
     const existingRemote = readState();
     const remoteLive = await probeLiveness(existingRemote, 8000);
-    if (remoteLive === "live") {
+    if (isReachable(remoteLive)) {
       die("a browser is already running", "`cast browser stop` first");
     }
-    if (remoteLive === "unresponsive") {
+    // Same rule as the local path: a browser that did not answer is not gone.
+    if (!authorizesTeardown(remoteLive)) {
       die(
         `a managed browser (pid ${existingRemote!.pid}) exists but CDP is not answering`,
         "it is likely overloaded, not dead — retry shortly, or `cast browser stop` to replace it deliberately",
