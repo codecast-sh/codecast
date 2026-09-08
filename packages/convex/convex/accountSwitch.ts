@@ -1734,26 +1734,129 @@ export const restampApiErrorFlags = internalMutation({
       .take(1000);
     let stamped = 0;
     for (const conv of recent) {
-      // Already-flagged rows are re-checked too: a kind split (e.g. statusless
-      // connection drops moving out of "error") leaves them stamped with the
-      // old kind, outside the blocked set, until re-classified here.
-      // Newest banner-or-turn, not newest row: a trailing system notice
-      // ("Remote Control disconnected") must not hide the banner behind it.
-      const tail = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
-        .order("desc")
-        .take(8);
-      const newest = newestSignificantMessage(tail);
-      if (!newest || !isBannerTurn(newest)) continue;
-      const kind = classifyApiErrorBanner(newest.content);
-      if (!kind) continue;
-      if (conv.pending_api_error === true && conv.pending_api_error_kind === kind && conv.pending_api_error_at != null) continue;
-      await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: kind, pending_api_error_at: newest.timestamp });
+      const restamp = await decideRestamp(ctx, conv);
+      if (!restamp) continue;
+      await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: restamp.kind, pending_api_error_at: restamp.at });
       stamped++;
     }
     if (stamped > 0) console.log(`restampApiErrorFlags: stamped ${stamped} conversation(s)`);
     return { scanned: recent.length, stamped };
+  },
+});
+
+// The stamp a conversation SHOULD carry, read off its transcript tail with the
+// current classifier — or null to leave it alone. One rule for every backfill,
+// so two scans can never disagree about what a row means.
+//
+// Already-flagged rows are re-judged too: a kind split (e.g. statusless
+// connection drops moving out of "error") leaves them stamped with the old
+// kind, outside the blocked set, until re-classified here.
+//
+// Newest banner-or-turn, not newest row: Claude Code writes a system notice
+// ("Remote Control disconnected") after a banner, and that notice must not
+// hide the banner behind it. A real turn at the tail means the session moved
+// on under its own power, so there is nothing to re-stamp.
+async function decideRestamp(
+  ctx: { db: any },
+  conv: Pick<Doc<"conversations">, "_id"> & Partial<Doc<"conversations">>,
+): Promise<{ kind: string; at: number } | null> {
+  const tail: Doc<"messages">[] = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+    .order("desc")
+    .take(8);
+  const newest = newestSignificantMessage(tail);
+  if (!newest || !isBannerTurn(newest)) return null;
+  const kind = classifyApiErrorBanner(newest.content);
+  if (!kind) return null;
+  // Idempotent: an already-correct stamp is not a change.
+  if (conv.pending_api_error === true && conv.pending_api_error_kind === kind && conv.pending_api_error_at != null) return null;
+  return { kind, at: newest.timestamp };
+}
+
+// How many parked rows one reclassify pass reads. The sibling above scans 1000
+// recent conversations in a single transaction and TIMES OUT on production
+// ("too many system operations"), which is exactly why the stranded rows were
+// still stranded. This pass is bounded instead: a small page of rows that are
+// already flagged, plus a cursor the operator feeds back to continue.
+const RECLASSIFY_BATCH_DEFAULT = 100;
+const RECLASSIFY_BATCH_MAX = 500;
+
+// Re-classify PARKED conversations against the current classifier. Built for
+// the codex plan-window parks stamped "error" before ct-49676 taught the
+// parser to read codex's structured code: those rows hold only the provider's
+// prose, so they never heal on their own and stay invisible to the recovery
+// loop for as long as they live (ct-49793).
+//
+// Three properties the sibling backfill lacks:
+//
+// - BOUNDED. Walks `by_pending_api_error`, which holds only rows that are
+//   actually parked, one capped page per call with a cursor to resume from.
+//   Scanning every recent conversation is what made restampApiErrorFlags
+//   unusable on prod.
+// - DRY RUN BY DEFAULT. Reports what it would change and writes nothing
+//   unless the caller passes dry_run: false. A wrong "limit" stamp feeds the
+//   recovery loop, so the safe mode is the one you get by accident.
+// - LEAVES SETTLED ROWS ALONE. A conversation a human already continued has a
+//   real turn at its tail (decideRestamp returns null); one they killed or
+//   completed is skipped outright. Re-parking either would resurrect work the
+//   human deliberately put down.
+//
+// Run via:
+//   npx convex run accountSwitch:reclassifyParkedApiErrorFlags '{}'
+//   npx convex run accountSwitch:reclassifyParkedApiErrorFlags '{"dry_run":false}'
+export const reclassifyParkedApiErrorFlags = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    batch: v.optional(v.number()),
+    dry_run: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dry_run !== false;
+    const batch = Math.min(Math.max(Math.trunc(args.batch ?? RECLASSIFY_BATCH_DEFAULT), 1), RECLASSIFY_BATCH_MAX);
+    const page = await ctx.db
+      .query("conversations")
+      .withIndex("by_pending_api_error", (q) => q.eq("pending_api_error", true))
+      .order("desc")
+      .paginate({ cursor: args.cursor ?? null, numItems: batch });
+
+    const changes: { id: string; title?: string; agent_type?: string; from: string | null; to: string }[] = [];
+    let skippedSettled = 0;
+    for (const conv of page.page) {
+      // A killed or completed row is the human saying they are done with it.
+      if (conv.status !== "active" || conv.inbox_killed_at != null) {
+        skippedSettled++;
+        continue;
+      }
+      const restamp = await decideRestamp(ctx, conv);
+      if (!restamp) continue;
+      changes.push({
+        id: conv._id,
+        title: conv.title,
+        agent_type: conv.agent_type,
+        from: conv.pending_api_error_kind ?? null,
+        to: restamp.kind,
+      });
+      if (!dryRun) {
+        await ctx.db.patch(conv._id, {
+          pending_api_error: true,
+          pending_api_error_kind: restamp.kind,
+          pending_api_error_at: restamp.at,
+        });
+      }
+    }
+    console.log(
+      `reclassifyParkedApiErrorFlags: ${dryRun ? "would change" : "changed"} ${changes.length} of ${page.page.length} parked row(s), ${skippedSettled} settled`,
+    );
+    return {
+      dry_run: dryRun,
+      scanned: page.page.length,
+      changed: changes.length,
+      skipped_settled: skippedSettled,
+      changes,
+      is_done: page.isDone,
+      cursor: page.continueCursor,
+    };
   },
 });
 

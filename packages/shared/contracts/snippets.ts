@@ -1284,6 +1284,9 @@ export interface DeviceSnippetSettings {
   stable_mode?: StableMode;
   /** Whether stable mode is applied globally vs per-project. */
   stable_global?: boolean;
+  /** May the auto-switch loop spend a Codex rate-limit reset credit on this
+   *  machine instead of switching accounts? Off unless config says otherwise. */
+  codex_reset_credit_auto?: boolean;
 }
 
 /** The markdown section for a slug that has one. Throws for a slug that

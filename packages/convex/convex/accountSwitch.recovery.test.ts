@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { autoSwitchCheck, onFreshApiErrorPark, reviveAuthBlockedOnRemotes, throttleContinueCheck } from "./accountSwitch";
+import { autoSwitchCheck, onFreshApiErrorPark, reclassifyParkedApiErrorFlags, reviveAuthBlockedOnRemotes, throttleContinueCheck } from "./accountSwitch";
 import { AUTO_SWITCH_CODEX_CONTINUE_KEY, AUTO_SWITCH_CONTINUE_KEY, authRestartAttemptKey, resetCreditAttemptKey } from "./ccAccountsShared";
+import { blockedKindsForAgent } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner } from "./inboxFilters";
 import { makeFakeDb } from "./testDb";
 
@@ -296,5 +297,178 @@ describe("Codex limit parks through the backend handler", () => {
     const followUp = f.now + 3 * 60_000 + 5_000;
     expect(f.device.cc_auto_switch_state.next_check_at).toBe(followUp);
     expect(f.scheduled.some((s) => s.at === followUp)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ct-49793 — codex plan-window parks stamped before the classifier could read
+// codex's structured code. They hold only the provider's prose, so they never
+// heal on their own; reclassifyParkedApiErrorFlags is the one-off that frees
+// them, and it must do so without disturbing anything else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Verbatim from the four stranded production rows (ct-49676 found them live).
+const STRANDED_CODEX_LIMIT_BANNER =
+  "⚠ Turn stopped: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 12th, 2026 9:10 PM.";
+
+describe("classifying a stranded codex plan-window park", () => {
+  test("the production banner reads as a limit park", () => {
+    expect(classifyApiErrorBanner(STRANDED_CODEX_LIMIT_BANNER)).toBe("limit");
+  });
+
+  test("the per-minute cap is NOT swept up with it", () => {
+    // Codex sends the identical opening sentence for rate_limit_exceeded. Only
+    // the purchase-credits remedy means the plan window is spent, so the bare
+    // sentence must stay out of "limit" — reading a burst as a quota park is
+    // what sent the fleet rotating accounts on 2026-09-04.
+    expect(classifyApiErrorBanner("⚠ Turn stopped: You've hit your usage limit.")).toBe("error");
+    expect(classifyApiErrorBanner("⚠ Turn stopped: You've hit your usage limit. Try again in 3 minutes.")).toBe("error");
+    expect(
+      classifyApiErrorBanner("⚠ Turn stopped: You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again later."),
+    ).toBe("error");
+  });
+
+  test("the marker is what makes matching the prose safe", () => {
+    // The same words in an ordinary assistant turn are not a banner at all.
+    expect(
+      classifyApiErrorBanner("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits."),
+    ).toBe(null);
+  });
+
+  test("the other marked client-error kinds are unchanged", () => {
+    expect(classifyApiErrorBanner("⚠ Turn stopped: no API key configured for provider anthropic")).toBe("auth");
+    expect(classifyApiErrorBanner("⚠ Turn stopped: the model returned an empty response")).toBe("error");
+  });
+});
+
+function parkFixture() {
+  const now = Date.now();
+  const tables: Record<string, any[]> = { conversations: [], messages: [] };
+  const db = makeFakeDb(tables);
+  let seq = 0;
+  const park = (id: string, extra: Record<string, unknown> = {}, banner = STRANDED_CODEX_LIMIT_BANNER) => {
+    tables.conversations.push({
+      _id: id, user_id: "users_owner", agent_type: "codex", status: "active",
+      pending_api_error: true, pending_api_error_kind: "error", pending_api_error_at: now - 60_000,
+      updated_at: now - 60_000, title: id, ...extra,
+    });
+    tables.messages.push({
+      _id: `messages_${++seq}`, conversation_id: id, role: "assistant", content: banner, timestamp: now - 60_000,
+    });
+    return id;
+  };
+  const run = (args: Record<string, unknown> = {}) =>
+    (reclassifyParkedApiErrorFlags as any)._handler({ db }, args);
+  return { now, tables, db, park, run };
+}
+
+describe("reclassifyParkedApiErrorFlags", () => {
+  test("a dry run names the rows and writes nothing", async () => {
+    const f = parkFixture();
+    f.park("conversations_a");
+    f.park("conversations_b");
+    const res = await f.run();
+    expect(res).toMatchObject({ dry_run: true, scanned: 2, changed: 2, is_done: true });
+    expect(res.changes.map((c: any) => c.id).sort()).toEqual(["conversations_a", "conversations_b"]);
+    expect(res.changes[0]).toMatchObject({ from: "error", to: "limit", agent_type: "codex" });
+    // The point of a dry run: the rows still say what they said.
+    expect(f.tables.conversations.every((c) => c.pending_api_error_kind === "error")).toBe(true);
+  });
+
+  test("dry run is what you get unless you ask for a write", async () => {
+    const f = parkFixture();
+    f.park("conversations_a");
+    expect((await f.run({})).dry_run).toBe(true);
+    expect((await f.run({ dry_run: true })).dry_run).toBe(true);
+    expect(f.tables.conversations[0].pending_api_error_kind).toBe("error");
+  });
+
+  test("a real run re-stamps the park, and running it again changes nothing", async () => {
+    const f = parkFixture();
+    f.park("conversations_a");
+    const first = await f.run({ dry_run: false });
+    expect(first).toMatchObject({ dry_run: false, changed: 1 });
+    expect(f.tables.conversations[0]).toMatchObject({
+      pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: f.now - 60_000,
+    });
+    // Idempotent: the second pass finds nothing left to do.
+    const second = await f.run({ dry_run: false });
+    expect(second.changed).toBe(0);
+    expect(second.changes).toEqual([]);
+  });
+
+  test("the pass is bounded and resumes from its cursor", async () => {
+    const f = parkFixture();
+    for (let i = 0; i < 5; i++) f.park(`conversations_${i}`);
+    const first = await f.run({ batch: 2 });
+    expect(first).toMatchObject({ scanned: 2, changed: 2, is_done: false });
+    const second = await f.run({ batch: 2, cursor: first.cursor });
+    expect(second).toMatchObject({ scanned: 2, is_done: false });
+    // The second page reaches rows the first did not.
+    const seen = [...first.changes, ...second.changes].map((c: any) => c.id);
+    expect(new Set(seen).size).toBe(4);
+    const third = await f.run({ batch: 2, cursor: second.cursor });
+    expect(third.is_done).toBe(true);
+  });
+
+  test("an operator cannot ask for an unbounded pass", async () => {
+    // The hard cap is the whole reason this exists: the sibling backfill reads
+    // 1000 rows in one transaction and dies on prod with "too many system
+    // operations". A caller asking for more must still get a bounded page.
+    const f = parkFixture();
+    for (let i = 0; i < 520; i++) f.park(`conversations_${i}`);
+    const huge = await f.run({ batch: 10_000 });
+    expect(huge.scanned).toBe(500);
+    expect(huge.is_done).toBe(false);
+    // And the default is smaller still.
+    expect((await f.run({})).scanned).toBe(100);
+  });
+
+  test("a nonsense batch size is coerced, never trusted", async () => {
+    const f = parkFixture();
+    for (let i = 0; i < 12; i++) f.park(`conversations_${i}`);
+    expect((await f.run({ batch: 0 })).scanned).toBe(1);
+    expect((await f.run({ batch: -5 })).scanned).toBe(1);
+    expect((await f.run({ batch: 3.7 })).scanned).toBe(3);
+  });
+
+  test("a session the human already continued is left alone", async () => {
+    const f = parkFixture();
+    f.park("conversations_continued");
+    // A real turn after the banner: the session moved on under its own power.
+    f.tables.messages.push({
+      _id: "messages_later", conversation_id: "conversations_continued", role: "assistant",
+      content: "Picking the migration back up.", timestamp: f.now - 10_000,
+    });
+    const res = await f.run({ dry_run: false });
+    expect(res.changed).toBe(0);
+    expect(f.tables.conversations[0].pending_api_error_kind).toBe("error");
+  });
+
+  test("a killed or completed session is left alone", async () => {
+    const f = parkFixture();
+    f.park("conversations_killed", { inbox_killed_at: f.now - 5_000 });
+    f.park("conversations_done", { status: "completed" });
+    const res = await f.run({ dry_run: false });
+    expect(res).toMatchObject({ changed: 0, skipped_settled: 2 });
+    expect(f.tables.conversations.every((c) => c.pending_api_error_kind === "error")).toBe(true);
+  });
+
+  test("a park of another kind keeps its own stamp", async () => {
+    const f = parkFixture();
+    f.park("conversations_auth", { pending_api_error_kind: "auth" }, "Login expired · Please run /login");
+    f.park("conversations_throttle", { pending_api_error_kind: "throttle" },
+      "Rate limited · the request burst exceeded the account's per-minute rate limit · retried automatically");
+    const res = await f.run({ dry_run: false });
+    expect(res.changed).toBe(0);
+    expect(f.tables.conversations.map((c) => c.pending_api_error_kind)).toEqual(["auth", "throttle"]);
+  });
+
+  test("a re-stamped codex park is admitted by the recovery loop", async () => {
+    // The whole point: kind "error" is outside the blocked set for every agent,
+    // and "limit" is inside codex's. Re-stamping is what puts the row in front
+    // of autoSwitchCheck.
+    expect(blockedKindsForAgent("codex").has("error")).toBe(false);
+    expect(blockedKindsForAgent("codex").has("limit")).toBe(true);
   });
 });

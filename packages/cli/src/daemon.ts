@@ -88,7 +88,8 @@ import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames } from "./codexAccounts.js";
+import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames, resolveCodexAccount } from "./codexAccounts.js";
+import { redeemCodexResetCredit } from "./codexResetCredit.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, agentSessionFromTranscriptPath, decodePiCwdSlug, decodeGrokCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
@@ -3385,6 +3386,10 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
     snippets,
     stable_mode: (config as any).stable_mode ?? "off",
     stable_global: (config as any).stable_global === true,
+    // The server's auto-switch loop reads this to decide whether a Codex reset
+    // credit is even on the table (ct-49529). It only ever proposes: the redeem
+    // handler re-reads the config before spending anything.
+    codex_reset_credit_auto: config.codex_reset_credit_auto === true,
   };
 }
 
@@ -5274,6 +5279,61 @@ async function executeRemoteCommand(
             syncServiceRef?.reportMintFlow("rejected", parsed.mint, undefined, error).catch(() => {});
           }
           break;
+        }
+
+        // codex_reset_credit mode: spend one of the active ChatGPT account's
+        // rate-limit reset credits INSTEAD of switching accounts (ct-49529),
+        // then fall through to the ordinary no-switch revive so the parked
+        // sessions resume on the same account with clear windows.
+        //
+        // The server proposes; this machine decides. The config flag is
+        // re-read here because the device row it was reported through can be
+        // minutes stale, and the credit is spent from this machine's login.
+        // Any refusal breaks out with nothing killed and nothing continued —
+        // the sessions stay parked, and the loop's follow-up check falls
+        // through to a real switch.
+        if (parsed.codex_reset_credit) {
+          const requested: string | undefined =
+            typeof parsed.codex_reset_credit.profile === "string"
+              ? parsed.codex_reset_credit.profile
+              : undefined;
+          if (readConfig()?.codex_reset_credit_auto !== true) {
+            error = "Codex reset-credit redemption is off on this machine (config codex_reset_credit_auto)";
+            log(`[ACCOUNTS] Refused reset-credit redeem: not enabled in config`);
+            break;
+          }
+          try {
+            const target = resolveCodexAccount(requested);
+            if (!target.active) {
+              error = `Codex profile "${requested}" is not the active login — a credit is only worth spending on the account the parked sessions run`;
+              break;
+            }
+            const outcome = await redeemCodexResetCredit({
+              account: target.account,
+              codexHomeDir: target.home,
+              readWindows: () => {
+                const fresh = resolveCodexAccount(requested).usage;
+                return { session: fresh?.session, weekly: fresh?.weekly };
+              },
+            });
+            result = JSON.stringify(outcome);
+            if (outcome.status !== "redeemed" || outcome.outcome !== "reset") {
+              log(
+                `[ACCOUNTS] Reset credit not spent for "${target.name ?? target.account}": ` +
+                  (outcome.status === "refused" ? outcome.reason : outcome.outcome),
+              );
+              break;
+            }
+            log(`[ACCOUNTS] Redeemed a Codex reset credit for "${target.name ?? target.account}" — windows cleared`);
+            // Re-probe now: the server holds off judging this account until a
+            // snapshot fetched after the redeem lands, exactly as after a switch.
+            maintainCodexUsageSnapshot("codex_reset_credit", { force: true })
+              .then(() => sendHeartbeat())
+              .catch(() => {});
+          } catch (err) {
+            error = `Codex reset-credit redeem failed: ${err instanceof Error ? err.message : String(err)}`;
+            break;
+          }
         }
 
         const releaseAccountSwitch = await accountLifecycleGate.acquireSwitch();
