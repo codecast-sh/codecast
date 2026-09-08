@@ -31,6 +31,7 @@ import {
   parseRateLimitDelay,
 } from "@platform/cli-kit/retryQueue";
 import { SHUTDOWN_FLUSH_MS } from "./shutdownBudget.js";
+import { AsyncResource } from "node:async_hooks";
 
 export { parseRateLimitDelay };
 export type { LogLevel };
@@ -433,7 +434,7 @@ export class RetryQueue {
   }
 
   setExecutor(executor: (op: RetryOperation) => Promise<boolean>): void {
-    this.queue.setExecutor(executor as (op: GenericRetryOperation<Record<string, unknown>>) => Promise<boolean>);
+    this.queue.setExecutor(AsyncResource.bind(executor) as (op: GenericRetryOperation<Record<string, unknown>>) => Promise<boolean>);
   }
 
   start(): void {

@@ -8,7 +8,17 @@ import { countingSemaphore } from "./semaphore.js";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
+import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus } from "@codecast/shared/contracts";
+
+const fetchWithIngestDeadline = ((input, init) => {
+  const deadline = currentTranscriptDeadline();
+  deadline?.check();
+  const signals = [AbortSignal.timeout(60_000)];
+  if (init?.signal) signals.push(init.signal);
+  if (deadline) signals.push(deadline.signal);
+  return fetch(input, { ...init, signal: AbortSignal.any(signals) });
+}) as typeof fetch;
 
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
@@ -394,7 +404,9 @@ export class SyncService {
   private conversationWriteChains = new Map<string, Promise<unknown>>();
 
   constructor(config: SyncConfig) {
-    this.client = new ConvexHttpClient(config.convexUrl);
+    this.client = new ConvexHttpClient(config.convexUrl, {
+      fetch: fetchWithIngestDeadline,
+    });
     this.convexUrl = config.convexUrl;
     this.userId = config.userId;
     this.apiToken = config.authToken;
@@ -888,10 +900,11 @@ export class SyncService {
         "images:generateUploadUrl",
       );
       const response = await withTimeout(
-        fetch(uploadUrl, {
+        fetchWithIngestDeadline(uploadUrl, {
           method: "POST",
           headers: { "Content-Type": decoded.mediaType },
           body: new Uint8Array(binaryData),
+          signal: AbortSignal.timeout(this.imageUploadTimeoutMs),
         }),
         this.imageUploadTimeoutMs,
         "image upload fetch",
