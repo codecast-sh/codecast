@@ -14,6 +14,8 @@ import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWor
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, applySyncPatch, type PendingEntry } from "./syncProtocol";
+import { syncTransaction } from "./syncTransaction";
+import { installStoreListenerCensus } from "./storeListenerCensus";
 import { current, isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import type { OsPermissionKind } from "../lib/osPermissions";
@@ -4543,7 +4545,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
+  applySyncTableRows: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  applySyncRecordRow: (field: string, id: string, record: any) => void;
   // The detail query answered null for a doc we have cached: it was deleted or
   // access was revoked — drop the cached body so the page shows "not found"
   // instead of stale content forever.
@@ -8612,7 +8616,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.syncMeta[key] = next;
   }),
 
-  syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
+  // Every incoming apply runs inside a sync transaction, so a burst of feeder
+  // pushes costs ONE subscriber visit instead of N (ct-49548). State still
+  // commits synchronously; only the notification is folded. A plain function,
+  // not an action: the fold has to wrap the inner action's own commit.
+  syncTable(field: string, incoming: any, opts?: SyncOpts) {
+    syncTransaction(() => get().applySyncTableRows(field, incoming, opts));
+  },
+
+  applySyncTableRows: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
     const kind = config.kind ?? "collection";
@@ -8840,7 +8852,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (config.extra) Object.assign(this, config.extra);
   }),
 
-  syncRecord: sync(function (this: Draft, field: string, id: string, record: any) {
+  // The single-record twin of syncTable, and the same transaction (ct-49746).
+  // A feeder that writes a row at a time — useSyncDocs and useSyncTasks each
+  // loop syncRecord over a page — used to cost one subscriber visit per row;
+  // now the whole page costs one. Same shape as syncTable above: a plain
+  // function wrapping the sync() action, because the fold has to enclose the
+  // action's own write.
+  syncRecord(field: string, id: string, record: any) {
+    syncTransaction(() => get().applySyncRecordRow(field, id, record));
+  },
+
+  applySyncRecordRow: sync(function (this: Draft, field: string, id: string, record: any) {
     // Apply pending protection: local-first field values win over server
     const { record: protectedRecord, pending: newPending } =
       applySyncRecord(field, id, record, this.pending);
@@ -11208,7 +11230,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
 });
 
 function createInboxStore() {
-  return create<InboxStoreState>(mutativeMiddleware(inboxStoreConfig) as any);
+  const withMiddleware = mutativeMiddleware(inboxStoreConfig);
+  return create<InboxStoreState>(((set: any, get: any, api: any) => {
+    // Runs before create() copies `subscribe` onto the bound hook, so React
+    // subscriptions and imperative ones share one counted, foldable path.
+    installStoreListenerCensus(api);
+    return withMiddleware(set, get, api);
+  }) as any);
 }
 
 // -- Dev hot swap --
