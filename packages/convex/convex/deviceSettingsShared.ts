@@ -17,6 +17,11 @@ export const deviceSettingsValidator = v.object({
     v.union(v.literal("solo"), v.literal("team"), v.literal("off")),
   ),
   stable_global: v.optional(v.boolean()),
+  // May the auto-switch loop spend one of this machine's Codex rate-limit reset
+  // credits instead of switching accounts? Off unless the config says otherwise
+  // — a credit is something the human earned, so nothing spends one on their
+  // behalf until they say so (ct-49529, `codex_reset_credit_auto` in config.json).
+  codex_reset_credit_auto: v.optional(v.boolean()),
 });
 
 // Daemon-reported model inventory for dynamic clients (opencode/pi): each
