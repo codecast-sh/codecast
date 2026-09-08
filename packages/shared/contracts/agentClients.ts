@@ -358,6 +358,62 @@ export interface AgentFileTargets {
   nativeManager?: AgentNativeManagerCommands;
 }
 
+/**
+ * The per-pane terminal modes tmux exposes as formats, read once per readiness
+ * poll. tmux tracks more modes than it renders — MODE_BRACKETPASTE (`?2004h`)
+ * among them — so a rule can only ask for what is in this shape.
+ */
+export interface PaneTerminalModes {
+  /** `#{alternate_on}`: the program switched to the alternate screen (`?1049h`). */
+  alternateScreen: boolean;
+  /** `#{cursor_flag}`: the terminal cursor is visible (`?25h`). */
+  cursorVisible: boolean;
+}
+
+/**
+ * What a FRESHLY LAUNCHED pane must show before the daemon will paste into it,
+ * beyond `promptReadyPattern` matching. Absent means the pattern alone decides,
+ * which is the behaviour every client had before ct-49538.
+ *
+ * The problem this exists for: a prompt pattern answers "did the composer
+ * paint", and painting is not reading. Every client here paints its composer
+ * seconds before it consumes stdin, and the pane is the only witness the daemon
+ * has. Where a client tells the terminal something true at the moment it goes
+ * live, that fact belongs in `modes`; where it only paints, the frame has to
+ * carry the evidence instead (`frameCompleteAfter`).
+ *
+ * Measured per client on a private tmux server, cold launches through the
+ * daemon's own launch text (ct-49538). The full flag timelines are on the task.
+ */
+export interface AgentPaneReadiness {
+  /**
+   * Terminal modes that must hold WHILE the prompt pattern matches. Only the
+   * listed keys are checked; an unlisted one is not asserted either way.
+   *
+   * grok and opencode both take the alternate screen with the cursor hidden and
+   * then SHOW the cursor on the same frame their composer goes live, so for
+   * them these modes are a real readiness fact rather than a paint. claude
+   * hides the cursor when ready and never leaves the primary screen, and codex
+   * changes no mode at all from shell to live composer — so neither client can
+   * be judged this way, and neither carries a `modes` rule.
+   */
+  modes?: Partial<PaneTerminalModes>;
+  /**
+   * A pattern that must appear AFTER the prompt pattern's match — the rest of
+   * the ready frame, painted below the composer. It says the frame is finished
+   * rather than half drawn, which for a client that tells the terminal nothing
+   * is the only ordering evidence available.
+   */
+  frameCompleteAfter?: RegExp;
+  /**
+   * Quiet time between the rule first holding and the first paste, so a
+   * freshly painted frame stops redrawing. 500 ms is the value the fresh-launch
+   * delivery path applied to every client before this field existed, and it
+   * stays the default for a client with no entry here.
+   */
+  settleMs?: number;
+}
+
 /** Everything the daemon, convex, and web need to know about one client. */
 export interface AgentClientDescriptor {
   /** Stable internal id — the daemon's agent-type spelling and the registry key. */
@@ -373,6 +429,16 @@ export interface AgentClientDescriptor {
   /** Static args always passed at launch, before the conditional permission /
    *  model / effort flags the daemon appends. Empty for every current client. */
   launchArgs: string[];
+  /**
+   * This client's composer must be TYPED, never pasted, and this is the tmux
+   * key that puts a literal newline in it.
+   *
+   * A bracketed paste is a paste GESTURE to the program receiving it, not just
+   * text, and a client is free to answer it by reading the machine's own
+   * clipboard. That is behaviour a managed pane must not have: the pane is
+   * driven by injection, so whatever the human last copied rides along.
+   */
+  typedComposerInput?: { newlineKey: string };
   /**
    * How this client runs non-interactively (print / exec / run). Required: a
    * new client must say how `cast exec` invokes it. `flag` is `-p` on the main
@@ -408,6 +474,9 @@ export interface AgentClientDescriptor {
    * alone. Per-client verbatim values are quoted on each descriptor below.
    */
   promptReadyPattern: RegExp;
+  /** What else a freshly launched pane must show before the daemon pastes into
+   *  it. Absent = the prompt pattern alone, plus the default settle. */
+  paneReadiness?: AgentPaneReadiness;
   /** Prefix for the tmux session names the daemon's resume path creates. */
   tmuxPrefix: string;
   /** Model/effort picker config, or undefined for clients with no model UI. */
@@ -523,11 +592,31 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     resumeCmd: (sessionId) => `codex resume ${sessionId}`,
     transcriptRoots: ["~/.codex/sessions"],
     watcherKind: "jsonl-dir",
-    // Fresh-launch site (daemon.ts:11989) codex branch, verbatim: />\s*$/ (ASCII
-    // `>` anchored at line end). DISAGREES with the shared readiness path
-    // (daemon.ts:11251 etc.), which matches the `›` glyph via /[❯›]/. ct-39077
-    // must decide which codex actually renders before collapsing the two.
-    promptReadyPattern: />\s*$/,
+    // Codex renders its composer as `› Ask Codex to do anything` and then paints
+    // a footer BELOW it — `<model> <effort> · <cwd>` — so the last non-space
+    // character of the pane is never `>`. The old fresh-launch pattern />\s*$/
+    // therefore never matched: a codex pane sitting at a live composer classified
+    // "booting" on every poll for the full 120s discovery budget and the session
+    // never bound by readiness (ct-49754, measured on codex 0.153.4). The `›`
+    // glyph is what codex actually renders, and it agrees with the shared /[❯›]/
+    // readiness path rather than disagreeing with it.
+    promptReadyPattern: /›/,
+    // Codex changes NO terminal mode between the shell and a live composer:
+    // measured over three cold boots, #{alternate_on} stayed 0 and #{cursor_flag}
+    // stayed 1 from exec through to `› Ask Codex to do anything`, and every other
+    // mode tmux renders stayed 0. So there is no mode fact to require, and the
+    // frame has to carry the evidence. The glyph paints first and the footer
+    // after it — 1365→2926ms, 589→1015ms, 358→576ms over those three boots — so
+    // requiring the footer BELOW the glyph is the ordering statement available
+    // here: the ready frame is finished, not half drawn.
+    //
+    // Codex still paints that frame before it reads stdin, and nothing here
+    // closes that window — the Enter gate does, by refusing to submit until the
+    // payload renders in the composer. Measured over 24 cold deliveries across
+    // four clients, no pane still held its payload 1200ms after delivery
+    // returned, so a second press on top of the gate would only ever have
+    // submitted an empty composer.
+    paneReadiness: { frameCompleteAfter: /·/, settleMs: 500 },
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
     capabilities: { panePromptMonitoring: true, fork: true, reconstitute: true, bracketedPaste: true },
@@ -650,6 +739,14 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // against the settled one). Consumed by the fresh-launch injection-readiness
     // poll (daemon.ts, tryStartedTmux) and the opencode resume-readiness poll.
     promptReadyPattern: /ctrl\+p commands|Ask anything/i,
+    // The footer alone is a paint. opencode also tells the terminal when it is
+    // ready: it takes the alternate screen with the cursor HIDDEN while it
+    // loads, and shows the cursor again on the frame its composer goes live.
+    // Measured on a cold launch: shell at 253ms (alt 0, cursor 1), alternate
+    // screen with the cursor hidden at 3636ms, cursor back at 9361ms on the same
+    // poll that first saw the footer. Requiring both closes a 5.7s window in
+    // which the footer could be read off a half-painted frame.
+    paneReadiness: { modes: { alternateScreen: true, cursorVisible: true }, settleMs: 500 },
     // `oc-` tmux prefix — distinct from claude `cc`, codex `cx`, cursor `cu`,
     // gemini `gm`. (`ct-` is a task-id prefix, not a tmux prefix; no collision.)
     tmuxPrefix: "oc",
@@ -731,6 +828,15 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // (ps comm basename "grok", verified live on v1.0.5).
     binary: "grok",
     launchArgs: [],
+    // Why: a bracketed paste makes grok read the machine's clipboard and attach
+    // any image it holds, so every injected message on a machine with a
+    // screenshot copied carried that image to xAI and the transcript recorded
+    // an attachment nobody sent (ct-49607, measured on 1.0.13). No env gate
+    // stops it: grok's three clipboard variables are two copy routes and one
+    // read gate, and the read gate leaves the paste-time attach in place. Typed
+    // input is clean, and grok's composer takes Ctrl+J as a literal newline, so
+    // typing keeps a multi-line message whole.
+    typedComposerInput: { newlineKey: "C-j" },
     printMode: { kind: "flag", token: "-p", promptAsValue: true },
     // Always resume by UUID: a non-UUID argument matches session TITLES for the
     // cwd case-insensitively and ERRORS on duplicates (ambiguity by design), so
@@ -765,6 +871,14 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // contain the words "send a message to interrupt" — never add a generic
     // /interrupt/ busy heuristic for grok.
     promptReadyPattern: /❯/,
+    // A bare ❯ is also what several shells prompt with (starship, pure, oh-my-zsh
+    // agnoster), so on a pane whose launch has not taken yet — a mistyped binary,
+    // a shell that printed its prompt before grok exec'd — the pattern matches the
+    // SHELL and the daemon pastes a message into it. grok runs full screen, so the
+    // alternate screen separates the two: measured on a cold launch, the shell sat
+    // at alt 0 and grok took the alternate screen at 797ms, 1.5s before its ❯
+    // painted at 2296ms. Nothing grok renders is ever on the primary screen.
+    paneReadiness: { modes: { alternateScreen: true }, settleMs: 500 },
     // `gk-` — free: cc/cx/cu/gm/oc/pi taken.
     tmuxPrefix: "gk",
     modelConfig: GROK_MODEL,

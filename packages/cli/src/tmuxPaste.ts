@@ -59,6 +59,60 @@ export async function pasteAndSubmitText(
 }
 
 /**
+ * The tmux key that enters a literal newline in this client's composer, for a
+ * client that must be typed rather than pasted. Null for every other client.
+ */
+export function composerNewlineKey(agentType?: AgentClientId): string | null {
+  return AGENT_CLIENTS[agentType ?? "claude"].typedComposerInput?.newlineKey ?? null;
+}
+
+// One `send-keys -l` per chunk of a line. A whole message would otherwise ride
+// in a single argv, and a long one (a pasted diff, a quoted transcript) is the
+// case that would hit the argv limit rather than the common short message.
+const TYPED_CHUNK_CHARS = 1024;
+
+/**
+ * Type text into a pane key by key, with `newlineKey` between lines.
+ *
+ * Why: a bracketed paste is a paste GESTURE, and grok answers it by reading the
+ * machine's clipboard and attaching any image on it — so a delivery carried a
+ * screenshot the human had copied to xAI, under a message that never mentioned
+ * it (ct-49607). Typed input never triggers that read; the newline key is what
+ * keeps a multi-line message one message instead of one per line.
+ */
+export async function typeTextIntoPane(
+  exec: TmuxExec,
+  target: string,
+  text: string,
+  newlineKey: string,
+): Promise<void> {
+  const lines = prepareInjectedContent(text, { bracketed: true }).split("\n");
+  for (const [index, line] of lines.entries()) {
+    if (index > 0) await exec(["send-keys", "-t", target, newlineKey]);
+    for (let at = 0; at < line.length; at += TYPED_CHUNK_CHARS) {
+      await exec(["send-keys", "-t", target, "-l", line.slice(at, at + TYPED_CHUNK_CHARS)]);
+    }
+  }
+}
+
+/**
+ * Put message text in a pane's composer the way that client accepts it: typed
+ * for a client whose composer reads the machine's clipboard on a paste, pasted
+ * through a tmux buffer for everyone else. One entry point, so a caller never
+ * has to know which clients those are.
+ */
+export async function deliverTextIntoPane(
+  exec: TmuxExec,
+  target: string,
+  text: string,
+  opts: { bracketed?: boolean; agentType?: AgentClientId } = {},
+): Promise<void> {
+  const newlineKey = composerNewlineKey(opts.agentType);
+  if (newlineKey) return typeTextIntoPane(exec, target, text, newlineKey);
+  return pasteTextIntoPane(exec, target, text, opts.bracketed ?? true);
+}
+
+/**
  * Paste text through a temporary tmux buffer. `-p` asks tmux to bracket the
  * payload when the foreground application enabled that mode. If buffer-based
  * paste fails, raw `send-keys -l` is still safe because its fallback payload is

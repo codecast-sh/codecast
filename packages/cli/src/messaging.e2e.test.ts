@@ -21,15 +21,32 @@
 // All scenarios run real tmux and a real shim binary. CI must have `tmux`
 // and `bash` installed (true on every Ubuntu/macOS GH runner).
 
+// FIRST import, and it must stay first: every tmux session this file creates —
+// shim panes and real client TUIs alike — belongs on a private tmux server, and
+// the daemon reads the environment that selects it at module load. See
+// isolatedTmuxServer.ts.
+import { killIsolatedTmuxServer } from "./test-helpers/isolatedTmuxServer.js";
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { injectViaTmux } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
 import {
   spawnHarness,
   waitFor,
   sweepStaleSessions,
+  assertRealClaudeHomeUntouched,
   readJsonlMessages,
+  MATRIX_CLIENTS,
+  MATRIX_TMUX_PREFIX,
+  matrixClientAvailable,
+  spawnClientPane,
+  startFakeModelEndpoint,
+  deliverToPane,
+  waitForRecorded,
+  logMatrix,
+  type ClientPane,
+  type FakeModelEndpoint,
   type Harness,
 } from "./test-helpers/messagingHarness.js";
 
@@ -63,6 +80,10 @@ beforeAll(() => {
 
 afterAll(() => {
   sweepStaleSessions();
+  // Takes the whole private server with it, so a pane orphaned by a thrown
+  // test cannot outlive the run.
+  killIsolatedTmuxServer();
+  assertRealClaudeHomeUntouched();
 });
 
 beforeEach(() => {
@@ -380,4 +401,168 @@ describe("messaging e2e — resume / large JSONL", () => {
     // 5000 historical + 1 new + 1 assistant reply.
     expect(all.length).toBeGreaterThan(5_000);
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// D0 cold-boot injection matrix (ct-49536)
+//
+// The scenarios above drive a shim we wrote. These drive the REAL client TUIs
+// — claude, codex, grok, opencode — each spawned cold in its own tmux pane and
+// injected through the same `injectViaTmux` the daemon calls, then asserted on
+// the client's own transcript. Every cell self-skips when the client's binary
+// is absent, so a runner with no agents installed (every CI runner today) stays
+// green while a developer machine runs the whole grid.
+//
+// The three cases are the injection failure classes the memories record:
+//   cold boot   — a TUI paints its composer seconds before it reads stdin, so a
+//                 payload can vanish, arrive with the drain's C-a/C-k bytes
+//                 glued to it, or sit in the composer forever
+//                 (inject_cold_boot_enter_swallowed, cold_boot_clearing_keys_
+//                 land_as_text). Multi-line, because an unbracketed newline is
+//                 the Enter key (injection_newlines_need_bracketed_paste).
+//   mid-turn    — delivery into a running turn must ride the type-ahead queue
+//                 and never send the interrupting Escape.
+//   resume      — the pane a resume rebuilds is a cold boot with a warm
+//                 transcript (resume_readiness_poll_outran_inflight_guard).
+//
+// Every measurement prints a `[matrix]` line; the per-client pass rate and
+// latency baseline on the task comes from running this file repeatedly.
+// ---------------------------------------------------------------------------
+
+const CONTROL_BYTE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
+
+function multilinePayload(marker: string): string {
+  return `${marker}: first line\nsecond line\n\nfourth after a blank line`;
+}
+
+/** A TUI may pad the composer, so compare on trailing whitespace only —
+ *  anything glued to the FRONT of the payload still fails the match. */
+function recorded(pane: ClientPane): string[] {
+  return pane.userMessages().map((m) => m.trimEnd());
+}
+
+describe("cold-boot injection matrix (real clients)", () => {
+  afterAll(() => {
+    sweepStaleSessions(MATRIX_TMUX_PREFIX);
+  });
+
+  for (const client of MATRIX_CLIENTS) {
+    describe.skipIf(!matrixClientAvailable(client))(client, () => {
+      let endpoint: FakeModelEndpoint;
+      let pane: ClientPane | null = null;
+
+      beforeEach(async () => {
+        endpoint = await startFakeModelEndpoint();
+      });
+
+      // The budget is for the DELETE, not for anything the test is waiting on.
+      // Measured on the codex cell (ct-49852): the tmux kill takes 4-59ms, the
+      // endpoint closes in under 1ms, and `fs.rmSync` of the pane's directories
+      // takes 0.7-5.4s — 25s once with the disk contended. A fresh CODEX_HOME is
+      // why: codex bootstraps ~730MB into it that the tests never use — three
+      // 220MB copies of its own binary under `tmp/arg0/` so it can re-exec under
+      // another argv[0], and a git clone of the plugin marketplace (~2.6k files)
+      // under `.tmp/`. bun's default 5s hook budget sits inside that spread, so
+      // two runs in four failed a delivery that had already passed, on "a
+      // beforeEach/afterEach hook timed out for this test". 60s is an order of
+      // magnitude over the median removal and 2.4x the worst one measured.
+      afterEach(() => {
+        try { pane?.tearDown(); } catch {}
+        pane = null;
+        endpoint.close();
+      }, 60_000);
+
+      test("cold boot: a multi-line message starts a turn and lands verbatim", async () => {
+        pane = spawnClientPane(client, { endpointUrl: endpoint.url });
+        const payload = multilinePayload(`matrix-cold-${randomUUID().slice(0, 8)}`);
+
+        const delivery = await deliverToPane(pane, payload);
+        const landedMs = await waitForRecorded(pane, payload);
+        logMatrix(client, "cold_boot", {
+          delivered_ms: delivery.elapsedMs,
+          attempts: delivery.attempts,
+          transcript_ms: landedMs,
+          pane_age_ms: pane.ageMs(),
+        });
+
+        // One message, not four: an unbracketed multi-line payload submits per
+        // line, so the blank line and the tail would be separate turns.
+        expect(recorded(pane).filter((m) => m.startsWith(payload.split("\n")[0]))).toEqual([payload]);
+        // The turn actually started — the client called the model. Clients take
+        // their time getting there (opencode fires ~10s after the submit), so
+        // this waits rather than sampling once.
+        await waitFor(() => endpoint.requests() > 0, {
+          timeoutMs: 60_000,
+          label: `${client} started a turn for the injected message`,
+        });
+        // No clearing-key residue: the pre-paste C-a/C-k bytes must never be
+        // recorded as message text (cold_boot_clearing_keys_land_as_text).
+        for (const message of recorded(pane)) expect(CONTROL_BYTE.test(message)).toBe(false);
+      }, 180_000);
+
+      test("mid-turn: a type-ahead message queues and lands when the turn ends", async () => {
+        pane = spawnClientPane(client, { endpointUrl: endpoint.url });
+        const first = `matrix-turn-${randomUUID().slice(0, 8)}: hold this turn open`;
+        await deliverToPane(pane, first);
+        // Ground truth for "a turn is running": the client's model request is
+        // open on the fake endpoint, which never answers. Pane text is the
+        // daemon's own guess at the same question and is what this case exists
+        // to test, so it cannot also be the precondition.
+        await waitFor(() => endpoint.inFlight() > 0, {
+          timeoutMs: 60_000,
+          label: `${client} turn is in flight against the stalling endpoint`,
+        });
+        logMatrix(client, "mid_turn", { pane_state_while_busy: pane.liveState() });
+
+        const second = multilinePayload(`matrix-typeahead-${randomUUID().slice(0, 8)}`);
+        const delivery = await deliverToPane(pane, second, { budgetMs: 45_000 });
+        // The running turn survived. An interrupt aborts the model request, so
+        // a still-held request proves the injection rode the type-ahead queue
+        // instead of sending the Escape that cancels the turn.
+        expect(endpoint.inFlight()).toBeGreaterThan(0);
+
+        // Ending the turn flushes the client's own queue.
+        endpoint.reject();
+        const landedMs = await waitForRecorded(pane, second, { timeoutMs: 90_000 });
+        logMatrix(client, "mid_turn", {
+          delivered_ms: delivery.elapsedMs,
+          attempts: delivery.attempts,
+          transcript_ms: landedMs,
+        });
+
+        const messages = recorded(pane);
+        if (!messages.includes(first)) {
+          throw new Error(
+            `${client} lost the message the turn was started with\n` +
+            `recorded: ${JSON.stringify(messages)}\npane:\n${pane.capture()}`,
+          );
+        }
+        expect(messages.indexOf(first)).toBeLessThan(messages.indexOf(second));
+      }, 240_000);
+
+      test("resume: a rebuilt pane takes an injection into the same session", async () => {
+        pane = spawnClientPane(client, { endpointUrl: endpoint.url });
+        const before = `matrix-preresume-${randomUUID().slice(0, 8)}: first turn`;
+        await deliverToPane(pane, before);
+        await waitForRecorded(pane, before);
+        // Let the turn end, so the resumed pane starts from a settled session.
+        endpoint.reject();
+
+        pane.resume();
+        const after = multilinePayload(`matrix-postresume-${randomUUID().slice(0, 8)}`);
+        const delivery = await deliverToPane(pane, after, { budgetMs: 90_000 });
+        const landedMs = await waitForRecorded(pane, after);
+        logMatrix(client, "resume", {
+          delivered_ms: delivery.elapsedMs,
+          attempts: delivery.attempts,
+          transcript_ms: landedMs,
+          pane_age_ms: pane.ageMs(),
+        });
+
+        const messages = recorded(pane);
+        expect(messages).toContain(before);
+        for (const message of messages) expect(CONTROL_BYTE.test(message)).toBe(false);
+      }, 240_000);
+    });
+  }
 });

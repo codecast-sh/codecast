@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { injectViaTmux } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
+import { hasBinary } from "./test-helpers/binaryProbe.js";
 
 // End-to-end regression for the "211" bug (root-caused 2026-06-27 against Claude Code).
 //
@@ -18,16 +18,10 @@ import { tmuxRun } from "./tmux.js";
 // byte typed afterward — so we can assert the answer lands AND that no stray option digits
 // follow it. Needs tmux + python3; skips (not fails) where they're unavailable.
 
-function have(bin: string): boolean {
-  try {
-    execFileSync("which", [bin], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const CAN_RUN = have("tmux") && have("python3");
+// hasBinary, not a bare `which` in a try/catch: a probe that fails to spawn
+// under load is not evidence that the binary is missing, and skipping on it
+// turns this suite into a green run that tested nothing (ct-49770).
+const CAN_RUN = hasBinary("tmux") && hasBinary("python3");
 
 // A fake interactive menu that mirrors the Claude TUI's alt-screen + raw mode. On Escape it
 // leaves the alt screen, prints DECLINED, then echoes everything typed for the next ~2s as

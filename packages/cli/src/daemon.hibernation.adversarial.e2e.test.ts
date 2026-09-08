@@ -1,3 +1,7 @@
+// FIRST import: it moves this process onto a private tmux server, and daemon.js
+// snapshots the environment at module load — imported after it, the daemon's tmux
+// calls keep talking to the machine's shared server (ct-49770).
+import "./test-helpers/isolatedTmuxServer.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,7 +32,10 @@ async function fixture(opts: { child?: boolean; verifiable?: boolean; space?: bo
   const script = path.join(root, "claude");
   const source = buildShimScript({ sessionId });
   fs.writeFileSync(script, opts.child ? source.replace("\nemit_meta\n", "\nsleep 120 &\necho $! > child.pid\nemit_meta\n") : source, { mode: 0o755 });
-  const h = spawnHarness({ sessionId, tmuxPrefix: `${prefix}${opts.space ? " space" : ""}`, command: `exec '${script}'${opts.verifiable === false ? "" : ` --session-id ${sessionId}`}` });
+// home: this process's own. The hibernation pass finds a pane's transcript through
+// the daemon's session file index, which is rooted at process.env.HOME — a pane
+// writing into a home of its own is invisible to it (ct-49770).
+  const h = spawnHarness({ sessionId, home: os.homedir(), tmuxPrefix: `${prefix}${opts.space ? " space" : ""}`, command: `exec '${script}'${opts.verifiable === false ? "" : ` --session-id ${sessionId}`}` });
   harnesses.push(h);
   await waitFor(() => h.paneHasPrompt(), { timeoutMs: 10000 });
   if (opts.child) childPids.push(Number(fs.readFileSync(path.join(h.cwd, "child.pid"), "utf8")));
@@ -76,7 +83,11 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
   for (const stage of ["before", "at-kill"]) test(`attached human ${stage}`, async () => {
     const f = await fixture();
     const attach = async () => {
-      const client = Bun.spawn(["tmux", "-C", "attach-session", "-t", `=${f.h.tmuxSession}`], { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
+      // env from process.env, explicitly: bun does not hand a mutated
+      // process.env to a child that inherits, so without this the attach client
+      // looks for the session on the machine's shared tmux server and never
+      // finds it (ct-49770).
+      const client = Bun.spawn(["tmux", "-C", "attach-session", "-t", `=${f.h.tmuxSession}`], { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: { ...process.env } });
       attachers.push(client);
       await waitFor(() => tmuxRun(["display-message", "-p", "-t", `=${f.h.tmuxSession}:`, "#{session_attached}"]).stdout.trim() === "1", { timeoutMs: 3000 });
     };
