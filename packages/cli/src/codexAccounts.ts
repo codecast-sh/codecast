@@ -33,6 +33,12 @@ import {
   type CodexUsageSnapshot,
 } from "./codexUsage.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import {
+  fetchCodexBackendUsage,
+  mergeCodexUsage,
+  nextUsageRetry,
+  type UsageRetryState,
+} from "./codexBackendUsage.js";
 
 export class CodexAccountError extends Error {}
 
@@ -249,6 +255,30 @@ export function resolveCodexAccount(name?: string): CodexAccountTarget {
   };
 }
 
+/** The saved profile covering a login, matched by account_id with email as the
+ * fallback. One predicate, because "is this account already saved", "which
+ * profile do I re-snapshot into" and "which account is this pane on" are the
+ * same question asked three times. */
+function profileCovering(
+  index: ProfileIndex,
+  summary: CodexAuthSummary,
+): [string, CodexProfileMeta] | undefined {
+  if (!summary.usable || (!summary.account_id && !summary.email)) return undefined;
+  return Object.entries(index.profiles).find(
+    ([, meta]) =>
+      (summary.account_id && meta.account_id === summary.account_id) ||
+      (summary.email && meta.email === summary.email),
+  );
+}
+
+/** The saved profile covering the machine's CURRENT ~/.codex login — the name a
+ * pane launched right now records, and the one every live pane is compared
+ * against. Undefined when the login is unusable or not enrolled yet: a switch
+ * we cannot name must order no restarts. */
+export function activeCodexProfileName(): string | undefined {
+  return profileCovering(readProfileIndex(), activeCodexSummary())?.[0];
+}
+
 /** Enroll the active login as a profile iff none covers it yet (matched by
  * account_id, email fallback) — the daemon calls this so `codex login` is the
  * only manual step, ever. Mirrors autoSaveActiveProfile. */
@@ -256,12 +286,7 @@ export function autoSaveActiveCodexProfile(): (CodexProfileMeta & { name: string
   const active = activeCodexSummary();
   if (!active.usable || (!active.account_id && !active.email)) return null;
   const index = readProfileIndex();
-  const covered = Object.values(index.profiles).some(
-    (meta) =>
-      (active.account_id && meta.account_id === active.account_id) ||
-      (active.email && meta.email === active.email),
-  );
-  if (covered) return null;
+  if (profileCovering(index, active)) return null;
   return saveCodexProfile(deriveProfileName(active.email, Object.keys(index.profiles)));
 }
 
@@ -301,13 +326,8 @@ export function migrateLegacyCodexProfileNames(): Array<{ from: string; to: stri
 export function resnapshotIfActiveCodexFresher(): string | null {
   const raw = readActiveCodexAuth();
   const active = decodeCodexAuth(raw);
-  if (!raw || !active.usable || (!active.account_id && !active.email)) return null;
-  const index = readProfileIndex();
-  const match = Object.entries(index.profiles).find(
-    ([, meta]) =>
-      (active.account_id && meta.account_id === active.account_id) ||
-      (active.email && meta.email === active.email),
-  );
+  if (!raw) return null;
+  const match = profileCovering(readProfileIndex(), active);
   if (!match) return null;
   const [name] = match;
   const stored = decodeCodexAuth(readProfileAuth(name));
@@ -327,12 +347,21 @@ export function resnapshotIfActiveCodexFresher(): string | null {
 interface UsageCache {
   // Keyed by account_id (email fallback) — same identity the index carries.
   accounts: Record<string, CodexUsageSnapshot>;
+  // When each account's ChatGPT-backend supplement may be asked again after a
+  // refusal, same keys. Kept beside the snapshots rather than inside one
+  // because the heartbeat payload sends a snapshot to Convex through a closed
+  // validator: a snapshot carrying an extra field would have the whole account
+  // inventory rejected. So this stays local, and only this file reads it.
+  backend_retries?: Record<string, UsageRetryState>;
 }
 
 export function readUsageCache(): UsageCache {
   try {
     const parsed = JSON.parse(fs.readFileSync(usageCachePath(), "utf-8"));
-    if (parsed && typeof parsed.accounts === "object") return parsed;
+    if (parsed && typeof parsed.accounts === "object") {
+      if (!parsed.backend_retries || typeof parsed.backend_retries !== "object") delete parsed.backend_retries;
+      return parsed;
+    }
   } catch {}
   return { accounts: {} };
 }
@@ -341,6 +370,26 @@ export interface CodexUsageRefreshSummary {
   probed: string[];
   skipped: string[];
   failed: Array<{ name: string; reason: string }>;
+  // The ChatGPT-backend supplement, reported apart from the app-server probe:
+  // it can fail on its own without costing the account its meters.
+  backend_failed: Array<{ name: string; reason: string }>;
+  backend_deferred: string[]; // still inside a recorded backoff window
+}
+
+// How long to leave an account alone once the backend has confirmed it has no
+// session window to report.
+const BACKEND_AGREED_COOLOFF_MS = 60 * 60 * 1000;
+
+/** The rest state after a backend reading that filled no hole. Not a failure —
+ * `failures: 0` keeps it out of the doubling ladder, so the next real refusal
+ * starts from the base delay. */
+function agreedNoSessionWindow(now: number): UsageRetryState {
+  return {
+    retry_at: now + BACKEND_AGREED_COOLOFF_MS,
+    failures: 0,
+    reason: "no session window on this plan",
+    failed_at: now,
+  };
 }
 
 /**
@@ -355,12 +404,23 @@ export async function refreshCodexUsageSnapshots(
     minIntervalMs?: number;
     // Test seam: receives the CODEX_HOME to probe (undefined = real home).
     rpcFetch?: (codexHomeDir?: string) => Promise<any | null>;
+    // Test seam for the ChatGPT-backend supplement. Receives the same home, so
+    // each account is read through its own auth.json. Throwing a
+    // CodexUsageHttpError here is what drives the per-account backoff.
+    backendFetch?: (codexHomeDir: string) => Promise<Omit<CodexUsageSnapshot, "models"> | null>;
   } = {},
 ): Promise<CodexUsageRefreshSummary> {
   const now = opts.now ?? Date.now();
   const minInterval = opts.minIntervalMs ?? 4 * 60 * 1000;
   const rpcFetch = opts.rpcFetch ?? ((home?: string) => fetchRateLimitsViaAppServer({ codexHome: home }));
-  const summary: CodexUsageRefreshSummary = { probed: [], skipped: [], failed: [] };
+  const backendFetch = opts.backendFetch ?? ((home: string) => fetchCodexBackendUsage(home, { now }));
+  const summary: CodexUsageRefreshSummary = {
+    probed: [],
+    skipped: [],
+    failed: [],
+    backend_failed: [],
+    backend_deferred: [],
+  };
 
   // Keep the profile store in step with the live login before probing.
   try {
@@ -392,6 +452,47 @@ export async function refreshCodexUsageSnapshots(
       snap = parseRateLimitsReadResult(await rpcFetch(home), now);
     } catch {
       snap = null;
+    }
+    // The ChatGPT backend supplements what the app-server left blank — most
+    // often the five-hour session window, which reads as headroom when absent.
+    // The RPC stays authoritative: mergeCodexUsage only fills holes. Skipped
+    // while this account is backing off from a refusal, and skipped entirely
+    // for a home we cannot name (the active probe passes the real ~/.codex).
+    //
+    // The trigger names only what the backend is asked FOR. Missing reset
+    // credits are not on it: having none is the ordinary state of an account,
+    // so treating that as a hole would send every account to the endpoint on
+    // every cycle forever.
+    if (home && (!snap || !snap.session || !snap.plan_type)) {
+      const retry = cache.backend_retries?.[key];
+      if (retry && now < retry.retry_at) {
+        summary.backend_deferred.push(label);
+      } else {
+        try {
+          const backend = await backendFetch(home);
+          snap = mergeCodexUsage(snap, backend);
+          // The backend answered and the hole is still there: this plan has no
+          // five-hour window at all (verified on a live Pro account, where both
+          // sources report the weekly bucket alone). Asking again every tick
+          // would buy nothing, so rest — the app-server keeps the meters fresh
+          // meanwhile, and an upgraded plan is picked up within the hour.
+          const next = backend && !snap?.session ? agreedNoSessionWindow(now) : undefined;
+          if (next) {
+            (cache.backend_retries ??= {})[key] = next;
+            wrote = true;
+          } else if (backend && retry) {
+            delete cache.backend_retries![key];
+            wrote = true;
+          }
+        } catch (err) {
+          (cache.backend_retries ??= {})[key] = nextUsageRetry(retry, err, now);
+          wrote = true;
+          summary.backend_failed.push({
+            name: label,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     }
     // The active account has the rollout logs to lean on: model mix always,
     // limit windows too when the RPC fails (binary missing, transient error).
@@ -438,6 +539,9 @@ export async function refreshCodexUsageSnapshots(
   if (wrote) {
     for (const key of Object.keys(cache.accounts)) {
       if (!knownKeys.has(key)) delete cache.accounts[key];
+    }
+    for (const key of Object.keys(cache.backend_retries ?? {})) {
+      if (!knownKeys.has(key)) delete cache.backend_retries![key];
     }
     atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), { mode: 0o644 });
     invalidateCodexAccountsCache();
