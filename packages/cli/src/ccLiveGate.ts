@@ -24,6 +24,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { defaultConfigDir } from "./config/configDir.js";
 
 /** One live claude pane: the tmux session name, and the saved profile it was
  *  launched under (absent = the machine's keychain login). */
@@ -52,7 +53,7 @@ const drainListeners = new Set<() => void>();
 let writeChain: Promise<void> = Promise.resolve();
 
 function gateStatePath(): string {
-  const dir = process.env.CODECAST_DIR || path.join(process.env.HOME || os.homedir(), ".codecast");
+  const dir = defaultConfigDir();
   return path.join(dir, "cc-live-gate.json");
 }
 

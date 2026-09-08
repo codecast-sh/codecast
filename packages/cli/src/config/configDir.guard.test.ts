@@ -56,7 +56,12 @@ const FORBIDDEN: Array<{ rx: RegExp; what: string }> = [
 
 /** Each entry needs a reason the copy cannot be the shared resolver. Empty is
  *  the correct state; a stale entry fails the guard too. */
-const ALLOWED: Record<string, string> = {};
+const ALLOWED: Record<string, string> = {
+  // The isolation helper itself: it WRITES CODECAST_DIR and has to know the
+  // real directory to tell "already redirected" from "pointed at the human's
+  // state" (ct-49576). Calling the resolver here would only hide that.
+  "test-helpers/codecastDir.ts": "sets and restores CODECAST_DIR; naming the real directory is its whole job",
+};
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "__fixtures__"]);
 

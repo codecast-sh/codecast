@@ -24286,7 +24286,7 @@ const WARM_POOL_RECENCY_WINDOW_MS = 15 * 60 * 1000;
  * the same one-hour cutoff as the status files above is safe.
  */
 export async function sweepStatusLineStamps(cutoff: number): Promise<void> {
-  const dir = path.join(process.env.HOME || "", ".codecast", STATUSLINE_STAMP_DIR);
+  const dir = path.join(defaultConfigDir(), STATUSLINE_STAMP_DIR);
   let names: string[];
   try {
     names = await fs.promises.readdir(dir);

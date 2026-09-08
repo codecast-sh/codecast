@@ -17,6 +17,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { defaultConfigDir } from "./config/configDir.js";
 
 /**
  * $HOME first: bun's os.homedir() caches at startup and ignores later env
@@ -28,7 +29,7 @@ export function homeDir(): string {
 
 /** The CLI state directory — CODECAST_DIR when set, else ~/.codecast. */
 export function codecastDir(): string {
-  return process.env.CODECAST_DIR || path.join(homeDir(), ".codecast");
+  return defaultConfigDir();
 }
 
 /** A path inside the CLI state directory, e.g. codecastPath("positions.json"). */
