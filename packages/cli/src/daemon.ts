@@ -19183,7 +19183,12 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
     expected.phase = "parked";
     delete expected.replayStop;
     const remaining = await boundary.terminal(["list-panes", "-a", "-F", "#{pane_id}"]).catch(error => {
-      if (/no server running on|no sessions|error connecting to .*\(No such file or directory\)/i.test(String(error))) return { stdout: "" };
+      // "no current target" joins the others: killing the last pane can leave a
+      // server with no sessions at all, and tmux says so with that phrase
+      // instead. All four mean the same thing here — no pane remains, which is
+      // exactly what the check below is asking about (ct-49537's descendant
+      // kill makes the empty-server case ordinary rather than rare).
+      if (/no server running on|no sessions|no current target|error connecting to .*\(No such file or directory\)/i.test(String(error))) return { stdout: "" };
       throw error;
     });
     if (remaining.stdout.trim().split("\n").includes(target.pane)) return false;
