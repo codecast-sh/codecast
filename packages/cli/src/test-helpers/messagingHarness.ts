@@ -451,6 +451,72 @@ export function seedClaudeHome(homeDir: string, projectCwd: string): void {
   }, null, 2));
 }
 
+/**
+ * The two directories codex bootstraps into a fresh CODEX_HOME, shared by every
+ * codex pane in a run instead of built and deleted per pane.
+ *
+ * `.tmp` holds a git clone of the plugin marketplace — 88-91MB and ~7.8k files
+ * on the version measured — and `tmp/arg0` holds the re-exec entries codex
+ * needs to run under another argv[0] (symlinks to the installed binary on the
+ * version measured; ct-49885 recorded three full 220MB copies instead). The
+ * matrix reads neither. A fresh home pays for both twice, once at boot and
+ * again in the afterEach delete, and that delete is what put the codex cell
+ * over bun's 5s hook budget (ct-49852). Sharing them took a bootstrapped home
+ * from 90.7MB and 7897 files to 2.8MB and 115, and its delete from 2.0-3.2s to
+ * 10-91ms.
+ *
+ * Why sharing is safe: codex reuses a clone whose `plugins.sha` still matches
+ * and takes `plugins.sync.lock` around the sync, and it mints its own randomly
+ * named subdirectory under `tmp/arg0`, so panes cannot collide there. And
+ * `fs.rmSync` removes a symlink rather than what it points at, so a pane's
+ * teardown still deletes exactly the pane's own state.
+ *
+ * This is a speedup, and it is the one place the harness knows anything about
+ * codex's private directory layout. If a codex release renames either
+ * directory the pane simply goes back to bootstrapping its own — slower, never
+ * wrong.
+ */
+const CODEX_SHARED_DIRS = [".tmp", "tmp"] as const;
+let codexScratch: string | null = null;
+
+function sharedCodexScratch(): string {
+  if (codexScratch) return codexScratch;
+  const scratchRoot = path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME);
+  // The sweep, not the exit hook below, is what actually holds: a run killed
+  // outright never reaches the hook, and bun's own test runner does not always
+  // reach it either — a matrix run leaves its directory behind, and the next
+  // run is what removes it. Without this the scratch root grows one ~64MB clone
+  // per run. Same shape, and the same reason, as isolatedTmuxServer's
+  // sweepDeadServers.
+  try {
+    for (const name of fs.readdirSync(scratchRoot)) {
+      const pid = Number(name.match(/^codexboot-(\d+)-/)?.[1]);
+      if (!pid || pid === process.pid) continue;
+      try { process.kill(pid, 0); continue; } catch {}
+      try { fs.rmSync(path.join(scratchRoot, name), { recursive: true, force: true }); } catch {}
+    }
+  } catch {}
+
+  const dir = path.join(scratchRoot, `codexboot-${process.pid}-${randomUUID().slice(0, 8)}`);
+  for (const name of CODEX_SHARED_DIRS) fs.mkdirSync(path.join(dir, name), { recursive: true });
+  process.once("exit", () => {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  });
+  codexScratch = dir;
+  return dir;
+}
+
+/** Point this home's bootstrap directories at the run's shared copies. */
+function shareCodexBootstrap(homeDir: string): void {
+  const shared = sharedCodexScratch();
+  for (const name of CODEX_SHARED_DIRS) {
+    const link = path.join(homeDir, name);
+    // A relaunch (pane.resume) runs the recipe again against the same home.
+    if (fs.lstatSync(link, { throwIfNoEntry: false })) continue;
+    fs.symlinkSync(path.join(shared, name), link);
+  }
+}
+
 const CLIENT_RECIPES: Record<MatrixClientId, ClientRecipe> = {
   // claude runs under a HOME of its own, so its transcripts land in the temp
   // home this pane owns and the real ~/.claude/projects is never written to or
@@ -491,6 +557,7 @@ const CLIENT_RECIPES: Record<MatrixClientId, ClientRecipe> = {
     launch: (ctx) => {
       const real = fs.realpathSync(ctx.cwd);
       fs.mkdirSync(ctx.homeDir, { recursive: true });
+      shareCodexBootstrap(ctx.homeDir);
       fs.writeFileSync(path.join(ctx.homeDir, "config.toml"), [
         `model = "matrix"`,
         `model_provider = "matrix"`,
