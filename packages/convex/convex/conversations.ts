@@ -8906,6 +8906,14 @@ export async function computeInboxSessions(
     }
     return { conv, row, subagentChildren, dismissed, stashed, hidden };
   }));
+  // The stamp for a subagent child row, assembled below and applied where the
+  // children are emitted. A child never reaches the enriched top-level rows —
+  // shouldShowInInbox drops subagents from the candidate set — so the emission
+  // under its parent is the ONLY one it gets, and leaving it stampless made
+  // every `cast sessions <subagent-id>` throw in tallyInboxRows and lose the
+  // whole inbox with it (ct-49761). Null when the caller didn't ask for a
+  // projection: the web base list must never carry a bucket (C1).
+  let stampChildRow: ((child: any, row: any) => void) | null = null;
   if (opts.projection && includeLiveness) {
     // The same placement the liveness overlay stamps (computeSessionsLiveness):
     // one classifier, one alphabet. The asking inputs come from the candidate
@@ -8937,6 +8945,22 @@ export async function computeInboxSessions(
     // overlay and the web do.
     const byId = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
     rideLeadPlacements(new Map(enrichedRows.map((r) => [r.conv._id.toString(), r.row as { bucket: InboxBucket }])), (id) => byId.get(id)?.conv);
+    // Children go through the SAME placement call as their parents, off the
+    // same clock and the same asking inputs. A child has no probed last user
+    // message (buildSubagentChildRow leaves it null), which is the honest
+    // input: null means "not probed", exactly what the top-level path passes
+    // for a row whose probe was skipped.
+    stampChildRow = (child, row) => {
+      const cid = child._id.toString();
+      const asking = ownAsk(row, child) || pendingDecisionIds.has(cid) || askingParents.has(cid);
+      const placement = placeConversationRow(child, row, asking, row.last_user_message, now);
+      row.bucket = placement.bucket;
+      row.work_state = placement.work_state;
+      row.asking = asking;
+      // A child is emitted only under a shown parent, so it is never below the
+      // fold on its own account.
+      row.below_fold = false;
+    };
   }
   for (const r of enrichedRows) {
     if (r.hidden) {
@@ -8949,7 +8973,9 @@ export async function computeInboxSessions(
     // exposing them now would make active buckets pick them up as orphans.
     if (r.dismissed || r.stashed) continue;
     for (const child of r.subagentChildren) {
-      results.push(buildSubagentChildRow(child, maps, now, r.conv._id));
+      const childRow = buildSubagentChildRow(child, maps, now, r.conv._id);
+      stampChildRow?.(child, childRow);
+      results.push(childRow);
     }
   }
 
@@ -9705,7 +9731,10 @@ export function tallyInboxRows(
     requestedIds?: Set<string>;
   },
 ) {
-  const counts = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, stashed: 0, dismissed: 0, killed: 0, below_fold: 0, total: 0 };
+  // `unstamped` is a HEALTH figure, not a bucket: rows this tally had to drop
+  // because an upstream emitter skipped the projection. It should always read
+  // 0; a non-zero value names a gap in computeInboxSessions.
+  const counts = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, stashed: 0, dismissed: 0, killed: 0, below_fold: 0, total: 0, unstamped: 0 };
   const rows: Array<{
     id: string;
     session_id: string;
@@ -9777,7 +9806,16 @@ export function tallyInboxRows(
     // classifier, one alphabet (sync-convergence C3).
     const work_state: WorkState = s.work_state;
     const bucket: InboxBucket = s.bucket;
-    if (!work_state || !bucket) throw new Error(`tallyInboxRows: row ${s._id} is not stamped with a projection`);
+    // A stampless row is a bug in whoever emitted it, but it must cost ONE
+    // ROW, not the inbox. Throwing here failed the whole query, so a single
+    // unstamped subagent turned `cast sessions` into "Internal error" and hid
+    // every other session the user has (ct-49761). Skip it, count it, and name
+    // it in the logs so the upstream gap stays visible instead of silent.
+    if (!work_state || !bucket) {
+      counts.unstamped++;
+      console.error(`tallyInboxRows: row ${s._id} is not stamped with a projection — skipped`);
+      continue;
+    }
     const is_live = !!s.is_connected && s.agent_status !== "hibernated";
 
     counts.total++;

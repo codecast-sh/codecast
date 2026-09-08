@@ -585,7 +585,11 @@ describe("inboxForCLI path — the same placement, tallied from the stamps", () 
     expect(row("pin")).toMatchObject({ bucket: "pinned", work_state: "needs_input", below_fold: false });
     expect(row("err")).toMatchObject({ bucket: "needs_input", work_state: "needs_input" });
     expect(row("old")).toMatchObject({ bucket: "needs_input", below_fold: true });
-    expect(row("sub").bucket).toBeUndefined(); // children are never placed
+    // Children ARE placed (ct-49761). They used to be the one emission the
+    // stamp loop skipped, and because a subagent never becomes a top-level row
+    // that was its only emission — so `cast sessions <subagent-id>`, which
+    // lists a named child, handed the tally a stampless row and threw.
+    expect(row("sub")).toMatchObject({ work_state: expect.any(String), bucket: expect.any(String), below_fold: false });
     expect(hidden_count).toBe(1);
 
     const { counts, rows } = tallyInboxRows(sessions, { showAll: true, stateFilter: null, labelByConv: new Map() });
