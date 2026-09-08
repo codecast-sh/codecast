@@ -16,6 +16,7 @@ import {
   type AnalyticsConfig,
   type ResolvedAnalyticsConfig,
 } from "./index";
+import { createTrackGate, type TrackGate } from "./catalog";
 
 let Sentry: typeof import("@sentry/react-native") | null = null;
 try {
@@ -36,6 +37,7 @@ try {
 }
 
 let config: ResolvedAnalyticsConfig | null = null;
+let gate: TrackGate | null = null;
 
 // The header says to call initAnalytics after first mount, so an app that
 // identifies a user from a stored session can easily get there first. Those
@@ -59,6 +61,13 @@ export interface NativeAnalyticsConfig extends AnalyticsConfig {
 /** Call after first mount, never at module eval (see header comment). */
 export function initAnalytics(input: NativeAnalyticsConfig) {
   config = resolveConfig(input);
+  // A phone has neither an env nor a Do Not Track header, so the only opt out
+  // here is the app's own setting, passed in as config.optedOut.
+  gate = createTrackGate({
+    catalog: config.catalog,
+    sessionCap: config.sessionEventCap,
+    optedOut: config.optedOut,
+  });
   const isDev = config.environment === "development";
   const enableSessionReplay = input.enableSessionReplay ?? true;
 
@@ -78,7 +87,7 @@ export function initAnalytics(input: NativeAnalyticsConfig) {
     }
   }
 
-  if (config.posthogKey && PostHogCtor) {
+  if (config.posthogKey && !config.optedOut && PostHogCtor) {
     try {
       posthog = new PostHogCtor(config.posthogKey, {
         host: config.posthogHost,
@@ -136,6 +145,8 @@ export function track(event: string, properties?: Record<string, string | number
     preInit.add(() => track(event, properties));
     return;
   }
+  // Same boundary as web: opt out, per-session cap, then the catalog.
+  if (!gate?.check(event, properties).ok) return;
   posthog?.capture(event, properties);
 }
 
@@ -170,6 +181,7 @@ export function wrapRoot<T>(Component: T): T {
 /** Test hook: forget config and the held calls so init can run from scratch. */
 export function _resetForTests() {
   config = null;
+  gate = null;
   posthog = null;
   preInit.clear();
 }

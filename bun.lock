@@ -18,7 +18,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.119",
+      "version": "1.1.124",
       "bin": {
         "codecast": "./dist/index.js",
         "cast": "./dist/index.js",
@@ -76,7 +76,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.103",
+      "version": "1.1.104",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
         "electron-updater": "^6.3.0",
@@ -153,6 +153,9 @@
     "packages/shared": {
       "name": "@codecast/shared",
       "version": "0.0.1",
+      "dependencies": {
+        "@platform/analytics": "file:../../platform/packages/analytics",
+      },
     },
     "packages/vscode-extension": {
       "name": "codecast-blame",
@@ -4244,6 +4247,8 @@
     "@codecast/convex/@platform/flags": ["@platform/flags@file:platform/packages/flags", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "posthog-js": ">=1.0.0", "posthog-react-native": ">=3.0.0", "react": ">=18.0.0" }, "optionalPeers": ["posthog-js", "posthog-react-native", "react"], "bin": { "platform-flags": "src/cli.ts" } }],
 
     "@codecast/electron/@platform/desktop": ["@platform/desktop@file:platform/packages/desktop", { "devDependencies": { "typescript": "^5.7.2" }, "peerDependencies": { "@electron/notarize": ">=2", "electron": ">=28", "electron-builder": ">=24" }, "optionalPeers": ["@electron/notarize", "electron-builder"] }],
+
+    "@codecast/shared/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
 
     "@codecast/web/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
 
