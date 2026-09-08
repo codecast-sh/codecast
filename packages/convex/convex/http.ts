@@ -3935,6 +3935,16 @@ cliRoute("/cli/anchor/say-chat", async (ctx, body) => {
   return await ctx.runMutation(api.chat.sendAsAnchor, body);
 });
 
+// Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
+// resolve the ref (id or short id) and check conversation access inside the
+// mutation. body: { api_token, conversation_id }.
+cliRoute("/cli/session/ack", async (ctx, body) => {
+  return await ctx.runMutation(api.sessionReads.acknowledge, body);
+});
+cliRoute("/cli/session/unread", async (ctx, body) => {
+  return await ctx.runMutation(api.sessionReads.markUnread, body);
+});
+
 // Team chat. Every one of these authorizes the caller inside the function — this
 // route only forwards the request body, so the mutation's own argument list is
 // what keeps identity and scope out of the caller's hands.

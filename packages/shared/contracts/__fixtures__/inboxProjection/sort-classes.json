@@ -1,0 +1,306 @@
+{
+  "about": "Order INSIDE a bucket (ct-49550): several rows per class whose placement is identical and whose sort stamps differ, plus the creation grace. Fresh cluster (no fold).",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "_id": "ni_fresh",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "idle",
+      "agent_status_updated_at": "E-1m"
+    },
+    {
+      "_id": "ni_stale",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "idle",
+      "agent_status_updated_at": "E-2h"
+    },
+    {
+      "_id": "ni_no_daemon",
+      "status": "active",
+      "updated_at": "E-30m",
+      "message_count": 5,
+      "is_idle": true
+    },
+    {
+      "_id": "done_recent_turn",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "done",
+      "agent_status_updated_at": "E-4h",
+      "turn_completed_at": "E-5m"
+    },
+    {
+      "_id": "done_old_turn",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "done",
+      "agent_status_updated_at": "E-1m",
+      "turn_completed_at": "E-3h"
+    },
+    {
+      "_id": "done_no_turn",
+      "status": "active",
+      "updated_at": "E-3m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "done",
+      "agent_status_updated_at": "E-1h"
+    },
+    {
+      "_id": "work_just_back",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 5,
+      "is_idle": false,
+      "agent_status": "working",
+      "agent_status_updated_at": "E-1m",
+      "turn_completed_at": "E-2m"
+    },
+    {
+      "_id": "work_grinding",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 5,
+      "is_idle": false,
+      "agent_status": "working",
+      "agent_status_updated_at": "E-90m",
+      "turn_completed_at": "E-90m"
+    },
+    {
+      "_id": "work_never_settled",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 5,
+      "is_idle": false,
+      "agent_status": "working",
+      "agent_status_updated_at": "E-45m"
+    },
+    {
+      "_id": "work_born",
+      "status": "active",
+      "updated_at": "E-2m",
+      "started_at": "E-2m",
+      "message_count": 3,
+      "is_idle": false,
+      "agent_status": "working",
+      "agent_status_updated_at": "E-2m"
+    },
+    {
+      "_id": "dorm_wake_soon",
+      "status": "active",
+      "updated_at": "E-3m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "dormant",
+      "agent_status_updated_at": "E-3m",
+      "loop_state": {
+        "status": "armed",
+        "wakeup_at": "E+10m",
+        "event_at": "E-3m"
+      }
+    },
+    {
+      "_id": "dorm_wake_later",
+      "status": "active",
+      "updated_at": "E-4m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "dormant",
+      "agent_status_updated_at": "E-4m",
+      "loop_state": {
+        "status": "armed",
+        "wakeup_at": "E+3h",
+        "event_at": "E-4m"
+      }
+    },
+    {
+      "_id": "dorm_unnamed_wake",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 5,
+      "is_idle": true,
+      "agent_status": "dormant",
+      "agent_status_updated_at": "E-5m"
+    },
+    {
+      "_id": "new_born",
+      "status": "active",
+      "updated_at": "E-1m",
+      "started_at": "E-1m",
+      "message_count": 0
+    },
+    {
+      "_id": "new_older",
+      "status": "active",
+      "updated_at": "E-2h",
+      "started_at": "E-2h",
+      "message_count": 0
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 2,
+        "needs_input": 3,
+        "done": 3,
+        "dormant": 3,
+        "working": 4,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "89fb432e70eb18d2",
+    "placements": {
+      "donenoturnz100000000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "doneoldturnz11000000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "donerecentturnz14000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "dormunnamedwakez1500000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "dormwakelaterz130000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "dormwakesoonz1200000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "newbornz700000000000000000000000": [
+        "new",
+        "idle",
+        false
+      ],
+      "newolderz80000000000000000000000": [
+        "new",
+        "idle",
+        false
+      ],
+      "nifreshz700000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "ninodaemonz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "nistalez700000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "workbornz80000000000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "workgrindingz1200000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "workjustbackz1200000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "workneversettledz160000000000000": [
+        "working",
+        "working",
+        false
+      ]
+    },
+    "sort_at": {
+      "donenoturnz100000000000000000000": -3600000,
+      "doneoldturnz11000000000000000000": -10800000,
+      "donerecentturnz14000000000000000": -300000,
+      "dormunnamedwakez1500000000000000": -300000,
+      "dormwakelaterz130000000000000000": 10800000,
+      "dormwakesoonz1200000000000000000": 600000,
+      "newbornz700000000000000000000000": -60000,
+      "newolderz80000000000000000000000": -7200000,
+      "nifreshz700000000000000000000000": -60000,
+      "ninodaemonz100000000000000000000": -1800000,
+      "nistalez700000000000000000000000": -7200000,
+      "workbornz80000000000000000000000": -120000,
+      "workgrindingz1200000000000000000": -5400000,
+      "workjustbackz1200000000000000000": -120000,
+      "workneversettledz160000000000000": -2700000
+    },
+    "sort_order": {
+      "done": [
+        "donerecentturnz14000000000000000",
+        "donenoturnz100000000000000000000",
+        "doneoldturnz11000000000000000000"
+      ],
+      "dormant": [
+        "dormwakesoonz1200000000000000000",
+        "dormwakelaterz130000000000000000",
+        "dormunnamedwakez1500000000000000"
+      ],
+      "needs_input": [
+        "nifreshz700000000000000000000000",
+        "ninodaemonz100000000000000000000",
+        "nistalez700000000000000000000000"
+      ],
+      "new": [
+        "newbornz700000000000000000000000",
+        "newolderz80000000000000000000000"
+      ],
+      "working": [
+        "workbornz80000000000000000000000",
+        "workjustbackz1200000000000000000",
+        "workneversettledz160000000000000",
+        "workgrindingz1200000000000000000"
+      ]
+    }
+  }
+}

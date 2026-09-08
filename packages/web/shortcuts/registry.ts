@@ -18,6 +18,7 @@ export type ShortcutAction =
   | 'session.jumpIdle'
   | 'session.jumpPinned'
   | 'session.pin'
+  | 'session.markUnread'
   | 'session.moveToBucket'
   | 'view.switch'
   | 'session.stash'
@@ -134,6 +135,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to top needs-input session' },
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
+  // Ctrl+Shift+U = Unread. Non-destructive (the next visit clears it), so a
+  // plain bypass is safe; Ctrl+U alone is the browser's view-source.
+  { key: 'ctrl+shift+u', action: 'session.markUnread', skipInputCheck: true, description: 'Mark session unread' },
   // Ctrl+L = Label. Free in-app and in the browser on mac (address bar is
   // Cmd+L); Ctrl+M stays compose-focus. Non-destructive (opens the label
   // picker), so a plain `true` bypass is safe from a full composer — unlike

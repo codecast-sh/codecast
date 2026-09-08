@@ -252,6 +252,44 @@
         "needs_input",
         false
       ]
+    },
+    "sort_at": {
+      "dismissedleadz130000000000000000": -600000,
+      "edgez400000000000000000000000000": -108000000,
+      "handoffnotariderz160000000000000": -480000,
+      "leadz400000000000000000000000000": -60000,
+      "matedonez80000000000000000000000": -120000,
+      "matefreshunderoldleadz2100000000": -540000,
+      "mateleadabsentz14000000000000000": -420000,
+      "mateneedsz9000000000000000000000": -180000,
+      "mateofmatez100000000000000000000": -360000,
+      "mateoldunderfreshleadz2100000000": -115200000,
+      "matepinnedz100000000000000000000": -240000,
+      "matestashedz11000000000000000000": -300000,
+      "mateunderdismissedleadz220000000": -660000,
+      "oldleadz700000000000000000000000": -111600000,
+      "spawnedteamleadz1500000000000000": -120000
+    },
+    "sort_order": {
+      "dismissed": [
+        "dismissedleadz130000000000000000",
+        "mateunderdismissedleadz220000000"
+      ],
+      "needs_input": [
+        "spawnedteamleadz1500000000000000",
+        "mateleadabsentz14000000000000000",
+        "handoffnotariderz160000000000000",
+        "matefreshunderoldleadz2100000000",
+        "edgez400000000000000000000000000",
+        "oldleadz700000000000000000000000"
+      ],
+      "working": [
+        "leadz400000000000000000000000000",
+        "matedonez80000000000000000000000",
+        "mateneedsz9000000000000000000000",
+        "mateofmatez100000000000000000000",
+        "mateoldunderfreshleadz2100000000"
+      ]
     }
   }
 }

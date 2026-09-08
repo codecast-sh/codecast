@@ -4076,17 +4076,22 @@ describe("inboxStore fork stub lifecycle", () => {
 describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
   // Three waiting-for-input sessions whose grouped order and time order
   // DISAGREE, so the test can tell which ordering the advance used.
-  // Grouped (needsInput: earliest-updated first): A, B, C → next after A = B.
-  // Time view (started_at desc):                  A, C, B → next after A = C.
+  // Grouped (needsInput: the queue, oldest state start first): A, B, C → next after A = B.
+  // Time view (started_at desc):                                A, C, B → next after A = C.
   const A = "a".repeat(32);
   const B = "b".repeat(32);
   const C = "c".repeat(32);
+  // A settled row, with the status stamped when the turn ended: the grouped
+  // queue orders by that stamp (shared inboxSortTime, ct-49550), the time view
+  // by started_at, and the two fixtures below disagree on purpose.
   const waiting = (id: string, updated_at: number, started_at: number): InboxSession => ({
     ...baseSession,
     _id: id,
     session_id: `sess-${id.slice(0, 1)}`,
     message_count: 5,
     is_idle: true,
+    agent_status: "idle",
+    agent_status_updated_at: updated_at,
     updated_at,
     started_at,
   });
@@ -4099,11 +4104,12 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
     // (30d recent window + 12h fold), so the fixture rows must be current to
     // be walked at all. Relative order mirrors the original fixture exactly.
     const now = Date.now();
+    const MIN = 60_000;
     seedCurrentSession({
       sessions: {
-        [A]: waiting(A, now - 300, now - 10),
-        [B]: waiting(B, now - 200, now - 30),
-        [C]: waiting(C, now - 100, now - 20),
+        [A]: waiting(A, now - 30 * MIN, now - 10 * MIN),
+        [B]: waiting(B, now - 20 * MIN, now - 30 * MIN),
+        [C]: waiting(C, now - 10 * MIN, now - 20 * MIN),
       },
       conversations: {
         [A]: { _id: A } as any,

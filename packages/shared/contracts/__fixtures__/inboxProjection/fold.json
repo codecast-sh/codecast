@@ -290,6 +290,56 @@
         "working",
         false
       ]
+    },
+    "sort_at": {
+      "ancientpinz100000000000000000000": -3024000000,
+      "bridgedismissedz1500000000000000": -68400000,
+      "bridgeownedz11000000000000000000": -61200000,
+      "bridgepinz9000000000000000000000": -57600000,
+      "bridgestashedz130000000000000000": -64800000,
+      "edgez400000000000000000000000000": -79200000,
+      "expireddismissrecentactivityz280": -82800000,
+      "expiredstashrecentactivityz26000": -172800000,
+      "foldedaskz9000000000000000000000": -259200000,
+      "foldedblankz11000000000000000000": -345600000,
+      "foldeddonez100000000000000000000": -172800000,
+      "foldedhiddenanchorz1800000000000": -432000000,
+      "foldedneedsz11000000000000000000": -82800000,
+      "foldedstandingz14000000000000000": -518400000,
+      "freshdonez9000000000000000000000": -36000000,
+      "freshneedsz100000000000000000000": -10800000,
+      "freshworkingz1200000000000000000": -300000,
+      "oldpinz6000000000000000000000000": -1728000000,
+      "oldqueuedz9000000000000000000000": -604800000
+    },
+    "sort_order": {
+      "dismissed": [
+        "bridgedismissedz1500000000000000",
+        "expireddismissrecentactivityz280"
+      ],
+      "done": [
+        "freshdonez9000000000000000000000",
+        "foldeddonez100000000000000000000"
+      ],
+      "needs_input": [
+        "freshneedsz100000000000000000000",
+        "bridgeownedz11000000000000000000",
+        "edgez400000000000000000000000000",
+        "foldedneedsz11000000000000000000"
+      ],
+      "pinned": [
+        "bridgepinz9000000000000000000000",
+        "oldpinz6000000000000000000000000",
+        "ancientpinz100000000000000000000"
+      ],
+      "stashed": [
+        "bridgestashedz130000000000000000",
+        "expiredstashrecentactivityz26000"
+      ],
+      "working": [
+        "freshworkingz1200000000000000000",
+        "oldqueuedz9000000000000000000000"
+      ]
     }
   }
 }

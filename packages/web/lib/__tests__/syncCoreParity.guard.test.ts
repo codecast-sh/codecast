@@ -32,6 +32,7 @@ const CORE_FEEDERS = [
   "useSyncChangeFeed",      // sync-log applier
   "useSyncSessionDecisions", // decision queue (questions input)
   "useSyncBuckets",         // labels
+  "useSyncSessionReads",    // the viewer's per-session read marks (unread)
 ] as const;
 
 function read(p: string): string {
@@ -123,6 +124,7 @@ const SESSION_REPLICA_CHANNELS = [
   "syncLog.getRange",
   "sessionDecisions.listForUser",
   "buckets.webList",
+  "sessionReads.listMine",
   "users.getCurrentUser",
   "users.getCurrentUserProbe",
 ] as const;

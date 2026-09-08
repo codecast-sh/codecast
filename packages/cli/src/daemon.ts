@@ -213,8 +213,8 @@ import {
   PASTE_END,
   PASTE_START,
   clientAcceptsBracketedPaste,
+  deliverTextIntoPane,
   pasteAndSubmitText,
-  pasteTextIntoPane as pasteTextIntoPaneWith,
   prepareInjectedContent,
 } from "./tmuxPaste.js";
 import { formatFeedResults } from "./formatter.js";
@@ -14640,8 +14640,10 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
-async function pasteTextIntoPane(target: string, text: string, bracketed = true): Promise<void> {
-  await pasteTextIntoPaneWith(tmuxExec, target, text, bracketed);
+// Composer entry for one client: a tmux buffer paste, or typed keys for a
+// client whose composer reads the machine's clipboard on a paste (ct-49607).
+async function deliverIntoPane(target: string, text: string, bracketed = true, agentType?: AgentClientId): Promise<void> {
+  await deliverTextIntoPane(tmuxExec, target, text, { bracketed, agentType });
 }
 
 // Post-submit verification: closed loop until the pasted message provably
@@ -15269,7 +15271,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
       if (declineText) {
-        await pasteTextIntoPane(target, declineText, bracketed);
+        await deliverIntoPane(target, declineText, bracketed, agentType);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
       }
@@ -15299,7 +15301,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     }
     if (poll.text) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      await pasteTextIntoPane(target, poll.text, bracketed);
+      await deliverIntoPane(target, poll.text, bracketed, agentType);
       await new Promise(resolve => setTimeout(resolve, 150));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     } else if (menuSteps.length > 0) {
@@ -15345,7 +15347,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // "text not found" reads as "submitted" (ct-49607).
   const contentPrefix = sanitized.split("\n", 1)[0].slice(0, 40);
 
-  const doPaste = () => pasteTextIntoPaneWith(exec, target, sanitized, bracketed);
+  const doPaste = () => deliverTextIntoPane(exec, target, sanitized, { bracketed, agentType });
   const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
 
   // Why: a retry must never paste a second copy. An earlier attempt can leave

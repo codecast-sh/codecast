@@ -36,6 +36,8 @@
       }
     },
     "set_digest": "0000000000000000",
-    "placements": {}
+    "placements": {},
+    "sort_at": {},
+    "sort_order": {}
   }
 }

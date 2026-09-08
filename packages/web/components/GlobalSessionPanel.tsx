@@ -25,7 +25,7 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -2163,6 +2163,20 @@ function convAuthorSig(conv: any): string | null {
 
 // -- SessionCard (shared) --
 
+// Unread, said once. Weight carries it (the title goes bright and medium) and
+// this dot marks the leading edge, the same two signals the chat rail uses —
+// never a count, which turns a busy afternoon into a number that never reaches
+// zero.
+function UnreadDot() {
+  return (
+    <span
+      className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-cyan"
+      title="Unread — this session moved since you last looked at it"
+      aria-label="Unread"
+    />
+  );
+}
+
 export const SessionCard = memo(function SessionCard({
   session,
   isActive,
@@ -2181,6 +2195,7 @@ export const SessionCard = memo(function SessionCard({
   forkColorKey,
   sessionLabel,
   isFavorite,
+  isUnread,
   subRow,
   isSelected = false,
 }: {
@@ -2214,6 +2229,9 @@ export const SessionCard = memo(function SessionCard({
   // store heartbeat notification (the selector runs per notification, not per render).
   sessionLabel: string | null;
   isFavorite: boolean;
+  /** Lit for this viewer: the session moved since they last acknowledged it,
+   *  or they marked it unread by hand (store/inboxStore.sessionUnreadMap). */
+  isUnread?: boolean;
 }) {
   session = withSafetyBlock(session);
   const tipActions = useTipActions();
@@ -2575,8 +2593,9 @@ export const SessionCard = memo(function SessionCard({
                 <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
               </span>
             )}
+            {isUnread && !isActive && <UnreadDot />}
             <span data-sv-title className={`truncate text-xs leading-tight flex-1 ${
-              isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
+              isActive ? "text-violet-300 font-medium" : isUnread ? "text-sol-text font-medium" : "text-gray-400 font-normal"
             }`}>
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
@@ -2741,7 +2760,8 @@ export const SessionCard = memo(function SessionCard({
               <EyeOff className="w-3 h-3" />
             </span>
           )}
-          <span data-sv-title className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
+          {isUnread && !isActive && <UnreadDot />}
+          <span data-sv-title className={`truncate min-w-0 ${isUnread && !isActive ? "font-semibold text-sol-text" : ""}`}>{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
@@ -3501,6 +3521,10 @@ function SessionListPanelImpl({
     // Local answered/dismissed marks — drop a question from the section in the
     // same commit the user acted in (lib/decisionQueue). Ref changes on stamp.
     s => s.questionResolutions,
+    // Which cards are lit. A signature, not the raw collections: sessions hands
+    // back a new ref every heartbeat, and unread must wake the list only when
+    // the SET changes (store/inboxStore.sessionUnreadWakeSig).
+    s => sessionUnreadWakeSig(s),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -3661,6 +3685,13 @@ function SessionListPanelImpl({
     }
     return map;
   }, [bucketByConv, s.buckets]);
+  // conversation_id → is it lit for this viewer. Derived ONCE here and handed
+  // to each card as a scalar prop, the same rule labelByConv follows.
+  const unreadByConv = useMemo(
+    () => sessionUnreadMap(s),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature IS the dep (see the tracked-store note above)
+    [sessionUnreadWakeSig(s)],
+  );
   // Favorited conversation ids, derived once from the authoritative favorites list so
   // a card checks its star with an O(1) Set lookup instead of a per-heartbeat scan.
   const favoriteIds = useMemo(
@@ -4472,6 +4503,7 @@ function SessionListPanelImpl({
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
                 {/* Stashing is the standing-loop workflow — a loop's home rests
@@ -4500,6 +4532,7 @@ function SessionListPanelImpl({
                     onKill={onKill}
                     variant={variant}
                     sessionLabel={labelByConv[sub._id] ?? null}
+                    isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
@@ -4685,6 +4718,7 @@ function SessionListPanelImpl({
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
                 {/* The bars stack under their card the way subagent rows do —
@@ -4721,6 +4755,7 @@ function SessionListPanelImpl({
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
                     sessionLabel={labelByConv[sub._id] ?? null}
+                    isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
@@ -5108,6 +5143,7 @@ function SessionListPanelImpl({
                   onPin={s.pinSession}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   subRow="trigger"
                   // A claimed stashed/killed home renders muted — resting is

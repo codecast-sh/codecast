@@ -66,6 +66,7 @@ import {
   projectInbox,
   digestProjection,
   placeProjectableRow,
+  inboxSortTimeOfRow,
   rowLastTurnAllowsPark,
   emptyInboxTally,
   isOrphanOrSubagent,
@@ -76,9 +77,12 @@ import {
   fnv1a32Update,
   FNV1A32_OFFSET,
   WORKING_SET_RECENCY_MS,
+  isSessionUnread,
+  type SessionActivityFacts,
   type InboxBucket,
   type InboxTally,
   type InboxTruncation,
+  type InboxSortTime,
   type ProjectableInboxRow,
   type WorkingSetRow,
   type WorkState,
@@ -524,6 +528,10 @@ export type InboxSession = {
   // ended, the per-turn identity for a session the harness keeps alive for
   // background work, whose status then stops moving between turns.
   agent_status_boundary?: boolean | null;
+  // When the lead turn behind the current status ended (ct-49533). The stamp
+  // outlives later status writes, so it names the delivery even for a session
+  // the harness keeps alive afterwards — which is what the done and working
+  // classes sort a bucket by (ct-49550).
   turn_completed_at?: number | null;
   hibernated_at?: number | null;
   last_heartbeat?: number | null;
@@ -1048,6 +1056,17 @@ export type BucketAssignmentItem = {
   updated_at: number;
 };
 
+// One row per (user, conversation): where this viewer's attention stopped.
+// Unread is never stored — it is isSessionUnread(mark, session.updated_at),
+// re-derived at render so an ack and a new turn cannot disagree.
+export type SessionReadItem = {
+  _id: string;
+  conversation_id: string;
+  acknowledged_at: number;
+  manual_unread?: boolean;
+  updated_at: number;
+};
+
 // The decision queue: one explicit question an agent handed its human via
 // `cast decide` (session_decisions table). Answering is local-first — the
 // resolution fields flip on the draft and ride the generic patch rail; the
@@ -1114,6 +1133,102 @@ export function convBucketMap(assignments: Record<string, BucketAssignmentItem>)
   const map: Record<string, string | undefined> = {};
   for (const a of Object.values(winner)) map[a.conversation_id] = a.bucket_id ?? undefined;
   return map;
+}
+
+// conversation_id → the viewer's read mark. Same two-rows-per-conversation
+// problem as convBucketMap (an optimistic `sessionread-` stub alongside the
+// real server row), resolved the same way: real beats stub, then newer wins.
+export function sessionReadMap(reads: Record<string, SessionReadItem>): Record<string, SessionReadItem> {
+  const winner: Record<string, SessionReadItem> = {};
+  for (const r of Object.values(reads)) {
+    const prev = winner[r.conversation_id];
+    if (prev) {
+      const realness = Number(isConvexId(r._id)) - Number(isConvexId(prev._id));
+      if (realness < 0 || (realness === 0 && (r.updated_at ?? 0) <= (prev.updated_at ?? 0))) continue;
+    }
+    winner[r.conversation_id] = r;
+  }
+  return winner;
+}
+
+// The same lookup inside a draft, for the optimistic write path.
+function findSessionReadInDraft(
+  draft: { sessionReads: Record<string, SessionReadItem> },
+  conversationId: string,
+): SessionReadItem | undefined {
+  let best: SessionReadItem | undefined;
+  for (const id in draft.sessionReads) {
+    const row = draft.sessionReads[id];
+    if (row?.conversation_id !== conversationId) continue;
+    if (!best) { best = row; continue; }
+    const realness = Number(isConvexId(row._id)) - Number(isConvexId(best._id));
+    if (realness > 0 || (realness === 0 && (row.updated_at ?? 0) > (best.updated_at ?? 0))) best = row;
+  }
+  return best;
+}
+
+/** Which sessions are lit for this viewer, derived from the marks, the rows'
+ *  own updated_at, and the local "last opened" record as the fallback for a
+ *  session with no server mark yet. Derived once per list render and handed to
+ *  each card as a scalar prop — a per-card selector over sessionReads would
+ *  re-scan the collection on every heartbeat notification. */
+export function sessionUnreadMap(state: {
+  sessions: Record<string, InboxSession>;
+  sessionReads: Record<string, SessionReadItem>;
+  _lastViewedAt: Record<string, number>;
+}): Record<string, boolean> {
+  const marks = sessionReadMap(state.sessionReads);
+  const out: Record<string, boolean> = {};
+  for (const id in state.sessions) {
+    const session = state.sessions[id];
+    if (!session) continue;
+    if (isSessionUnread({
+      ...sessionActivityFacts(session),
+      mark: marks[id],
+      localViewedAt: state._lastViewedAt[id],
+    })) out[id] = true;
+  }
+  return out;
+}
+
+/** The three row facts the read model reads, pulled off an inbox row. One
+ *  place, so the card's comparison and the ack's stamp are the same number —
+ *  acknowledging anything else leaves a card that cannot be cleared. */
+export function sessionActivityFacts(row: {
+  updated_at?: number;
+  turn_completed_at?: number | null;
+  agent_status_boundary?: boolean | null;
+} | undefined | null): SessionActivityFacts {
+  return {
+    updatedAt: row?.updated_at ?? 0,
+    turnCompletedAt: row?.turn_completed_at ?? null,
+    statusBoundary: row?.agent_status_boundary ?? null,
+  };
+}
+
+// Wake signature for unread, memoized by the three input refs. A list
+// subscribes to THIS, never to the raw collections: `sessions` hands back a
+// new ref on every ~1s liveness heartbeat, but updated_at moves only on real
+// activity, so the signature string stays identical and nothing re-renders
+// (store/wakeSig.ts — same rule sessionsWakeSig follows). It cannot ride
+// sessionsWakeSig itself: that signature deliberately omits updated_at.
+let _unreadSigSessions: unknown;
+let _unreadSigReads: unknown;
+let _unreadSigViewed: unknown;
+let _unreadSig = "";
+export function sessionUnreadWakeSig(state: {
+  sessions: Record<string, InboxSession>;
+  sessionReads: Record<string, SessionReadItem>;
+  _lastViewedAt: Record<string, number>;
+}): string {
+  if (state.sessions === _unreadSigSessions
+    && state.sessionReads === _unreadSigReads
+    && state._lastViewedAt === _unreadSigViewed) return _unreadSig;
+  _unreadSigSessions = state.sessions;
+  _unreadSigReads = state.sessionReads;
+  _unreadSigViewed = state._lastViewedAt;
+  _unreadSig = Object.keys(sessionUnreadMap(state)).sort().join(",");
+  return _unreadSig;
 }
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
@@ -2059,16 +2174,51 @@ function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } 
   ];
 }
 
-// A session paired with its precomputed sort rank.
-type RankedSession = { s: InboxSession; rank: ReturnType<typeof sessionSortRank> };
+// The WorkState a row sorts by: its placed verdict, or — for a row the
+// chokepoint never placed (a create stub, a child riding its parent) — the
+// legacy verdict read back as a work state. The exact inverse of
+// verdictOfWorkState, so the class the order uses is the class the section
+// files under.
+function sortWorkStateOf(s: InboxSession, placement?: { work_state: WorkState } | null): WorkState {
+  if (placement) return placement.work_state;
+  const c = rankVerdictOf(s, null);
+  return c.waiting ? c.rest : c.idle ? "idle" : "working";
+}
 
-// Comparator over precomputed ranks, with _id as the stable tiebreak. Defined
-// once and shared by sortSessions and placeInboxRows so the active-session
-// order lives in exactly one place.
+// Where a row sits INSIDE its group (shared inboxSortTimeOfRow, ct-49550): one
+// event stamp per class plus the creation grace, so a section is ordered by
+// when something happened to each row instead of by id. Cached on the row
+// object like the placement is — the sync layer keeps a row's ref stable
+// unless a field changed — and keyed by the class and the coarse clock the
+// grace reads.
+type SortKeyEntry = { work_state: WorkState; epoch: number; time: InboxSortTime };
+const _sortKeyCache = new WeakMap<object, SortKeyEntry>();
+function sessionSortTime(s: InboxSession, placement: { work_state: WorkState } | null, now: number): InboxSortTime {
+  const work_state = sortWorkStateOf(s, placement);
+  // The clock at minute grain: the only time term is the 5-minute creation
+  // grace, so a per-render `now` would cost a recompute for nothing.
+  const epoch = inboxEpoch(now);
+  const hit = _sortKeyCache.get(s);
+  if (hit && hit.work_state === work_state && hit.epoch === epoch) return hit.time;
+  const time = inboxSortTimeOfRow(s, work_state, epoch);
+  _sortKeyCache.set(s, { work_state, epoch, time });
+  return time;
+}
+const sessionSortKey = (s: InboxSession, placement: { work_state: WorkState } | null, now: number) =>
+  sessionSortTime(s, placement, now).key;
+
+// A session paired with its precomputed sort rank and its in-bucket sort key.
+type RankedSession = { s: InboxSession; rank: ReturnType<typeof sessionSortRank>; key: number };
+
+// Comparator over precomputed ranks: the categorical tuple first, then the
+// class's own time key (ascending — the shared inboxSortTime orients it), then
+// _id as the stable tiebreak. Defined once and shared by sortSessions and
+// placeInboxRows so the active-session order lives in exactly one place.
 function compareRankedSessions(a: RankedSession, b: RankedSession): number {
   for (let i = 0; i < a.rank.length; i++) {
     if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
   }
+  if (a.key !== b.key) return a.key - b.key;
   return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
 }
 
@@ -2079,9 +2229,10 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   // of times per sort — which dominated the constant re-categorize cost the
   // inbox pays on every liveness sync (see Chrome trace: sortSessions hot on
   // every status flip). Output order is byte-identical to the old comparator.
+  const now = Date.now();
   const keyed: RankedSession[] = Object.values(sessions)
     .filter((s) => !isSessionHidden(s))
-    .map((s) => ({ s, rank: sessionSortRank(s) }));
+    .map((s) => ({ s, rank: sessionSortRank(s), key: sessionSortKey(s, null, now) }));
   keyed.sort(compareRankedSessions);
   return keyed.map((x) => x.s);
 }
@@ -2371,6 +2522,11 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 // carried inside the rank tuple, changes a bucket): a heartbeat or a streamed
 // token must not move anything, so it must not change this signature.
 //
+// The in-bucket sort key (sessionSortKey) stays OUT for the same reason: it is
+// time-driven, its idle class reads updated_at, and every stamp that moves it
+// without changing the rank tuple (a second turn ending under an unchanged
+// status) rides the coarse ticker the placement call already takes (ct-49550).
+//
 // Subscribe a list/sidebar to sessionsWakeSig(s.sessions) instead of the raw
 // `s.sessions` map and it wakes only on real structural change, not on every
 // liveness tick. The TIME-driven reclassification placeInboxRows performs
@@ -2601,6 +2757,9 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     // compact) carries no verdict, so the replica must place it exactly as the
     // server does (ct-49533).
     agent_status_boundary: s.agent_status_boundary ?? null,
+    // The stamps the sort time inside a bucket reads (ct-49550).
+    turn_completed_at: s.turn_completed_at ?? null,
+    started_at: s.started_at ?? null,
     last_heartbeat: s.last_heartbeat ?? null,
     last_role_is_user: s.last_role_is_user ?? null,
     auq_open: s.auq_open ?? null,
@@ -2967,7 +3126,7 @@ export function placeInboxRows(
       : isSessionHidden(s);
     const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : hidden;
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
-    if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
+    if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p), key: sessionSortKey(s, p, now) });
     if (p ? p.bucket === "dismissed" : !subagent && isSessionDismissed(s)) dismissed.push(s);
     if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
     if (p?.bucket === "snoozed") snoozed.push(s);
@@ -3119,16 +3278,27 @@ export function placeInboxRows(
     return a._id < b._id ? -1 : a._id > b._id ? 1 : 0;
   });
   newSessions.sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  // Queues you clear top-down: oldest first; defer sinks below the group.
+  // The section sorts read the same per-class stamps the rank did (one cached
+  // computation per row): `at` for the queues that keep their own direction,
+  // `key` where the freshest belongs on top.
+  const sortTimeOf = (s: InboxSession) => sessionSortTime(s, placements.get(s._id) ?? null, now).at;
+  const sortKeyOf = (s: InboxSession) => sessionSortTime(s, placements.get(s._id) ?? null, now).key;
+  // Queues you clear top-down: oldest first; defer sinks below the group. The
+  // time is the CLASS's own event stamp (shared inboxSortTime, ct-49550) — when
+  // a needs-input row started needing you, when a done row's turn ended — not
+  // conversations.updated_at, which a late-syncing message or a heartbeat moves
+  // long after the row settled.
   const settledQueueOrder = (a: InboxSession, b: InboxSession) => {
     if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
-    return (a.updated_at || 0) - (b.updated_at || 0);
+    return sortTimeOf(a) - sortTimeOf(b);
   };
   questions.sort(settledQueueOrder);
   needsInput.sort(settledQueueOrder);
   done.sort(settledQueueOrder);
-  // Most recently parked first.
-  dormant.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  // The wake it parks on, soonest first: the row nearest to waking is the one
+  // the reader wants on top. A park whose wake nothing can name files after
+  // every named one, freshest park first (shared inboxSortTime).
+  dormant.sort((a, b) => sortKeyOf(a) - sortKeyOf(b));
 
   // Stable refs: reuse the previous slot's objects wherever the new content
   // is identical (the "nothing moved" half of the memoization contract).
@@ -4878,6 +5048,23 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   /** The Threads page's session read mark: "seen up to the current message
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
+
+  // -- Session unread (server-backed, per viewer) --
+  /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
+   *  is derived from these against each session's updated_at, never stored. */
+  sessionReads: Record<string, SessionReadItem>;
+  /** "I am looking at this session now." Called only while the conversation is
+   *  the active view AND the reader is present (useAckActiveConversation);
+   *  `at` is the session's own updated_at so the optimistic mark is exactly
+   *  what the server writes. Clears any manual unread flag. */
+  ackSessionRead: (conversationId: string, at?: number) => void;
+  /** "Leave this one lit." Survives every later change; the next presence ack
+   *  is what clears it. */
+  markSessionUnread: (conversationId: string) => void;
+  /** The dispatching halves of the two above. Called only by them — the guards
+   *  live in the plain wrappers so a no-op never reaches the outbox. */
+  writeSessionAck: (conversationId: string, stamp: number) => void;
+  writeSessionUnread: (conversationId: string) => void;
   createBucket: (opts: { name: string; color?: string }, continuation?: DurableCreateContinuation) => Promise<{ bucketId: string }>;
   /** Local-first team create: a stub team row and the active team switch land
    *  in the same tick; resolves the REAL team id once the server answers, and
@@ -7422,6 +7609,66 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const count = this.conversations[id]?.message_count ?? this.sessions[id]?.message_count;
     if (typeof count === "number") this._seenMessageCount[id] = count;
     this._seenUpToAt[id] = Date.now();
+  }),
+
+  // -- Session unread --
+  sessionReads: {},
+  // Plain, not an action: an action() always dispatches, and the ack fires on
+  // every presence change and every re-render of the open session. The guard
+  // here is what makes "the agent re-reported the same state" literally free —
+  // no draft, no outbox entry, no mutation.
+  ackSessionRead: (conversationId: string, at?: number) => {
+    if (!conversationId) return;
+    const now = Date.now();
+    // The session's own activity watermark is what the card compares against,
+    // so acknowledging exactly that value is what makes the dot go out. Never
+    // ahead of the clock: a future stamp would swallow turns not yet landed.
+    const stamp = Math.min(at && at > 0 ? at : now, now);
+    const existing = findSessionReadInDraft(get(), conversationId);
+    if (existing && existing.acknowledged_at >= stamp && !existing.manual_unread) return;
+    get().writeSessionAck(conversationId, stamp);
+  },
+  writeSessionAck: action(function (this: Draft, conversationId: string, stamp: number) {
+    const now = Date.now();
+    const existing = findSessionReadInDraft(this, conversationId);
+    if (existing) {
+      if (existing.acknowledged_at < stamp) existing.acknowledged_at = stamp;
+      // Mirror the server's projection exactly (it omits a false flag), so
+      // field protection reconciles by === instead of freezing forever.
+      delete existing.manual_unread;
+      existing.updated_at = now;
+    } else {
+      const stubId = `sessionread-${conversationId}`;
+      this.sessionReads[stubId] = {
+        _id: stubId,
+        conversation_id: conversationId,
+        acknowledged_at: stamp,
+        updated_at: now,
+      };
+    }
+  }),
+  markSessionUnread: (conversationId: string) => {
+    if (!conversationId) return;
+    // Already lit by hand: nothing to say again.
+    if (findSessionReadInDraft(get(), conversationId)?.manual_unread) return;
+    get().writeSessionUnread(conversationId);
+  },
+  writeSessionUnread: action(function (this: Draft, conversationId: string) {
+    const now = Date.now();
+    const existing = findSessionReadInDraft(this, conversationId);
+    if (existing) {
+      existing.manual_unread = true;
+      existing.updated_at = now;
+    } else {
+      const stubId = `sessionread-${conversationId}`;
+      this.sessionReads[stubId] = {
+        _id: stubId,
+        conversation_id: conversationId,
+        acknowledged_at: 0,
+        manual_unread: true,
+        updated_at: now,
+      };
+    }
   }),
 
   // =====================

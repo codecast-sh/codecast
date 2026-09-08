@@ -230,7 +230,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # fetch-depth 2 is what the injection-path filter below needs to diff a
+      # push; a pull_request fetches its base branch itself.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -411,3 +415,55 @@ jobs:
           check_job test-web "$TEST_WEB" "$TEST_WEB_SHOULD_RUN"
           check_job test-cli "$TEST_CLI" "$TEST_CLI_SHOULD_RUN"
           exit "$failed"
+      # The injection path is the most fragile code in the daemon, so a change
+      # to it runs the rest of the cold-boot matrix (ct-49536): the per-client
+      # stale-draft cases against real client TUIs, the two doubling cases that
+      # prime a live composer before handing it to the injector (ct-49753,
+      # ct-49841), plus the scripted pane suites that need no binary at all. The matrix's cold-boot, mid-turn and
+      # resume cells live in messaging.e2e.test.ts and already ran in the step
+      # above. Every real-client cell self-skips when the binary is absent, so
+      # this stays green on a runner with no agents and is meaningful on one
+      # that has them.
+      - name: Detect injection-path changes
+        id: injection
+        # The two-dot diff against the base tip is deliberately generous: a
+        # branch behind main reports main's files as changed too. Over-running
+        # the matrix costs a few minutes; missing an injection change costs a
+        # regression nobody caught.
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            changed=$(git diff --name-only FETCH_HEAD HEAD || true)
+          else
+            changed=$(git diff --name-only HEAD~1 HEAD || true)
+          fi
+          if echo "$changed" | grep -qE '^(packages/cli/src/(daemon\.ts|tmuxPaste\.ts)|packages/shared/contracts/agentClients\.ts)$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "changed injection paths: $(echo "$changed" | grep -cE '^(packages/cli/src/(daemon\.ts|tmuxPaste\.ts)|packages/shared/contracts/agentClients\.ts)$' || true)"
+
+      - name: Cold-boot injection matrix (real clients where installed)
+        if: steps.injection.outputs.run == 'true'
+        working-directory: packages/cli
+        # Same three-attempt shape as the E2E step above, and for the same
+        # reason: spawning agent TUIs back-to-back on a contended runner is
+        # resource flake, a real injection regression fails all three.
+        run: |
+          set -e
+          for attempt in 1 2 3; do
+            echo "::group::Injection matrix attempt $attempt"
+            if bun test src/daemon.inject-clear.test.ts src/daemon.inject-enter-gate.test.ts src/daemon.inject-submit-verify.test.ts src/daemon.inject-deaf-pane.test.ts src/daemon.inject-double-paste.test.ts --timeout=240000; then
+              echo "::endgroup::"
+              echo "Injection matrix passed on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::Injection matrix attempt $attempt failed; retrying"
+            tmux kill-server 2>/dev/null || true
+            sleep 2
+          done
+          echo "::error::Injection matrix failed all 3 attempts — likely a real regression"
+          exit 1

@@ -7,6 +7,7 @@ import {
   INBOX_WINDOW_CAPS,
   digestProjection,
   fnv1a32,
+  inboxSortTimeOfRow,
   projectInbox,
   type InboxBucket,
   type InboxTruncation,
@@ -48,6 +49,10 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v7: agent_status_boundary — a settle produced by a resume, a clear or a
   // manual compact carries no verdict of its own (ct-49533).
   7: "aa6af9ced0a0d0d2",
+  // v8: every expected block now names each member's in-bucket sort stamp and
+  // the freshest-first order it produces — the shared per-class sort time and
+  // the creation grace (ct-49550).
+  8: "f4780d48f6371246",
 };
 
 type Expected = {
@@ -55,6 +60,14 @@ type Expected = {
   tally: { shown: Record<InboxBucket, number>; folded: Record<InboxBucket, number> };
   set_digest: string;
   placements: Record<string, [bucket: string, work_state: string, below_fold: boolean]>;
+  // Each member's in-bucket sort stamp (shared inboxSortTimeOfRow, ct-49550),
+  // written relative to the fixture epoch so the file reads as ages. Direction
+  // free: a section the reader clears top-down orders by this ascending.
+  sort_at: Record<string, number>;
+  // The same rows in FRESHEST-FIRST key order per bucket — what the flat active
+  // list, j/k and the working section render, creation grace included. Buckets
+  // with one member are left out: they say nothing about order.
+  sort_order: Record<string, string[]>;
 };
 
 type Fixture = {
@@ -91,11 +104,26 @@ function loadCases(): Array<{ name: string; file: string; fixture: Fixture; rows
 function actualFor(c: ReturnType<typeof loadCases>[number]): Expected {
   const p = projectInbox(c.rows, c.epoch, { asking: (id) => c.asking.has(id) });
   const placements: Expected["placements"] = {};
+  const byId = new Map(c.rows.map((r) => [String(r._id), r]));
+  const sort_at: Expected["sort_at"] = {};
+  const inBucket = new Map<string, Array<{ id: string; key: number }>>();
   for (const id of [...p.placements.keys()].sort()) {
     const pl = p.placements.get(id)!;
     placements[id] = [pl.bucket, pl.work_state, pl.below_fold];
+    const t = inboxSortTimeOfRow(byId.get(id)!, pl.work_state, c.epoch);
+    sort_at[id] = t.at === 0 ? 0 : t.at - c.epoch;
+    const list = inBucket.get(pl.bucket) ?? [];
+    list.push({ id, key: t.key });
+    inBucket.set(pl.bucket, list);
   }
-  return { truncated: p.truncated, tally: p.tally, set_digest: p.set_digest, placements };
+  const sort_order: Expected["sort_order"] = {};
+  for (const bucket of [...inBucket.keys()].sort()) {
+    const list = inBucket.get(bucket)!;
+    if (list.length < 2) continue;
+    list.sort((a, b) => a.key - b.key || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    sort_order[bucket] = list.map((x) => x.id);
+  }
+  return { truncated: p.truncated, tally: p.tally, set_digest: p.set_digest, placements, sort_at, sort_order };
 }
 
 // One hash over every expected block, in file order: fnv1a32 over the

@@ -4,6 +4,7 @@ import { useSyncTeamInboxSessions } from "./useSyncTeamInboxSessions";
 import { useSyncChangeFeed } from "./useSyncChangeFeed";
 import { useSyncSessionDecisions } from "./useSyncSessionDecisions";
 import { useSyncBuckets } from "./useSyncBuckets";
+import { useSyncSessionReads } from "./useSyncSessionReads";
 import { useInboxDigestCompare } from "./useInboxDigestCompare";
 import { emitSyncWake } from "./syncWake";
 
@@ -23,6 +24,7 @@ export type SyncCoreProfile = "web" | "mobile";
 //   useSyncChangeFeed      the sync-log applier (per-scope catch-up cursors)
 //   useSyncSessionDecisions  the decision queue (the questions bucket input)
 //   useSyncBuckets         labels
+//   useSyncSessionReads    the viewer's per-session read marks (unread)
 //   useInboxDigestCompare  the anti-entropy loop (sync-convergence C6/C7):
 //                          replica digest vs the overlay's stamps, bounded
 //                          heal through getInboxSessionsByIds + one probe
@@ -43,6 +45,7 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useSyncChangeFeed();
   useSyncSessionDecisions();
   useSyncBuckets();
+  useSyncSessionReads();
   useInboxDigestCompare();
 
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
