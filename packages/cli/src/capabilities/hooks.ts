@@ -21,7 +21,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { applyOwnedJson, type ApplyResult, type OwnedKey } from "./ownedJson.js";
+import { applyOwnedJson, decodeKeyPath, readLedger, type ApplyResult, type OwnedKey } from "./ownedJson.js";
 
 /** One entry inside a `settings.json` hook matcher. Claude Code's shape. */
 export interface HookEntry {
@@ -126,6 +126,7 @@ export function installOwnedHook(
     keyPath: matcherKeyPath(event),
     value: mergeMatchers(readAt(current, matcherKeyPath(event)), command, options.timeout),
   }));
+  desired.push(...retainOwned(target, current, isHookKey));
 
   return applyOwnedJson(target, desired, {
     adopt: true,
@@ -165,7 +166,78 @@ export function removeOwnedHook(
     const without = stripCommand(readAt(current, matcherKeyPath(event)), command);
     if (without.length > 0) desired.push({ keyPath: matcherKeyPath(event), value: without });
   }
+  desired.push(...retainOwned(target, current, isHookKey));
   return applyOwnedJson(target, desired, { adopt: true, dryRun: options.dryRun, indent: 2 });
+}
+
+/**
+ * Everything else codecast already owns in this file, re-stated unchanged.
+ *
+ * `applyOwnedJson` reads its `desired` list as the WHOLE claim: a ledger key
+ * missing from it is a key we no longer want, and it is deleted. Two writers
+ * share this file and this ledger — the hooks pair below `hooks.*`, the status
+ * line at `statusLine` — so each has to hand back the other's keys or the last
+ * one to run silently removes them.
+ *
+ * What is handed back is the LEDGER's value, never the file's, and only while
+ * the key is still there. Re-stating the file's value would launder a user's
+ * edit into our ledger, and a later removal would then delete their work;
+ * re-stating a key they deleted would resurrect it. Given the ledger value,
+ * `planJsonMerge` answers both cases the way it answers every other key.
+ */
+function retainOwned(target: string, current: unknown, mine: (keyPath: string[]) => boolean): OwnedKey[] {
+  const kept: OwnedKey[] = [];
+  for (const [encoded, ours] of Object.entries(readLedger(target))) {
+    const keyPath = decodeKeyPath(encoded);
+    if (mine(keyPath)) continue;
+    if (readAt(current, keyPath) !== undefined) kept.push({ keyPath, value: ours });
+  }
+  return kept;
+}
+
+const isHookKey = (keyPath: string[]): boolean => keyPath[0] === "hooks";
+const isStatusLineKey = (keyPath: string[]): boolean => keyPath[0] === "statusLine";
+
+/** The value codecast writes at `statusLine`. Claude Code's own shape. */
+function statusLineEntry(command: string): Record<string, unknown> {
+  return { type: "command", command, padding: 0 };
+}
+
+/**
+ * Point Claude Code's `statusLine` at our script — but only if nobody else has.
+ *
+ * Unlike a hooks array, `statusLine` holds ONE command: a user who configured
+ * their own has a status line they look at, and replacing it would be taking
+ * their screen. `planJsonMerge` already answers this — a key that exists and is
+ * not in our ledger is reported as a conflict and left alone — so the caller
+ * only has to read `conflicts` to know it did not install.
+ */
+export function installOwnedStatusLine(
+  command: string,
+  options: { settingsPath?: string; mode?: number; dryRun?: boolean } = {},
+): ApplyResult {
+  const target = options.settingsPath ?? defaultSettingsPath();
+  const current = readSettings(target);
+  const desired: OwnedKey[] = [
+    { keyPath: ["statusLine"], value: statusLineEntry(command) },
+    ...retainOwned(target, current, isStatusLineKey),
+  ];
+  // No `adopt`: the value is wholly ours, so the default rule (a key we do not
+  // own is a conflict, not a thing to take over) is the right one.
+  return applyOwnedJson(target, desired, { dryRun: options.dryRun, indent: 2, mode: options.mode ?? 0o600 });
+}
+
+/** Take our `statusLine` back out, leaving any hook entries we own in place. */
+export function removeOwnedStatusLine(
+  options: { settingsPath?: string; dryRun?: boolean } = {},
+): ApplyResult {
+  const target = options.settingsPath ?? defaultSettingsPath();
+  const current = readSettings(target);
+  return applyOwnedJson(target, retainOwned(target, current, isStatusLineKey), {
+    adopt: true,
+    dryRun: options.dryRun,
+    indent: 2,
+  });
 }
 
 /** Every matcher under an event with `command` taken out, empties dropped. */

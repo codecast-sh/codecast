@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { installOwnedHook, removeOwnedHook } from "./hooks.js";
+import {
+  installOwnedHook,
+  installOwnedStatusLine,
+  removeOwnedHook,
+  removeOwnedStatusLine,
+} from "./hooks.js";
 
 const dirs: string[] = [];
 function settings(seed?: unknown): string {
@@ -136,5 +141,101 @@ describe("removeOwnedHook", () => {
     const result = removeOwnedHook(CMD, { settingsPath: file });
     expect(result.wrote).toBe(false);
     expect(read(file)).toEqual({ model: "opus" });
+  });
+});
+
+const STATUSLINE = "/home/u/.claude/hooks/codecast-statusline.sh";
+
+describe("installOwnedStatusLine", () => {
+  test("writes Claude Code's statusLine shape into a file that has none", () => {
+    const file = settings({ model: "opus" });
+    const result = installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    expect(result.wrote).toBe(true);
+    expect(read(file).statusLine).toEqual({ type: "command", command: STATUSLINE, padding: 0 });
+    expect(read(file).model).toBe("opus");
+  });
+
+  // statusLine holds ONE command, so installing over a user's would take a bar
+  // they look at every turn. The install declines and says so.
+  test("never replaces a status line somebody else configured", () => {
+    const theirs = { type: "command", command: "~/bin/my-bar.sh" };
+    const file = settings({ statusLine: theirs });
+    const result = installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    expect(result.wrote).toBe(false);
+    expect(result.conflicts).toHaveLength(1);
+    expect(read(file).statusLine).toEqual(theirs);
+  });
+
+  test("re-running it changes nothing", () => {
+    const file = settings();
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    expect(installOwnedStatusLine(STATUSLINE, { settingsPath: file }).wrote).toBe(false);
+  });
+
+  test("removal takes only ours and leaves a user's edit standing", () => {
+    const original = { model: "opus" };
+    const file = settings(original);
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    removeOwnedStatusLine({ settingsPath: file });
+    expect(read(file)).toEqual(original);
+
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    const doc = read(file);
+    doc.statusLine.command = "~/bin/theirs.sh";
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+    expect(removeOwnedStatusLine({ settingsPath: file }).conflicts).toHaveLength(1);
+    expect(read(file).statusLine.command).toBe("~/bin/theirs.sh");
+  });
+
+  // One settings file, one ownership ledger, two writers. `applyOwnedJson`
+  // deletes any ledger key a call does not re-state, so each writer has to hand
+  // the other's keys back or installing one silently removes the other.
+  test("hooks and the status line survive each other's installs and removals", () => {
+    const file = settings();
+    installOwnedHook(["Stop"], CMD, { timeout: 5, settingsPath: file });
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    installOwnedHook(["Stop"], CMD, { timeout: 5, settingsPath: file });
+    expect(read(file).statusLine?.command).toBe(STATUSLINE);
+    expect(read(file).hooks.Stop[0].hooks[0].command).toBe(CMD);
+
+    removeOwnedStatusLine({ settingsPath: file });
+    expect(read(file).statusLine).toBeUndefined();
+    expect(read(file).hooks.Stop[0].hooks[0].command).toBe(CMD);
+
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    removeOwnedHook(CMD, { settingsPath: file });
+    expect(read(file).hooks).toBeUndefined();
+    expect(read(file).statusLine?.command).toBe(STATUSLINE);
+  });
+
+  // Handing the other writer's keys back must not launder an edit: a status
+  // line the user has since changed is theirs, and the hook writer passing
+  // through must not re-claim it — or the next removal would delete their work.
+  test("a hook install does not re-claim a status line the user has edited", () => {
+    const file = settings();
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    installOwnedHook(["Stop"], CMD, { timeout: 5, settingsPath: file });
+    const doc = read(file);
+    doc.statusLine.command = "~/bin/theirs.sh";
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+
+    installOwnedHook(["Stop"], CMD, { timeout: 5, settingsPath: file });
+    expect(read(file).statusLine.command).toBe("~/bin/theirs.sh");
+    // The claim is gone with it, so removing our hooks cannot take it.
+    removeOwnedHook(CMD, { settingsPath: file });
+    removeOwnedStatusLine({ settingsPath: file });
+    expect(read(file).statusLine.command).toBe("~/bin/theirs.sh");
+  });
+
+  test("a hook install does not resurrect a status line the user deleted", () => {
+    const file = settings();
+    installOwnedStatusLine(STATUSLINE, { settingsPath: file });
+    installOwnedHook(["Stop"], CMD, { timeout: 5, settingsPath: file });
+    const doc = read(file);
+    delete doc.statusLine;
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+
+    installOwnedHook(["Stop"], CMD, { timeout: 5, settingsPath: file });
+    expect(read(file).statusLine).toBeUndefined();
   });
 });
