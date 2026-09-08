@@ -554,10 +554,18 @@ export function activeAccountIdentity(): { email?: string; uuid?: string; verifi
  *  about to snapshot is already stored under a DIFFERENT profile, the label is
  *  provably wrong — refuse rather than stamp a second name on one token. This
  *  is the offline half of the identity rule: it needs no network and it stops
- *  the spread at the first duplicate instead of the fifth. */
+ *  the spread at the first duplicate instead of the fifth.
+ *
+ *  The refresh token counts as the same proof, and it catches a case the access
+ *  token cannot. Refresh tokens are single use: once two profiles hold one, the
+ *  first rotation strands the other copy, and a live claude that rotated the
+ *  active credential has already made its access token differ from every stored
+ *  one while the refresh half still names the duplicate (ct-49526). */
 function assertNotAnotherProfilesCredential(name: string, credentialJson: string): void {
-  const token = oauthOf(credentialJson)?.accessToken;
-  if (typeof token !== "string" || !token) return;
+  const oauth = oauthOf(credentialJson);
+  const token = typeof oauth?.accessToken === "string" && oauth.accessToken ? oauth.accessToken : null;
+  const refresh = typeof oauth?.refreshToken === "string" && oauth.refreshToken ? oauth.refreshToken : null;
+  if (!token && !refresh) return;
   for (const other of Object.keys(readProfileIndex().profiles)) {
     if (other === name) continue;
     let stored: string | null;
@@ -567,19 +575,164 @@ function assertNotAnotherProfilesCredential(name: string, credentialJson: string
       continue;
     }
     if (!stored) continue;
-    let otherToken: unknown;
+    let otherOauth: any;
     try {
-      otherToken = JSON.parse(stored)?.credentials?.claudeAiOauth?.accessToken;
+      otherOauth = JSON.parse(stored)?.credentials?.claudeAiOauth;
     } catch {
       continue;
     }
-    if (otherToken !== token) continue;
+    const shared = token && otherOauth?.accessToken === token
+      ? "access token"
+      : refresh && otherOauth?.refreshToken === refresh
+        ? "refresh token"
+        : null;
+    if (!shared) continue;
     throw new CcAccountError(
-      `Refusing to save "${name}": this machine's credential is the one already stored as "${other}", ` +
-        `so the login is "${other}", not "${name}". Log into ${name}'s account (claude /login) and save again — ` +
-        `run \`cast accounts verify\` to see what each profile really holds.`,
+      `Refusing to save "${name}": this machine's credential shares its ${shared} with the login already stored ` +
+        `as "${other}", so the login is "${other}", not "${name}". Log into ${name}'s account (claude /login) and ` +
+        `save again — run \`cast accounts verify\` to see what each profile really holds.`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Identity matched read back
+// ---------------------------------------------------------------------------
+// When a live claude holds the active credential the daemon does not refresh it
+// (ccLiveGate.ts) — the CLI does, and we read the result back. Writing a
+// credential we did not mint into a profile is the write that poisoned the
+// store on 2026-09-02, when one login ended up saved under three names. So the
+// read back names its profile from the credential itself and refuses anything
+// less than a single unambiguous answer.
+
+/** What a credential proves about whose it is. Any of these alone can name a
+ *  profile; any of them disagreeing rules one out. */
+export interface CredentialIdentity {
+  uuid?: string;
+  email?: string;
+  organization?: string;
+  refreshToken?: string;
+}
+
+export type CredentialProfileMatch =
+  | { kind: "matched"; name: string }
+  | { kind: "ambiguous"; names: string[] }
+  | { kind: "none" };
+
+/** Identity fields are compared case-insensitively: an email that differs only
+ *  in case is the same account. */
+function normalizeField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+}
+
+/** A token is compared verbatim — case carries meaning in a secret, and folding
+ *  it could call two different grants the same one. */
+function tokenField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** The identity an oauthAccount block carries, however it spells it. */
+function identityOfOauthAccount(acct: Record<string, any> | null | undefined): CredentialIdentity {
+  return {
+    uuid: normalizeField(acct?.accountUuid ?? acct?.account_uuid ?? acct?.uuid),
+    email: normalizeField(acct?.emailAddress ?? acct?.email ?? acct?.email_address),
+    // The uuid when the blob carries one, else the name: both are stable per
+    // organization, and only ever compared against another profile's copy.
+    organization: normalizeField(acct?.organizationUuid ?? acct?.organization_uuid ?? acct?.organizationName),
+  };
+}
+
+/** "token" when they hold the same refresh token, "match" when a field they
+ *  share agrees, "mismatch" when one disagrees, "unverifiable" when they have
+ *  no field in common.
+ *
+ *  A disagreement wins over an agreement: two accounts in one organization
+ *  share that field and differ on email, and the email is what tells them
+ *  apart. */
+function compareIdentities(
+  a: CredentialIdentity,
+  b: CredentialIdentity,
+): "token" | "match" | "mismatch" | "unverifiable" {
+  let agreed = false;
+  for (const field of ["uuid", "email", "organization"] as const) {
+    const left = a[field];
+    const right = b[field];
+    if (!left || !right) continue;
+    if (left !== right) return "mismatch";
+    agreed = true;
+  }
+  if (a.refreshToken && b.refreshToken && a.refreshToken === b.refreshToken) return "token";
+  return agreed ? "match" : "unverifiable";
+}
+
+/**
+ * Which saved profile a credential belongs to, or why we cannot say.
+ *
+ * `matched` needs exactly one profile the credential agrees with AND no profile
+ * we could not judge at all: an unreadable secret on a profile with no recorded
+ * identity might BE this account, and writing elsewhere on that guess is how a
+ * token lands under the wrong name. Ambiguity is a refusal, never a coin flip.
+ *
+ * Every read is async: the daemon calls this on its maintenance tick, where a
+ * synchronous keychain call has answered in seconds under load.
+ */
+export async function matchProfileForCredential(
+  raw: CredentialIdentity,
+): Promise<CredentialProfileMatch> {
+  // Normalized here as well as at the call sites: an email that differs only in
+  // case is the same account, and a caller that forgot would silently answer
+  // "none" and leave the profile carrying a spent token.
+  const identity: CredentialIdentity = {
+    uuid: normalizeField(raw.uuid),
+    email: normalizeField(raw.email),
+    organization: normalizeField(raw.organization),
+    refreshToken: tokenField(raw.refreshToken),
+  };
+  const matched: string[] = [];
+  const byToken: string[] = [];
+  let unverifiable = 0;
+  for (const [name, meta] of Object.entries(readProfileIndex().profiles)) {
+    const stored = await readProfileSecretAsync(name).catch(() => null);
+    let storedIdentity: CredentialIdentity = {};
+    if (stored) {
+      try {
+        const profile = parseProfile(stored);
+        storedIdentity = {
+          ...identityOfOauthAccount(profile.oauthAccount),
+          refreshToken: tokenField(profile.credentials?.claudeAiOauth?.refreshToken),
+        };
+      } catch {
+        /* unreadable blob — the index's own labels are all we have */
+      }
+    }
+    // The index records what we were told at save time and survives a keychain
+    // that will not answer, so it fills whatever the stored blob left blank.
+    const candidate: CredentialIdentity = {
+      uuid: storedIdentity.uuid ?? normalizeField(meta.uuid),
+      email: storedIdentity.email ?? normalizeField(meta.email),
+      organization: storedIdentity.organization,
+      refreshToken: storedIdentity.refreshToken,
+    };
+    const verdict = compareIdentities(identity, candidate);
+    if (verdict === "token") {
+      byToken.push(name);
+      matched.push(name);
+    } else if (verdict === "match") {
+      matched.push(name);
+    } else if (verdict === "unverifiable") {
+      unverifiable++;
+    }
+  }
+  // Refresh token equality is proof rather than evidence: one refresh token
+  // belongs to exactly one grant, so a profile we could not judge does not
+  // weaken it. Two profiles holding it is the fault this cannot resolve — the
+  // credential is duplicated, and assertNotAnotherProfilesCredential refuses
+  // the write that would spread it further.
+  if (byToken.length === 1) return { kind: "matched", name: byToken[0] };
+  if (byToken.length > 1) return { kind: "ambiguous", names: byToken };
+  if (matched.length === 1 && unverifiable === 0) return { kind: "matched", name: matched[0] };
+  if (matched.length === 0 && unverifiable === 0) return { kind: "none" };
+  return { kind: "ambiguous", names: matched };
 }
 
 /** The identity block to store beside the credential. When the credential has
@@ -1138,38 +1291,88 @@ export async function refreshProfileCredential(
 
 /**
  * Re-snapshot the active login into the saved profile that covers it whenever
- * the live credential is FRESHER than the stored one — i.e. a manual /login or
- * a proactive refresh rotated the tokens. Freshness is compared by the token's
- * own expiry, so this is a cheap no-op when they're already in step. Returns the
- * updated profile name, or null when there's nothing to do (no login, not saved
- * yet — first-time saves are `autoSaveActiveProfile`'s job — or already fresh).
+ * the live credential is FRESHER than the stored one. Three things make it
+ * fresher: a manual /login, the daemon's own proactive refresh, and — the case
+ * the live process gate creates — a running claude that rotated the credential
+ * while the daemon stood back. That last one is the read back, so this is also
+ * the path a credential we did not mint takes into a profile.
+ *
+ * Which profile is answered by `matchProfileForCredential`, from the credential
+ * itself: exactly one profile it agrees with by account uuid, email,
+ * organization or refresh token equality. An ambiguous answer is refused and
+ * logged rather than resolved by picking the first, because picking the first
+ * is how one login ended up saved under three names.
+ *
+ * Fresher means a later expiry, or a rotated refresh token that is not older.
+ * A rotation alone is enough: a live claude's refresh replaces the pair, and
+ * the stored copy's refresh token is spent from that moment — a profile still
+ * holding it is a login that will fail the next time we touch it.
+ *
+ * Returns the updated profile name, or null when there is nothing to do (no
+ * login, not saved yet — first-time saves are `autoSaveActiveProfile`'s job —
+ * already in step, or an identity we refused to guess at).
  */
-export async function resnapshotIfActiveFresher(): Promise<string | null> {
-  const active = activeAccountSummary();
-  if (!active?.uuid && !active?.email) return null;
-  const activeExpiry = (await activeCredentialExpiresAt()) ?? 0;
-  const index = readProfileIndex();
-  const match = Object.entries(index.profiles).find(
-    ([, meta]) =>
-      (active.uuid && meta.uuid === active.uuid) || (active.email && meta.email === active.email),
-  );
-  if (!match) return null;
-  const [name] = match;
-  const raw = await readProfileSecretAsync(name);
+export async function resnapshotIfActiveFresher(
+  opts: { warn?: (msg: string) => void } = {},
+): Promise<string | null> {
+  const raw = await readActiveCredentialAsync();
+  const activeOauth = oauthOf(raw);
+  if (!activeOauth) return null;
+  const label = identityOfOauthAccount(readOauthAccount());
+  const active = activeAccountIdentity();
+  // ~/.claude.json is a label written by another program at another moment. When
+  // the credential itself has proved a DIFFERENT account, the label describes
+  // the one we switched away from — and its organization is stale too. Carrying
+  // that organization would rule out the very profile the uuid names, which is
+  // the 2026-09-02 poisoning shape read from the other end.
+  const labelDescribesUs = !active?.verified || !active.uuid || label.uuid === normalizeField(active.uuid);
+  const identity: CredentialIdentity = {
+    uuid: normalizeField(active?.uuid) ?? label.uuid,
+    email: normalizeField(active?.email) ?? label.email,
+    ...(labelDescribesUs ? { organization: label.organization } : {}),
+    refreshToken: tokenField(activeOauth.refreshToken),
+  };
+  if (!identity.uuid && !identity.email && !identity.organization && !identity.refreshToken) return null;
+
+  const match = await matchProfileForCredential(identity);
+  if (match.kind === "ambiguous") {
+    opts.warn?.(
+      `refusing to write the active login into a profile: ${
+        match.names.length
+          ? `it matches ${match.names.length} profiles (${match.names.join(", ")})`
+          : "a saved profile carries no identity we can rule out"
+      } — run \`cast accounts verify\` to see what each profile really holds`,
+    );
+    return null;
+  }
+  if (match.kind !== "matched") return null;
+  const name = match.name;
+
+  const activeExpiry = typeof activeOauth.expiresAt === "number" ? activeOauth.expiresAt : 0;
+  const stored = await readProfileSecretAsync(name);
   let storedExpiry = 0;
-  if (raw) {
+  let storedRefresh: string | undefined;
+  if (stored) {
     try {
-      const e = parseProfile(raw).credentials?.claudeAiOauth?.expiresAt;
-      if (typeof e === "number") storedExpiry = e;
+      const oauth = parseProfile(stored).credentials?.claudeAiOauth;
+      if (typeof oauth?.expiresAt === "number") storedExpiry = oauth.expiresAt;
+      storedRefresh = tokenField(oauth?.refreshToken);
     } catch {
       /* stored blob unreadable — treat as stale, re-save below */
     }
   }
-  if (activeExpiry <= storedExpiry) return null;
+  const refreshTokenRotated =
+    !!identity.refreshToken && !!storedRefresh && identity.refreshToken !== storedRefresh;
+  const fresher = activeExpiry > storedExpiry;
+  const rotatedAndNotOlder = refreshTokenRotated && activeExpiry >= storedExpiry;
+  if (!fresher && !rotatedAndNotOlder) return null;
   try {
     saveProfile(name);
     return name;
-  } catch {
+  } catch (err) {
+    // assertNotAnotherProfilesCredential refuses a credential a second profile
+    // already holds. That refusal is the point — say so rather than swallow it.
+    opts.warn?.(`re-snapshot of profile "${name}" refused: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }

@@ -40,7 +40,10 @@ import {
   sameAccountFingerprint,
   attributeFingerprint,
   activeAccountSummary,
+  matchProfileForCredential,
+  tokenKey,
 } from "./ccAccounts.js";
+import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 
 const CRED = JSON.stringify({
   claudeAiOauth: {
@@ -405,7 +408,9 @@ describe("deleteProfile (sandboxed $HOME)", () => {
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: other }));
     fs.writeFileSync(
       path.join(home, ".claude", ".credentials.json"),
-      JSON.stringify({ claudeAiOauth: { ...JSON.parse(CRED).claudeAiOauth, accessToken: "at-union" } }),
+      JSON.stringify({
+        claudeAiOauth: { ...JSON.parse(CRED).claudeAiOauth, accessToken: "at-union", refreshToken: "rt-union" },
+      }),
     );
     saveProfile("union");
 
@@ -648,6 +653,225 @@ describe("resnapshotIfActiveFresher (sandboxed $HOME)", () => {
     // spawn resolves `security` regardless of PATH, so on a Mac the sync
     // read answers from the real keychain here.)
     expect(await readLocalCredentialAsync()).toContain('"expiresAt":1234');
+  });
+});
+
+// The read back: when a live claude holds the active credential the daemon
+// defers its own refresh (ccLiveGate.ts) and folds whatever the CLI rotated
+// into the profile that credential belongs to. Naming that profile from the
+// credential rather than from a label is what keeps one login from being saved
+// under several names (ct-49526).
+describe("identity matched read back", () => {
+  let home: string;
+  let isolated: IsolatedCodecastDir;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  const ALPHA = {
+    accountUuid: "aaaaaaaa-0000-0000-0000-000000000001",
+    emailAddress: "alpha@example.com",
+    organizationUuid: "org-alpha",
+  };
+  const BETA = {
+    accountUuid: "bbbbbbbb-0000-0000-0000-000000000002",
+    emailAddress: "beta@example.com",
+    organizationUuid: "org-beta",
+  };
+
+  const credOf = (accessToken: string, refreshToken: string, expiresAt: number) =>
+    JSON.stringify({ claudeAiOauth: { accessToken, refreshToken, expiresAt, subscriptionType: "max" } });
+
+  const secretPath = (name: string) => path.join(home, ".codecast", "cc-accounts", `${name}.json`);
+  const storedOauth = (name: string) =>
+    JSON.parse(fs.readFileSync(secretPath(name), "utf-8")).credentials.claudeAiOauth;
+
+  /** A saved profile, written the way saveProfile writes one. Built rather than
+   *  hand-rolled so the fixture cannot drift from the real storage shape. */
+  const writeProfile = (name: string, oauthAccount: Record<string, any>, cred: string) => {
+    const profile = buildProfile(cred, oauthAccount, 1);
+    fs.mkdirSync(path.dirname(secretPath(name)), { recursive: true });
+    fs.writeFileSync(secretPath(name), JSON.stringify(profile));
+    const file = path.join(home, ".codecast", "cc-accounts.json");
+    const index = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : { profiles: {} };
+    index.profiles[name] = profileMeta(profile);
+    fs.writeFileSync(file, JSON.stringify(index));
+    invalidateAccountsCache();
+  };
+
+  /** The machine's active login: the credential store plus ~/.claude.json's label. */
+  const setActive = (oauthAccount: Record<string, any>, cred: string) => {
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), cred);
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount }));
+    invalidateAccountsCache();
+  };
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-readback-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    // The profile store keys off HOME; this keeps anything reading CODECAST_DIR
+    // out of the human's real state too.
+    isolated = isolateCodecastDir("cc-readback-home-");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    isolated.restore();
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("matches exactly one profile by account uuid", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("beta", BETA, credOf("at-beta", "rt-beta", 1000));
+    expect(await matchProfileForCredential({ uuid: ALPHA.accountUuid })).toEqual({
+      kind: "matched",
+      name: "alpha",
+    });
+  });
+
+  it("matches by email, organization, or refresh token equality", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("beta", BETA, credOf("at-beta", "rt-beta", 1000));
+    expect(await matchProfileForCredential({ email: "BETA@example.com" })).toEqual({
+      kind: "matched",
+      name: "beta",
+    });
+    expect(await matchProfileForCredential({ organization: "org-alpha" })).toEqual({
+      kind: "matched",
+      name: "alpha",
+    });
+    // The strongest evidence there is: one refresh token belongs to one grant,
+    // and it names the profile even with no label at all.
+    expect(await matchProfileForCredential({ refreshToken: "rt-beta" })).toEqual({
+      kind: "matched",
+      name: "beta",
+    });
+  });
+
+  it("refuses an ambiguous match rather than picking the first", async () => {
+    // The 2026-09-02 poisoning shape: one account labelled under two names.
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("alpha-dup", ALPHA, credOf("at-dup", "rt-dup", 1000));
+    const match = await matchProfileForCredential({ uuid: ALPHA.accountUuid });
+    expect(match.kind).toBe("ambiguous");
+    expect((match as { names: string[] }).names.sort()).toEqual(["alpha", "alpha-dup"]);
+  });
+
+  // A profile we cannot judge at all might BE this account, so a single match
+  // beside it is still a guess.
+  it("refuses when a profile carries no identity to rule out", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("blank", {}, credOf("at-blank", "", 1000));
+    expect(await matchProfileForCredential({ uuid: ALPHA.accountUuid })).toEqual({
+      kind: "ambiguous",
+      names: ["alpha"],
+    });
+  });
+
+  it("answers none when no profile covers the credential", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("beta", BETA, credOf("at-beta", "rt-beta", 1000));
+    expect(await matchProfileForCredential({ uuid: "cccccccc-0000-0000-0000-000000000003" })).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("a disagreeing field rules a profile out even when another agrees", async () => {
+    // Two accounts in one organization: the organization agrees, the email is
+    // what tells them apart.
+    writeProfile("alpha", { ...ALPHA, organizationUuid: "org-shared" }, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("beta", { ...BETA, organizationUuid: "org-shared" }, credOf("at-beta", "rt-beta", 1000));
+    expect(
+      await matchProfileForCredential({ email: BETA.emailAddress, organization: "org-shared" }),
+    ).toEqual({ kind: "matched", name: "beta" });
+  });
+
+  it("reads a rotated refresh token back into its profile at an unchanged expiry", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 5000));
+    writeProfile("beta", BETA, credOf("at-beta", "rt-beta", 5000));
+    // What a live claude leaves behind: a new pair at the same recorded expiry.
+    // The stored refresh token is spent from this moment, so the profile has to
+    // take the new one even though nothing looks fresher.
+    setActive(ALPHA, credOf("at-rotated", "rt-alpha-2", 5000));
+    const warnings: string[] = [];
+    expect(await resnapshotIfActiveFresher({ warn: (m) => warnings.push(m) })).toBe("alpha");
+    expect(storedOauth("alpha").refreshToken).toBe("rt-alpha-2");
+    expect(storedOauth("alpha").accessToken).toBe("at-rotated");
+    expect(storedOauth("beta").refreshToken).toBe("rt-beta"); // untouched
+    expect(warnings).toEqual([]);
+  });
+
+  it("leaves the profile alone when the live credential is older", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 5000));
+    setActive(ALPHA, credOf("at-old", "rt-alpha-0", 4000));
+    expect(await resnapshotIfActiveFresher()).toBeNull();
+    expect(storedOauth("alpha").refreshToken).toBe("rt-alpha");
+  });
+
+  it("refuses the read back when the match is ambiguous, and says so", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 1000));
+    writeProfile("alpha-dup", ALPHA, credOf("at-dup", "rt-dup", 1000));
+    setActive(ALPHA, credOf("at-rotated", "rt-alpha-2", 9000));
+    const warnings: string[] = [];
+    expect(await resnapshotIfActiveFresher({ warn: (m) => warnings.push(m) })).toBeNull();
+    expect(warnings.join(" ")).toContain("matches 2 profiles");
+    expect(storedOauth("alpha").refreshToken).toBe("rt-alpha");
+    expect(storedOauth("alpha-dup").refreshToken).toBe("rt-dup");
+  });
+
+  // Fault injection. Two profiles hold copies of ONE refresh token — the state a
+  // botched save or an old restore leaves behind. Rotating it strands whichever
+  // copy is not written back, so the read back must refuse and leave both alone.
+  // The access tokens differ, so only the refresh half can catch this.
+  it("refuses to write into a profile whose refresh token a second profile also holds", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-shared", 1000));
+    writeProfile("beta", BETA, credOf("at-beta", "rt-shared", 1000));
+    setActive(ALPHA, credOf("at-rotated", "rt-shared", 9000));
+    const warnings: string[] = [];
+    expect(await resnapshotIfActiveFresher({ warn: (m) => warnings.push(m) })).toBeNull();
+    expect(warnings.join(" ")).toContain("refresh token");
+    expect(storedOauth("alpha").accessToken).toBe("at-alpha");
+    expect(storedOauth("beta").accessToken).toBe("at-beta");
+  });
+
+  // The 2026-09-02 poisoning read from the other end: a switch left ~/.claude.json
+  // naming the account we switched AWAY from. The credential's own verdict wins,
+  // and the stale label's organization must not come along for the ride — it
+  // would rule out the very profile the verified uuid names.
+  it("ignores a stale label when the credential has proved a different account", async () => {
+    writeProfile("alpha", ALPHA, credOf("at-alpha", "rt-alpha", 5000));
+    writeProfile("beta", BETA, credOf("at-beta", "rt-beta", 5000));
+    setActive(BETA, credOf("at-rotated", "rt-alpha-2", 9000));
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-identity.json"),
+      JSON.stringify({
+        tokens: {
+          [tokenKey("at-rotated")]: {
+            uuid: ALPHA.accountUuid,
+            email: ALPHA.emailAddress,
+            verified_at: 1,
+          },
+        },
+      }),
+    );
+    invalidateAccountsCache();
+    expect(await resnapshotIfActiveFresher()).toBe("alpha");
+    expect(storedOauth("alpha").refreshToken).toBe("rt-alpha-2");
+    expect(storedOauth("beta").refreshToken).toBe("rt-beta");
+  });
+
+  it("saveProfile refuses a credential another profile already holds by refresh token", () => {
+    writeProfile("beta", BETA, credOf("at-beta", "rt-shared", 1000));
+    setActive(ALPHA, credOf("at-alpha", "rt-shared", 9000));
+    expect(() => saveProfile("alpha")).toThrow(/shares its refresh token .* "beta"/);
   });
 });
 
