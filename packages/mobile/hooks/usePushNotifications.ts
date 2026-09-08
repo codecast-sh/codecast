@@ -7,6 +7,7 @@ import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useRouter } from 'expo-router';
 import { chatPushIsOnScreen } from '@/lib/chatFocus';
+import { useNotificationCatchUp } from '@/hooks/useNotificationCatchUp';
 import { acceptInvite, declineInvite } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
 import {
@@ -68,6 +69,11 @@ export function usePushNotifications() {
   const storePushToken = useMutation(api.users.storePushToken);
   const router = useRouter();
   const { isAuthenticated } = useAuth();
+  // Everything that arrives here is accounted for against the backend's push
+  // ring, so a phone that was offline can ask for the rest.
+  const { recordLivePush } = useNotificationCatchUp();
+  const recordRef = useRef(recordLivePush);
+  recordRef.current = recordLivePush;
   // Cold-start ring answers race Convex auth: on a killed app the mount effect
   // (and the launching notification response) runs BEFORE ConvexAuthProvider
   // has read the token from SecureStore, so respondInvite would go out
@@ -100,6 +106,9 @@ export function usePushNotifications() {
 
     const handleNotificationResponse = (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data;
+      // A tap is proof of delivery even when the app never saw the arrival —
+      // the cold-start path is exactly the case the replay must not repeat.
+      recordRef.current(data);
       const ringPush = parseCallRingPush(data);
       if (ringPush && !authedRef.current) {
         pendingHuddle.current = response;
@@ -173,6 +182,7 @@ export function usePushNotifications() {
 
     notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
       setNotification(notification);
+      recordRef.current(notification.request.content.data);
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);

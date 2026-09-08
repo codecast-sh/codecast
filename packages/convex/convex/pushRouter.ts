@@ -31,6 +31,7 @@ import {
   type MachineDevice,
   type PresenceRow,
 } from "./presencePolicy";
+import { workspaceGrantsAccess, workspaceKey } from "./lib/access";
 
 // Client heartbeats every ~30s while visible; background browser tabs get
 // throttled to ~1/min, so "fresh" tolerates two missed beats. Sleeping the
@@ -144,6 +145,195 @@ export function summarizePushBatch(
     // its notification list), not one arbitrary session out of many.
     data: { type: "aggregate", count: rows.length },
   };
+}
+
+// ── Catch-up ring (ct-49553) ──
+// The outbox deletes a row the moment it ships, so a phone that was asleep or
+// out of signal recovered nothing: the only thing it could reconstruct was the
+// single notification it was last tapped from. Every routed push is now also
+// recorded here with a monotonic per-user `seq` and the `epoch` that counter
+// belongs to, and the phone asks notifications.getMissedSince for the rest.
+
+// Why 256: it matches the phone's own cap on remembered notification keys, and
+// it is far more than any background window a replay can still usefully cover.
+// Past the cap we evict oldest-first — a phone away that long is a cold open,
+// and the live stream resumes from current.
+export const PUSH_RING_CAPACITY = 256;
+
+// system_config key holding the counter lifetime. One row, global. Unlike
+// Orca's in-memory buffer the counter here is durable — it is the ring's own
+// head — so the epoch does NOT change per deploy; it changes when the router is
+// deliberately RESET (rotatePushEpoch). Rotating on every deploy would make
+// every phone replay its whole ring for nothing.
+export const PUSH_EPOCH_KEY = "push_router_epoch";
+
+// Reads the current epoch, minting it on first run. A phone's watermark means
+// nothing under a different epoch, which is what lets getMissedSince tell "you
+// missed nothing" from "your seq came from a counter that no longer exists".
+export async function currentPushEpoch(ctx: any): Promise<string> {
+  const row = await ctx.db
+    .query("system_config")
+    .withIndex("by_key", (q: any) => q.eq("key", PUSH_EPOCH_KEY))
+    .first();
+  if (row?.value) return row.value;
+  const epoch = crypto.randomUUID();
+  await ctx.db.insert("system_config", {
+    key: PUSH_EPOCH_KEY,
+    value: epoch,
+    updated_at: Date.now(),
+  });
+  return epoch;
+}
+
+/** The id both the live push payload and its replayed copy carry. */
+export function pushRingKey(epoch: string, seq: number): string {
+  return `${epoch}.${seq}`;
+}
+
+export type RoutedPushContent = {
+  type?: string;
+  title: string;
+  subtitle?: string;
+  body: string;
+  data?: any;
+  channel_id?: string;
+  interruption_level?: string;
+};
+
+// Records one routed push and returns the stamp that rides its payload. The
+// ring IS the counter — the next seq is one past the head of what this user
+// still holds — so there is no state row to keep in step with it, and no write
+// to the user doc (whose every change re-renders the phone's whole tree through
+// the auth provider's getCurrentUser subscription). Eviction preserves the
+// head, so the counter only ever climbs; rows from a rotated epoch are dropped
+// outright, because a mismatched reply must be able to say "here is everything
+// I still hold" and rows from a dead counter are not that.
+export async function recordRoutedPush(
+  ctx: any,
+  user: { _id: any },
+  push: RoutedPushContent,
+): Promise<{ seq: number; epoch: string; key: string }> {
+  const epoch = await currentPushEpoch(ctx);
+  const all = await ctx.db
+    .query("push_ring")
+    .withIndex("by_user_seq", (q: any) => q.eq("user_id", user._id))
+    .collect();
+  const rows: any[] = [];
+  for (const row of all) {
+    if (row.epoch === epoch) rows.push(row);
+    else await ctx.db.delete(row._id);
+  }
+  const seq = ringHead(rows) + 1;
+  const key = pushRingKey(epoch, seq);
+  await ctx.db.insert("push_ring", {
+    user_id: user._id,
+    // Write-time ACCESS key: a routed push is private to its recipient, even
+    // when the notification behind it came off a team surface.
+    workspace: workspaceKey({ type: "personal", userId: user._id }),
+    epoch,
+    seq,
+    key,
+    type: push.type,
+    title: push.title,
+    subtitle: push.subtitle,
+    body: push.body,
+    data: push.data,
+    channel_id: push.channel_id,
+    interruption_level: push.interruption_level,
+    created_at: Date.now(),
+  });
+  if (rows.length >= PUSH_RING_CAPACITY) {
+    const ordered = [...rows].sort((a: any, b: any) => a.seq - b.seq);
+    for (const row of ordered.slice(0, rows.length - PUSH_RING_CAPACITY + 1)) {
+      await ctx.db.delete(row._id);
+    }
+  }
+  return { seq, epoch, key };
+}
+
+/** Highest seq the ring still holds; 0 when it holds nothing. */
+function ringHead(rows: Array<{ seq: number }>): number {
+  return rows.reduce((head, row) => (row.seq > head ? row.seq : head), 0);
+}
+
+export type MissedPush = RoutedPushContent & {
+  key: string;
+  seq: number;
+  epoch: string;
+  created_at: number;
+};
+
+// The cut, pure so both epoch cases are testable without a db. A matching epoch
+// returns strictly newer entries — the same watermark always yields the same
+// set, so asking twice can never re-deliver. A mismatch returns the whole ring:
+// a seq from a dead counter indexes nothing here, and every retained entry
+// postdates that counter, so none of them can already have reached this phone.
+//
+// A watermark PAST the head is the same situation wearing a matching epoch: the
+// counter is the ring's head, so a caller claiming a seq this counter never
+// issued did not get it here (a ring emptied out from under a live epoch is the
+// way that happens). Cutting against it would silently kill catch-up until the
+// counter climbed back past it, so it reads as a mismatch too.
+export function selectMissedSince(
+  rows: MissedPush[],
+  args: { seq: number; epoch?: string },
+): MissedPush[] {
+  const ordered = [...rows].sort((a, b) => a.seq - b.seq);
+  if (ordered.length === 0) return ordered;
+  const head = ordered[ordered.length - 1];
+  if (args.epoch !== undefined && args.epoch !== head.epoch) return ordered;
+  if (args.seq > head.seq) return ordered;
+  return ordered.filter((row) => row.seq > args.seq);
+}
+
+// Wipes the epoch, so every phone's stored watermark names a counter nobody
+// has. The lever for a router reset: after it the next getMissedSince replays
+// what is retained instead of silently cutting it against a restarted counter.
+export const rotatePushEpoch = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const epoch = crypto.randomUUID();
+    const row = await ctx.db
+      .query("system_config")
+      .withIndex("by_key", (q: any) => q.eq("key", PUSH_EPOCH_KEY))
+      .first();
+    if (row) await ctx.db.patch(row._id, { value: epoch, updated_at: Date.now() });
+    else await ctx.db.insert("system_config", { key: PUSH_EPOCH_KEY, value: epoch, updated_at: Date.now() });
+    return { epoch };
+  },
+});
+
+// Read side of the ring, called by notifications.getMissedSince (where the
+// phone reaches it). Access is the stored workspace key evaluated through the
+// one predicate — never team_id, and never "the index is keyed by my user id".
+export async function readMissedSince(
+  ctx: any,
+  userId: any,
+  args: { seq: number; epoch?: string },
+): Promise<{ epoch: string | null; entries: MissedPush[] }> {
+  const rows = await ctx.db
+    .query("push_ring")
+    .withIndex("by_user_seq", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const mine: any[] = [];
+  for (const row of rows) {
+    if (await workspaceGrantsAccess(ctx, userId, row.workspace)) mine.push(row);
+  }
+  mine.sort((a, b) => a.seq - b.seq);
+  const entries = selectMissedSince(mine as MissedPush[], args).map((row) => ({
+    key: row.key,
+    seq: row.seq,
+    epoch: row.epoch,
+    type: row.type,
+    title: row.title,
+    subtitle: row.subtitle,
+    body: row.body,
+    data: row.data,
+    channel_id: row.channel_id,
+    interruption_level: row.interruption_level,
+    created_at: row.created_at,
+  }));
+  return { epoch: mine.length > 0 ? mine[mine.length - 1].epoch : null, entries };
 }
 
 // Queue a mobile push for a user. Call from the same mutation that inserted the
@@ -287,14 +477,33 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
       q.eq("recipient_user_id", userId).eq("read", false))
     .take(100);
   for (const row of sendable) await ctx.db.delete(row._id);
+  const channelId = isChat ? "chat" : undefined;
+  const interruptionLevel = addressed ? "time-sensitive" : undefined;
+  // Stamp and retain BEFORE the send: the ring is what a phone that misses this
+  // push reads back, and the same {seq, epoch, key} rides the payload so a live
+  // arrival and its replayed copy are recognisably one notification.
+  const stamp = await recordRoutedPush(ctx, user!, {
+    type: sendable.length === 1 ? sendable[0].type : "aggregate",
+    title,
+    subtitle,
+    body,
+    data,
+    channel_id: channelId,
+    interruption_level: interruptionLevel,
+  });
   await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
     push_token: user!.push_token!,
     title,
     subtitle,
     body,
-    data,
-    channel_id: isChat ? "chat" : undefined,
-    interruption_level: addressed ? "time-sensitive" : undefined,
+    data: {
+      ...(data ?? {}),
+      notificationSeq: stamp.seq,
+      notificationEpoch: stamp.epoch,
+      notificationKey: stamp.key,
+    },
+    channel_id: channelId,
+    interruption_level: interruptionLevel,
     badge: Math.min(unread.length, 99),
     user_id: userId,
   });

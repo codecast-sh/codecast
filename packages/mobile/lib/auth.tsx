@@ -21,6 +21,10 @@ const LAST_PRINCIPAL_KEY = 'last_verified_principal';
 export interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
+  // Who is signed in. Already resolved here, so consumers that only need the
+  // id (the push catch-up watermark is per user) read it instead of mounting a
+  // second getCurrentUser subscription of their own.
+  currentUserId: string | null;
   isBiometricAvailable: boolean;
   isBiometricEnabled: boolean;
   isAppleAuthAvailable: boolean;
@@ -346,6 +350,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         isAuthenticated,
         isLoading,
+        currentUserId,
         isBiometricAvailable,
         isBiometricEnabled,
         isAppleAuthAvailable,
