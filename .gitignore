@@ -124,3 +124,8 @@ packages/web/tsconfig.*.tmp.json
 
 # tsc incremental state, regenerated on every typecheck
 packages/web/*.tsbuildinfo
+
+# Per-package installs inside the vendored @platform mirror. CI installs into
+# each package to run its tests; the mirror itself is generated from
+# ~/src/platform and only scripts/vendor-platform.sh writes to it.
+platform/packages/*/bun.lock
