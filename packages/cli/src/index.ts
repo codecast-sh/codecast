@@ -5625,9 +5625,9 @@ program
   .action(async (options: { json?: boolean }) => {
     const { activateAllGroups } = await import("./commandGroups.js");
     await activateAllGroups(program, groupDeps());
-    const { buildAgentContext, formatAgentContextSummary } = await import("./agentContext.js");
+    const { buildAgentContext, formatAgentContextSummary, writeStdout } = await import("./agentContext.js");
     const context = buildAgentContext(program, getVersion());
-    console.log(options.json ? JSON.stringify(context, null, 2) : formatAgentContextSummary(context));
+    await writeStdout(options.json ? JSON.stringify(context, null, 2) : formatAgentContextSummary(context));
   });
 
 program

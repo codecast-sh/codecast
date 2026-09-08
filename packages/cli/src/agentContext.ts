@@ -174,3 +174,21 @@ export function formatAgentContextSummary(context: AgentContext): string {
     "Run `cast agent-context --json` for the full machine-readable command surface.",
   ].join("\n");
 }
+
+/**
+ * Print a payload and wait for the pipe to take all of it.
+ *
+ * `console.log` returns before the bytes leave the process, and stdout to a
+ * PIPE is asynchronous: the runtime exits once the event loop drains, dropping
+ * whatever the pipe had not accepted yet. This surface is ~580KB, so a
+ * consumer reading it through a pipe — which is every programmatic consumer,
+ * the agents this command exists for — got a truncated document and a JSON
+ * parse error, while the same run redirected to a file was complete (the tail
+ * stopped on a 576KiB boundary, ct-49907). Awaiting the write's callback is
+ * what makes the two agree.
+ */
+export function writeStdout(text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(`${text}\n`, (err) => (err ? reject(err) : resolve()));
+  });
+}
