@@ -20,7 +20,7 @@
 //     adopt the new account (the daemon's switch_account command does this).
 
 import { execFileSync, keychainReadAsync } from "./proc.js";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";

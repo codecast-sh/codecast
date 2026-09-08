@@ -1,3 +1,7 @@
+// FIRST import: it moves this process onto a private tmux server, and daemon.js
+// snapshots the environment at module load — imported after it, the daemon's tmux
+// calls keep talking to the machine's shared server (ct-49770).
+import "./isolatedTmuxServer.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { injectViaTmux } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
+import { hasBinary } from "./test-helpers/binaryProbe.js";
 
 // Covers the multiSelect AskUserQuestion key protocol (verified against Claude Code
 // 2.1.201): on a multiSelect question a digit TOGGLES that option's checkbox and the
@@ -21,16 +21,10 @@ import { tmuxRun } from "./tmux.js";
 //
 // Needs tmux + python3; skips (rather than fails) where they're unavailable.
 
-function have(bin: string): boolean {
-  try {
-    execFileSync("which", [bin], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const CAN_RUN = have("tmux") && have("python3");
+// hasBinary, not a bare `which` in a try/catch: a probe that fails to spawn
+// under load is not evidence that the binary is missing, and skipping on it
+// turns this suite into a green run that tested nothing (ct-49770).
+const CAN_RUN = hasBinary("tmux") && hasBinary("python3");
 
 // A fake interactive form. Alternate screen + raw mode like the Claude TUI. Two modes:
 // `multiselect`: one checkbox question — a digit moves the highlight to that row and

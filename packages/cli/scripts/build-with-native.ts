@@ -150,11 +150,6 @@ if (import.meta.main) {
       run("/usr/bin/clang", ["-Os", "-fobjc-arc", "-arch", "arm64", "-arch", "x86_64", "-mmacosx-version-min=11.0", "-framework", "AppKit", path.join(import.meta.dir, "../native/browser-icon.m"), "-o", binary]);
       signAndVerify(binary, "sh.codecast.browser-icon");
       helper = fs.readFileSync(binary).toString("base64");
-      console.error(`cast computer helper: ${buildComputerHelper({ stage, output: COMPUTER_HELPER_PAYLOAD })} bytes embedded`);
-    } else {
-      fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
-    }
-    run(process.execPath, ["build", ...args, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
       // Why: build-binaries.sh compiles five targets, so a per-target swift
       // build would tar different mtimes and give darwin-arm64 and darwin-x64
       // DIFFERENT helpers — two hashes for one release, and nothing to record

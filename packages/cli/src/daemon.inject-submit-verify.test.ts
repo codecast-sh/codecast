@@ -47,8 +47,10 @@ $
 `;
 
 // Builds an IO whose capture() walks through `frames` (sticking on the last),
-// recording every action the loop takes.
-function scriptedIO(frames: string[]) {
+// recording every action the loop takes. `extra` adds the optional evidence
+// sources — a pane with none of them is the shape every test below the matrix
+// block was written against.
+function scriptedIO(frames: string[], extra: Partial<TmuxSubmitVerifyIO> = {}) {
   const actions: string[] = [];
   let i = 0;
   const io: TmuxSubmitVerifyIO = {
@@ -66,7 +68,7 @@ function scriptedIO(frames: string[]) {
     sleep: async () => {},
     log: () => {},
   };
-  return { io, actions };
+  return { io: { ...io, ...extra }, actions };
 }
 
 describe("verifyTmuxSubmitAfterPaste", () => {
@@ -84,7 +86,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: false, // pane unchanged 400ms after paste — the real failure signature
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions).toEqual(["enter"]); // one discrete Enter once the text rendered, no re-paste
   });
 
@@ -97,7 +99,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: false,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions).toEqual(["enter"]);
   });
 
@@ -110,7 +112,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       contentPrefix: PROMPT,
       deadlineMs: 4000,
     });
-    expect(res.outcome).toBe("timeout");
+    expect(res.outcome).toBe("agent_prompt_stalled");
     expect(actions).toEqual([]);
   });
 
@@ -121,7 +123,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: true,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions).toEqual([]);
   });
 
@@ -134,7 +136,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: true,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions).toEqual(["enter", "enter", "enter"]);
   });
 
@@ -152,7 +154,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       contentPrefix: "first line that is hidden by the paste chip",
       multiline: true,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(res.rePasted).toBe(false);
     expect(actions).toEqual(["enter"]);
   });
@@ -168,7 +170,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: false,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(res.rePasted).toBe(true);
     expect(actions[0]).toBe("repaste"); // after 3 consecutive live-empty observations
     expect(actions[actions.length - 1]).toBe("enter");
@@ -198,7 +200,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: true,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions).toEqual([]);
   });
 
@@ -245,7 +247,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: true,
       contentPrefix: QUEUED_PROMPT.slice(0, 40),
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(res.rePasted).toBe(false);
     expect(actions).toEqual([]); // no Enter into the live box, no re-paste into a busy pane
   });
@@ -277,7 +279,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: false,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(res.rePasted).toBe(true);
     expect(actions).toEqual(["repaste", "enter"]);
   });
@@ -290,7 +292,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       contentPrefix: PROMPT,
       deadlineMs: 4000,
     });
-    expect(res.outcome).toBe("timeout");
+    expect(res.outcome).toBe("agent_prompt_stalled");
     expect(res.payloadCheckable).toBe(true);
     expect(res.payloadSeen).toBe(false);
     expect(actions).toEqual(["repaste"]); // tried recovery once, never a blind ack
@@ -308,7 +310,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       pasteConfirmed: false,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(res.payloadCheckable).toBe(false);
     expect(actions).toEqual([]);
   });
@@ -319,6 +321,175 @@ describe("verifyTmuxSubmitAfterPaste", () => {
 // "submitted"; the daemon then reported "thinking" and the row went terminal.
 // A single frame is thin evidence — the loop must look once more and, if the
 // text is still at the prompt, press Enter instead of acking.
+// ---------------------------------------------------------------------------
+// Per-client submit evidence (the D0 matrix's CI half, ct-49536)
+//
+// Each pair below was captured from a live pane of that client (2026-09-06):
+// the composer holding the pasted payload, then the same pane one Enter later
+// with the turn running. The verifier has to read "submitted" from four
+// different vocabularies — claude's spinner word, codex's "esc to interrupt"
+// footer, grok's braille spinner and "[stop]" chrome, and opencode's pane with
+// no prompt glyph at all — so a client whose chrome changes fails here without
+// needing its binary on the runner.
+// ---------------------------------------------------------------------------
+
+const MATRIX_PAYLOAD = "matrix payload first line\nsecond line\n\nfourth after a blank line";
+
+const CLIENT_FRAMES: Record<string, { idle: string; pasted: string; running: string; glyphless?: true }> = {
+  claude: {
+    idle: `
+ ▐▛███▛█   Claude Code v2.1.263
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+────────────────────────────────────────────────────────────────────────
+❯ Try "how do I log an error?"
+────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`,
+    pasted: `
+ ▐▛███▛█   Claude Code v2.1.263
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+────────────────────────────────────────────────────────────────────────
+❯ [Pasted text #1 +3 lines]
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`,
+    running: `
+ ▐▛███▛█   Claude Code v2.1.263
+  ▝▝ ▝▝    /private/tmp/matrix-claude
+❯ matrix payload first line
+  second line
+  fourth after a blank line
+✽ Hashing…
+                                                       ● high · /effort
+────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────
+  paste again to expand
+`,
+  },
+  codex: {
+    idle: `
+╭─────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)              │
+╰─────────────────────────────────────────╯
+› Ask Codex to do anything
+  ? for shortcuts
+`,
+    pasted: `
+› matrix payload first line
+  second line
+  fourth after a blank line
+  matrix default · /private/tmp/matrix-codex
+`,
+    running: `
+› matrix payload first line
+  second line
+  fourth after a blank line
+⚠ Model metadata for \`matrix\` not found. Defaulting to fallback metadata.
+• Working (1s • esc to interrupt)
+› Ask Codex to do anything
+  matrix default · /private/tmp/matrix-codex
+`,
+  },
+  grok: {
+    idle: `
+  /private/tmp/matrix-grok
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                  │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`,
+    pasted: `
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯ [Pasted: 4 lines]                                                │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`,
+    running: `
+  /private/tmp/matrix-grok                                    1.5K / 200K
+     ❯ matrix payload first line                                 9:32 PM
+       second line
+        …
+    ⠴ Waiting for response… 1.7s                    1.7s ⇣1.51k [stop]
+  ╭────────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                  │
+  ╰──────────────────────────────── matrix · always-approve ───────────╯
+  Shift+Tab:mode  │  Esc:cancel  │  Ctrl+x:shortcuts
+`,
+  },
+  opencode: {
+    glyphless: true,
+    idle: `
+                    ┃
+                    ┃  Ask anything… "Fix broken tests"
+                    ┃
+                    ┃  Build · matrix-model matrix
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`,
+    pasted: `
+                    ┃
+                    ┃  [Pasted ~4 lines]
+                    ┃
+                    ┃  Build · matrix-model matrix
+                                   tab agents  ctrl+p commands
+  /private/tmp/matrix-opencode                          1.18.29
+`,
+    running: `
+  ┃  matrix payload first line
+  ┃  second line
+  ┃
+  ┃  fourth after a blank line
+     ▣  Build · matrix-model
+  ┃  Build · matrix-model matrix
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt              tab agents  ctrl+p commands
+`,
+  },
+};
+
+describe("verifyTmuxSubmitAfterPaste — real client turn-started frames", () => {
+  for (const [client, frames] of Object.entries(CLIENT_FRAMES)) {
+    test(`${client}: the running turn reads as submitted, with no extra keys`, async () => {
+      const { io, actions } = scriptedIO([frames.running]);
+      const result = await verifyTmuxSubmitAfterPaste(io, {
+        prePaste: frames.idle,
+        pasteConfirmed: true,
+        contentPrefix: MATRIX_PAYLOAD.slice(0, 40),
+        multiline: true,
+        deadlineMs: 4_000,
+      });
+      expect(result.outcome).toBe("delivered");
+      // The caller already sent the gate's Enter; a second one would submit
+      // whatever the person at the keyboard typed next.
+      expect(actions).toEqual([]);
+    });
+
+    test(`${client}: the payload still sitting in the composer is ${frames.glyphless ? "invisible to the pane verifier" : "answered with a discrete Enter"}`, async () => {
+      const { io, actions } = scriptedIO([frames.pasted]);
+      const result = await verifyTmuxSubmitAfterPaste(io, {
+        prePaste: frames.idle,
+        pasteConfirmed: true,
+        contentPrefix: MATRIX_PAYLOAD.slice(0, 40),
+        multiline: true,
+        deadlineMs: 2_000,
+      });
+      if (frames.glyphless) {
+        // opencode draws no prompt glyph, so "our text is still in the box"
+        // and "the turn is running" are the same picture and the verifier acks.
+        // That is why opencode's turn state comes from its SQLite store and not
+        // from this loop — the pane cannot answer the question.
+        expect(result.outcome).toBe("delivered");
+        return;
+      }
+      // The chip (or the text) is still at the prompt: the Enter was swallowed
+      // into the paste burst, so the loop presses a discrete one and keeps
+      // watching rather than acking a message nobody submitted.
+      expect(result.outcome).toBe("agent_prompt_stalled");
+      expect(actions).toContain("enter");
+    });
+  }
+});
+
 describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
   const REDRAW_BLANK_PANE = `
  ▐▛███▜▌   Claude Code v2.1.175
@@ -343,7 +514,7 @@ describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
       pasteConfirmed: true,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions).toEqual(["enter", "enter"]);
   });
 
@@ -354,7 +525,7 @@ describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
       pasteConfirmed: true,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(actions[0]).toBe("enter");
   });
 
@@ -365,7 +536,7 @@ describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
       pasteConfirmed: false,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
     expect(res.payloadCheckable).toBe(false);
     expect(actions).toEqual(["enter"]);
   });
@@ -377,7 +548,227 @@ describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
       pasteConfirmed: true,
       contentPrefix: PROMPT,
     });
-    expect(res.outcome).toBe("submitted");
+    expect(res.outcome).toBe("delivered");
+    expect(actions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two sources that do not read the pane (ct-49539)
+//
+// Every case above proves the submit from what tmux captured. That fails on a
+// pane which says nothing the daemon recognises — a client whose spinner is not
+// in the activity regex, one that redraws its composer empty and prints the
+// turn nowhere. The daemon has two other witnesses for the same question: the
+// status hook, which reports a working turn for the pane's session id, and the
+// pane title, which several clients flip for exactly the length of a turn.
+//
+// Both are read against a "before" the CALLER captures with the pre-paste pane,
+// never at the top of this loop: by then the Enter has gone in, and a client
+// that flips its title within the tick would look like it had always been that
+// way. The baseline tests below are what pin that.
+// ---------------------------------------------------------------------------
+
+// A pane with no opinion: composer empty again, no spinner glyph the daemon
+// knows, our payload nowhere on screen.
+const SILENT_PRE = `
+  Build · matrix-model matrix
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  tab agents  ctrl+p commands
+`;
+
+// The same pane a moment later. Differs from SILENT_PRE only in the token
+// counter, so the loop's frozen-pane check does not swallow it — but nothing in
+// it says whether our message was submitted.
+const SILENT_POST = `
+  Build · matrix-model matrix                    1.5K / 200K
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  tab agents  ctrl+p commands
+`;
+
+const PASTE_AT = 10_000;
+
+describe("verifyTmuxSubmitAfterPaste — hook and title evidence", () => {
+  const silent = (extra: Partial<TmuxSubmitVerifyIO>) => scriptedIO([SILENT_POST], extra);
+
+  test("the hook reporting a turn after the paste is a delivered submit", async () => {
+    const { io, actions } = silent({ hookTurnStartedAt: async () => PASTE_AT + 1 });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("delivered");
+    expect(res.evidence).toBe("hook_working_turn");
+    // The pane never proved anything, so without the hook this run would have
+    // spent five blind Enters and then given up.
+    expect(actions).toEqual([]);
+  });
+
+  test("a turn that started before the paste belongs to someone else", async () => {
+    const { io, actions } = silent({ hookTurnStartedAt: async () => PASTE_AT - 1 });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("agent_prompt_stalled");
+    expect(res.evidence).toBeNull();
+    expect(actions).toEqual(["enter", "enter", "enter", "enter", "enter"]);
+  });
+
+  test("a title that starts spinning after the paste is a delivered submit", async () => {
+    const { io, actions } = silent({ paneTitle: async () => "_ codex" });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      paneTitleBefore: "codex",
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("delivered");
+    expect(res.evidence).toBe("pane_title");
+    expect(actions).toEqual([]);
+  });
+
+  test("a title that already said working before the paste is not news about it", async () => {
+    // claude writes "_ Claude Code" from boot and never moves it, so without the
+    // pre-paste baseline this source would report every claude pane delivered.
+    const { io, actions } = silent({ paneTitle: async () => "_ Claude Code" });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      paneTitleBefore: "_ Claude Code",
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("agent_prompt_stalled");
+    expect(res.evidence).toBeNull();
+    expect(actions).toEqual(["enter", "enter", "enter", "enter", "enter"]);
+  });
+
+  test("no source answers: five bounded Enters, then a stall the caller can see", async () => {
+    const { io, actions } = silent({
+      hookTurnStartedAt: async () => null,
+      paneTitle: async () => "codex",
+    });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      paneTitleBefore: "codex",
+      deadlineMs: 4_000,
+    });
+    // Never "delivered": the presumed-status write reads this outcome, and a
+    // stall painted as a running turn is what terminalized the row on
+    // 2026-09-03 and left the healer nothing to revive.
+    expect(res.outcome).toBe("agent_prompt_stalled");
+    expect(res.evidence).toBeNull();
+    expect(actions).toEqual(["enter", "enter", "enter", "enter", "enter"]);
+  });
+
+  test("the pane is asked first, so it names the evidence when it can answer", async () => {
+    const SPINNER_POST = `
+  Build · matrix-model matrix                    1.5K / 200K
+⠙ Working (2s • esc to interrupt)
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+`;
+    const { io } = scriptedIO([SPINNER_POST], {
+      hookTurnStartedAt: async () => PASTE_AT + 1,
+      paneTitle: async () => "_ codex",
+    });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      paneTitleBefore: "codex",
+    });
+    expect(res.outcome).toBe("delivered");
+    // Cheapest first: the capture is already in hand, the turn mark is a map
+    // read, and the title costs a tmux call nobody made here.
+    expect(res.evidence).toBe("pane_activity");
+  });
+
+  test("a foreign turn is still possible, so the hook does not ack for it either", async () => {
+    // The ct-40212 shape: unconfirmed paste, our payload never on screen, and a
+    // turn running. The turn may be the buffered clearing bytes submitting as
+    // garbage, and the hook cannot tell those apart — so it is held to the same
+    // guard as the pane scrape.
+    const { io, actions } = scriptedIO([SILENT_POST], {
+      hookTurnStartedAt: async () => PASTE_AT + 1,
+    });
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: false,
+      contentPrefix: PROMPT,
+      pasteAt: PASTE_AT,
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("agent_prompt_stalled");
+    expect(res.evidence).toBeNull();
+    expect(actions).toEqual(["repaste"]); // recovery, never a blind ack
+  });
+});
+
+describe("verifyTmuxSubmitAfterPaste — a dialog took the keyboard", () => {
+  const CODEX_PERMISSION = `
+› run the migration
+⠙ Working (2s • esc to interrupt)
+
+  Would you like to run the following command?
+
+    bunx convex deploy
+
+  Press enter to confirm or esc to cancel
+`;
+
+  test("a permission dialog raised after the paste blocks, spinner or not", async () => {
+    // The dialog check runs before every evidence source on purpose: codex keeps
+    // its spinner drawn while the dialog waits, so a pane can look busy and hold
+    // our prompt unsubmitted at the same time.
+    const { io, actions } = scriptedIO([CODEX_PERMISSION]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SILENT_PRE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("agent_prompt_blocked");
+    expect(res.evidence).toBeNull();
+    // Enter at a permission dialog is how a blind un-wedge once walked a credits
+    // chooser to "Pay $45.00 now" (ct-38494).
+    expect(actions).toEqual([]);
+  });
+
+  test("a dialog that predates the paste is not this submit's verdict, and nobody types at it", async () => {
+    // Codex draws the spinner only while a turn runs, so a settled pane waiting
+    // on an answer looks like this. The dialog was already there before the
+    // paste — the pre-flight's business, not this submit's — so the loop must
+    // neither report it as our block nor spend its bounded Enters on it.
+    const SETTLED_DIALOG = CODEX_PERMISSION.replace("⠙ Working (2s • esc to interrupt)\n", "");
+    const { io, actions } = scriptedIO([SETTLED_DIALOG + "\n"]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: SETTLED_DIALOG,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+      deadlineMs: 4_000,
+    });
+    expect(res.outcome).toBe("agent_prompt_stalled");
+    expect(res.evidence).toBeNull();
     expect(actions).toEqual([]);
   });
 });

@@ -13,19 +13,12 @@
 // timeout this test would hang until bun's own test timeout and fail.
 
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { tmuxRun } from "./tmux.js";
+import { hasBinary } from "./test-helpers/binaryProbe.js";
 
-function hasTmux(): boolean {
-  try {
-    execFileSync("which", ["tmux"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-describe.skipIf(!hasTmux())("tmuxRun timeout hardening", () => {
+// hasBinary rather than a `which` in a try/catch: the catch also swallowed a
+// failed spawn, which skipped this contract instead of reporting it (ct-49770).
+describe.skipIf(!hasBinary("tmux"))("tmuxRun timeout hardening", () => {
   test("a blocking tmux call is reaped by the timeout instead of spinning forever", () => {
     const channel = `cc-timeout-probe-${process.pid}`;
     const start = Date.now();

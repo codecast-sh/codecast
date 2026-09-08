@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { STUB_SOURCE, resolveStubRuntime, pickDoctorProjectDir } from "../doctor.js";
-import { spawnHarness, shellQuote } from "../test-helpers/messagingHarness.js";
+import { spawnTmuxPane, shellQuote } from "../test-helpers/tmuxPane.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { benchClock, deadlineSignal, type BenchClock } from "./probes.js";
 import type { Config } from "../config/types.js";
@@ -125,9 +125,9 @@ export class BenchFixture {
     signal.throwIfAborted();
     await this.checkpoint();
     const command = `DOCTOR_BOOT_TOKEN=${shellQuote(`boot-${f.sessionId}`)} exec ${shellQuote(this.runtime)} ${shellQuote(this.stubPath)} ${shellQuote(f.sessionId)} ${shellQuote(f.jsonlPath)} ${shellQuote(f.registryPath)}`;
-    spawnHarness({ cwd: this.scratch, sessionId: f.sessionId, jsonlPath: f.jsonlPath, tmuxSession: f.tmuxSession, command, singleAttempt: true,
+    spawnTmuxPane({ session: f.tmuxSession, cwd: this.scratch, body: command, attempts: 1,
       onCreated: () => { f.created = true; },
-      runTmux: (args, opts) => {
+      run: (args, opts) => {
         const r = spawnSync("tmux", this.tmuxArgs(args), { encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", env: { ...process.env, ...opts?.env } });
         return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
       },
