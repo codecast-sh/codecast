@@ -28,6 +28,8 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { docSourceForPlanSource } from "@codecast/shared/docs";
+import { renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/tasks";
+import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
@@ -1114,26 +1116,12 @@ export const snippet = query({
     if (!plan) return { snippet: "", task_count: 0 };
     if (!(await canAccessPlan(ctx, auth.userId, plan))) return { snippet: "", task_count: 0 };
 
-    const lines: string[] = [];
-    lines.push(`Plan: ${plan.title} (${plan.short_id}) [${plan.status}]`);
+    let docContent: string | undefined;
     if (plan.doc_id) {
       const doc = await ctx.db.get(plan.doc_id);
       if (doc && (await canReadPlanDoc(ctx, auth.userId, plan, doc)) && doc.content) {
-        lines.push(`Body: ${doc.content.slice(0, 2000)}`);
+        docContent = doc.content;
       }
-    }
-    if (plan.goal) lines.push(`Goal: ${plan.goal}`);
-
-    if (plan.acceptance_criteria?.length) {
-      lines.push("Acceptance Criteria:");
-      for (const c of plan.acceptance_criteria) {
-        lines.push(`  - ${c}`);
-      }
-    }
-
-    if (plan.progress) {
-      const p = plan.progress;
-      lines.push(`Progress: ${p.done}/${p.total} done, ${p.in_progress} in progress, ${p.open} open`);
     }
 
     const tasks = [];
@@ -1144,38 +1132,31 @@ export const snippet = query({
       }
     }
 
-    if (tasks.length > 0) {
-      lines.push("Tasks:");
-      for (const t of tasks) {
-        lines.push(`  - ${t.short_id}: ${t.title} [${t.status}]`);
-      }
+    // Why: this snippet is what an agent is shown about the plan it works on,
+    // and every field below the header is prose someone else wrote — the plan
+    // doc, its comments, and task titles issueSync imports from GitHub or
+    // Linear. Fenced, capped and named, the same way `cast plan context`
+    // renders it, so one renderer decides what a foreign plan looks like
+    // (ct-49593).
+    const lines: string[] = [];
+    lines.push(`Plan: ${inlineForeignText(plan.title)} (${plan.short_id}) [${plan.status}]`);
+    if (plan.progress) {
+      const p = plan.progress;
+      lines.push(`Progress: ${p.done}/${p.total} done, ${p.in_progress} in progress, ${p.open} open`);
     }
 
-    const comments = mergePlanEntries(plan);
-    const decisions = comments.filter(e => e.type === "decision").slice(-3);
-    const discoveries = comments.filter(e => e.type === "discovery").slice(-3);
-    const references = comments.filter(e => e.type === "reference");
+    const record = renderFencedPlanRecord({
+      short_id: plan.short_id,
+      title: plan.title,
+      goal: plan.goal,
+      doc_content: docContent,
+      acceptance_criteria: plan.acceptance_criteria,
+      comments: mergePlanEntries(plan),
+    });
+    if (record) lines.push(record);
 
-    if (decisions.length) {
-      lines.push("Recent Decisions:");
-      for (const d of decisions) {
-        lines.push(`  - ${d.content}${d.rationale ? ` (${d.rationale})` : ""}`);
-      }
-    }
-
-    if (discoveries.length) {
-      lines.push("Discoveries:");
-      for (const d of discoveries) {
-        lines.push(`  - ${d.content}`);
-      }
-    }
-
-    if (references.length) {
-      lines.push("Context:");
-      for (const r of references) {
-        lines.push(`  - ${r.content}: ${r.path_or_url}`);
-      }
-    }
+    const taskBlock = renderFencedPlanTasks(tasks, plan);
+    if (taskBlock) lines.push(taskBlock);
 
     return {
       snippet: lines.join("\n"),

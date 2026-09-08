@@ -20,7 +20,7 @@ import { canAccessConversation, canAccessPullRequest } from "./lib/access";
 import { insertTask, refreshArmedTriggerKind } from "./agentTasks";
 import { recordExternalEvent } from "./externalEvents";
 import { foldChecksState, foldShepherdState, prUrl, shortSha } from "./lib/gitRefs";
-import { checkLabel } from "@codecast/shared/contracts";
+import { checkLabel, inlineForeignText } from "@codecast/shared/contracts";
 
 const SHEPHERD_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const WAKE_RETRY_MS = 20 * 1000;
@@ -372,7 +372,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
   if (tasks.length) {
     lines.push("");
     lines.push("## Linked work");
-    for (const task of tasks.slice(0, 10)) lines.push(`- ${task.short_id} ${task.title}`);
+    // Why: a linked task's title reaches the shepherd's wake prompt, and an
+    // imported one was written by whoever opened the issue (ct-49593).
+    for (const task of tasks.slice(0, 10)) lines.push(`- ${task.short_id} ${inlineForeignText(task.title)}`);
   }
 
   lines.push("");
