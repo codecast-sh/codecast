@@ -5,6 +5,33 @@ import * as path from "node:path";
 
 const args = process.argv.slice(2);
 const target = args.find((arg) => arg.startsWith("--target="))?.split("=")[1];
+
+/**
+ * Code splitting, for every compiled build (ct-49751).
+ *
+ * ct-49546 made the lazy command groups: `cast state` and `cast --help` reach
+ * the group they need through an `await import()`, so the CLI no longer has to
+ * evaluate every group to answer. Without `--splitting` that buys the binary
+ * nothing — bun concatenates the dynamic imports into the one entry file, and
+ * JSC parses the whole file before the first statement runs. With it, each
+ * group lands in its own chunk that is read only when its verb runs.
+ *
+ * Measured on bun 1.3.14, darwin-arm64. The deterministic half, `cast
+ * _boot-bytes` on two builds that differ only in this flag: 4,312,289 bytes
+ * unsplit against 1,499 split in the release shape, and 7,110,947 against
+ * 2,031 without `--minify`. The clock agrees but is coarser — median of 11
+ * runs of `cast bench boot --binary`, twice over, on Developer ID signed
+ * artifacts: `cast --help` 150/180 -> 120/100 ms CPU, `cast state` 160/180 ->
+ * 110/110, `cast bogus` 150/190 -> 110/120. A signed binary pays a fixed
+ * signature cost either way, which is why the clock moves by about a third
+ * while the bytes move by three orders of magnitude.
+ *
+ * It rides here rather than in build-binaries.sh so `build:binary` and any
+ * ad-hoc compile get the same shape as a release. `computer-helper-release.ts`
+ * asserts the split survived into the artifact, because a bun that stopped
+ * splitting under `--compile` would cost the win silently.
+ */
+const SPLIT_COMPILED_BUILDS = args.includes("--compile") && !args.includes("--splitting");
 const needsMac = target?.includes("darwin") || (!target?.includes("linux") && !target?.includes("windows") && process.platform === "darwin");
 const stage = fs.mkdtempSync(path.join(os.tmpdir(), "cast-native-build-"));
 const run = (command: string, argv: string[]) => {
@@ -93,6 +120,27 @@ export function buildComputerHelper(options: { stage: string; output: string; un
   return fs.statSync(options.output).size;
 }
 
+/**
+ * Delete the per-chunk `.map` files splitting leaves beside the outfile.
+ *
+ * They are build debris in an artifact directory: five targets writing about
+ * 165 chunks each put ~500 files next to the five binaries, and `deploy.sh` and
+ * `cut-cli-release.yml` both enumerate that directory by name. Nothing needs
+ * them — a `--compile`d binary carries its own map and prints stack traces
+ * against the original .ts files with no external map at all, for an eager
+ * frame and a lazily imported one alike (checked on bun 1.3.14).
+ * `<entry>.js.map` stays, because the release scripts ship it by that name.
+ */
+function dropChunkSourcemaps() {
+  const outfile = args.find((arg) => arg.startsWith("--outfile="))?.split("=")[1];
+  if (!outfile) return;
+  const dir = path.dirname(path.resolve(outfile));
+  for (const name of fs.readdirSync(dir)) {
+    // Only bun's hashed chunk names, so a map a human left here survives.
+    if (/-[0-9a-z]{8}\.js\.map$/.test(name)) fs.rmSync(path.join(dir, name));
+  }
+}
+
 if (import.meta.main) {
   try {
     let helper = "";
@@ -107,6 +155,23 @@ if (import.meta.main) {
       fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
     }
     run(process.execPath, ["build", ...args, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
+      // Why: build-binaries.sh compiles five targets, so a per-target swift
+      // build would tar different mtimes and give darwin-arm64 and darwin-x64
+      // DIFFERENT helpers — two hashes for one release, and nothing to record
+      // in the artifact manifest as the helper's identity. It builds the bundle
+      // once and points this at it instead (ct-49524).
+      const prebuilt = process.env.CODECAST_COMPUTER_HELPER_TAR;
+      if (prebuilt) {
+        fs.copyFileSync(prebuilt, COMPUTER_HELPER_PAYLOAD);
+        console.error(`cast computer helper: ${fs.statSync(COMPUTER_HELPER_PAYLOAD).size} bytes embedded from ${prebuilt}`);
+      } else {
+        console.error(`cast computer helper: ${buildComputerHelper({ stage, output: COMPUTER_HELPER_PAYLOAD })} bytes embedded`);
+      }
+    } else {
+      fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
+    }
+    run(process.execPath, ["build", ...args, ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
+    if (SPLIT_COMPILED_BUILDS) dropChunkSourcemaps();
   } finally {
     // Leave the tracked placeholder empty again: the payload belongs in the
     // built binary, never in the working tree.

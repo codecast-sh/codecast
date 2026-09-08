@@ -113,6 +113,13 @@ if [[ -n "${CODECAST_COMPUTER_HELPER_TAR:-}" ]]; then
     helper_args+=(--allow-adhoc)
   fi
   bun scripts/computer-helper-release.ts verify "$OUTPUT_DIR" "${helper_args[@]}"
+elif [[ "$(uname)" == "Darwin" ]]; then
+  # No helper in this build, but the split check still has to run: it is what
+  # keeps `cast --help` from parsing every lazy command group, and a build that
+  # skips the helper is exactly where a lost --splitting would go unnoticed
+  # until a release. (ct-49751)
+  echo ""
+  bun scripts/computer-helper-release.ts boot "$OUTPUT_DIR"
 fi
 
 echo ""

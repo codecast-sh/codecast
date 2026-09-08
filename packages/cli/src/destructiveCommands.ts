@@ -15,7 +15,9 @@ export type DestructiveConfirm =
 export type DestructiveCommand = {
   /** Registered command path, root-relative: ["doc", "delete"]. */
   path: readonly string[];
-  /** The gate this command runs before it acts. Absent = it acts immediately. */
+  /** The gate this table puts in front of the command. Absent means this table
+   *  adds none — either the command acts immediately (`kill`, `stop`), or it
+   *  already owns a better gate of its own (`computer setup`). */
   confirm?: DestructiveConfirm;
 };
 
@@ -50,6 +52,25 @@ export const DESTRUCTIVE_COMMANDS: readonly DestructiveCommand[] = [
   { path: ["hosts", "rm"] },
   { path: ["browser", "stop"] },
   { path: ["integrations", "remove"] },
+  // The one `cast computer` verb that changes the machine rather than reading
+  // it: it installs the helper app and opens System Settings panes, so a typo
+  // must not be answered with it. No `confirm` here because setup.ts already
+  // asks, and asks better — it names the grants that are actually missing,
+  // `--yes` skips it, and with no terminal to answer it refuses to open
+  // anything. A second, blanker prompt from this table would ask twice and then
+  // drift from the real one. ct-49790, ct-49848.
+  //
+  // Deliberately NOT listed: `capabilities`, which materializes the same helper
+  // but is idempotent, installs only codecast's own signed app, and is the verb
+  // `cast doctor` tells a stuck human to run — the suggester should offer it
+  // freely. Nor the input verbs (`click`, `type-text`, `press-key`, `hotkey`,
+  // `paste-text`, `set-value`, `scroll`, `perform-secondary-action`), which
+  // change state in OTHER apps and are the most consequential thing here. They
+  // are the feature itself: asking on every invocation would break every agent
+  // that uses it, and marking them would make the suggester reluctant to
+  // propose the verbs people type most. What restrains them is the behaviour
+  // rule in the guidance snippet and the two macOS grants, not this table.
+  { path: ["computer", "setup"] },
 ];
 
 const key = (path: readonly string[]): string => path.join(" ");

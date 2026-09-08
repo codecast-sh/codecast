@@ -64,16 +64,16 @@ test("malformed result, excessive diagnostics and wrong worker identity fail clo
 test("off switch runs existing async fallback with no child; crash fallback is only for validated reads", async () => {
   const h = harness(); let fallbacks = 0;
   const fallback = async () => { fallbacks++; return { stdout: "fallback", stderr: "" }; };
-  configureDaemonWorkers(false, h.options);
+  await configureDaemonWorkers(false, h.options);
   expect(await routeProbe("ps", ["aux"], {}, fallback)).toEqual({ stdout: "fallback", stderr: "" }); expect(h.children).toHaveLength(0);
-  configureDaemonWorkers(true, h.options);
+  await configureDaemonWorkers(true, h.options);
   const p = routeProbe("ps", ["aux"], { timeout: 1000 }, fallback); h.children[0].emit("exit", 1);
   expect(await p).toEqual({ stdout: "fallback", stderr: "" }); expect(fallbacks).toBe(2);
   await routeProbe("tmux", ["send-keys", "-t", "x", "Enter"], {}, fallback);
   expect(h.children).toHaveLength(1);
 });
 test("shutdown does not launch fallback work after the worker is closed", async () => {
-  const h = harness(); configureDaemonWorkers(true, h.options); let called = false;
+  const h = harness(); await configureDaemonWorkers(true, h.options); let called = false;
   const p = routeProbe("ps", ["aux"], { timeout: 1000 }, async () => { called = true; return {}; });
   closeDaemonWorkers(); await expect(p).rejects.toThrow("closed"); expect(called).toBe(false);
 });

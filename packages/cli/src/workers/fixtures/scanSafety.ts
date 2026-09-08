@@ -7,7 +7,7 @@ import {tmuxRun} from '../../tmux.js';
 const [enabled,name,id]=process.argv.slice(2);
 const root=process.env.HOME!;
 const main=path.resolve(import.meta.dir,'../../main.ts');
-configureDaemonWorkers(enabled==='true',{invocation:{command:process.execPath,args:[main,'_worker','probe']}},{invocation:{command:process.execPath,args:[main,'_worker','scan']}});
+await configureDaemonWorkers(enabled==='true',{invocation:{command:process.execPath,args:[main,'_worker','probe']}},{invocation:{command:process.execPath,args:[main,'_worker','scan']}});
 let denied:string|undefined;
 try{
  const script=path.join(root,'claude');fs.writeFileSync(script,'#!/bin/bash\nwhile IFS= read -r line; do :; done\n',{mode:0o755});

@@ -29,9 +29,12 @@
  *
  * Adding a group is one entry: its token, its description moved here out of the
  * module, and a `load()` that imports the register function. That is also how a
- * group that used to be registered eagerly joins — `cast computer` (ct-49521)
- * and `cast guide` (ct-49544) each become one entry when they land, in place of
- * the `registerXCommand(program)` line they add to index.ts today. ct-49546.
+ * group that used to be registered eagerly joins, in place of the
+ * `registerXCommand(program)` line it had in index.ts — which is how
+ * `cast computer` (ct-49521) and `cast guide` (ct-49544) are registered.
+ * Nothing may reach those two any other way: a register function exported
+ * under `computer/` or by `guide.ts` that index.ts also calls directly is a
+ * failure of commandGroups.guard.test.ts. ct-49546, ct-49848, ct-49849.
  */
 
 import type { Command } from "commander";
@@ -246,6 +249,11 @@ Examples:
     load: () => import("./app/cli.js").then((m) => m.registerAppCommand),
   },
   {
+    token: "computer",
+    description: `Drive a native macOS app through its accessibility tree (cast browser is still the tool for web pages)`,
+    load: () => import("./computer/cli.js").then((m) => (program: Command) => m.registerComputerCommand(program)),
+  },
+  {
     token: "exec",
     args: ["[prompt...]"],
     hasOptions: true,
@@ -271,6 +279,22 @@ Examples:
   Multi-line prompt, exact newlines preserved.
   EOF`,
     load: () => import("./execCommand.js").then((m) => m.registerExecCommand),
+  },
+  {
+    token: "guide",
+    args: ["[topic]"],
+    hasOptions: true,
+    description: `Print a capability guide from this binary (the one that will run the commands)
+
+Same text \`cast install\` writes into CLAUDE.md, headed by this cast's version
+and daemon build id — so a guide can never describe a different binary than
+the one in your $PATH.
+
+Examples:
+  cast guide --list          Every topic, one line each
+  cast guide browser         The full Browser guide
+  cast guide tasks --json    Machine-readable {topic, version, build_id, body}`,
+    load: () => import("./guide.js").then((m) => m.registerGuideCommand),
   },
 ];
 

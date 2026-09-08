@@ -9,9 +9,6 @@
 // Same deps pattern as publish.ts / imageCommand.ts: index.ts hands in config
 // access, this module stays importable by tests.
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { stdinText } from "./sendBody.js";
@@ -24,72 +21,20 @@ import {
   THREAD_STATE_STATUS_LABEL,
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
+import { commandGroup } from "./commandGroups.js";
+import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
 
-// ── the local stamp the reminder hook reads ──────────────────────────────────
-//
-// The reminder hook (thread-state.sh, on Stop and UserPromptSubmit) must decide
-// whether to nudge without a network call on every event, so the decision is
-// kept on disk: a stamp file exists only while this session has a pinned state,
-// and a mark beside it holds the transcript message count the thread stood at
-// after the last write (plus a "nudged" flag once the reminder has fired).
-// `cast state` deletes the mark on every write, which is what makes the
-// reminder fire once per stretch and re-arm when the agent actually updates
-// its state.
-
-function threadStateDir(): string {
-  return path.join(os.homedir(), ".codecast", "thread-state");
-}
-
-export function threadStateStampPath(sessionId: string): string {
-  return path.join(threadStateDir(), `${sessionId}.json`);
-}
-
-export function threadStateCounterPath(sessionId: string): string {
-  return path.join(threadStateDir(), "counters", sessionId);
-}
-
-/** What the stamp holds. `status` is the agent's declared answer to "who acts
- * next" — the daemon reads it at turn end (daemon.ts declaredSettleVerdict)
- * and settles the agent's status to "dormant" / "done" instead of plain idle
- * when the stamp was written during the turn that just ended. */
-export interface ThreadStateStamp {
-  at: number;
-  status?: ThreadStateStatus;
-}
-
-/** Stamp "this session has a pinned state" (with the declared status) and
- * reset the reminder's message baseline. */
-export function writeThreadStatePulse(sessionId: string, status?: ThreadStateStatus): void {
-  try {
-    fs.mkdirSync(threadStateDir(), { recursive: true });
-    const stamp: ThreadStateStamp = { at: Date.now(), ...(status ? { status } : {}) };
-    fs.writeFileSync(threadStateStampPath(sessionId), JSON.stringify(stamp));
-    const counter = threadStateCounterPath(sessionId);
-    if (fs.existsSync(counter)) fs.unlinkSync(counter);
-  } catch {}
-}
-
-/** The stamp for a session, or null when it has none / is unreadable. */
-export function readThreadStateStamp(sessionId: string): ThreadStateStamp | null {
-  try {
-    const raw = fs.readFileSync(threadStateStampPath(sessionId), "utf8");
-    const parsed = JSON.parse(raw) as { at?: unknown; status?: unknown };
-    if (typeof parsed.at !== "number") return null;
-    const status = parseThreadStateStatus(typeof parsed.status === "string" ? parsed.status : null);
-    return { at: parsed.at, ...(status ? { status } : {}) };
-  } catch {
-    return null;
-  }
-}
-
-/** Drop the stamp — a session with no pinned state is never nudged. */
-export function clearThreadStatePulse(sessionId: string): void {
-  try {
-    for (const file of [threadStateStampPath(sessionId), threadStateCounterPath(sessionId)]) {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-    }
-  } catch {}
-}
+// The on-disk stamp the reminder hook reads lives in threadStateStamp.ts:
+// the daemon needs it and must not load this command to get it. Re-exported
+// here so importers of `cast state`'s module keep working. ct-49546.
+export {
+  threadStateStampPath,
+  threadStateCounterPath,
+  writeThreadStatePulse,
+  readThreadStateStamp,
+  clearThreadStatePulse,
+  type ThreadStateStamp,
+} from "./threadStateStamp.js";
 
 /** Words that mean "remove the pinned state" when they are the whole argument.
  * Deliberately excludes "done": an agent wrapping up is as likely to mean it as
@@ -222,39 +167,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
   program
     .command("state")
     .argument("[args...]", stdinText("clear | show <session> | the text to pin"))
-    .description(
-      "Pin the current state of this thread — the standing answer to \"where does this stand?\"\n\n" +
-      "The text renders pinned above the composer in the dashboard and on the inbox\n" +
-      "card, so the human sees the situation the moment they open the session instead\n" +
-      "of reading back through it. First line: what this session is working on, plain\n" +
-      "and unlabeled. You own it: rewrite it whenever the answer changes, and clear it\n" +
-      "when it stops being true. The dashboard shows how many messages have passed\n" +
-      "since you wrote it, so a stale state is visible as stale. A message from the\n" +
-      "human takes the pin down on its own (your declaration of who acts next has\n" +
-      "been answered); a send from another session or a trigger wake leaves it.\n\n" +
-      "Subcommands:\n" +
-      "  cast state                     Print the pinned state of this session\n" +
-      "  cast state \"<text>\"            Pin (or replace) the state\n" +
-      "  cast state clear               Remove it\n" +
-      "  cast state show <session>      Print another session's state\n\n" +
-      "--status is your answer to WHO ACTS NEXT, and it decides where the session\n" +
-      "files in the inbox when your turn ends:\n" +
-      "  working   still moving (default)\n" +
-      "  blocked   a human must act to unblock you            → Needs Input\n" +
-      "  done      delivered; nothing stalled, review at leisure → Done\n" +
-      "  dormant   a machine wakes you — name the wake in the text → Dormant\n" +
-      "done and dormant cover exactly the turn that declares them: after the next\n" +
-      "wake, declare again or the session returns to Needs Input.\n\n" +
-      "Examples:\n" +
-      "  cast state --status dormant \"Waiting on CI run 8841 — tr-42 re-checks at 3pm\"\n" +
-      "  cast state --status blocked - <<'EOF'\n" +
-      "  Migrating the sync layer to wake signatures\n" +
-      "  Status: rewrite done, tests green\n" +
-      "  Blocked: needs a prod key before the last check\n" +
-      "  EOF\n" +
-      "  cast state --status done \"Shipped — all four fixes verified in the browser\"\n" +
-      "  cast state clear               # the state no longer holds",
-    )
+    .description(commandGroup("state").description)
     .option(
       "--status <status>",
       "Who acts next: working (default) | blocked | done | dormant — files the session under Needs Input / Done / Dormant when the turn ends",

@@ -26,6 +26,10 @@ import { createHash } from "node:crypto";
 const PAYLOAD = path.join(import.meta.dir, "helper.tar");
 const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
+/** Each test runs a real `bun build --compile`, which is 15-20 s here — far
+ *  over bun's 5 s default, so the timeout has to be stated. */
+const COMPILE_TIMEOUT = 300_000;
+
 let stage = "";
 
 beforeEach(() => {
@@ -70,7 +74,7 @@ test("a compiled binary reports the sha256 of the payload it was built with", ()
   fs.copyFileSync(tar, PAYLOAD);
 
   expect(compileAndAsk()).toBe(sha256(tar));
-});
+}, COMPILE_TIMEOUT);
 
 test("a compiled binary with an empty payload reports no helper", () => {
   // The non-macOS case: build-with-native.ts leaves the file empty, and every
@@ -78,4 +82,4 @@ test("a compiled binary with an empty payload reports no helper", () => {
   // a zero-byte helper.
   fs.writeFileSync(PAYLOAD, "");
   expect(compileAndAsk()).toBe("none");
-});
+}, COMPILE_TIMEOUT);

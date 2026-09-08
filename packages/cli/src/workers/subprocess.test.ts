@@ -42,11 +42,11 @@ test("actual source entry roundtrip works for all worker kinds without config/CL
   expect(fs.readdirSync(dir)).toEqual([]);
 });
 test("production async wrapper routes probes on, keeps exact process IDs, and switches off with no child", async () => {
-  const h = configureDaemonWorkers(true, { invocation: invocation() })!;
+  const h = (await configureDaemonWorkers(true, { invocation: invocation() }))!;
   const result = await execFileAsync("ps", ["-p", String(process.pid), "-o", "command="], { encoding: "utf-8", timeout: 5000 });
   expect(result.stdout).toContain("bun"); expect(h.state.pid).toBeGreaterThan(1);
   const pid = h.state.pid!;
-  configureDaemonWorkers(false); await until(() => !alive(pid));
+  await configureDaemonWorkers(false); await until(() => !alive(pid));
   expect((await execFileAsync("ps", ["-p", String(process.pid), "-o", "command="], { timeout: 5000 })).stdout).toContain("bun");
   expect(h.state.closed).toBe(true);
 });
@@ -87,7 +87,7 @@ test("deadline kills slow child descendants; no late result survives", async () 
 });
 test("killing worker mid-request allows async fallback and replacement after backoff", async () => {
   const dir = temp(); slowPs(dir);
-  const h = configureDaemonWorkers(true, { invocation: invocation(), backoffMs: [20, 30, 40] })!;
+  const h = (await configureDaemonWorkers(true, { invocation: invocation(), backoffMs: [20, 30, 40] }))!;
   const p = execFileAsync("ps", ["aux"], { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, timeout: 5000 });
   const settled = Promise.allSettled([p]);
   await until(() => fs.existsSync(path.join(dir, "job.pid")));
@@ -104,16 +104,16 @@ test("read-only tmux listing/capture matches direct async path on an isolated so
     for (let i = 0; i < 2; i++) { tmux(["new-session", "-d", "-s", names[i], "sh", "-c", "printf 'probe fixture\\n'; exec sleep 60"]); tmux(["set-option", "-t", names[i], "@codecast_session_id", `sameprefix-${i}-full`]); }
     const args = ["-L", socket, "list-sessions", "-F", "#{@codecast_session_id}|#{session_created}|#{session_name}"];
     const direct = await tmuxRunAsync(args);
-    const h = configureDaemonWorkers(true, { invocation: invocation() })!;
+    const h = (await configureDaemonWorkers(true, { invocation: invocation() }))!;
     const routed = await tmuxRunAsync(args); expect(routed).toEqual(direct); expect(h.state.pid).toBeGreaterThan(1);
     const panes = parseCodecastPaneRows(routed.stdout);
     expect(pickPaneForSession(panes, "sameprefix-1-full", "collision-b")).toBe(names[1]);
     expect(pickPaneForSession(panes, "sameprefix-X-full", "collision-b")).toBeNull();
     const capture = ["-L", socket, "capture-pane", "-p", "-t", names[0]];
     await delay(100);
-    const workerCapture = await tmuxRunAsync(capture); configureDaemonWorkers(false);
+    const workerCapture = await tmuxRunAsync(capture); await configureDaemonWorkers(false);
     expect(workerCapture).toEqual(await tmuxRunAsync(capture)); expect(workerCapture.stdout).toContain("probe fixture");
-    configureDaemonWorkers(true, { invocation: invocation() });
+    await configureDaemonWorkers(true, { invocation: invocation() });
     const missing = await tmuxRunAsync(["-L", socket, "has-session", "-t", "does-not-exist"]);
     expect(missing.status).toBe(1); expect(missing.stderr).toContain("find");
   } finally { tmux(["kill-server"]); }

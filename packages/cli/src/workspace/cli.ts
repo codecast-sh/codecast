@@ -22,6 +22,7 @@ import { MANIFEST_REL_PATH } from "./resolver.js";
 import { readState } from "./contract.js";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
+import { commandGroup } from "../commandGroups.js";
 
 /**
  * Resolve the repo root for the current working directory.
@@ -42,7 +43,7 @@ export function registerWorkspaceCommand(program: Command): void {
   const ws = program
     .command("workspace")
     .alias("ws")
-    .description("Manage isolated git worktrees for parallel agent work");
+    .description(commandGroup("workspace").description);
 
   // -----------------------------------------------------------------------
   // cast workspace init

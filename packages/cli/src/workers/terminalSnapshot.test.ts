@@ -8,7 +8,7 @@ import { encodeFrame } from "./protocol.js";
 import { handleTerminalHttp, terminalSessionSnapshot } from "../terminal/terminalServer.js";
 test("actual terminal HTTP handler never awaits a probe and never turns a probe timeout into an empty fleet", async () => {
   let reply!: (failed?: boolean) => void;
-  const host = configureDaemonWorkers(true, {
+  const host = (await configureDaemonWorkers(true, {
     invocation: { command: "synthetic-private-worker", args: [] },
     spawnChild() {
       const child = Object.assign(new EventEmitter(), { pid: 999999, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -20,7 +20,7 @@ test("actual terminal HTTP handler never awaits a probe and never turns a probe 
       return child as unknown as ChildProcess;
     },
     killChild() {},
-  })!;
+  }))!;
   terminalSessionSnapshot.invalidate();
   const server = http.createServer((req, res) => { handleTerminalHttp(req, res, { token: "fixture", log() {} }); });
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));

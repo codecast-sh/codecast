@@ -9,11 +9,10 @@ import * as fs from "node:fs";
 import type { Config } from "./types.js";
 import { sharedConfigFile } from "./sharedConfig.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "../tokenEncryption.js";
-import { codecastDir } from "../codecastDir.js";
 
-export function defaultConfigDir(): string {
-  return codecastDir();
-}
+// Re-exported so this stays the one import for callers that read the config
+// through it (fastPath.ts loads both off this module namespace).
+export { defaultConfigDir } from "./sharedConfig.js";
 
 export function readAuthConfig(
   configDir: string,

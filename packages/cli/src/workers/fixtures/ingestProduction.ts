@@ -99,7 +99,7 @@ const {readTranscriptIngest} = await import('../ingestClient.js');
 const main = path.resolve(import.meta.dir,'../../main.ts');
 const worker = path.resolve(import.meta.dir,'ingestWorker.ts');
 const options = {invocation:{command:process.execPath,args:[worker]},backoffMs:[0,0,0]};
-configureDaemonWorkers(enabled,{invocation:{command:process.execPath,args:[main,'_worker','probe']}},{invocation:{command:process.execPath,args:[main,'_worker','scan']}},options);
+await configureDaemonWorkers(enabled,{invocation:{command:process.execPath,args:[main,'_worker','probe']}},{invocation:{command:process.execPath,args:[main,'_worker','scan']}},options);
 const rows = new Map<string,any>(), sends:any[] = [], queued:any[] = [], titles:string[] = [];
 let createFailure = false, sendFailure = false, recreateFailure = false, created = 0;
 const sync:any = new Proxy({

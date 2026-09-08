@@ -25,7 +25,7 @@ test('named production policies match local traversal on actual layouts, pruning
  for(const [policy,maxDepth] of cases) {
    closeDaemonWorkers(); const opts={...scanPredicates(root,policy),policy,maxDepth};
    const local:WalkFile[]=[];await walkFiles(root,opts,f=>local.push(f));
-   start(); const remote:WalkFile[]=[];await walkFiles(root,opts,f=>remote.push(f));
+   await start(); const remote:WalkFile[]=[];await walkFiles(root,opts,f=>remote.push(f));
    const normalize=(files:WalkFile[])=>files.map(f=>[f.rel,f.depth,f.stat.mtimeMs,f.stat.size,f.stat.isFile()]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
    expect(normalize(remote)).toEqual(normalize(local));
    expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);
@@ -35,7 +35,7 @@ test('named production policies match local traversal on actual layouts, pruning
 test('large trees use bounded pages, apply batches with yielding, and parents precede descendants',async()=> {
  const root=temp();
  for(let i=0;i<2200;i++) write(root,`d/f${String(i).padStart(5,'0')}.jsonl`);
- write(root,'d/child/nested.jsonl');write(root,'root.jsonl');start();
+ write(root,'d/child/nested.jsonl');write(root,'root.jsonl');await start();
  let count=0,pages=0,ticks=0;const timer=setInterval(()=>ticks++,1);
  try {
  await visitScan({name:'walk',root,policy:{files:'jsonl'},stats:true},rows=> {pages++;expect(rows.length).toBeLessThanOrEqual(SCAN_PAGE_ROWS);expect(Buffer.byteLength(JSON.stringify(rows))).toBeLessThan(SCAN_PAGE_BYTES);count+=rows.length;});
@@ -45,19 +45,19 @@ test('large trees use bounded pages, apply batches with yielding, and parents pr
  } finally {clearInterval(timer);}
 });
 test('crash after a delivered scan page falls back without duplicate observations',async()=> {
- const root=temp();for(let i=0;i<500;i++)write(root,`${i}.jsonl`);start();let killed=false;const seen:string[]=[];
+ const root=temp();for(let i=0;i<500;i++)write(root,`${i}.jsonl`);await start();let killed=false;const seen:string[]=[];
  await walkFiles(root,{policy:{files:'jsonl'},fileFilter:r=>r.endsWith('.jsonl')},f=> {seen.push(f.path);if(!killed){killed=true;process.kill(scanWorkerHost()!.state.pid!,'SIGKILL');}});
  expect(seen).toHaveLength(500);expect(new Set(seen).size).toBe(500);
 });
 test('cancellation after a page discards all later pages without fallback',async()=> {
- const root=temp();for(let i=0;i<350;i++)write(root,`${i}.jsonl`);start();const abort=new AbortController();let rows=0;
+ const root=temp();for(let i=0;i<350;i++)write(root,`${i}.jsonl`);await start();const abort=new AbortController();let rows=0;
  await expect(visitScan({name:'walk',root,policy:{},stats:false},batch=> {rows+=batch.length;abort.abort();},abort.signal)).rejects.toThrow('stopped');
  expect(rows).toBe(128);expect(scanWorkerHost()!.state.pending).toBe(0);
 });
 test('inventory, plugin manifests and roots are real worker observations with local parity',async()=> {
  const home=temp();write(home,'.claude/skills/own/SKILL.md','---\nname: own\ndescription: own skill\n---\ntext');write(home,'.agents/skills/shared/SKILL.md','---\nname: shared\ndescription: shared skill\n---\ntext');fs.mkdirSync(path.join(home,'.codex'),{recursive:true});
  const project=path.join(home,'src','repo');fs.mkdirSync(project,{recursive:true});fs.symlinkSync(project,path.join(home,'src','linked'));write(home,'.claude/plugins/installed_plugins.json',JSON.stringify({version:2,plugins:{'fixture@market':[{scope:'user',version:'1'}]}}));write(home,'.claude/plugins/cache/market/fixture/1/.claude-plugin/plugin.json',JSON.stringify({name:'fixture'}));write(home,'.claude/plugins/cache/market/fixture/1/scripts/a.sh','true');
- const inv=await readInventoryAsyncLocal(home);const manifests=readInstalledPluginObservations(home);const roots=await enumerateLocalRootsAsync(home,[project]);start();
+ const inv=await readInventoryAsyncLocal(home);const manifests=readInstalledPluginObservations(home);const roots=await enumerateLocalRootsAsync(home,[project]);await start();
  expect(await readInventoryAsync(home)).toEqual(inv);expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);
  expect(await readInstalledPluginObservationsAsync(home)).toEqual(manifests);
  const rows=await collectScan({name:'roots',home,started:[project]});expect(rows.map(r=>r.type==='root'?r.path:null)).toEqual(roots);
@@ -68,13 +68,13 @@ test('scan protocol refuses callback code, unknown policies, oversized paths and
 
 test('missing, unreadable and deleted entries preserve local parity and policy-only crash fallback',async()=>{
  const root=temp();write(root,'ok/a.jsonl');write(root,'deny/a.jsonl');fs.chmodSync(path.join(root,'deny'),0);
- try{const off:WalkFile[]=[];await walkFiles(root,{policy:{files:'jsonl'}},f=>off.push(f));start();const on:WalkFile[]=[];await walkFiles(root,{policy:{files:'jsonl'}},f=>on.push(f));expect(on.map(f=>f.rel)).toEqual(off.map(f=>f.rel));expect(on.map(f=>f.rel)).toEqual(['ok/a.jsonl']);}finally{fs.chmodSync(path.join(root,'deny'),0o755);}
- closeDaemonWorkers();const large=temp();for(let i=0;i<500;i++)write(large,`${String(i).padStart(4,'0')}.jsonl`);write(large,'exclude.txt');start();let killed=false;const seen:string[]=[];
+ try{const off:WalkFile[]=[];await walkFiles(root,{policy:{files:'jsonl'}},f=>off.push(f));await start();const on:WalkFile[]=[];await walkFiles(root,{policy:{files:'jsonl'}},f=>on.push(f));expect(on.map(f=>f.rel)).toEqual(off.map(f=>f.rel));expect(on.map(f=>f.rel)).toEqual(['ok/a.jsonl']);}finally{fs.chmodSync(path.join(root,'deny'),0o755);}
+ closeDaemonWorkers();const large=temp();for(let i=0;i<500;i++)write(large,`${String(i).padStart(4,'0')}.jsonl`);write(large,'exclude.txt');await start();let killed=false;const seen:string[]=[];
  await walkFiles(large,{policy:{files:'jsonl'}},f=>{seen.push(f.rel);if(!killed){killed=true;fs.unlinkSync(path.join(large,'0499.jsonl'));process.kill(scanWorkerHost()!.state.pid!,'SIGKILL');}});expect(seen).toHaveLength(499);expect(new Set(seen).size).toBe(499);expect(seen).not.toContain('exclude.txt');
 });
 
 test('old scan replies after runtime replacement are discarded and open cursors are bounded',async()=>{
- const root=temp();for(let i=0;i<300;i++)write(root,`${i}.jsonl`);start();const host=scanWorkerHost()!,request=host.request.bind(host);let release!:()=>void,arrived!:()=>void;const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>arrived=r);
- host.request=async(...args:Parameters<typeof host.request>)=>{const result=await request(...args);arrived();await gate;return result;};let applied=0;const old=visitScan({name:'walk',root,policy:{},stats:false},rows=>{applied+=rows.length;});const rejected=old.then(()=>null,error=>error);await started;closeDaemonWorkers();start();expect((await collectScan({name:'walk',root,policy:{},stats:false}))).toHaveLength(300);release();expect((await rejected)?.message).toContain('stopped');expect(applied).toBe(0);
+ const root=temp();for(let i=0;i<300;i++)write(root,`${i}.jsonl`);await start();const host=scanWorkerHost()!,request=host.request.bind(host);let release!:()=>void,arrived!:()=>void;const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>arrived=r);
+ host.request=async(...args:Parameters<typeof host.request>)=>{const result=await request(...args);arrived();await gate;return result;};let applied=0;const old=visitScan({name:'walk',root,policy:{},stats:false},rows=>{applied+=rows.length;});const rejected=old.then(()=>null,error=>error);await started;closeDaemonWorkers();await start();expect((await collectScan({name:'walk',root,policy:{},stats:false}))).toHaveLength(300);release();expect((await rejected)?.message).toContain('stopped');expect(applied).toBe(0);
  const current=scanWorkerHost()!;const pages:any[]=[];for(let i=0;i<4;i++)pages.push(await current.request('scan',{action:'open',job:{name:'walk',root,policy:{},stats:false}}));await expect(current.request('scan',{action:'open',job:{name:'walk',root,policy:{},stats:false}})).rejects.toThrow('busy');for(const page of pages)expect((await current.request('scan',{action:'close',cursor:page.cursor}) as any).done).toBe(true);expect(current.state.pending).toBe(0);
 });

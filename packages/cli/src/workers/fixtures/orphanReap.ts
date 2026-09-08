@@ -10,7 +10,7 @@ const run = promisify(execFile);
 const [mode, pane] = process.argv.slice(2);
 const enabled = mode === "true", root = process.env.HOME!, conv = "orphan-fixture-conversation";
 const main = path.resolve(import.meta.dir, "../../main.ts");
-configureDaemonWorkers(enabled, { invocation: { command: process.execPath, args: [main, "_worker", "probe"] } }, { invocation: { command: process.execPath, args: [main, "_worker", "scan"] } });
+await configureDaemonWorkers(enabled, { invocation: { command: process.execPath, args: [main, "_worker", "probe"] } }, { invocation: { command: process.execPath, args: [main, "_worker", "scan"] } });
 const { io, reapOrphanedAgent: reap } = orphanReaperForTests;
 const originalIo = { ...io };
 const owned: Array<{ pid: number; ids: string[] }> = [];

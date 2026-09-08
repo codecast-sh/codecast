@@ -22,6 +22,7 @@ import {
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { getVersion } from "./update.js";
 import { c, fmt } from "./colors.js";
+import { commandGroup } from "./commandGroups.js";
 
 /** The guide text for one topic: the installed body without the installer's own
  *  bookkeeping (the end marker, and the version stamp the header already
@@ -93,16 +94,7 @@ function printList(json: boolean): void {
 export function registerGuideCommand(program: Command): void {
   program
     .command("guide")
-    .description(
-      "Print a capability guide from this binary (the one that will run the commands)\n\n" +
-      "Same text `cast install` writes into CLAUDE.md, headed by this cast's version\n" +
-      "and daemon build id — so a guide can never describe a different binary than\n" +
-      "the one in your $PATH.\n\n" +
-      "Examples:\n" +
-      "  cast guide --list          Every topic, one line each\n" +
-      "  cast guide browser         The full Browser guide\n" +
-      "  cast guide tasks --json    Machine-readable {topic, version, build_id, body}"
-    )
+    .description(commandGroup("guide").description)
     .argument("[topic]", `topic to print (${guideTopics().map((t) => t.slug).join(", ")})`)
     .option("--list", "List every topic instead of printing one")
     .option("--json", "Machine-readable output")

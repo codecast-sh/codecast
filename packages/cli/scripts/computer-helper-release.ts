@@ -16,6 +16,12 @@
  *
  * A tar is not reproducible (it records mtimes), so "build once" is not an
  * optimisation here — it is the only way one hash can identify the helper.
+ *
+ * `verify` also proves one fact that is not about the helper but has the same
+ * shape — only a built artifact can show it, and only by running it: the
+ * compiled binary is still code split, so the lazy command groups cost nothing
+ * until their verb runs (ct-49751). It lives here because this is already the
+ * step that runs the freshly built darwin binary.
  */
 
 import { spawnSync } from "node:child_process";
@@ -142,6 +148,34 @@ export function embeddedHelperSha256(binary: string): string | null {
   return answer;
 }
 
+/**
+ * Bytes of JavaScript the artifact parses before it picks a verb.
+ *
+ * `bun build --compile --splitting` keeps every `await import()` in its own
+ * chunk; without `--splitting` bun concatenates them all into the entry module
+ * and the binary parses the whole CLI to print `cast --help`. Measured on bun
+ * 1.3.14, darwin-arm64, on the release shape: 1,499 bytes split against
+ * 4,312,289 unsplit, and `cast --help` about 165 -> 110 ms CPU (median of 11,
+ * `cast bench boot --binary`, on identically signed artifacts).
+ */
+export function bootBytes(binary: string): number {
+  const result = spawnSync(binary, ["_boot-bytes"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, CODECAST_NO_AUTO_UPDATE: "1" } });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${binary} _boot-bytes failed (${result.status ?? result.signal})\n${result.stderr ?? ""}`);
+  const answer = Number.parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(answer) || answer <= 0) throw new Error(`${binary} _boot-bytes printed ${JSON.stringify(result.stdout.trim())}`);
+  return answer;
+}
+
+/**
+ * The ceiling that separates a split build from an unsplit one, with room to
+ * spare on both sides: the module holds fastPath.ts and nothing else, and the
+ * unsplit figure is three orders of magnitude above this. It fails on the two
+ * ways the win can be lost — the compile step stops splitting, or a static
+ * import in fastPath.ts drags its graph back in front of every verb.
+ */
+export const BOOT_BYTES_CEILING = 64 * 1024;
+
 export interface HelperReleaseRecord {
   version: string;
   sha256: string;
@@ -149,6 +183,8 @@ export interface HelperReleaseRecord {
   authority: string;
   /** sha256 per artifact; null where the build carries no helper. */
   artifacts: Record<string, string | null>;
+  /** What the runnable darwin artifact parses before it picks a verb. */
+  bootBytes: number;
 }
 
 /**
@@ -181,7 +217,12 @@ export function verifyRelease(binariesDir: string, expect: HelperIdentityExpecta
   const reported = embeddedHelperSha256(path.join(binariesDir, native));
   if (reported !== sha256) throw new Error(`${native} reports helper ${reported ?? "none"}, but the release built ${sha256}`);
 
-  const record: HelperReleaseRecord = { version: bundle.version, sha256, size: fs.statSync(tar).size, authority: bundle.authority, artifacts };
+  const parsed = bootBytes(path.join(binariesDir, native));
+  if (parsed > BOOT_BYTES_CEILING) {
+    throw new Error(`${native} parses ${parsed} bytes before it picks a verb, over the ${BOOT_BYTES_CEILING} ceiling — the lazy command groups are being parsed eagerly. Either the compile step lost --splitting (build-with-native.ts) or fastPath.ts gained a static import.`);
+  }
+
+  const record: HelperReleaseRecord = { version: bundle.version, sha256, size: fs.statSync(tar).size, authority: bundle.authority, artifacts, bootBytes: parsed };
   fs.writeFileSync(path.join(binariesDir, HELPER_JSON_NAME), `${JSON.stringify(record, null, 2)}\n`);
   return record;
 }
@@ -196,11 +237,21 @@ if (import.meta.main) {
     if (!target) throw new Error("usage: computer-helper-release.ts build <output.tar>");
     const { sha256, size } = buildHelperPayload(target);
     console.log(`cast computer helper: ${size} bytes, sha256 ${sha256}`);
+  } else if (command === "boot") {
+    // The split half of `verify`, on its own, for a build that ships no helper
+    // (CODECAST_SKIP_COMPUTER_HELPER=1, or a Mac without swift). The ceiling is
+    // the point of the check, so it must not depend on the helper being there.
+    if (!target) throw new Error("usage: computer-helper-release.ts boot <binaries-dir>");
+    const native = `codecast-darwin-${process.arch === "x64" ? "x64" : "arm64"}`;
+    const parsed = bootBytes(path.join(target, native));
+    if (parsed > BOOT_BYTES_CEILING) throw new Error(`${native} parses ${parsed} bytes before it picks a verb, over the ${BOOT_BYTES_CEILING} ceiling — the compile step lost --splitting, or fastPath.ts gained a static import.`);
+    console.log(`compiled boot: ${parsed} bytes parsed before the verb is picked`);
   } else if (command === "verify") {
     if (!target) throw new Error("usage: computer-helper-release.ts verify <binaries-dir> [--identity <authority>] [--team <id>] [--version <v>] [--allow-adhoc]");
     const record = verifyRelease(target, { identity: flag("identity"), team: flag("team"), version: flag("version"), allowAdhoc: rest.includes("--allow-adhoc") });
     console.log(`cast computer helper ${record.version}: sha256 ${record.sha256}, ${record.authority}`);
+    console.log(`compiled boot: ${record.bootBytes} bytes parsed before the verb is picked`);
   } else {
-    throw new Error(`unknown command ${JSON.stringify(command ?? "")}; expected build or verify`);
+    throw new Error(`unknown command ${JSON.stringify(command ?? "")}; expected build, verify or boot`);
   }
 }

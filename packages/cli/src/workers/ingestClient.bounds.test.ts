@@ -19,15 +19,15 @@ test('actual ingest client applies one budget to pages, local reads, fallback an
   const original=Object.getOwnPropertyDescriptor(performance,'now');
   const nowMethod=performance.now;
   let now=0,closes=0,requests:number[]=[],pages=0;
-  const setup=()=>{
-    configureDaemonWorkers(true);
+  const setup=async ()=>{
+    await configureDaemonWorkers(true);
     const host=ingestWorkerHost()!;
     Object.defineProperty(host,'state',{get:()=>({closed:false,generation:1,pid:123,pending:0})});
     return host;
   };
   try {
     Object.defineProperty(performance,'now',{configurable:true,value:()=>now});
-    let host=setup();
+    let host=await setup();
     host.request=(async(_operation:any,payload:any,options:any)=>{
       if(payload.action==='close') {closes++;return {};}
       requests.push(options.timeoutMs);now+=9_000;
@@ -35,16 +35,16 @@ test('actual ingest client applies one budget to pages, local reads, fallback an
     }) as typeof host.request;
     await expect(readTranscriptIngest(input,{timeoutMs:10_000})).rejects.toThrow(IngestDeadlineExceeded);
     expect(requests).toEqual([10_000,1_000]);expect(closes).toBe(1);
-    now=0;host=setup();
+    now=0;host=await setup();
     host.request=(async(_operation:any,payload:any)=>{
       if(payload.action==='close') {closes++;return {};}
       return {cursor:'cursor',generation:payload.job.generation,sequence:0,tokens:[],done:false};
     }) as typeof host.request;
     await expect(readTranscriptIngest(input)).rejects.toThrow('no progress');
-    now=0;host=setup();
+    now=0;host=await setup();
     host.request=(async()=>{now=11_000;throw new WorkerUnavailable('unavailable after budget');}) as typeof host.request;
     await expect(readTranscriptIngest(input,{timeoutMs:10_000})).rejects.toThrow(IngestDeadlineExceeded);
-    now=0;host=setup();
+    now=0;host=await setup();
     host.request=(async(_operation:any,payload:any)=>{
       if(payload.action==='close')return {};
       const page={cursor:'cursor',generation:payload.job.generation,sequence:0,tokens:[...ingestTokens({...result,totalCount:0})],done:true};
@@ -55,7 +55,7 @@ test('actual ingest client applies one budget to pages, local reads, fallback an
     fs.writeFileSync(file,JSON.stringify({type:'assistant',uuid:'deep',timestamp:'2026-09-05T00:00:00Z',message:{role:'assistant',content:[{type:'tool_use',id:'tool',name:'tool',input:nested}]}})+'\n');
     closeDaemonWorkers();
     await expect(readTranscriptIngest(input)).rejects.toThrow('nesting');
-    host=setup();host.request=(async()=>{throw new WorkerUnavailable('small fallback');}) as typeof host.request;
+    host=await setup();host.request=(async()=>{throw new WorkerUnavailable('small fallback');}) as typeof host.request;
     await expect(readTranscriptIngest(input)).rejects.toThrow('nesting');
   } finally {
     if(original)Object.defineProperty(performance,'now',original);

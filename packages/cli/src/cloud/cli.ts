@@ -18,6 +18,7 @@ import {
   prepareCloudHost,
   waitForDeviceOnline,
 } from "./prepare.js";
+import { commandGroup } from "../commandGroups.js";
 
 /** The model option key the launch flags want, from the row's full id. */
 export function launchModelKey(model: string | null | undefined, agentType: string | null | undefined): string | undefined {
@@ -26,7 +27,7 @@ export function launchModelKey(model: string | null | undefined, agentType: stri
 }
 
 export function registerCloudCommand(program: Command): void {
-  const cloud = program.command("cloud", { hidden: true }).description("Cloud host plumbing used by the daemon");
+  const cloud = program.command("cloud", { hidden: true }).description(commandGroup("cloud").description);
 
   cloud
     .command("wake <hostId>")
