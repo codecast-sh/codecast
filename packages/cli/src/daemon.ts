@@ -82,7 +82,9 @@ import {
   attributeFingerprintToProfile,
   readActiveOauth,
   createMtimeGatedCache,
+  ingestStatusLineUsage,
 } from "./ccAccounts.js";
+import { STATUSLINE_HOOK_PATH, STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
@@ -109,12 +111,22 @@ import {
   daemonTickStale,
   DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
+  EXIT_DO_NOT_RESTART,
   extractPlistProgramArguments,
   shellEscapeForSh,
   watchdogHeartbeatStale,
   WATCHDOG_HEARTBEAT_FILENAME,
   WATCHDOG_PASS_STAMP_FILENAME,
 } from "./supervision.js";
+import {
+  clearDaemonExitStamp,
+  consumeHangMarker,
+  createHangRecorder,
+  noRestartReason,
+  writeDaemonExitStamp,
+  writeHangMarker,
+  type HangMarker,
+} from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
 import { parseCodexSessionFile } from "./parser.js";
@@ -207,6 +219,15 @@ import {
   type LoopbackIdentity,
 } from "./loopbackIdentity.js";
 import { HookStatusGate } from "./hookStatusGate.js";
+import {
+  SPOOL_EXT,
+  appendStatusSpool,
+  drainAllStatusSpools,
+  drainStatusSpool,
+  isSafeStatusSessionId,
+  isSpoolableStatus,
+  sweepStatusSpools,
+} from "./statusSpool.js";
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
@@ -1042,6 +1063,9 @@ interface DaemonState {
   // logins can start the watcher without re-touching an undecided TCC state
   // (see cursorWatcherDecision) and doctor can explain a denial.
   cursorAccess?: "granted" | "denied";
+  // Hang marker left by the PREVIOUS daemon and consumed at this boot, so the
+  // stall survives the process that suffered it (see daemonMarkers.ts).
+  lastHang?: HangMarker;
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -1257,15 +1281,10 @@ const closedSyntheticPrompts = new Map<string, number>();
 // lifecycle is otherwise only reachable through live tmux scrapes.
 export const syntheticPromptTestSeam = { lastEmittedSyntheticPrompt, closedSyntheticPrompts };
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
-// A session id that is safe to use as a file name inside AGENT_STATUS_DIR. The
-// leading character cannot be a dot, so no id can name a parent directory, and
-// no separator is allowed, so no id can leave the directory at all. Real ids
-// are uuids, so this rejects nothing a real caller sends. Exported for the
-// test that covers the traversal shapes.
-const SAFE_STATUS_SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
-export function isSafeStatusSessionId(sessionId: string): boolean {
-  return SAFE_STATUS_SESSION_ID.test(sessionId);
-}
+// Re-exported for the test that covers the traversal shapes. Both the legacy
+// status file and the spool build a path out of the id, so the check lives
+// with them in statusSpool.ts.
+export { isSafeStatusSessionId };
 // Every write of an agent status file rides this one chain. Two statuses for a
 // session (a PostToolUse then a Stop) must land in that order, and two writes
 // racing on one path can also leave bytes the boot replay cannot parse. One
@@ -1283,13 +1302,25 @@ function queueAgentStatusWrite(sessionId: string, payload: () => HookStatusData)
     .catch(() => {});
 }
 
+// The deferral's second write: one line on the session's spool, so a burst
+// during the boot window replays in the order it happened instead of
+// collapsing to whatever the file above holds last (ct-49531). Rides the same
+// chain as that write, which is what keeps the two files agreeing on order.
+function queueAgentStatusSpoolAppend(sessionId: string, data: HookStatusData): void {
+  if (!isSpoolableStatus(data.status)) return;
+  agentStatusWriteChain = agentStatusWriteChain
+    .then(() => appendStatusSpool(AGENT_STATUS_DIR, sessionId, data))
+    .catch(() => {});
+}
+
 // The loopback server listens seconds into boot; the /hook/status handler
 // exists only once the caches it closes over do. Until then a status lands in
 // the agent-status directory, where the chokidar watcher and the boot replay
-// below already drain it. See hookStatusGate.ts for why the daemon writes that
-// file rather than letting the hook script fall back on its own.
+// below already drain it. See hookStatusGate.ts for why the daemon writes those
+// files rather than letting the hook script fall back on its own.
 const hookStatusGate = new HookStatusGate<HookStatusData>((sessionId, data) => {
   queueAgentStatusWrite(sessionId, () => data);
+  queueAgentStatusSpoolAppend(sessionId, data);
 });
 export function setHookStatusSink(sink: (sessionId: string, data: HookStatusData) => void): void {
   hookStatusGate.setSink(sink);
@@ -1751,6 +1782,61 @@ function startVaultMirror(): void {
   vaultMirror.start();
 }
 
+// --- Live usage from a session's statusLine command ---
+// Claude Code hands every turn's rate-limit windows to the statusLine command,
+// and codecast-statusline.sh posts them here (see statuslineHook.ts). That is a
+// reading per turn where the OAuth usage endpoint gives one per five minutes,
+// so it is what auto-switch gets to see when an account is burning down fast.
+//
+// Unauthenticated, like /hook/status beside it: both are loopback-only, and a
+// local process could already forge a status event. What it writes is a
+// percentage, never a token. A forged post can at worst make auto-switch move
+// sessions to another saved account — visible, reversible, and it costs the
+// forger nothing to instead post the same thing as a real session.
+const STATUSLINE_MAX_BODY = 64 * 1024;
+const STATUSLINE_LOG_EVERY_MS = 10 * 60 * 1000;
+const statusLineLogged = new Map<string, number>();
+
+export function handleStatusLinePost(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let aborted = false;
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > STATUSLINE_MAX_BODY) {
+      aborted = true;
+      res.writeHead(413);
+      res.end();
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on("end", () => {
+    if (aborted) return;
+    // The hook fires and forgets, so nothing here retries and nothing may
+    // throw out of the request: a bad payload is dropped, not reported.
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ok");
+    void (async () => {
+      try {
+        const account = new URL(req.url ?? "/", "http://localhost").searchParams.get("account") || undefined;
+        const result = await ingestStatusLineUsage(JSON.parse(Buffer.concat(chunks).toString("utf-8")), { account });
+        if (!result?.wrote) return;
+        const last = statusLineLogged.get(result.key) ?? 0;
+        const now = Date.now();
+        if (now - last < STATUSLINE_LOG_EVERY_MS) return;
+        statusLineLogged.set(result.key, now);
+        const pct = (w?: { percent: number }) => (w ? `${w.percent}%` : "—");
+        log(
+          `[CC-USAGE] live ${account ?? "active"} (${result.key.slice(0, 8)}) session=${pct(result.snapshot.session)} weekly=${pct(result.snapshot.weekly)}`,
+        );
+      } catch {}
+    })();
+  });
+}
+
 function startHookServer(): http.Server {
   // Reading the saved port and token is the first thing boot does with the
   // config dir. It is one small file read in another module, which is what
@@ -1758,6 +1844,14 @@ function startHookServer(): http.Server {
   loopbackIdentity = loadOrCreateIdentity(CONFIG_DIR);
 
   const server = http.createServer((req, res) => {
+    // Live account usage forwarded by a session's statusLine command
+    // (statuslineHook.ts). Ahead of /hook/status because their paths share a
+    // prefix; the method keeps them apart, and this makes that explicit.
+    if (req.method === "POST" && req.url?.startsWith(STATUSLINE_HOOK_PATH)) {
+      handleStatusLinePost(req, res);
+      return;
+    }
+
     if (req.method === "GET" && req.url?.startsWith("/hook/status")) {
       const url = new URL(req.url, `http://localhost`);
       const sessionId = url.searchParams.get("session_id");
@@ -23174,6 +23268,22 @@ export function summarizeSamplingTraces(raw: unknown, top = 5): string {
 function startLoopFreezeProbe(): NodeJS.Timeout {
   // One sink for both sync spawns and sync filesystem work (slowSync.ts).
   setSlowSyncSink((message) => log(message));
+  // A hang the PREVIOUS daemon measured outlives the process that suffered it:
+  // consume the marker here, at the one place that understands it, and park it
+  // in the state file so `cast health` and `cast doctor` can report the stall
+  // even when the daemon that hung was killed and never spoke again.
+  try {
+    const priorHang = consumeHangMarker(CONFIG_DIR);
+    if (priorHang) {
+      log(
+        `[HANG-MARKER] previous daemon (pid ${priorHang.pid}) was silent for ` +
+        `${Math.round(priorHang.unresponsive_ms / 1000)}s; ` +
+        `${priorHang.self_recovered ? "loop resumed on its own" : "loop never resumed"}` +
+        `${priorHang.hot_stacks ? `; hot stacks: ${priorHang.hot_stacks}` : ""}`,
+      );
+      saveDaemonState({ lastHang: priorHang });
+    }
+  } catch {}
   // JSC's sampling profiler runs on its own thread, so it keeps collecting JS
   // stacks even while the event loop is pinned — exactly the window nothing
   // else can observe. Draining the buffer every tick keeps it bounded; when a
@@ -23202,6 +23312,13 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
   // before the loop stopped ticking. (Reading lastLogLine at report time would
   // name whatever logged first AFTER the freeze — the wrong side of it.)
   let logAtLastProbe = lastLogLine;
+  // The marker for a hang this daemon is living through. Written the moment the
+  // probe measures HANG_MARKER_THRESHOLD_MS of silence and rewritten only after
+  // the loop has ticked normally for HANG_SELF_RECOVERED_AFTER_MS — a daemon
+  // that resumes for one tick and re-wedges (or is SIGKILLed by the watchdog in
+  // that window) leaves the marker saying it never recovered, which is exactly
+  // the case the kill was aimed at.
+  const hangRecorder = createHangRecorder({ write: (marker) => writeHangMarker(marker, CONFIG_DIR) });
   const t = setInterval(() => {
     const now = Date.now();
     const nowMono = performance.now();
@@ -23234,7 +23351,15 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
       // that track each other through a laptop sleep disprove it.
       if (!suspend) {
         log(`[LOOP-FREEZE-CLOCKS] wall ${Math.round(late)}ms, loop ${Math.round(Math.max(0, monoLate))}ms, cpu ${cpuMs}ms`);
+        // A freeze long enough to matter to the watchdog leaves a file behind:
+        // the log line above dies with the log, and a daemon killed inside the
+        // stall never reports anything at all (daemonMarkers.ts).
+        if (hangRecorder.observeFreeze(verdict.freezeMs, now, hot)) {
+          log(`[HANG-MARKER] recorded ${Math.round(verdict.freezeMs / 1000)}s of loop silence for the next boot`);
+        }
       }
+    } else {
+      hangRecorder.observeHealthyTick(now);
     }
     logAtLastProbe = lastLogLine;
   }, LOOP_FREEZE_PROBE_INTERVAL_MS);
@@ -23439,6 +23564,34 @@ const WARM_POOL_RECENCY_WINDOW_MS = 15 * 60 * 1000;
  * vanished between the listing and the read is skipped. `dir` is a parameter
  * because AGENT_STATUS_DIR is fixed from HOME at import, so tests pass a temp dir.
  */
+/**
+ * The statusline script's per-session stamps (statuslineHook.ts). They used to
+ * live in $TMPDIR, where the system swept them; under ~/.codecast nothing does,
+ * and a machine that runs agents all day would otherwise keep one tiny file per
+ * session forever. Dropping a live session's stamp costs it one re-render, so
+ * the same one-hour cutoff as the status files above is safe.
+ */
+export async function sweepStatusLineStamps(cutoff: number): Promise<void> {
+  const dir = path.join(process.env.HOME || "", ".codecast", STATUSLINE_STAMP_DIR);
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return;
+  }
+  await runBounded(names, 16, async (name) => {
+    const filePath = path.join(dir, name);
+    try {
+      const st = await fs.promises.lstat(filePath);
+      if (!st.isFile() || st.mtimeMs >= cutoff) return;
+      await fs.promises.unlink(filePath);
+    } catch {
+      // A stamp that vanished under us, or one we cannot read, is not our
+      // problem: the script rewrites its own on the next render.
+    }
+  }, "Statusline stamp sweep");
+}
+
 export async function readAgentStatusFiles(dir = AGENT_STATUS_DIR): Promise<Array<{ sessionId: string; filePath: string; mtimeMs: number; data: HookStatusData | null }>> {
   let names: string[];
   try {
@@ -23869,6 +24022,19 @@ function startWatchdog(
   }, WATCHDOG_INTERVAL_MS);
 }
 
+// Stop for a configuration fact no restart can change, and say so in a way a
+// supervisor can read: the stamp is what makes both watchdog forms stop reviving
+// this daemon every minute into the same failure (supervision.ts). Everything
+// here must survive a broken ~/.codecast, so nothing depends on the log file.
+function exitDoNotRestart(reason: string): never {
+  console.error(`${reason}\nThe daemon will not be restarted until this is fixed. Then run: cast start`);
+  writeDaemonExitStamp(reason, CONFIG_DIR);
+  try {
+    fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [FATAL-CONFIG] ${reason}\n`);
+  } catch {}
+  process.exit(EXIT_DO_NOT_RESTART);
+}
+
 async function main(): Promise<void> {
   // Refuse before any state, lock, or exit-handler setup: on Windows the daemon
   // spawned a visible console window per background child (git, codex, cast) —
@@ -23878,7 +24044,28 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  ensureConfigDir();
+  // Config error 1: no HOME. CONFIG_DIR is built from it, so an unset HOME sends
+  // the pid file, the config and the state file to a relative
+  // "undefined/.codecast" that nothing else reads. Every launcher we ship sets
+  // HOME (launchd's gui domain, the systemd unit in provisionLinux.ts, any login
+  // shell), so an unset one is a broken unit — and a restart cannot set it.
+  if (!process.env.HOME) {
+    exitDoNotRestart("HOME is not set, so the daemon cannot locate ~/.codecast — set HOME in the launchd or systemd job that starts it");
+  }
+
+  // Config error 2: ~/.codecast cannot be created or written (a read-only home,
+  // an ownership mismatch after a restore, a CODECAST_DIR pointing at a file).
+  // Without it the daemon can neither read its config nor write its pid, and
+  // every restart meets the same filesystem — today that is a launchd and
+  // watchdog hot loop with the reason buried in launchd.err.log.
+  try {
+    ensureConfigDir();
+  } catch (err) {
+    exitDoNotRestart(`Cannot create or write ${CONFIG_DIR}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Past the config gate: re-arm supervision for whatever stopped a previous
+  // daemon, since a human clearly fixed it and started us.
+  clearDaemonExitStamp(CONFIG_DIR);
   ensureCastAlias();
 
   if (!acquireLock()) {
@@ -23925,6 +24112,10 @@ async function main(): Promise<void> {
     flushLogBuffer();
     persistLogQueue();
     if (skipRespawn || underLaunchd) return;
+    // A terminal config exit must not be respawned by the daemon either: its own
+    // crash-backoff loop would relaunch into the same failure and count it as a
+    // crash loop (see exitDoNotRestart).
+    if (code === EXIT_DO_NOT_RESTART) return;
     if (code !== 0) {
       const { count, backoffMinutes } = recordCrash();
       if (backoffMinutes > 0) {
@@ -24793,9 +24984,18 @@ async function main(): Promise<void> {
   // Process existing status files on startup (chokidar ignoreInitial skips
   // them). A live hook that lands first wins: the ts guards in
   // handleStatusData drop a replayed record older than it.
-  void readAgentStatusFiles().then((files) => {
+  //
+  // The spools go first and in write order: they hold every status the hook
+  // could not push while the handler was down, and the single-status files
+  // below hold only the newest of them, so replaying history then latest is
+  // the order the ts guards expect (ct-49531).
+  void drainAllStatusSpools<HookStatusData>(AGENT_STATUS_DIR).then((spooled) => {
+    for (const { sessionId, records } of spooled) {
+      for (const data of records) handleStatusData(sessionId, data);
+    }
+  }).catch(() => {}).then(() => readAgentStatusFiles().then((files) => {
     for (const f of files) if (f.data) handleStatusData(f.sessionId, f.data, f.filePath);
-  }).catch(() => {});
+  })).catch(() => {});
 
   // The hook record carries transcript_path only on a permission prompt, so
   // the transcript comes from the session file index (a map lookup; staleOk
@@ -25064,10 +25264,24 @@ async function main(): Promise<void> {
   }
 
   function handleStatusFile(filePath: string) {
+    if (filePath.endsWith(SPOOL_EXT)) { handleStatusSpoolFile(filePath); return; }
     const sessionId = path.basename(filePath, ".json");
     if (!sessionId || !filePath.endsWith(".json")) return;
     fs.promises.readFile(filePath, "utf-8")
       .then((raw) => handleStatusData(sessionId, JSON.parse(raw) as HookStatusData, filePath))
+      .catch(() => {});
+  }
+
+  // One session's spool. Every line is a status the hook could not push, so
+  // they replay in the order they were written and the drain truncates behind
+  // itself — the same funnel as a pushed status, only late (ct-49531). No
+  // filePath is passed: it names the spool, not the session's status file,
+  // and handleStatusData would unlink it on a settle.
+  function handleStatusSpoolFile(filePath: string) {
+    const sessionId = path.basename(filePath, SPOOL_EXT);
+    if (!sessionId) return;
+    drainStatusSpool<HookStatusData>(filePath)
+      .then((records) => { for (const data of records) handleStatusData(sessionId, data); })
       .catch(() => {});
   }
 
@@ -25136,6 +25350,10 @@ async function main(): Promise<void> {
   // Clean up stale agent-status files every 30 minutes
   const statusCleanupInterval = setInterval(() => {
     (async () => {
+      // The spool's own retention: a 7 day TTL and the 5 MB cap. The cap is
+      // enforced here because the hook has no builtin that reads a file size
+      // and must not spawn a process per event (ct-49531).
+      await sweepStatusSpools(AGENT_STATUS_DIR).catch(() => {});
       const cutoff = Date.now() - 60 * 60 * 1000;
       for (const f of await readAgentStatusFiles()) {
         if (f.mtimeMs >= cutoff) continue;
@@ -25143,6 +25361,7 @@ async function main(): Promise<void> {
         lastHookStatus.delete(f.sessionId);
         bypassPermissionsCleaned.delete(f.sessionId);
       }
+      await sweepStatusLineStamps(cutoff);
     })().catch(() => {});
   }, 30 * 60 * 1000);
 
@@ -26967,7 +27186,15 @@ export async function runWatchdog(): Promise<void> {
     } catch {}
   }
 
-  // 4. If daemon is dead, restart it
+  // 4. If daemon is dead, restart it — unless it declared its own exit terminal.
+  // The shell watchdog makes the same check before kickstart; this is the same
+  // rule for the compiled pass, which is what actually spawns the daemon in a
+  // binary install (supervision.ts EXIT_DO_NOT_RESTART).
+  const blockedReason = !daemonAlive ? noRestartReason(CONFIG_DIR) : null;
+  if (blockedReason) {
+    logLine(`Daemon exited ${EXIT_DO_NOT_RESTART} (do not restart): ${blockedReason} — fix it and run 'cast start'`);
+    return;
+  }
   if (!daemonAlive) {
     logLine("Daemon not running, restarting...");
 

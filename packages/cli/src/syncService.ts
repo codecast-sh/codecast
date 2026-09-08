@@ -9,7 +9,7 @@ import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
-import type { OpenTaskReport, AgentStatus } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, TriggerPrecheckResult } from "@codecast/shared/contracts";
 
 const fetchWithIngestDeadline = ((input, init) => {
   const deadline = currentTranscriptDeadline();
@@ -2250,6 +2250,37 @@ export class SyncService {
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error, run_session_uuid: runSessionUuid }
       );
       return result as boolean;
+    } catch {
+      return false;
+    }
+  }
+
+  // Record a firing the `--precheck` gate refused: no agent ran, so there is no
+  // conversation for webListRuns to project a run from and the skip row IS the
+  // run record. Re-arms the trigger on its normal cadence server-side.
+  async skipTaskRun(
+    taskId: string,
+    daemonId: string,
+    result: TriggerPrecheckResult,
+    reason: string,
+  ): Promise<boolean> {
+    if (!this.apiToken) return false;
+    try {
+      const ok = await this.mutate(
+        "agentTasks:skipTaskRun" as any,
+        {
+          api_token: this.apiToken,
+          task_id: taskId,
+          daemon_id: daemonId,
+          command: result.command,
+          exit_code: result.exitCode,
+          timed_out: result.timedOut,
+          duration_ms: result.durationMs,
+          output: result.output,
+          reason,
+        }
+      );
+      return ok as boolean;
     } catch {
       return false;
     }

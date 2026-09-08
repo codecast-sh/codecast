@@ -3,12 +3,13 @@
 // the daemon's sync loop uses, so a drift between the stub's transcript shape
 // and what production accepts fails here instead of as a false doctor alarm.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { pickDoctorProjectDir, exportHasToken, resolveStubRuntime, STUB_SOURCE } from "./doctor.js";
+import { pickDoctorProjectDir, exportHasToken, resolveStubRuntime, STUB_SOURCE, loopHangCheck, daemonDownDetail } from "./doctor.js";
+import { writeDaemonExitStamp, writeHangMarker, type HangMarker } from "./daemonMarkers.js";
 import { parseSessionFile } from "./parser.js";
 import { TEST_SCRATCH_DIRNAME } from "./syncScope.js";
 import type { Config } from "./config/types.js";
@@ -65,6 +66,63 @@ describe("exportHasToken", () => {
     // not match the request.
     expect(exportHasToken(messages, "pong-99", "assistant")).toBe(false);
     expect(exportHasToken(messages, "pong-11", "assistant")).toBe(true);
+  });
+});
+
+// What `cast doctor` says about a stall nobody was awake to see, and about a
+// daemon that is down because it told its supervisor not to restart it. Both
+// read files under an isolated config dir — the real ~/.codecast is untouched.
+describe("doctor rendering of the daemon's breadcrumbs", () => {
+  let configDir: string;
+  const at = 1_800_000_000_000;
+
+  beforeEach(() => {
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-markers-"));
+  });
+  afterEach(() => {
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+
+  const hang = (over: Partial<HangMarker> = {}): HangMarker => ({
+    detected_at: at,
+    pid: 900,
+    unresponsive_ms: 62_000,
+    hot_stacks: "primeSessionFileIndex@daemon.ts:91 70%",
+    self_recovered: true,
+    ...over,
+  });
+
+  test("no marker anywhere: a clean pass, not silence", () => {
+    expect(loopHangCheck(undefined, configDir, at)).toEqual({ ok: true, detail: "no stall in the last 24h" });
+  });
+
+  test("a stall the daemon consumed at boot warns and names the stack that pinned the loop", () => {
+    const check = loopHangCheck(hang(), configDir, at + 120_000);
+    expect(check.ok).toBe(false);
+    expect(check.warn).toBe(true);
+    expect(check.detail).toBe(
+      "62s of loop silence 2m ago (pid 900), loop resumed on its own; hot stacks: primeSessionFileIndex@daemon.ts:91 70%",
+    );
+  });
+
+  test("a marker still on disk is reported even though no daemon ever consumed it", () => {
+    // The daemon that hung was killed and never booted again: the file is the
+    // only witness, and doctor must not need a live daemon to read it.
+    writeHangMarker(hang({ self_recovered: false, hot_stacks: "" }), configDir);
+    const check = loopHangCheck(undefined, configDir, at + 60_000);
+    expect(check.detail).toBe("62s of loop silence 1m ago (pid 900), loop never resumed — the daemon died in it");
+  });
+
+  test("a stall from last week is history, not a finding", () => {
+    expect(loopHangCheck(hang(), configDir, at + 8 * 24 * 3600_000).ok).toBe(true);
+  });
+
+  test("a dead daemon reads as fixable until it declared its exit terminal", () => {
+    expect(daemonDownDetail(configDir, { configured: true, state: "not running" }))
+      .toBe("not running (launchd state: not running) — run `cast start`");
+    writeDaemonExitStamp("HOME is not set", configDir);
+    expect(daemonDownDetail(configDir, { configured: true, state: "not running" }))
+      .toBe("not running and supervision is disarmed — HOME is not set; fix that, then run `cast start`");
   });
 });
 

@@ -16,6 +16,22 @@ import { AGENT_ENV_UNSET_SH } from "./agentEnv.js";
 
 export const WATCHDOG_HEARTBEAT_FILENAME = "watchdog.heartbeat";
 
+// sysexits' EX_CONFIG. The daemon exits with it when the thing that stopped it
+// is a configuration fact no restart can change (no HOME, an unusable
+// ~/.codecast) — as opposed to a crash, where restarting is exactly right.
+// A supervisor only sees "the process is gone", so the daemon also leaves the
+// reason in daemonMarkers' exit stamp; both watchdog forms read that file and
+// stop reviving instead of relaunching into the same failure every minute.
+// launchd's KeepAlive cannot express "restart unless it exited 78", so the
+// watchdog is the layer that honours it; a `cast start` after the user fixes
+// the config clears the stamp and supervision resumes.
+export const EXIT_DO_NOT_RESTART = 78;
+
+// The file the exit stamp lives in, named here so the generated shell script and
+// the one TypeScript reader (daemonMarkers' noRestartReason, which the compiled
+// `_watchdog` pass calls) cannot drift apart.
+export const DAEMON_EXIT_STAMP_FILE = "daemon-exit.json";
+
 // The compiled `_watchdog` pass records when it last ran here (epoch ms). The
 // shell loop's heartbeat stamp can't serve this purpose for the binary pass —
 // the wrapper stamps it immediately before invoking the binary, so the binary
@@ -296,6 +312,18 @@ check_once() {
   fi
 
   [ "\$RUNNING" -eq 1 ] && [ "\$STALE" -eq 0 ] && return 0
+
+  # The daemon can declare its own exit terminal (EXIT_DO_NOT_RESTART): no HOME,
+  # an unusable ~/.codecast — facts a restart cannot change. Reviving it every
+  # minute just reruns the same failure and buries the reason in the log. The
+  # stamp is cleared by the next daemon that boots past the config gate, so
+  # \`cast start\` after the fix re-arms this loop.
+  EXIT_STAMP="\${HOME}/.codecast/${DAEMON_EXIT_STAMP_FILE}"
+  if [ -f "\$EXIT_STAMP" ] && grep -q '"code"[[:space:]]*:[[:space:]]*${EXIT_DO_NOT_RESTART}' "\$EXIT_STAMP" 2>/dev/null; then
+    REASON=\$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "\$EXIT_STAMP")
+    log "Daemon exited ${EXIT_DO_NOT_RESTART} (do not restart): \${REASON:-config error} - fix it and run 'cast start'"
+    return 0
+  fi
 
   # Not healthy. A cast stop / upgrade / login race can leave the job booted-out
   # (removed from launchd entirely), in which case kickstart alone fails forever

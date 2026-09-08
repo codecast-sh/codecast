@@ -373,6 +373,12 @@ export interface ProcessSessionClaim {
   sessionId: string;
   /** Epoch seconds the claim was written (registry `ts`). */
   ts: number;
+  /**
+   * The launch the claiming process belongs to (session-register.sh forwards
+   * CODECAST_LAUNCH_TOKEN). Absent for a process codecast did not launch, and
+   * for hook scripts installed before launch tokens shipped.
+   */
+  launchToken?: string;
 }
 
 const ARGV_ID = "([A-Za-z0-9][A-Za-z0-9._-]{7,})(?=\\s|$)";
@@ -418,6 +424,20 @@ const CLAIM_START_SLACK_SEC = 5;
  * The session a process runs, from its hook claims (newest one written after the
  * process started) or, absent any, its argv. Null when neither says anything.
  */
+/** The newest claim written after the process started, or null. */
+function newestLiveClaim(args: {
+  claims: readonly ProcessSessionClaim[];
+  processStartSec: number | null;
+}): ProcessSessionClaim | null {
+  if (args.processStartSec === null) return null;
+  let newest: ProcessSessionClaim | null = null;
+  for (const c of args.claims) {
+    if (c.ts < args.processStartSec - CLAIM_START_SLACK_SEC) continue;
+    if (!newest || c.ts > newest.ts) newest = c;
+  }
+  return newest;
+}
+
 export function processDeclaredSessionId(args: {
   argvId: string | null;
   claims: readonly ProcessSessionClaim[];
@@ -425,15 +445,7 @@ export function processDeclaredSessionId(args: {
    *  without a start time a claim cannot be told apart from a reused pid's). */
   processStartSec: number | null;
 }): string | null {
-  if (args.processStartSec !== null) {
-    let newest: ProcessSessionClaim | null = null;
-    for (const c of args.claims) {
-      if (c.ts < args.processStartSec - CLAIM_START_SLACK_SEC) continue;
-      if (!newest || c.ts > newest.ts) newest = c;
-    }
-    if (newest) return newest.sessionId;
-  }
-  return args.argvId;
+  return newestLiveClaim(args)?.sessionId ?? args.argvId;
 }
 
 export function judgeProcessIdentity(args: {
@@ -441,10 +453,23 @@ export function judgeProcessIdentity(args: {
   argvId: string | null;
   claims: readonly ProcessSessionClaim[];
   processStartSec: number | null;
-}): { verdict: ProcessIdentityVerdict; declared: string | null } {
+  /**
+   * Whether a launch token has been superseded (the daemon's launch-token
+   * ledger). A pid whose own claim names the right session but carries a token
+   * the pane has already replaced is the orphan case this exists for: it is a
+   * previous launch, still alive, still writing — using it re-enters the
+   * process the pane moved on from (ct-49532).
+   */
+  staleLaunchToken?: (token: string) => boolean;
+}): { verdict: ProcessIdentityVerdict; declared: string | null; reason?: "stale-token" } {
   const declared = processDeclaredSessionId(args);
   if (!declared) return { verdict: "unknown", declared };
-  return { verdict: declared === args.sessionId ? "owned" : "foreign", declared };
+  if (declared !== args.sessionId) return { verdict: "foreign", declared };
+  const claim = newestLiveClaim(args);
+  if (claim?.launchToken && args.staleLaunchToken?.(claim.launchToken)) {
+    return { verdict: "foreign", declared, reason: "stale-token" };
+  }
+  return { verdict: "owned", declared };
 }
 
 /**

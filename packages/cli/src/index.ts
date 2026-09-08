@@ -88,6 +88,8 @@ import { fetchCodexResetCredits, offerRevision, redeemCodexResetCredit } from ".
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
+import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
+import { installOwnedStatusLine, removeOwnedStatusLine } from "./capabilities/hooks.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -967,7 +969,11 @@ TTY=$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')
 
 REGISTRY_DIR="$HOME/.codecast/session-registry"
 mkdir -p "$REGISTRY_DIR"
-echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
+# launch_token: which LAUNCH wrote this claim. The daemon stamps it into the
+# pane env at every spawn and resume, so a claim carrying a superseded token
+# names a process the pane has already replaced (ct-49532). Empty for a session
+# codecast did not launch, which stays as unfenced as it was before.
+echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\",\\"launch_token\\":\\"$\{CODECAST_LAUNCH_TOKEN:-}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
 exit 0
 `;
 
@@ -1032,7 +1038,9 @@ function installHookScript(fileName: string, script: string, events: readonly st
 
 function installStatusHook(): void {
   installHookScript("codecast-status.sh", CODECAST_STATUS_HOOK, [
-    "UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
+    // PostCompact is the only clearing signal a manual /compact emits: it ends
+    // at an idle prompt and no Stop follows (ct-49533).
+    "UserPromptSubmit", "PreToolUse", "PreCompact", "PostCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
   ]);
 }
 
@@ -1046,6 +1054,24 @@ function installThreadStateHook(): void {
 
 function installTaskPulseHook(): void {
   installHookScript("task-pulse.sh", TASK_PULSE_HOOK, ["UserPromptSubmit"]);
+}
+
+// Not a hook: `statusLine` is a single command Claude Code runs to draw the bar
+// under the composer, so a user who set their own has a status line they look
+// at. installOwnedStatusLine writes it only when the key is free (or ours) and
+// reports a conflict otherwise, and the ownership ledger is what lets
+// `cast uninstall` take it back out without touching a value we did not write.
+function installStatusLineHook(): void {
+  const home = process.env.HOME || "";
+  const hookFile = path.join(home, ".claude", "hooks", STATUSLINE_HOOK_FILE);
+  try {
+    fs.mkdirSync(path.dirname(hookFile), { recursive: true });
+    fs.writeFileSync(hookFile, CODECAST_STATUSLINE_HOOK, { mode: 0o755 });
+    installOwnedStatusLine(hookFile, { settingsPath: path.join(home, ".claude", "settings.json") });
+  } catch {
+    // Live usage is an enhancement over the 5-minute poll, never a reason to
+    // fail an install.
+  }
 }
 
 function showWelcome(): void {
@@ -1761,6 +1787,7 @@ async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
   installSessionRegisterHook();
   installStatusHook();
+  installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
 
@@ -2434,6 +2461,7 @@ function refreshEnabledSnippets(config: Record<string, any>): void {
   if (config.orch_enabled) installOrchestration(true);
   installSessionRegisterHook();
   installStatusHook();
+  installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
 }
@@ -9126,7 +9154,18 @@ program
     // 3. Remove hooks from ~/.claude/settings.json and hook scripts
     const claudeDir = path.join(home, ".claude");
     const settingsFile = path.join(claudeDir, "settings.json");
-    const hookFiles = ["codecast-status.sh", "session-register.sh", "stable-feed.sh", "task-pulse.sh"];
+    const hookFiles = [
+      "codecast-status.sh",
+      "session-register.sh",
+      "stable-feed.sh",
+      "task-pulse.sh",
+      STATUSLINE_HOOK_FILE,
+    ];
+
+    // The status line is a top-level key rather than an entry in a hooks array,
+    // and the ownership ledger is the only thing that knows whether the value
+    // there is ours to remove — so it comes out through its own writer.
+    try { removeOwnedStatusLine({ settingsPath: settingsFile }); } catch {}
 
     if (fs.existsSync(settingsFile)) {
       try {
@@ -12818,6 +12857,7 @@ trigger
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
+  .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers ignore it.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
   .option("--thread", "Post results back to the current conversation thread")
@@ -12976,6 +13016,7 @@ trigger
           event_filter,
           mode: options.safe ? "propose" : options.mode,
           max_runtime_ms: maxRuntimeMs,
+          precheck: options.precheck,
         }),
       });
 
@@ -13206,6 +13247,7 @@ trigger
   .option("--agent <type>", "Agent type: claude or codex")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
+  .option("--precheck <command>", "Shell gate run before each scheduled or recurring run; exit 0 runs the trigger. Pass \"\" to remove the gate.")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13270,9 +13312,10 @@ trigger
       }
       body.max_runtime_ms = ms;
     }
+    if (options.precheck !== undefined) body.precheck = options.precheck;
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck.");
       process.exit(1);
     }
 
@@ -13406,12 +13449,27 @@ trigger
       process.exit(1);
     }
 
+    // The gate that decides whether a firing spends a session at all, and the
+    // last firing it refused — a skipped run leaves no conversation to read,
+    // so this line is the only record of it here.
+    if (t.precheck) {
+      console.log(`Precheck: ${c.dim}${t.precheck}${c.reset}`);
+      if (t.last_precheck_skip_at) {
+        console.log(
+          `${c.yellow}skipped${c.reset} ${formatMs(Date.now() - t.last_precheck_skip_at)} ago — ` +
+            `${t.last_precheck_skip_reason || "the precheck refused the run"}`,
+        );
+      }
+    }
+
     if (!t.last_run_conversation_id) {
       if (t.last_run_at) {
         // The task has run but its conversation can't be resolved (yet) —
         // distinct from never having run at all.
         console.log(fmt.muted(`Last run ${formatMs(Date.now() - t.last_run_at)} ago — run conversation not synced yet.`));
         if (t.last_run_summary) console.log(t.last_run_summary);
+      } else if (t.last_precheck_skip_at) {
+        console.log(fmt.muted("No agent has run yet — every firing so far was skipped by the precheck."));
       } else {
         console.log(fmt.muted("No run history yet."));
       }
@@ -18177,6 +18235,7 @@ if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUp
     if (config?.orch_enabled) installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
+    installStatusLineHook();
     installTaskPulseHook();
     installThreadStateHook();
 

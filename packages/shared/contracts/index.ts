@@ -73,5 +73,6 @@ export * from "./prRefs";
 // CLI and the two web trigger pages each held a copy, and they had drifted.
 export * from "./triggerEvents";
 export * from "./fence";
+export * from "./triggerPrecheck";
 
 export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "./sessionSnooze";

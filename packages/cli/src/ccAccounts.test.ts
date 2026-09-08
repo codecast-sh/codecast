@@ -24,9 +24,12 @@ import {
   deleteProfile,
   listProfiles,
   parseUsageResponse,
+  parseRetryAfter,
   refreshUsageSnapshots,
   readUsageCache,
   readActiveStamp,
+  parseStatusLineUsage,
+  ingestStatusLineUsage,
   CcAccountError,
   createMtimeGatedCache,
   writeAccountToken,
@@ -1090,6 +1093,137 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(byName.c.usage?.session?.percent).toBe(28);
   });
 
+  // --- Live usage forwarded by a session's statusLine command (ct-49525) ---
+  // A running session reports its account's windows every turn, which is both
+  // fresher and free next to the five-minute OAuth poll. These cover who a post
+  // is attributed to, and which of the two readings wins when they disagree.
+
+  const statusLinePayload = (fiveHour: number, sevenDay: number) => ({
+    session_id: "f03e4098-8b2b-44e0-9370-de3b4fc2edd0",
+    cost: { total_duration_ms: 17462 },
+    rate_limits: {
+      five_hour: { used_percentage: fiveHour, resets_at: 1_788_759_000 },
+      seven_day: { used_percentage: sevenDay, resets_at: 1_789_016_400 },
+    },
+  });
+
+  it("reads the windows Claude Code 2.1.263 actually sends, seconds converted to ms", () => {
+    const snap = parseStatusLineUsage(statusLinePayload(7, 32), NOW);
+    expect(snap).toEqual({
+      fetched_at: NOW,
+      source: "live-session",
+      session: { percent: 7, resets_at: 1_788_759_000_000 },
+      weekly: { percent: 32, resets_at: 1_789_016_400_000 },
+    });
+    expect(parseStatusLineUsage({ cost: { total_duration_ms: 1 } }, NOW)).toBeNull();
+    expect(parseStatusLineUsage({ rate_limits: {} }, NOW)).toBeNull();
+  });
+
+  it("attributes a post to the session's pinned account, and an unpinned one to the active login", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    expect((await ingestStatusLineUsage(statusLinePayload(11, 12), { account: "b", now: NOW + 1000 }))?.key).toBe("uuid-b");
+    // No account name: the session runs on the keychain login, which the
+    // activation stamp names without a keychain read.
+    expect((await ingestStatusLineUsage(statusLinePayload(13, 14), { account: undefined, now: NOW + 1000 }))?.key).toBe("uuid-a");
+    expect(await ingestStatusLineUsage(statusLinePayload(1, 2), { account: "../x", now: NOW })).toBeNull();
+    const cache = readUsageCache();
+    expect(cache.accounts["uuid-b"]?.session?.percent).toBe(11);
+    expect(cache.accounts["uuid-a"]?.session?.percent).toBe(13);
+  });
+
+  it("carries the live reading to the heartbeat without the local source marker", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(44, 55), { account: "b", now: NOW + 1000 });
+    invalidateAccountsCache();
+    const b = (getAccountsHeartbeatPayload()?.profiles ?? []).find((p) => p.name === "b");
+    expect(b?.usage?.session?.percent).toBe(44);
+    // Convex's ccUsageValidator accepts no unknown field: a daemon that sent
+    // this would have its whole account inventory rejected.
+    expect(b?.usage && "source" in b.usage).toBe(false);
+  });
+
+  it("keeps the model-scoped window the poll found — the live payload has none", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    const cache = readUsageCache();
+    cache.accounts["uuid-b"]!.weekly_scoped = { percent: 100, resets_at: NOW + 3600_000, label: "Fable" };
+    fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify(cache));
+    await ingestStatusLineUsage(statusLinePayload(2, 3), { account: "b", now: NOW + 1000 });
+    // Dropping it would read as headroom on an account whose Fable window is
+    // pegged, and auto-switch would send sessions there.
+    expect(readUsageCache().accounts["uuid-b"]?.weekly_scoped?.percent).toBe(100);
+  });
+
+  it("suppresses the poll for an account a live session is feeding, and resumes when it goes quiet", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(60, 61), { account: "b", now: NOW + 60_000 });
+
+    const during: string[] = [];
+    const res = await refreshUsageSnapshots({ now: NOW + 5 * 60_000, fetchImpl: usageFetch(during) });
+    expect(during).not.toContain("at-b");
+    expect(res.skipped).toContain("b");
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(60);
+
+    // Five minutes past the last post the feed counts as gone and the endpoint
+    // is the only reading left.
+    const after: string[] = [];
+    await refreshUsageSnapshots({ now: NOW + 11 * 60_000, fetchImpl: usageFetch(after) });
+    expect(after).toContain("at-b");
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
+  });
+
+  // The live payload has no model-scoped window. An account posting without
+  // pause would otherwise keep its Fable meter frozen at the last poll's
+  // reading, and auto-switch would send sessions to an account that pegged
+  // hours ago.
+  it("polls anyway once the endpoint has been silent for half an hour", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    const post = async (at: number) => {
+      await ingestStatusLineUsage(statusLinePayload(3, 4), { account: "b", now: at });
+      const calls: string[] = [];
+      await refreshUsageSnapshots({ now: at + 60_000, fetchImpl: usageFetch(calls) });
+      return calls;
+    };
+    // A feed that keeps posting holds the poll off — until the floor.
+    expect(await post(NOW + 10 * 60_000)).not.toContain("at-b");
+    expect(await post(NOW + 20 * 60_000)).not.toContain("at-b");
+    expect(await post(NOW + 31 * 60_000)).toContain("at-b");
+  });
+
+  it("never lets a failed or slow poll overwrite a live reading", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(70, 71), { account: "b", now: NOW + 6 * 60_000 });
+
+    // A poll that fails leaves the live reading standing.
+    await refreshUsageSnapshots({
+      now: NOW + 12 * 60_000,
+      fetchImpl: (async () => new Response("overloaded", { status: 529 })) as any,
+    });
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(70);
+
+    // And a post that lands WHILE the probes run is not written back over: the
+    // pass re-reads the cache instead of flushing the copy it started with.
+    let posted = false;
+    await refreshUsageSnapshots({
+      now: NOW + 20 * 60_000,
+      fetchImpl: (async (url: any, init: any) => {
+        if (!posted) {
+          posted = true;
+          await ingestStatusLineUsage(statusLinePayload(80, 81), { account: "b", now: NOW + 20 * 60_000 + 1 });
+        }
+        return usageFetch([])(url, init);
+      }) as any,
+    });
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(80);
+  });
+
+  it("does not rewrite the cache for an unchanged reading", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    expect((await ingestStatusLineUsage(statusLinePayload(5, 6), { account: "b", now: NOW + 1000 }))?.wrote).toBe(true);
+    expect((await ingestStatusLineUsage(statusLinePayload(5, 6), { account: "b", now: NOW + 16_000 }))?.wrote).toBe(false);
+    // A real move is always written, however soon it arrives.
+    expect((await ingestStatusLineUsage(statusLinePayload(6, 6), { account: "b", now: NOW + 31_000 }))?.wrote).toBe(true);
+  });
+
   // The token endpoint + usage endpoint behind one fetch: a refresh with the
   // expected refresh token rotates; anything else is refused with the given
   // status. Usage answers carry the bearer token so the test can see which
@@ -1246,7 +1380,11 @@ describe("account setup-token file", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("cast accounts token union");
     const file = writeAccountToken("union", TOKEN);
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(`. ${file} 2>/dev/null || true; `);
+    // The account NAME rides along so the statusLine hook can attribute the
+    // session's live usage; the token stays inside the sourced file.
+    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(
+      `. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=union; `,
+    );
     expect(warnings).toHaveLength(1);
     // The secret never appears on the launch line.
     expect(accountSourcePrefix("union")).not.toContain("sk-ant");
@@ -1438,5 +1576,184 @@ describe("switch identity integrity (sandboxed $HOME)", () => {
       fs.readFileSync(path.join(home, ".codecast", "cc-accounts", "aaa.json"), "utf-8"),
     );
     expect(stored.credentials.claudeAiOauth.accessToken).toBe("token-a");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Usage poll backoff (ct-49527)
+// ---------------------------------------------------------------------------
+// The poll used to retry on the next five-minute tick no matter what the
+// endpoint said, so a 429's Retry-After was ignored and an outage cost one
+// request per account every five minutes for as long as it lasted.
+
+describe("parseRetryAfter", () => {
+  const NOW = 1_781_000_000_000;
+
+  it("reads delta-seconds", () => {
+    expect(parseRetryAfter("120", NOW)).toBe(120_000);
+    expect(parseRetryAfter("  90 ", NOW)).toBe(90_000);
+  });
+
+  it("reads an HTTP date as the wait from now", () => {
+    expect(parseRetryAfter(new Date(NOW + 300_000).toUTCString(), NOW)).toBe(300_000);
+  });
+
+  it("ignores a header that names no future wait", () => {
+    for (const h of [null, undefined, "", "   ", "soon", "0", "-5", new Date(NOW - 60_000).toUTCString()]) {
+      expect(parseRetryAfter(h, NOW)).toBeUndefined();
+    }
+  });
+
+  it("caps at 24h so a corrupt header can't freeze the meters", () => {
+    expect(parseRetryAfter("999999999", NOW)).toBe(24 * 60 * 60 * 1000);
+    expect(parseRetryAfter(new Date(NOW + 400 * 86_400_000).toUTCString(), NOW)).toBe(24 * 60 * 60 * 1000);
+  });
+});
+
+describe("refreshUsageSnapshots backoff (isolated CODECAST_DIR, injected fetch)", () => {
+  const NOW = 1_781_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+  let home: string;
+  let sandbox: IsolatedCodecastDir;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-backoff-test-"));
+    sandbox = isolateCodecastDir("cc-backoff-dir-");
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    // One account: the machine's active login, with a credential live enough to
+    // probe. No saved profiles, so each pass makes exactly one usage request.
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "at-active", refreshToken: "rt", expiresAt: NOW + 8 * 3600_000, subscriptionType: "max" },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(home, ".claude.json"),
+      JSON.stringify({ oauthAccount: { accountUuid: "uuid-a", emailAddress: "a@x.com" } }),
+    );
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    sandbox.restore();
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  /** A usage endpoint that answers `replies` in order, repeating the last. */
+  const server = (...replies: Array<number | { status: number; retryAfter?: string }>) => {
+    let served = 0;
+    const fetchImpl = (async () => {
+      const raw = replies[Math.min(served, replies.length - 1)];
+      served++;
+      const r = typeof raw === "number" ? { status: raw, retryAfter: undefined } : raw;
+      if (r.status === 200) {
+        return new Response(JSON.stringify({ limits: [{ kind: "session", percent: 12 }] }), { status: 200 });
+      }
+      return new Response("refused", {
+        status: r.status,
+        headers: r.retryAfter ? { "Retry-After": r.retryAfter } : {},
+      });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, served: () => served };
+  };
+
+  const retryState = () => readUsageCache().retries?.["uuid-a"];
+
+  it("holds the poll off for the seconds a 429 named, then probes again", async () => {
+    const s = server({ status: 429, retryAfter: "120" }, 200);
+    const first = await refreshUsageSnapshots({ now: NOW, fetchImpl: s.fetchImpl });
+    expect(first.failed).toEqual([{ name: "active", reason: "usage endpoint 429" }]);
+    expect(retryState()).toMatchObject({ retry_at: NOW + 120_000, failures: 1, status: 429, retry_after: true });
+
+    // Inside the window the account is skipped without a request.
+    const held = await refreshUsageSnapshots({ now: NOW + 119_000, fetchImpl: s.fetchImpl });
+    expect(held.skipped).toEqual(["active"]);
+    expect(s.served()).toBe(1);
+
+    // At the named time it is asked again, and success clears the state.
+    const after = await refreshUsageSnapshots({ now: NOW + 120_000, fetchImpl: s.fetchImpl });
+    expect(after.probed).toEqual(["active"]);
+    expect(retryState()).toBeUndefined();
+    expect(readUsageCache().accounts["uuid-a"]?.session?.percent).toBe(12);
+  });
+
+  it("reads a 429's Retry-After given as an HTTP date", async () => {
+    const s = server({ status: 429, retryAfter: new Date(NOW + 45 * 60_000).toUTCString() });
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: s.fetchImpl });
+    expect(retryState()).toMatchObject({ retry_at: NOW + 45 * 60_000, retry_after: true });
+  });
+
+  it("caps a preposterous Retry-After at 24h", async () => {
+    const s = server({ status: 429, retryAfter: "999999999" });
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: s.fetchImpl });
+    expect(retryState()?.retry_at).toBe(NOW + DAY);
+  });
+
+  it("falls back to its own backoff for a 429 with no usable header", async () => {
+    const s = server({ status: 429, retryAfter: "whenever" });
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: s.fetchImpl });
+    expect(retryState()).toMatchObject({ retry_at: NOW + 30_000, status: 429 });
+    expect(retryState()?.retry_after).toBeUndefined();
+  });
+
+  it("doubles the wait on repeated 500s and caps it at 15 minutes", async () => {
+    const s = server(500);
+    const waits: number[] = [];
+    let now = NOW;
+    for (let i = 0; i < 7; i++) {
+      const res = await refreshUsageSnapshots({ now, fetchImpl: s.fetchImpl });
+      expect(res.failed).toHaveLength(1);
+      const state = retryState()!;
+      waits.push(state.retry_at - now);
+      now = state.retry_at;
+    }
+    expect(waits).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000]);
+    expect(s.served()).toBe(7);
+    expect(retryState()).toMatchObject({ failures: 7, reason: "usage endpoint 500" });
+  });
+
+  it("keeps the last good snapshot through failures and resets the streak on recovery", async () => {
+    const ok = server(200);
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: ok.fetchImpl });
+    const good = readUsageCache().accounts["uuid-a"];
+    expect(good?.fetched_at).toBe(NOW);
+
+    const bad = server(503);
+    let now = NOW + 10 * 60_000;
+    for (let i = 0; i < 3; i++) {
+      await refreshUsageSnapshots({ now, fetchImpl: bad.fetchImpl });
+      now = retryState()!.retry_at;
+    }
+    expect(retryState()?.failures).toBe(3);
+    // Why: a meter that flapped to empty on a transient failure would read as
+    // headroom, and auto-switch would send sessions to a spent account.
+    expect(readUsageCache().accounts["uuid-a"]).toEqual(good!);
+
+    const back = server(200, 500);
+    await refreshUsageSnapshots({ now, fetchImpl: back.fetchImpl });
+    expect(retryState()).toBeUndefined();
+    // The next failure starts the ladder over rather than resuming at 8x.
+    await refreshUsageSnapshots({ now: now + 10 * 60_000, fetchImpl: back.fetchImpl });
+    expect(retryState()).toMatchObject({ failures: 1, retry_at: now + 10 * 60_000 + 30_000 });
+  });
+
+  it("lets a human refresh through the backoff", async () => {
+    const s = server({ status: 429, retryAfter: "3600" }, 200);
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: s.fetchImpl });
+    // minIntervalMs 0 is the web's refresh button, not the timer.
+    const forced = await refreshUsageSnapshots({ now: NOW + 1000, minIntervalMs: 0, fetchImpl: s.fetchImpl });
+    expect(forced.probed).toEqual(["active"]);
+    expect(s.served()).toBe(2);
   });
 });
