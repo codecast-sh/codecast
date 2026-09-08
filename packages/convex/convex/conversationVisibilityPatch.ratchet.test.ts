@@ -55,7 +55,7 @@ function rawVisibilityPatches(source: string): number {
 }
 
 /** How many files patch conversation visibility outside the chokepoint. */
-const PIN = 1;
+const PIN = 0;
 
 const result = checkRatchet({
   name: "raw conversation visibility patch",

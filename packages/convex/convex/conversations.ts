@@ -3760,6 +3760,15 @@ export const backfillShortIds = internalMutation({
   },
 });
 
+// A conversation's team_id is also the input to the stored workspace ACCESS key
+// of every task, doc and plan linked to it, so both backfills below stamp it
+// through patchConversationVisibility. That propagation reads the owner's work
+// items once per conversation, so a batch that rewrites many conversations can
+// exceed a transaction's read limit — each call stops after this many rewrites
+// and asks to be re-run. A re-run is free: a stamped row now carries team_id
+// and is skipped (ct-49655).
+const RESCOPE_BATCH = 10;
+
 export const backfillTeamIds = internalMutation({
   args: {
     cursor: v.optional(v.string()),
@@ -3787,19 +3796,28 @@ export const backfillTeamIds = internalMutation({
       .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
 
     let updated = 0;
+    let rescoped = 0;
     for (const conv of result.page) {
       if (conv.team_id) continue;
       const userTeamId = userTeamMap.get(conv.user_id.toString());
       if (userTeamId) {
-        await ctx.db.patch(conv._id, { team_id: userTeamId });
+        // Why: stamping team_id also decides the stored workspace ACCESS key of
+        // every task, doc and plan linked to this conversation. A raw
+        // ctx.db.patch leaves them on the old key, so a now team-visible session
+        // keeps work items nobody on the team can read (ct-49655).
+        rescoped += await patchConversationVisibility(ctx, conv, { team_id: userTeamId });
         updated++;
+        if (updated >= RESCOPE_BATCH) break;
       }
     }
 
+    // Capped mid-page: hand back the SAME cursor so the re-run finishes the page.
+    const capped = updated >= RESCOPE_BATCH;
     return {
       updated,
-      cursor: result.continueCursor,
-      isDone: result.isDone,
+      rescoped,
+      cursor: capped ? args.cursor ?? null : result.continueCursor,
+      isDone: capped ? false : result.isDone,
     };
   },
 });
@@ -3871,6 +3889,7 @@ export const backfillUserTeamIds = internalMutation({
     const teamId = args.teamId as any;
     let updated = 0;
     let alreadyHad = 0;
+    let rescoped = 0;
     let cursor: string | null = null;
     do {
       const result = await ctx.db
@@ -3882,13 +3901,16 @@ export const backfillUserTeamIds = internalMutation({
           alreadyHad++;
           continue;
         }
-        await ctx.db.patch(conv._id, { team_id: teamId });
+        // Why: same as backfillTeamIds — the chokepoint patches the row and
+        // rewrites the workspace key of every linked work item (ct-49655).
+        rescoped += await patchConversationVisibility(ctx, conv, { team_id: teamId });
         updated++;
+        if (updated >= RESCOPE_BATCH) break;
       }
       cursor = result.continueCursor;
-      if (result.isDone) break;
+      if (result.isDone || updated >= RESCOPE_BATCH) break;
     } while (true);
-    return { updated, alreadyHad };
+    return { updated, alreadyHad, rescoped, isDone: updated < RESCOPE_BATCH };
   },
 });
 
