@@ -129,3 +129,10 @@ packages/web/*.tsbuildinfo
 # each package to run its tests; the mirror itself is generated from
 # ~/src/platform and only scripts/vendor-platform.sh writes to it.
 platform/packages/*/bun.lock
+
+# Scratch that keeps riding in on a `git add -A` from a shared checkout: a
+# browser capture, a note named after a zip, and a review doc its author
+# deliberately left unpublished. Ignored so no sweep can commit them again.
+/--full-page
+/codecast-extension-0.1.1.zip.md
+/docs/proposals/agent-organization/v2/review/comparison.md
