@@ -109,6 +109,10 @@ export function buildHookEnv(
   // Layer 3: system-owned canonical names — always win, can't be spoofed
   // by extraEnv (which is user-supplied via the manifest).
   env.CODECAST_HOOK = hook;
+  // The main checkout the worktree was cut from. A hook that must reach the
+  // repo it belongs to (a shared cache, the file it was copied from) had no
+  // way to name it: CODECAST_WORKTREE_PATH is the worktree, not the source.
+  env.CODECAST_ROOT_PATH = ctx.hooksRoot ?? ctx.worktreePath;
   env.CODECAST_WORKTREE_PATH = ctx.worktreePath;
   env.CODECAST_WORKTREE_NAME = ctx.worktreeName;
   env.CODECAST_BRANCH = ctx.branch;
