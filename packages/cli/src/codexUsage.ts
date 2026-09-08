@@ -22,6 +22,7 @@ import * as path from "path";
 import * as os from "os";
 import { spawn } from "./proc.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export interface CodexUsageWindow {
   percent: number;
@@ -65,7 +66,7 @@ export function codexHome(): string {
 }
 
 function cachePath(): string {
-  const dir = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  const dir = defaultConfigDir();
   return path.join(dir, "codex-usage-cache.json");
 }
 

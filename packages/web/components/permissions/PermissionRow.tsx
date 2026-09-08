@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Camera, CheckCircle, Mic, Monitor, type LucideIcon } from "lucide-react";
+import { Bell, Camera, CheckCircle, Image, Mic, Monitor, MousePointerClick, type LucideIcon } from "lucide-react";
 import { SettingsRow } from "../settings/ui";
 import { isElectron } from "../../lib/desktop";
 import {
@@ -17,6 +17,8 @@ const PERMISSION_ICONS: Record<OsPermissionKind, LucideIcon> = {
   microphone: Mic,
   camera: Camera,
   screen: Monitor,
+  computerAccessibility: MousePointerClick,
+  computerScreen: Image,
 };
 
 // One permission as a settings-style row: what it is, why Codecast wants it

@@ -124,6 +124,32 @@ describe("ComputerClient", () => {
     expect(fs.readFileSync(log, "utf-8").trim().split("\n")).toHaveLength(1);
   });
 
+  helperTest("a helper that dies mid-session is re-handshaken, not talked to as a stranger", async () => {
+    // Found by A7's granted e2e on a real Mac (ct-49523). The helper's identity
+    // check lives in the handshake: it learns which binary may drive it from
+    // the `castBinary` that request carries, and remembers it per process. So a
+    // reconnect that skips the handshake is refused by the fresh helper with
+    // `permission_denied: computer agent peer is not authorized` — a message
+    // that sends whoever reads it to System Settings, when the grant is fine
+    // and the connection is what broke. `shutdown()` already clears the cached
+    // capabilities for exactly this reason; an unexpected close must too.
+    const home = isolatedHome();
+    const log = path.join(home, "launches.log");
+    withEnv({ FAKE_LAUNCH_LOG: log, FAKE_REQUIRE_HANDSHAKE: "1" });
+
+    const client = makeClient();
+    const first = (await client.listApps()) as unknown as { helperPid: number };
+    expect(first.helperPid).toBe(readInstance()!.pid);
+
+    // The helper dies under the client, the way a crash or a reap does.
+    process.kill(readInstance()!.pid, "SIGKILL");
+    await Bun.sleep(200);
+
+    const second = (await client.listApps()) as unknown as { helperPid: number };
+    expect(second.helperPid).not.toBe(first.helperPid);
+    expect(fs.readFileSync(log, "utf-8").trim().split("\n")).toHaveLength(2);
+  });
+
   helperTest("two invocations racing to launch produce one helper", async () => {
     const home = isolatedHome();
     const log = path.join(home, "launches.log");

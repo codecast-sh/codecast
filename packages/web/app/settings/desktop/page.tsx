@@ -3,6 +3,7 @@ import { Info, Keyboard, RotateCcw, ShieldCheck, X } from "lucide-react";
 import { useOsPermissions } from "../../../hooks/useOsPermissions";
 import { OS_PERMISSION_KINDS } from "../../../lib/osPermissions";
 import { PermissionRow } from "../../../components/permissions/PermissionRow";
+import { ComputerPermissionRows } from "../../../components/permissions/ComputerPermissionRows";
 import { openDeviceSetup } from "../../../lib/deviceSetup";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
@@ -176,6 +177,7 @@ function PermissionsSection() {
       {OS_PERMISSION_KINDS.map((k) => (
         <PermissionRow key={k} kind={k} readiness={permissions[k]} onChange={refresh} />
       ))}
+      <ComputerPermissionRows />
     </SettingsSection>
   );
 }

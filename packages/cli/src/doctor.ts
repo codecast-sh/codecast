@@ -45,6 +45,7 @@ import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
 import { staleTmuxServerKillPlan, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -204,7 +205,7 @@ export function pickDoctorProjectDir(config: Config, runId: string, override?: s
   const candidates = override
     ? [override]
     : [
-        path.join(os.homedir(), ".codecast", "doctor", `e2e-${runId}`),
+        path.join(defaultConfigDir(), "doctor", `e2e-${runId}`),
         ...(config.sync_projects ?? []).map((root) => path.join(root, ".codecast-doctor", `e2e-${runId}`)),
       ];
   for (const candidate of candidates) {

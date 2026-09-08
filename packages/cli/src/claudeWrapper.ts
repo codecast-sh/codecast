@@ -8,9 +8,9 @@ import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
 import type { Config } from "./config/types.js";
 import { readAuthConfig } from "./config/readAuthConfig.js";
 import { resolveClaudeInstall, stableClaudeBinary } from "./stableClaudeBinary.js";
-import { codecastDir } from "./codecastDir.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
-const CONFIG_DIR = codecastDir();
+const CONFIG_DIR = defaultConfigDir();
 const INBOX_DIR = path.join(CONFIG_DIR, "inbox");
 const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 

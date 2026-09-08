@@ -236,7 +236,6 @@ import {
   appendStatusSpool,
   drainAllStatusSpools,
   drainStatusSpool,
-  isSafeStatusSessionId,
   isSpoolableStatus,
   sweepStatusSpools,
 } from "./statusSpool.js";
@@ -306,6 +305,7 @@ import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
 import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -524,10 +524,9 @@ interface ReparentedCheckout {
 }
 
 function reparentCheckoutDir(remote: string): string {
-  const home = process.env.HOME || "/tmp";
   const name = (remote.split("/").pop() || "repo").replace(/\.git$/, "").replace(/[^A-Za-z0-9._-]/g, "-");
   const hash = createHash("sha1").update(remote).digest("hex").slice(0, 8);
-  return path.join(home, ".codecast", "reparented", `${name}-${hash}`);
+  return path.join(defaultConfigDir(), "reparented", `${name}-${hash}`);
 }
 
 // A session reparented onto THIS machine (cast pull / reparentSessionToDevice)
@@ -913,7 +912,7 @@ setInterval(() => {
 function isInWakeGrace(): boolean { return Date.now() < wakeGraceUntil; }
 
 
-const CONFIG_DIR = process.env.HOME + "/.codecast";
+const CONFIG_DIR = defaultConfigDir();
 
 // On the cloud host the idle watchdog (provisionLinux.ts cast-idle-check) reads
 // this file's mtime instead of counting claude processes: a dormant session's
@@ -1099,7 +1098,7 @@ const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LOG_FLUSH_INTERVAL_MS = 15 * 1000; // 15 seconds - flush more frequently
 const MAX_LOG_QUEUE_SIZE = 500;
-const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
+const LOG_QUEUE_FILE = path.join(CONFIG_DIR, "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
 // External-watchdog staleness threshold lives in supervision.ts
@@ -1362,11 +1361,16 @@ const closedSyntheticPrompts = new Map<string, number>();
 // Exported for tests (daemon.synthetic-prompt-close.test.ts) — the closure
 // lifecycle is otherwise only reachable through live tmux scrapes.
 export const syntheticPromptTestSeam = { lastEmittedSyntheticPrompt, closedSyntheticPrompts };
-const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
-// Re-exported for the test that covers the traversal shapes. Both the legacy
-// status file and the spool build a path out of the id, so the check lives
-// with them in statusSpool.ts.
-export { isSafeStatusSessionId };
+const AGENT_STATUS_DIR = path.join(CONFIG_DIR, "agent-status");
+// A session id that is safe to use as a file name inside AGENT_STATUS_DIR. The
+// leading character cannot be a dot, so no id can name a parent directory, and
+// no separator is allowed, so no id can leave the directory at all. Real ids
+// are uuids, so this rejects nothing a real caller sends. Exported for the
+// test that covers the traversal shapes.
+const SAFE_STATUS_SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
+export function isSafeStatusSessionId(sessionId: string): boolean {
+  return SAFE_STATUS_SESSION_ID.test(sessionId);
+}
 // Every write of an agent status file rides this one chain. Two statuses for a
 // session (a PostToolUse then a Stop) must land in that order, and two writes
 // racing on one path can also leave bytes the boot replay cannot parse. One
@@ -1426,7 +1430,7 @@ function admitHookPost(sessionId: string, data: HookStatusData): boolean {
 // Where codecast-status.sh drops a pending AskUserQuestion's full tool_input, keyed by
 // session id. The buffered turn isn't in the JSONL yet, so this sidecar is the only
 // full-fidelity source for the question while it waits to be answered.
-const ASK_INPUT_DIR = path.join(process.env.HOME || "", ".codecast", "ask-input");
+const ASK_INPUT_DIR = path.join(CONFIG_DIR, "ask-input");
 const skillsSyncedConversations = new Set<string>();
 
 // Post-compaction message recovery: CC sometimes goes idle after compacting instead of

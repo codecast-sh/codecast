@@ -1,5 +1,5 @@
 import { OPEN_EVENT } from "../../lib/deviceSetup";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
@@ -10,8 +10,10 @@ import {
   OS_PERMISSION_KINDS,
   OS_PERMISSIONS,
   isPermissionActionable,
-  type OsPermissionKind,
+  type AppPermissionKind,
+  type PermissionMap,
 } from "../../lib/osPermissions";
+import { ComputerPermissionRows } from "./ComputerPermissionRows";
 import { PermissionRow } from "./PermissionRow";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -98,7 +100,11 @@ export function DeviceSetupDialog() {
         </DialogHeader>
         <Section title="Needed" kinds={required} permissions={permissions} onChange={refresh} />
         {optional.length > 0 && (
-          <Section title="Optional" kinds={optional} permissions={permissions} onChange={refresh} />
+          <Section title="Optional" kinds={optional} permissions={permissions} onChange={refresh}>
+            {/* Mounted with the dialog, so the helper is asked only while
+                someone is looking at the answer. */}
+            <ComputerPermissionRows />
+          </Section>
         )}
         <div className="flex items-center justify-between gap-3 border-t border-sol-border/60 px-5 py-3">
           <span className="text-xs text-sol-text-dim">
@@ -118,11 +124,13 @@ function Section({
   kinds,
   permissions,
   onChange,
+  children,
 }: {
   title: string;
-  kinds: OsPermissionKind[];
-  permissions: Record<OsPermissionKind, string>;
+  kinds: AppPermissionKind[];
+  permissions: PermissionMap;
   onChange: () => void;
+  children?: ReactNode;
 }) {
   if (kinds.length === 0) return null;
   return (
@@ -130,8 +138,9 @@ function Section({
       <div className="px-5 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">{title}</div>
       <div className="divide-y divide-sol-border/40">
         {kinds.map((k) => (
-          <PermissionRow key={k} kind={k} readiness={permissions[k] as any} onChange={onChange} />
+          <PermissionRow key={k} kind={k} readiness={permissions[k]} onChange={onChange} />
         ))}
+        {children}
       </div>
     </div>
   );

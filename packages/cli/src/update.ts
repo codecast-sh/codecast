@@ -13,11 +13,12 @@ import { createUpdater } from "@platform/cli-kit/update";
 import { execSync } from "./proc.js";
 import pkg from "../package.json";
 import { codecastDir } from "./codecastDir.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export * from "./snippetVersions.js";
 
 const VERSION = pkg.version;
-const CONFIG_DIR = codecastDir();
+const CONFIG_DIR = defaultConfigDir();
 
 export const updater = createUpdater({
   // Shown as "Downloading cast v1.2.3..." — the name a human types, which is

@@ -35,6 +35,7 @@ import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 import { learnHostDeviceId } from "../cloud/prepare.js";
 import { commandGroup } from "../commandGroups.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 /**
  * Find the machine a session should move to, whichever registry it lives in.
@@ -66,7 +67,7 @@ async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost;
 
 /** A Convex client + api_token + generated api, from the local config (move flow). */
 export async function convexClient(): Promise<{ client: any; token: string; api: any }> {
-  const cfgPath = path.join(os.homedir(), ".codecast", "config.json");
+  const cfgPath = path.join(defaultConfigDir(), "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   const token = cfg.auth_token?.startsWith("enc:") ? decryptToken(cfg.auth_token) : cfg.auth_token;
   const { ConvexHttpClient } = await import("convex/browser");
@@ -74,11 +75,11 @@ export async function convexClient(): Promise<{ client: any; token: string; api:
   return { client: new ConvexHttpClient(cfg.convex_url), token, api: apiMod.api };
 }
 
-const SCALEWAY_DIR = path.join(os.homedir(), ".codecast", "scaleway");
+const SCALEWAY_DIR = path.join(defaultConfigDir(), "scaleway");
 const HOSTS_FILE = path.join(SCALEWAY_DIR, "hosts.json");
 // Where the active move's placement is remembered so `pull` can find it
 // without re-deriving (kept tiny + local).
-const MOVES_FILE = path.join(os.homedir(), ".codecast", "remote-moves.json");
+const MOVES_FILE = path.join(defaultConfigDir(), "remote-moves.json");
 
 interface ScalewayHostMeta {
   id: string;

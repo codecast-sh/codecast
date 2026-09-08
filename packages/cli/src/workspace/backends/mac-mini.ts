@@ -20,6 +20,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { defaultConfigDir } from "../../config/configDir.js";
 import { execSync, spawnSync } from "../../proc.js";
 import { resolveManifest } from "../resolver.js";
 import { allocatePorts, portsToEnv } from "../ports.js";
@@ -44,7 +45,7 @@ import type {
   SandboxBackend,
 } from "./types.js";
 
-const SCALEWAY_HOSTS_DIR = path.join(os.homedir(), ".codecast/scaleway");
+const SCALEWAY_HOSTS_DIR = path.join(defaultConfigDir(), "scaleway");
 const SCALEWAY_HOSTS_FILE = path.join(SCALEWAY_HOSTS_DIR, "hosts.json");
 // fr-par-3 carries high stock of M1-M; fr-par-1 has the wider M2/M4 range.
 const DEFAULT_ZONE = "fr-par-3";

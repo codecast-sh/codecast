@@ -2,8 +2,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { CachedJsonStore } from "./cachedJsonStore.js";
 import { walkFiles } from "./fsWalk.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
-const CONFIG_DIR = process.env.HOME + "/.codecast";
+const CONFIG_DIR = defaultConfigDir();
 const LEDGER_FILE = path.join(CONFIG_DIR, "sync-ledger.json");
 const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 

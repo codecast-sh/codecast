@@ -10,9 +10,9 @@ import type { Config } from "./types.js";
 import { sharedConfigFile } from "./sharedConfig.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "../tokenEncryption.js";
 
-// Re-exported so this stays the one import for callers that read the config
-// through it (fastPath.ts loads both off this module namespace).
-export { defaultConfigDir } from "./sharedConfig.js";
+// Re-exported so the stable-context fast path can reach the reader and the
+// directory it reads from in one dynamic import (fastPath.ts).
+export { defaultConfigDir } from "./configDir.js";
 
 export function readAuthConfig(
   configDir: string,

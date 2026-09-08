@@ -14,6 +14,9 @@
  *   FAKE_ERROR_METHODS       JSON: {"method": {"code": …, "message": …}}
  *   FAKE_EXIT_BEFORE_BIND    exit with this code instead of binding
  *   FAKE_DELAY_BIND_MS       wait this long before binding the socket
+ *   FAKE_REQUIRE_HANDSHAKE   refuse every request until a handshake arrives,
+ *                            the way the real helper refuses a peer it was
+ *                            never told about (SocketHandshake.swift)
  */
 
 import * as fs from "node:fs";
@@ -91,6 +94,16 @@ const server = net.createServer((socket) => {
   });
 });
 
+/**
+ * The real helper learns which binary may drive it from the `castBinary` the
+ * handshake carries, and remembers it for the life of the PROCESS. A helper
+ * that never saw a handshake authorizes nobody, so it answers every request
+ * with `permission_denied`. That is what a client reconnecting to a fresh
+ * helper without re-handshaking actually meets.
+ */
+const requireHandshake = process.env.FAKE_REQUIRE_HANDSHAKE === "1";
+let handshaken = false;
+
 function reply(socket: net.Socket, payload: unknown): void {
   socket.write(`${JSON.stringify(payload)}\n`);
 }
@@ -106,6 +119,14 @@ function handle(socket: net.Socket, line: string): void {
     reply(socket, { id: request.id, ok: false, error: { code: "permission_denied", message: "invalid computer agent token" } });
     return;
   }
+  if (requireHandshake && !handshaken && request.method !== "handshake") {
+    reply(socket, {
+      id: request.id,
+      ok: false,
+      error: { code: "permission_denied", message: "computer agent peer is not authorized" },
+    });
+    return;
+  }
   if (hang.has(request.method)) return;
   const failure = errors[request.method];
   if (failure) {
@@ -113,6 +134,7 @@ function handle(socket: net.Socket, line: string): void {
     return;
   }
   if (request.method === "handshake") {
+    handshaken = true;
     reply(socket, { id: request.id, ok: true, result: capabilities });
     return;
   }

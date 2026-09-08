@@ -36,6 +36,7 @@ import { readSharedConfig, writeSharedConfig } from "../config/sharedConfig.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
 import { agentTempPath, TEMP_FILE_MODE } from "../tempFiles.js";
 import { SHOT_TEMP_KIND } from "./shotFile.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 export const AUTO_SHOT_MAX_WIDTH = 800;
 const AUTO_SHOT_JPEG_QUALITY = 60;
@@ -61,10 +62,6 @@ export function isMutatingStep(verb: string, args: string[] = []): boolean {
 }
 
 // ------------------------------------------------------------------- settings
-
-function defaultConfigDir(): string {
-  return process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
-}
 
 /**
  * Explicit config wins. When unset, the default depends on the audience: ON

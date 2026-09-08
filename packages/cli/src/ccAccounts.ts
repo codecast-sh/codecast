@@ -28,6 +28,7 @@ import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -75,16 +76,12 @@ function homeDir(): string {
   return process.env.HOME || os.homedir();
 }
 
-function codecastDir(): string {
-  return path.join(homeDir(), ".codecast");
-}
-
 function profileFileDir(): string {
-  return path.join(codecastDir(), "cc-accounts");
+  return path.join(defaultConfigDir(), "cc-accounts");
 }
 
 function indexPath(): string {
-  return path.join(codecastDir(), "cc-accounts.json");
+  return path.join(defaultConfigDir(), "cc-accounts.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +439,7 @@ interface IdentityCache {
 }
 
 function identityCachePath(): string {
-  return path.join(codecastDir(), "cc-identity.json");
+  return path.join(defaultConfigDir(), "cc-identity.json");
 }
 
 /** Stable per-token key. A hash so the cache file holds no token material. */
@@ -838,7 +835,7 @@ export const SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 
 export function accountTokenFilePath(name: string): string {
   assertValidProfileName(name);
-  return path.join(codecastDir(), `cc-account-${name}.env`);
+  return path.join(defaultConfigDir(), `cc-account-${name}.env`);
 }
 
 /** Store a setup-token for a profile as a 0600 `export` file (same shape and
@@ -1660,7 +1657,7 @@ function nextUsageRetry(
 }
 
 function usageCachePath(): string {
-  return path.join(codecastDir(), "cc-usage.json");
+  return path.join(defaultConfigDir(), "cc-usage.json");
 }
 
 export interface UsageCache {
@@ -1702,7 +1699,7 @@ interface ActiveStamp {
 }
 
 function activeStampPath(): string {
-  return path.join(codecastDir(), "cc-active.json");
+  return path.join(defaultConfigDir(), "cc-active.json");
 }
 
 export function readActiveStamp(): ActiveStamp | null {
@@ -2127,7 +2124,7 @@ export function createMtimeGatedCache<T>(
 const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
   // The directory itself is on the list so a token file appearing or vanishing
   // (a rename into ~/.codecast) invalidates the payload like an index write.
-  () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), codecastDir()],
+  () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), defaultConfigDir()],
   () => {
     let value: AccountsHeartbeatPayload | null = null;
     try {

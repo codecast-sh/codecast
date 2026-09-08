@@ -33,6 +33,7 @@ import {
 import { CdpConnection, type CdpEndpoint } from "./cdp.js";
 import { authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
 import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 /** How long a browser whose owner is `unverifiable` may sit untouched. */
 export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
@@ -111,7 +112,7 @@ export interface LiveOwners {
 }
 
 export function sessionRegistryDir(): string {
-  return path.join(process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast"), "session-registry");
+  return path.join(defaultConfigDir(), "session-registry");
 }
 
 /** Newest mtime of a transcript for this session id under any project, or 0. */

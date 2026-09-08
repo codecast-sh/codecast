@@ -26,11 +26,11 @@ import { execFile } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { codecastPath } from "./codecastDir.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 const execFileAsync = promisify(execFile);
 
-const GIT_DIR = codecastPath("git");
+const GIT_DIR = path.join(defaultConfigDir(), "git");
 const KEY_PATH = path.join(GIT_DIR, "id_ed25519");
 
 export type GitIdentity = "default" | "device";

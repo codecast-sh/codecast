@@ -45,6 +45,7 @@ import { parseManifest } from "../workspace/manifest.js";
 import { MANIFEST_REL_PATH } from "../workspace/resolver.js";
 import type { Config } from "../config/types.js";
 import { codecastDir } from "../codecastDir.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 export interface PolicySource {
   /** File the patterns came from, for messages. */
@@ -192,7 +193,7 @@ export function loadSitePolicy(cwd: string = process.cwd()): SitePolicy | null {
     }
   }
 
-  const configFile = path.join(codecastRoot(), "config.json");
+  const configFile = path.join(defaultConfigDir(), "config.json");
   if (fs.existsSync(configFile)) {
     try {
       const config = JSON.parse(fs.readFileSync(configFile, "utf-8")) as Config;

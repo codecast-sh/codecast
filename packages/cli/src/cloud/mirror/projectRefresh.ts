@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../atomicWrite.js";
 import { readHosts } from "../../browser/cloudHost.js";
-import { localConfigDir } from "../../config/readLocalConfig.js";
+import { defaultConfigDir } from "../../config/configDir.js";
+
 import { remoteHome, type RemoteHost } from "../../remote/session-move.js";
 import { withMirrorLock } from "./apply.js";
 import { assertSafePath } from "./bundle.js";
@@ -16,7 +17,7 @@ export interface ProjectRegistration {
   retired?: boolean;
 }
 
-export const projectRegistrationsFile = () => path.join(localConfigDir(), "browser", "mirror-projects.json");
+export const projectRegistrationsFile = () => path.join(defaultConfigDir(), "browser", "mirror-projects.json");
 
 function registeredHostId(host: RemoteHost): string | undefined {
   return readHosts().find((r) => r.user === host.user && r.address === host.address)?.id;

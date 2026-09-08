@@ -487,11 +487,24 @@ export class ComputerClient {
         if (line.trim()) this.handleLine(line);
       }
     };
-    const onClose = () => {
-      if (this.socket !== socket) return;
+    /**
+     * Forget a connection that went away on its own, the way `shutdown()`
+     * forgets one we ended. `caps` has to go with it: the handshake is what
+     * tells a helper which binary may drive it, and the helper remembers that
+     * per PROCESS — so the next request, which may reach a brand new helper,
+     * must handshake again. Keeping stale caps here made every request after a
+     * helper death fail with `permission_denied: computer agent peer is not
+     * authorized`, which reads like a missing grant and is not one.
+     */
+    const forget = (): void => {
       this.socket = null;
+      this.caps = null;
       this.detach?.();
       this.detach = null;
+    };
+    const onClose = () => {
+      if (this.socket !== socket) return;
+      forget();
       this.rejectPending(new ComputerError("accessibility_error", "the computer helper closed the connection"));
     };
     const onError = (err: Error) => {
@@ -499,6 +512,7 @@ export class ComputerClient {
       this.socket = null;
       this.detach?.();
       this.detach = null;
+      forget();
       if (!socket.destroyed) socket.destroy();
       this.rejectPending(asComputerError(err));
     };
