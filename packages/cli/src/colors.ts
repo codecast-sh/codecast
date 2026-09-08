@@ -56,3 +56,9 @@ export const icons = {
   arrow: isColorSupported ? "→" : "->",
   bullet: isColorSupported ? "•" : "-",
 };
+
+// The one mark for "we asked and got no answer". `cast accounts verify` prints
+// it for a profile whose credential could not be identified, `cast sessions` for
+// a session whose device stopped answering mid-work. Both mean the same thing,
+// and neither means "no" — so they say it with the same symbol. ct-49557.
+export const UNVERIFIABLE_MARK = `${c.dim}?${c.reset}`;

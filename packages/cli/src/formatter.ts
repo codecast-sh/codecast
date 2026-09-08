@@ -1,6 +1,17 @@
-import { c, fmt } from "./colors.js";
+import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
-import { threadStateHeadline, parseThreadStateStatus } from "@codecast/shared/contracts";
+import { threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
+import type { LivenessVerdict } from "@codecast/shared/contracts";
+
+// One glyph per liveness verdict. Green is positive contact. The gray ring is a
+// session that settled — its own agent said so, or we tore it down. The dim ? is
+// the row whose last word was "I am working" with no heartbeat behind it now:
+// nobody watched it end, so it is not settled, it is unverifiable (ct-49557).
+const LIVENESS_GLYPH: Record<LivenessVerdict, string> = {
+  live: `${c.green}●${c.reset}`,
+  unverifiable: UNVERIFIABLE_MARK,
+  exited: `${c.gray}○${c.reset}`,
+};
 
 /** Worktree name embedded in a path (".codecast/worktrees/<name>/…"), if any.
  * Lets a feed card reveal worktree residence even when the session never
@@ -271,7 +282,7 @@ function colorForState(ws: string): string {
 // the default view. formatter.test.ts pins this rather than the docs alone.
 function formatStateBadge(s: { work_state?: string; is_live?: boolean; is_pinned?: boolean; is_killed?: boolean; agent_status?: string }): string {
   const ws = s.work_state || "idle";
-  const liveGlyph = s.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
+  const liveGlyph = LIVENESS_GLYPH[sessionLivenessVerdict(s)];
   const label = WORK_STATE_LABEL[ws] ?? ws;
   const detail = s.is_live && s.agent_status && s.agent_status !== ws && WORK_STATE_LABEL[s.agent_status] === undefined
     ? `${c.dim}:${s.agent_status}${c.reset}`
