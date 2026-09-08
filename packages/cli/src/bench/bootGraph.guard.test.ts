@@ -88,8 +88,26 @@ describe("command groups stay off the boot graph", () => {
     // config-directory resolver, the workers' type-only modules, and three
     // workspace helpers. No command group is among them — that is the check
     // above, and it passes.
+    //
+    // 2,995 KB after ct-49854, at the same 220 files. The file count is the
+    // number that answers the question this guard asks, and it did not move:
+    // githubAppInstallState.ts arrived and sessionUpdates.ts left with the
+    // batching it belonged to, so nothing reached anywhere new. The 9 KB is
+    // modules already on the graph getting longer where ct-49854 added code —
+    // shared/entities/index.ts (+3.5 KB), cloud/mirror/transform.ts (+2.4 KB)
+    // and discovery.ts (+1.9 KB), appDescriptors.ts, workspace/chrome.ts,
+    // syncScope.ts, syncService.ts — plus triggerPrecheck.ts from c1463717a.
+    // Every import path was traced and each one predates the landing. A guard
+    // on reach cannot hold a byte budget flat against features written into
+    // files it has already accepted, so the bytes are re-pinned and the file
+    // count is what stays honest.
+    //
+    // 2,998 with ct-49915, still at 220 files: the widened env rule in
+    // workers/operations.ts and the one-shot report in slowSync.ts, both files
+    // the graph already carried. Code, not reach — which is the distinction
+    // this guard is for, and why the file count is the number to watch.
     expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(220);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2987);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2998);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -104,7 +122,11 @@ describe("command groups stay off the boot graph", () => {
     // rather than a graph it carries by accident (ct-49758) — but the command
     // groups are not its work, which is what assertOffGraph checks above.
     // 290 after the landing, from the same new leaves index.ts picked up.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(290);
+    // 291 after ct-49854, which is one new leaf: pendingPromptHold.ts, imported
+    // by daemon.ts directly. Holding a prompt the daemon has not delivered yet
+    // is the daemon's own work, so it is a leaf it legitimately gained rather
+    // than a subsystem arriving sideways.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(291);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

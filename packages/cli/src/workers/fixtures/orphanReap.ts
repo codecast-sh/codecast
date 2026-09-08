@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "../../proc.js";
+import { pidGone } from "../../test-helpers/processLiveness.js";
 import { promisify } from "node:util";
 import { configureDaemonWorkers, closeDaemonWorkers, scanWorkerHost } from "../bridge.js";
 import { acquireSessionProcessOwnership, ensureSessionFileIndex, resetSessionFileIndexForTests, orphanReaperForTests, hibernationConcurrencyForTests, trackSessionPaneForTests } from "../../daemon.js";
@@ -119,14 +120,14 @@ try {
   const c = await fixture();
   io.signal = pid => { assert.equal(pid, c.pid); originalIo.signal(pid); actualOwnedSignal = true; };
   await reap(c.id, c.pid, pane); assert.equal(actualOwnedSignal, true);
-  await waitUntil(async () => { try { process.kill(c.pid, 0); return false; } catch { return true; } });
+  await waitUntil(async () => pidGone(c.pid));
 } finally {
   release(); restore(); Object.assign(io, originalIo); hibernationConcurrencyForTests.setResumeInner(null);
   closeDaemonWorkers();
   for (const item of owned) {
     const identity = await ps(item.pid).catch(() => "");
     if (item.ids.some(id => identity.includes(id))) { try { process.kill(item.pid, "SIGKILL"); } catch {} }
-    await waitUntil(async () => { try { process.kill(item.pid, 0); return false; } catch { return true; } });
+    await waitUntil(async () => pidGone(item.pid));
     trackSessionPaneForTests(item.ids[0], null);
   }
 }

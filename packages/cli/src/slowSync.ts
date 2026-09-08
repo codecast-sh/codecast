@@ -8,7 +8,7 @@
 // sink and one message shape serve both, so the log report and the freeze
 // SLO read them the same way.
 
-export type SlowSyncTag = "SLOW-SYNC-SPAWN" | "SLOW-SYNC-FS" | "SPAWN-TIMEOUT";
+export type SlowSyncTag = "SLOW-SYNC-SPAWN" | "SLOW-SYNC-FS" | "SPAWN-TIMEOUT" | "WORKER-ENV-DROPPED";
 
 export const SLOW_SYNC_SPAWN_MS = 1_000;
 // Filesystem work is finer grained than a spawn: one walk of the transcript
@@ -38,6 +38,29 @@ export function reportSpawnTimeout(name: string, detail: string, timeoutMs: numb
   try {
     slowSyncSink?.(`[SPAWN-TIMEOUT] ${name} killed after ${timeoutMs}ms: ${detail}`);
   } catch {}
+}
+
+/**
+ * A probe the worker protocol could not carry, once per process.
+ *
+ * Here for the reason SPAWN-TIMEOUT is: not itself a loop hold, but how one
+ * starts. An unroutable probe does not fail, it runs on the daemon's own loop
+ * — the hold this file exists to name. Once, because the cause is usually the
+ * environment, which does not change under a running process (ct-49915).
+ */
+let unroutableProbeReported = false;
+export function reportUnroutableProbe(operation: string, args: string[], options: unknown): void {
+  if (unroutableProbeReported) return;
+  unroutableProbeReported = true;
+  try {
+    const env = (options as { env?: Record<string, unknown> } | null)?.env;
+    const keys = env ? Object.keys(env).length : 0;
+    slowSyncSink?.(`[WORKER-ENV-DROPPED] ${operation} ${args.join(" ").slice(0, 120)} cannot be carried to a worker (${keys} env entries); this probe and every later one runs on the daemon loop`);
+  } catch {}
+}
+
+export function resetUnroutableProbeReportForTests(): void {
+  unroutableProbeReported = false;
 }
 
 /**

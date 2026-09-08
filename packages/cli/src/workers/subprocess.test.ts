@@ -98,7 +98,13 @@ test("killing worker mid-request allows async fallback and replacement after bac
 });
 test("read-only tmux listing/capture matches direct async path on an isolated socket; full-ID collision stays exact", async () => {
   const socket = `f1-probe-${process.pid}-${Date.now()}`;
-  const tmux = (a: string[]) => execFileSync("tmux", ["-L", socket, ...a], { encoding: "utf8", timeout: 3000 });
+  // `-L` resolves under TMUX_TMPDIR, and the test harness moves that to a
+  // private directory at preload. Under bun a child inherits the env the
+  // process STARTED with, not the mutated one, so a bare spawn would build
+  // this server on the machine's default socket directory while tmuxRunAsync
+  // below — which passes its env explicitly — looked in the private one, and
+  // the two halves would never meet (ct-49907).
+  const tmux = (a: string[]) => execFileSync("tmux", ["-L", socket, ...a], { encoding: "utf8", timeout: 3000, env: { ...process.env } });
   const names = ["cast-term-collision-a", "cast-term-collision-b"];
   try {
     for (let i = 0; i < 2; i++) { tmux(["new-session", "-d", "-s", names[i], "sh", "-c", "printf 'probe fixture\\n'; exec sleep 60"]); tmux(["set-option", "-t", names[i], "@codecast_session_id", `sameprefix-${i}-full`]); }
