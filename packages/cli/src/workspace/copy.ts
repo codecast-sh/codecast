@@ -15,6 +15,9 @@
  *   - Directories are copied recursively.
  *   - Symlinks are followed (we copy the target, not the link) to keep the
  *     workspace self-contained.
+ *   - On macOS the bytes are cloned, not written: APFS gives every worktree a
+ *     copy-on-write view of the same blocks, so a credential directory costs
+ *     nothing to duplicate. Other filesystems fall back to a plain copy.
  */
 
 import { execSync } from "../proc.js";
@@ -27,6 +30,19 @@ export interface CopyOptions {
   overwrite?: boolean;
   /** Logger used for skip/warn messages. Defaults to console.warn. */
   log?: (msg: string) => void;
+  /** Platform to copy for. Defaults to the running one; tests override it. */
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * The copyFile mode for a platform: a copy-on-write clone on macOS, a plain
+ * copy everywhere else.
+ *
+ * COPYFILE_FICLONE asks for a reflink and silently writes bytes when the
+ * filesystem has none, so it is safe on a non-APFS Mac volume too.
+ */
+export function copyFileMode(platform: NodeJS.Platform = process.platform): number {
+  return platform === "darwin" ? fs.constants.COPYFILE_FICLONE : 0;
 }
 
 export interface CopyResult {
@@ -66,12 +82,13 @@ export function copyFiles(
 
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const mode = copyFileMode(opts.platform);
       const stat = fs.statSync(src);
       if (stat.isDirectory()) {
-        copyDirRecursive(src, dest);
+        copyDirRecursive(src, dest, mode);
       } else {
         // copyFileSync follows symlinks by default — good for portability.
-        fs.copyFileSync(src, dest);
+        copyFileCloning(src, dest, mode);
       }
       result.copied.push(pattern);
     } catch (err) {
@@ -86,14 +103,38 @@ export function copyFiles(
 }
 
 /**
+ * Copy one file, cloning its blocks when the platform offers it.
+ *
+ * Why the retry: a clone can be refused for reasons a plain copy survives (a
+ * source and destination on different volumes, a filesystem that reports the
+ * flag but rejects the operation), and a copied credential file is always
+ * better than a missing one.
+ */
+function copyFileCloning(src: string, dest: string, mode: number): void {
+  try {
+    fs.copyFileSync(src, dest, mode);
+  } catch (err) {
+    if (mode === 0) throw err;
+    fs.copyFileSync(src, dest, 0);
+  }
+}
+
+/**
  * Recursive directory copy. Falls back to `cp -r` if the source is large or
  * contains symlinks that fs.cpSync can't handle.
  */
-function copyDirRecursive(src: string, dest: string): void {
-  if (typeof fs.cpSync === "function") {
-    fs.cpSync(src, dest, { recursive: true, dereference: false });
+function copyDirRecursive(src: string, dest: string, mode = 0): void {
+  if (typeof fs.cpSync !== "function") {
+    // Older Node — shell out.
+    execSync(`cp -R ${JSON.stringify(src)} ${JSON.stringify(dest)}`, { stdio: "ignore" });
     return;
   }
-  // Older Node — shell out.
-  execSync(`cp -R ${JSON.stringify(src)} ${JSON.stringify(dest)}`, { stdio: "ignore" });
+  const opts = { recursive: true, dereference: false, mode };
+  try {
+    fs.cpSync(src, dest, opts);
+  } catch (err) {
+    if (mode === 0) throw err;
+    // Clone refused — take the plain copy, same as the single-file path.
+    fs.cpSync(src, dest, { ...opts, mode: 0 });
+  }
 }

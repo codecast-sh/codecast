@@ -19,6 +19,7 @@ function manifest(setup: Partial<WorkspaceManifest["setup"]>): WorkspaceManifest
   return {
     setup: {
       copy: setup.copy ?? [],
+      share: setup.share ?? [],
       install: setup.install ?? [],
       generate: setup.generate ?? [],
       migrate: setup.migrate ?? [],

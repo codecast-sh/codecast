@@ -28,6 +28,7 @@ afterEach(() => {
 const baseManifest = (): WorkspaceManifest => ({
   setup: {
     copy: [],
+    share: [],
     install: ["bun install"],
     generate: [],
     migrate: [],

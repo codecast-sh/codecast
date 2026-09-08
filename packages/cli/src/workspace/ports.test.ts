@@ -39,7 +39,7 @@ function holdPort(port: number): Promise<Server> {
 }
 
 const sampleManifest = (): WorkspaceManifest => ({
-  setup: { copy: [], install: [], generate: [], migrate: [] },
+  setup: { copy: [], share: [], install: [], generate: [], migrate: [] },
   ports: {
     web: { base: 33000, range: 100 },
     api: { base: 33001, range: 100 },

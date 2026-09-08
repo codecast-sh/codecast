@@ -33,6 +33,7 @@ describe("parseManifestText — Manifest A (minimal)", () => {
 
   test("missing sections default to empty", () => {
     expect(m.setup.copy).toEqual([]);
+    expect(m.setup.share).toEqual([]);
     expect(m.setup.generate).toEqual([]);
     expect(m.setup.migrate).toEqual([]);
     expect(m.ports).toEqual({});
@@ -68,6 +69,8 @@ run = ["bun run db:reset"]
 
   test("setup commands parsed", () => {
     expect(m.setup.copy).toEqual([".env", ".env.local"]);
+    expect(parseManifestText('[setup]\nshare = ["node_modules", ".venv"]\n').setup.share)
+      .toEqual(["node_modules", ".venv"]);
     expect(m.setup.install).toEqual(["bun install"]);
     expect(m.setup.generate).toEqual(["bun run codegen"]);
     expect(m.setup.migrate).toEqual(["bun run db:migrate"]);
