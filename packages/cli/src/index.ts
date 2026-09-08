@@ -103,7 +103,7 @@ import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
-import { isClaudeTranscriptOutOfWatchScope, isTestScratchPath } from "./syncScope.js";
+import { isClaudeTranscriptOutOfWatchScope, isTestArtifactPath } from "./syncScope.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import {
   getLastReconciliation,
@@ -1314,9 +1314,9 @@ function getStuckSyncs(): StuckSync[] {
     // user at "cast restart", which can't help. Genuine stuck syncs have synced
     // at least once, so they carry a real timestamp.
     if (record.lastSyncedAt <= 0) continue;
-    // Files the sync loop refuses to sync (test-scratch transcripts) are never
+    // Files the sync loop refuses to sync (a test run's transcripts) are never
     // actionable here — skip them defensively.
-    if (isTestScratchPath(filePath)) continue;
+    if (isTestArtifactPath(filePath)) continue;
     // A ledger row the live watcher would never advance (e.g. a workflow run's
     // journal.jsonl an older sweep synced) is not a wedge either.
     if (isClaudeTranscriptOutOfWatchScope(filePath)) continue;

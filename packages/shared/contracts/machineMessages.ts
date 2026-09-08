@@ -1,5 +1,3 @@
-import { isSessionUpdateBatch } from "./sessionUpdates";
-
 // Detection of user-role messages that machinery delivered into a session
 // rather than a human typing them: cross-session `cast send` wrappers,
 // inter-agent teammate broadcasts (Claude Code SendMessage), scheduled-task
@@ -167,7 +165,7 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
 // inter-agent teammate broadcast, a scheduled-task injection, a harness task
 // notification, or a team-chat mention waking the anchor.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionUpdateBatch(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

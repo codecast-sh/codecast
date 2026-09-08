@@ -83,7 +83,21 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
   const byPath = new Map<string, (typeof entries)[number]>();
   const add = (e: { path: string; kind: MirrorKind; mode: "0600" | "0700"; bytes: Buffer }, context = ctx) => {
     let transformed: ReturnType<typeof transformByKind>;
-    try { transformed = transformByKind(e.kind, e.bytes, context); }
+    try {
+      transformed = transformByKind(e.kind, e.bytes, context);
+      if (e.kind === "claude-mcp") {
+        const source = JSON.parse(e.bytes.toString("utf8"));
+        const projection = JSON.parse(transformed.bytes.toString("utf8"));
+        for (const project of projects) {
+          const settings = source.projects?.[project.sourceRoot];
+          if (!settings) continue;
+          const scoped = transformByKind(e.kind, Buffer.from(JSON.stringify({ projects: { [project.sourceRoot]: settings } })), { fromHome: home, toHome: opts.hostHome, pathMappings: mappings(project) });
+          Object.assign(projection.projects ??= {}, JSON.parse(scoped.bytes.toString("utf8")).projects);
+          transformed.scrubbed.push(...scoped.scrubbed);
+        }
+        transformed.bytes = Buffer.from(JSON.stringify(projection, null, 2) + "\n");
+      }
+    }
     catch (err) { throw new Error(`cannot transform required context ${e.path}: ${err instanceof Error ? err.message : String(err)}`); }
     const existing = byPath.get(e.path);
     if (existing) {
@@ -195,9 +209,25 @@ async function mirrorSsh(host: RemoteHost, command: string, opts: { input?: Buff
     child.stdout.on("data", (d) => { stdout += d; if (stdout.length > 32 * 1024 * 1024) cancel(new Error("mirror reply exceeds receive limit")); });
     child.stderr.on("data", (d) => { stderr = (stderr + d).slice(-4096); });
     child.on("error", (err) => { failure ??= err; });
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       clearTimeout(timer);
       opts.signal?.removeEventListener("abort", abort);
+      if (failure && child.pid) {
+        const deadline = performance.now() + 1_000;
+        for (;;) {
+          try { process.kill(child.pid, 0); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ESRCH") break;
+            reject(new Error("mirror SSH cleanup unconfirmed: cannot verify process exit"));
+            return;
+          }
+          if (performance.now() >= deadline) {
+            reject(new Error("mirror SSH cleanup unconfirmed: process remains after close"));
+            return;
+          }
+          await new Promise((done) => setTimeout(done, 10));
+        }
+      }
       if (failure) reject(failure); else resolve({ code, stdout, stderr });
     });
     child.stdin.on("error", () => {});

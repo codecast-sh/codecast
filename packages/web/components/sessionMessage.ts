@@ -23,8 +23,6 @@ import {
   stripInjectionNoise,
   isSessionMessage,
   isAgentMessage,
-  isSessionUpdateBatch,
-  parseSessionUpdateBatch,
   isTeammateMessage,
   stripTeammateFraming,
   isScheduledTaskMessage,
@@ -40,8 +38,6 @@ export {
   stripInjectionNoise,
   isSessionMessage,
   isAgentMessage,
-  isSessionUpdateBatch,
-  parseSessionUpdateBatch,
   isUserMessage,
   parseUserMessage,
   formatUserMessage,
@@ -235,14 +231,6 @@ export function parseMachineDeliveredMessage(
   rawContent: string | null | undefined,
 ): { kind: MachineDeliveredKind; source: string; body: string } | null {
   if (!rawContent) return null;
-  if (isSessionUpdateBatch(rawContent)) {
-    const batch = parseSessionUpdateBatch(rawContent);
-    return {
-      kind: "session",
-      source: batch ? `${batch.members.length} session update${batch.members.length === 1 ? "" : "s"}` : "session updates",
-      body: batch ? batch.members.map(member => `${member.from}: ${member.body}`).join("\n\n") : "Batch preview unavailable",
-    };
-  }
   if (isScheduledTaskMessage(rawContent)) {
     const m = rawContent.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
     const title = (m?.[1] ?? "").replace(/&quot;/g, '"');

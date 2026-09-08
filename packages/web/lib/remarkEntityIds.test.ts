@@ -154,3 +154,36 @@ describe("entityRemarkPlugins repository objects", () => {
     expect(html).toContain('href="https://github.com/codecast-sh/codecast/pull/482"');
   });
 });
+
+describe("entityRemarkPlugins contextual pull request references", () => {
+  // The number becomes the link and carries `pr:#N|<as written>`; the words in
+  // front of it stay prose, so "PR 3263" is still read as "PR " then the link.
+  test("#N and PR N become pr: payload links, words kept as text", () => {
+    const html = render("merged #3263 and PR 3247 today");
+    expect(html).toContain(">pr:#3263|#3263</a>");
+    expect(html).toContain("PR <a");
+    expect(html).toContain(">pr:#3247|3247</a>");
+  });
+
+  test("a full owner/repo#N reference is not doubled by the contextual scan", () => {
+    const html = render("merged codecast-sh/codecast#482");
+    expect(html).toContain(">codecast-sh/codecast#482</a>");
+    expect(html).not.toContain("pr:#482");
+  });
+
+  test("a hash in a URL fragment or inline code stays text", () => {
+    const html = render("see https://example.com/page#12 and `#12` and page.html#12");
+    expect(html).not.toContain("pr:#12");
+  });
+
+  test("a heading is not a reference", () => {
+    const html = render("# 2026 plan");
+    expect(html).toContain("<h1>2026 plan</h1>");
+  });
+
+  test("PR 3263 and #3263 in one message count as one mention", () => {
+    const html = render("PR 3263 landed; #3263 is merged");
+    expect(html).toContain('data-ref-nth="1"');
+    expect(html).toContain('data-ref-nth="2"');
+  });
+});

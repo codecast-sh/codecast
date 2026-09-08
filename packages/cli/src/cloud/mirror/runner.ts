@@ -52,8 +52,7 @@ export async function runStandaloneMirror(opts: Parameters<typeof startStandalon
     const stop: () => void = () => {
       signals.removeListener("SIGTERM", onSignal);
       signals.removeListener("SIGINT", onSignal);
-      unwatchParent();
-      void runner.stop().then(resolve, reject).finally(() => { clearInterval(keepAlive); });
+      void runner.stop().then(resolve, reject).finally(() => { unwatchParent(); clearInterval(keepAlive); });
     };
     const onSignal = () => { stop(); };
     process.on("SIGTERM", onSignal);

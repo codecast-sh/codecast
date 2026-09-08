@@ -1454,30 +1454,6 @@ export default defineSchema({
     .index("by_nonce_hash", ["nonce_hash"])
     .index("by_created_at", ["created_at"]),
 
-  session_updates: defineTable({
-    conversation_id: v.id("conversations"),
-    owner_user_id: v.id("users"),
-    from_user_id: v.id("users"),
-    from_conversation_id: v.id("conversations"),
-    from_short_id: v.string(),
-    to_short_id: v.string(),
-    to_ref: v.string(),
-    from_ref: v.string(),
-    client_id: v.string(),
-    body: v.string(),
-    encoded_bytes: v.number(),
-    created_at: v.number(),
-    soft_deadline: v.number(),
-    hard_deadline: v.number(),
-    state: v.union(v.literal("queued"), v.literal("enqueued"), v.literal("cancelled"), v.literal("rejected")),
-    pending_message_id: v.optional(v.id("pending_messages")),
-    reason: v.optional(v.string()),
-  })
-    .index("by_user_client_id", ["from_user_id", "client_id"])
-    .index("by_conversation_state_created", ["conversation_id", "state", "created_at"])
-    .index("by_state_deadline", ["state", "hard_deadline"])
-    .index("by_pending_message", ["pending_message_id"]),
-
   pending_messages: defineTable({
     conversation_id: v.id("conversations"),
     kill_generation: v.optional(v.number()),
@@ -1524,6 +1500,11 @@ export default defineSchema({
     // later send can never re-match an already-echoed row.
     echo_message_id: v.optional(v.id("messages")),
     retry_count: v.number(),
+    // Stamped by the daemon once it has SEEN its paste in the composer and the
+    // Enter accepted. "injected" alone is the pre-paste mark; a status ack may
+    // terminalize only a row that carries this stamp (a pre-paste mark acked by
+    // an unrelated working report lost a cast send on 2026-09-08).
+    paste_verified_at: v.optional(v.number()),
     // Present only after a conversation crosses the fenced-execution gate.
     // Legacy columns remain as a UI/backward-compatible projection, but legacy
     // daemon endpoints reject these rows. Convex assigns all four values in the
@@ -2938,7 +2919,11 @@ export default defineSchema({
   }).index("by_repository_suite", ["repository", "suite_id"]),
 
   github_app_installations: defineTable({
-    team_id: v.id("teams"),
+    // The codecast workspace that owns this credential (exactly one set): a
+    // team, whose members act through it inside the team, or a person, who
+    // acts through it in every workspace they work in.
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")),
     installation_id: v.number(),
     account_login: v.string(),
     account_type: v.union(v.literal("User"), v.literal("Organization")),
@@ -2959,6 +2944,7 @@ export default defineSchema({
     updated_at: v.number(),
   })
     .index("by_team_id", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"])
     .index("by_installation_id", ["installation_id"])
     .index("by_account_login", ["account_login"]),
 

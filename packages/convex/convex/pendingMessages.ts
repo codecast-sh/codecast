@@ -120,7 +120,8 @@ export function isTerminalPendingStatus(status: string): boolean {
 async function rependPendingMessage(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string; retry_count: number },
-  retryCount: number
+  retryCount: number,
+  holdReason?: string,
 ): Promise<boolean> {
   if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
@@ -130,6 +131,8 @@ async function rependPendingMessage(
     status: "pending" as const,
     retry_count: retryCount,
     delivered_at: undefined,
+    paste_verified_at: undefined,
+    delivery_disposition_reason: holdReason,
   });
   return true;
 }
@@ -137,7 +140,7 @@ async function rependPendingMessage(
 async function patchPendingMessageStatus(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string },
-  patch: { status: PendingStatus; delivered_at?: number }
+  patch: { status: PendingStatus; delivered_at?: number; paste_verified_at?: number }
 ): Promise<boolean> {
   if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
@@ -329,7 +332,7 @@ export async function updatePendingMessageStatusForDaemon(
   messageId: Id<"pending_messages">,
   userId: Id<"users">,
   deviceId: string,
-  patch: { status: PendingStatus; delivered_at?: number }
+  patch: { status: PendingStatus; delivered_at?: number; paste_verified_at?: number }
 ): Promise<{ updated: boolean; skipped?: boolean }> {
   const message = await ctx.db.get(messageId);
   if (!message) return { updated: false, skipped: true };
@@ -813,6 +816,9 @@ export const updateMessageStatus = mutation({
       v.literal("undeliverable")
     ),
     delivered_at: v.optional(v.number()),
+    // The daemon saw its paste in the composer and the Enter accepted. Only a
+    // row stamped this way may be terminalized by an observed working status.
+    paste_verified: v.optional(v.boolean()),
     api_token: v.optional(v.string()),
     device_id: v.optional(v.string()),
   },
@@ -831,18 +837,17 @@ export const updateMessageStatus = mutation({
       throw new Error("Unauthorized: can only update messages you sent or own");
     }
 
+    const patch = {
+      status: args.status,
+      delivered_at: args.delivered_at,
+      ...(args.status === "injected" && args.paste_verified ? { paste_verified_at: Date.now() } : {}),
+    };
     if (args.device_id) {
-      const result = await updatePendingMessageStatusForDaemon(ctx, args.message_id, authUserId, args.device_id, {
-        status: args.status,
-        delivered_at: args.delivered_at,
-      });
+      const result = await updatePendingMessageStatusForDaemon(ctx, args.message_id, authUserId, args.device_id, patch);
       return { success: true, skipped: result.skipped };
     }
 
-    const updated = await patchPendingMessageStatus(ctx, message, {
-      status: args.status,
-      delivered_at: args.delivered_at,
-    });
+    const updated = await patchPendingMessageStatus(ctx, message, patch);
 
     return { success: true, skipped: !updated };
   },
@@ -881,6 +886,13 @@ export async function retryPendingMessageForUser(
 export const retryMessage = mutation({
   args: {
     message_id: v.id("pending_messages"),
+    // A hold, not a failure: the daemon could not paste because the terminal
+    // was waiting for a human (a menu, a confirmation). The row goes back to
+    // "pending" so the next scan retries it, but retry_count stays where it is
+    // and the reason is stamped for the sender's card. Counting holds as
+    // attempts spent the whole budget in seven minutes and stranded a message
+    // for 49 minutes on 2026-09-08.
+    hold_reason: v.optional(v.string()),
     api_token: v.optional(v.string()),
     device_id: v.optional(v.string()),
   },
@@ -907,7 +919,9 @@ export const retryMessage = mutation({
       return { success: true, skipped: true };
     }
 
-    const updated = await rependPendingMessage(ctx, message, message.retry_count + 1);
+    const updated = args.hold_reason
+      ? await rependPendingMessage(ctx, message, message.retry_count, args.hold_reason)
+      : await rependPendingMessage(ctx, message, message.retry_count + 1);
 
     return { success: true, skipped: !updated };
   },
@@ -1008,18 +1022,6 @@ export async function cancelQueuedMessagesOnKill(
   }
   let budget = KILL_CANCEL_BUDGET;
   let cancelled = 0;
-  if (!options.continuation) {
-    const updates = await ctx.db
-      .query("session_updates")
-      .withIndex("by_conversation_state_created", (q: any) =>
-        q.eq("conversation_id", conversationId).eq("state", "queued"))
-      .take(budget);
-    for (const update of updates) {
-      await ctx.db.patch(update._id, { state: "cancelled", reason: "Session killed before update was enqueued" });
-    }
-    cancelled += updates.length;
-    budget -= updates.length;
-  }
   // Only a FENCED conversation can hold fenced rows, and that sweep is the
   // expensive one — gate it on the conversation's own marker rather than paying
   // a scan on every ordinary kill.
@@ -1282,7 +1284,7 @@ export const getConversationPendingMessage = query({
       ?? visible.find((m) => m.status === "undeliverable")
       ?? null;
     if (!msg) return null;
-    return { message_id: msg._id, client_id: msg.client_id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content };
+    return { message_id: msg._id, client_id: msg.client_id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content, hold_reason: msg.delivery_disposition_reason };
   },
 });
 

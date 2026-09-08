@@ -2,12 +2,33 @@ import { describe, expect, test } from "bun:test";
 import { REFERENCES_SNIPPET, SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { findOwnedSections } from "@platform/snippets";
 import {
-  gitconfigKeyAllowed, ownedSectionSpecs, parseGitConfigList, parseJsonLoose, remapHome, renderGitconfig, scrubSecrets,
+  credentialContentReason, gitconfigKeyAllowed, ownedSectionSpecs, parseGitConfigList, parseJsonLoose, remapHome, renderGitconfig, scrubSecrets,
   splitTomlTables, joinTomlTables, stripOwnedSections, transformByKind, transformClaudeSettings, transformCodexToml, transformForHost,
   transformGeminiSettings, transformGrokToml, transformHooksJson, transformOpencodeJson, transformTomlRemap,
 } from "./transform";
 
 const ctx = { fromHome: "/Users/ashot", toHome: "/home/ubuntu" };
+
+test("credential tripwire distinguishes runtime references from literal credentials without a minimum password length", () => {
+  for (const source of ['apiKey: env.API_KEY', 'apiKey: ctx.env.OPENAI_API_KEY', 'api_key = os.environ["OPENAI_API_KEY"]', 'token = process.env.TOKEN', '{"apiKey":"env.API_KEY"}', '{"password":"YOUR_PASSWORD"}']) {
+    expect(credentialContentReason(Buffer.from(source))).toBeNull();
+  }
+  expect(credentialContentReason(Buffer.from('{"password":"s3cret!"}'))).toBe("credential-bearing config excluded");
+  expect(credentialContentReason(Buffer.from('{"password":"x"}'))).toBe("credential-bearing config excluded");
+  expect(credentialContentReason(Buffer.from('{"password":".hidden-value"}'))).toBe("credential-bearing config excluded");
+  expect(credentialContentReason(Buffer.from('{"accessToken":"/opaque-base64-value"}'))).toBe("credential-bearing config excluded");
+  expect(credentialContentReason(Buffer.from('{"credentialFile":"~/.config/tool/credentials"}'))).toBeNull();
+  expect(credentialContentReason(Buffer.from('AIza' + 'A1b2C'.repeat(7)))).toBe("credential material excluded");
+});
+
+test("Claude MCP projection remaps project keys and refuses raw auth or history state", () => {
+  const input = { mcpServers: { local: { command: "/Users/ashot/scripts/run" } }, projects: { "/Users/ashot/src/repo": { mcpServers: { project: { command: "/Users/ashot/src/repo/mcp" } } } } };
+  const result = JSON.parse(transformByKind("claude-mcp", Buffer.from(JSON.stringify(input)), { ...ctx, pathMappings: [{ from: "/Users/ashot/src/repo", to: "/home/ubuntu/work/repo" }] }).bytes.toString());
+  expect(result.projects["/home/ubuntu/work/repo"].mcpServers.project.command).toBe("/home/ubuntu/work/repo/mcp");
+  expect(result.mcpServers.local.command).toBe("/home/ubuntu/scripts/run");
+  expect(() => transformByKind("claude-mcp", Buffer.from('{"oauthAccount":{"token":"private"}}'), ctx)).toThrow("invalid Claude MCP projection");
+  expect(() => transformByKind("claude-mcp", Buffer.from('{"projects":{"/home/u":{"mcpServers":{},"history":[]}}}'), ctx)).toThrow("invalid Claude MCP projection");
+});
 
 /** A laptop CLAUDE.md: user text, every real catalog section, more user text. */
 export function laptopClaudeMd(): string {

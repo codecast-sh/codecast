@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useContext } from "react";
 import Link from "next/link";
 import {
   Target,
@@ -20,6 +20,9 @@ import {
   isEntityId,
   entityMentionRegex,
   MESSAGE_REF_PREFIX,
+  CONTEXTUAL_PR_REF_PREFIX,
+  parseContextualPrRef,
+  repoObjectId,
   type EntityType,
 } from "../lib/entityLinks";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
@@ -39,7 +42,7 @@ import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
-import { filePathMention, parseFilePathHref } from "../lib/filePathLinks";
+import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/filePathLinks";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
@@ -446,8 +449,32 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
   return code;
 }
 
+/**
+ * A pull request named by number alone (`pr:#N|<as written>`, minted by
+ * remarkEntityIds) completes to `owner/repo#N` from the conversation's
+ * repository and wears a pill that reads as the text written. With no
+ * repository in context it is not a reference at all and prints back verbatim.
+ */
+function contextualPrReference(payload: string, repository: string | null | undefined, mention?: MentionInfo): React.ReactNode | null {
+  const ref = parseContextualPrRef(payload);
+  if (!ref) return null;
+  if (!repository) return <>{ref.label}</>;
+  return (
+    <EntityIdPill
+      type="pr"
+      id={repoObjectId({ type: "pr", repository, number: ref.number })}
+      certain
+      label={ref.label}
+      mention={mention}
+    />
+  );
+}
+
 export function EntityAwareLink({ href, children, ...allProps }: any) {
   const { mention, rest: props } = takeMentionProps(allProps);
+  // The conversation this link sits in, when there is one: its repository is
+  // what a bare `#3263` refers to.
+  const pathCtx = useContext(FilePathContext);
   {
     // Transclusion: ![[doc:<id>]] arrives as a link whose TEXT is
     // "embed:doc:<id>" (the embed:// href is dropped by react-markdown's url
@@ -490,6 +517,10 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
     if (ref.startsWith(MESSAGE_REF_PREFIX)) return <SharedMessagePill refId={ref} />;
     const date = parseDateRef(ref);
     if (date) return <DatePill iso={date.iso} label={date.label} />;
+    if (ref.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
+      const pr = contextualPrReference(ref, pathCtx?.repository, mention);
+      if (pr !== null) return pr;
+    }
     return <EntityIdPill shortId={ref} mention={mention} />;
   }
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
@@ -521,6 +552,12 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
     const date = parseDateRef(text);
     if (date) return <DatePill iso={date.iso} label={date.label} />;
   }
+  // A pull request named by number alone (`pr:#N|<as written>`), same
+  // convention: completed from the conversation's repository, or the text back.
+  if (text.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
+    const pr = contextualPrReference(text, pathCtx?.repository, mention);
+    if (pr !== null) return pr;
+  }
   if (isEntityId(text)) {
     // Fallback preserves the original link for a Convex-shaped id that turns
     // out not to be one of our entities. An entity:// href arrives stripped
@@ -539,15 +576,19 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   const entityRef = parseEntityUrl(href);
   if (entityRef) {
     // A GitHub pull request or commit URL is the same object as its codecast
-    // page, so it renders as that pill. One codecast does not know yet (no
-    // installation, not synced) stays the GitHub link it was — never bare text.
-    const github = /^https?:\/\/(www\.)?github\.com\//i.test(href ?? "");
+    // page, so it renders as that pill and opens there. A URL leaves no doubt
+    // about what it names, so the pill stands even before codecast holds the
+    // row (no installation yet, not synced): it reads as the author's own link
+    // text, or the `owner/repo#N` reference, and the page it opens offers the
+    // GitHub link when the row is missing.
+    const repoObject = entityRef.type === "pr" || entityRef.type === "commit";
     return (
       <EntityIdPill
         type={entityRef.type}
         id={entityRef.id}
         mention={mention}
-        fallback={github ? <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a> : undefined}
+        certain={repoObject}
+        label={repoObject && text && text !== href ? text : undefined}
       />
     );
   }
@@ -650,6 +691,8 @@ export function EntityIdPill({
   fallback,
   mention,
   compact: compactProp,
+  certain = false,
+  label: labelProp,
 }: {
   shortId?: string;
   type?: EntityType;
@@ -658,11 +701,23 @@ export function EntityIdPill({
   mention?: MentionInfo;
   /** Force the short-name form (a surface too narrow for a title). */
   compact?: boolean;
+  /** The reference certainly names a pull request or commit — it came from a
+   *  URL, or from a number in a conversation bound to the repository — so it
+   *  wears the pill even before codecast holds the row. A bare
+   *  `owner/repo#12` in prose is not certain: it is also the shape of a file
+   *  path with a line hash, so it stays text until the row is in hand. */
+  certain?: boolean;
+  /** What the reference reads as until the row resolves (the text as written);
+   *  the object's title still wins once it is in hand. */
+  label?: string;
 }) {
   // All resolution — type sniffing/server resolve, webGet queries, the
   // local-first store seed, label and route — is the shared hook.
   const rawRef = (idProp ?? shortId ?? "").trim();
-  const { rawId, type, entity, status, label: fullLabel, shortLabel, href } = useEntityResolution(rawRef, typeProp);
+  const resolution = useEntityResolution(rawRef, typeProp);
+  const { rawId, type, entity, status, href } = resolution;
+  const fullLabel = !entity && labelProp ? labelProp : resolution.label;
+  const shortLabel = !entity && labelProp ? labelProp : resolution.shortLabel;
   // A reader needs the title once. A repeat mention in the same message — or
   // a mention of an object the surrounding chrome already named (the sender
   // of a "message from" card) — shows the object's short NAME instead, so
@@ -777,11 +832,13 @@ export function EntityIdPill({
   // Also the transient state while resolveIdType is in flight.
   const suffix = mention?.suffix;
   if (!type) return fallback !== undefined ? <>{fallback}{suffix}</> : <span>{rawId}{suffix}</span>;
-  // A pull request or commit reference wears a pill only once its row is in
-  // hand. `owner/repo#12` is also the shape of a file path with a line hash,
-  // and `owner/repo@1234567` of a version pin, so one that names nothing
-  // codecast knows stays the text (or the GitHub link) it was written as.
-  if ((isPr || isCommit) && !entity) return fallback !== undefined ? <>{fallback}</> : <span>{rawId}</span>;
+  // A pull request or commit reference written as bare text wears a pill only
+  // once its row is in hand. `owner/repo#12` is also the shape of a file path
+  // with a line hash, and `owner/repo@1234567` of a version pin, so one that
+  // names nothing codecast knows stays the text it was written as. A certain
+  // reference (a URL, a number in a repository bound conversation) is exempt:
+  // it pills and opens the codecast page, which handles a missing row itself.
+  if ((isPr || isCommit) && !entity && !certain) return fallback !== undefined ? <>{fallback}</> : <span>{rawId}</span>;
 
   // Quiet chrome: the reference sits IN the sentence — same size as the
   // prose, no border, a faint tint of the type's color, the way a mention

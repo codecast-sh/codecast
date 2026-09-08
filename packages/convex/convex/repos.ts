@@ -83,6 +83,10 @@ async function installationForUser(
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
   for (const candidate of await installationsForOwner(ctx, repository)) {
     if (!installationCoversRepo(candidate, repository)) continue;
+    // Browsing stamps every cached row with the team it belongs to, so a
+    // personal installation (no team) cannot admit a viewer here; it serves
+    // issue sync and task pushes, where the work names its own workspace.
+    if (!candidate.team_id) continue;
     if (!(await isTeamMember(ctx, userId, candidate.team_id))) continue;
     return { team_id: candidate.team_id, installation_id: candidate.installation_id };
   }
@@ -111,6 +115,7 @@ async function installationForRepository(
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
   for (const candidate of await installationsForOwner(ctx, repository)) {
     if (!installationCoversRepo(candidate, repository)) continue;
+    if (!candidate.team_id) continue;
     return { team_id: candidate.team_id, installation_id: candidate.installation_id };
   }
   return null;

@@ -14,7 +14,7 @@ import { useState, type ComponentType, type CSSProperties } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GitPullRequest, ListChecks, Mail, MessagesSquare, NotebookText } from "lucide-react";
-import type { AppConnectionStatus, AppDescriptor, AppId } from "@codecast/shared/contracts";
+import type { AppConnectionScope, AppConnectionStatus, AppDescriptor, AppId } from "@codecast/shared/contracts";
 import { githubAppInstallUrl, type GithubInstallUser } from "./githubAppInstall";
 import { formatRelative } from "./utils";
 import type { IssueProvider, TaskExternal } from "../store/inboxStore";
@@ -67,15 +67,18 @@ export type AppConnectionActions = {
 };
 
 /**
- * The connect and disconnect gestures for one app. Every branch calls a flow
- * that already exists server-side: Slack's getInstallUrl, googleOAuth's
- * getConnectUrl/disconnect, the generic oauthConnectors pair for Linear and
- * Notion, the GitHub App install URL and githubApp.deleteInstallation.
+ * The connect and disconnect gestures for one app at one scope. Every branch
+ * calls a flow that already exists server-side: Slack's getInstallUrl,
+ * googleOAuth's getConnectUrl/disconnect, the generic oauthConnectors pair for
+ * Linear and Notion, the GitHub App install URL and
+ * githubApp.deleteInstallation. `scope` says which workspace the connection
+ * binds to — the team being looked at, or the person themself.
  */
 export function useAppConnection(
   descriptor: AppDescriptor,
   connection: AppConnectionStatus | undefined,
   me: GithubInstallUser | null | undefined,
+  scope: AppConnectionScope = "team",
 ): AppConnectionActions {
   const getSlackUrl = useAction(api.slack.getInstallUrl);
   const getGoogleUrl = useAction(api.googleOAuth.getConnectUrl);
@@ -117,9 +120,9 @@ export function useAppConnection(
       // reads (active_team_id ?? team_id) — minting from a different team would
       // install into one workspace while the card reports another.
       setError(null);
-      const url = me ? githubAppInstallUrl(me) : null;
+      const url = me ? githubAppInstallUrl(me, scope) : null;
       if (!url) {
-        setError("Join or create a team first — the GitHub App binds to a team");
+        setError("Join or create a team first, or install the GitHub App for yourself");
         return;
       }
       window.open(url, "_blank", "noopener");
@@ -132,14 +135,19 @@ export function useAppConnection(
         // Readonly scope only on first connect; the send grant is a later ask.
         await openMinted(() => getGoogleUrl({}), "Couldn't start the Google connection");
       } else if (descriptor.id === "linear" || descriptor.id === "notion") {
-        // The generic connector: one flow, provider in the signed state.
+        // The generic connector: one flow, provider and scope in the signed state.
         await openMinted(
-          () => getConnectorUrl({ provider: descriptor.id }),
+          () => getConnectorUrl({ provider: descriptor.id, scope }),
           `Couldn't start the ${descriptor.name} connection`,
         );
       } else {
         // Slack's "Add to Slack": the popup lands back on /anchor authenticated.
-        await openMinted(() => getSlackUrl({ scope_type: "team" }), "Couldn't start the Slack connection");
+        // The install binds to an anchor of the same scope, so a personal
+        // connection needs a personal anchor first — the server says so.
+        await openMinted(
+          () => getSlackUrl({ scope_type: scope === "team" ? "team" : "user" }),
+          "Couldn't start the Slack connection",
+        );
       }
     }, `Couldn't reach ${descriptor.name}`);
   };

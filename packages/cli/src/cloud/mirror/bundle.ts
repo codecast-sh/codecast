@@ -3,18 +3,16 @@
  *
  *   CASTMIRROR2\n  u32be(header length)  <JSON header>  <unique bodies, first-reference order>
  *
- * The content hash covers the header minus everything host-derived or
- * informational (cast_version, take_over, skipped, scrubbed,
- * excludes_applied) plus the bodies, with files sorted by path — so file
- * order, mtimes and reporting never move it, and a laptop can compare its
- * hash with a host stamp to skip a redundant push.
+ * Version 2 stores each SHA/size body once. Every logical path, mode, kind
+ * and body SHA remains in the content hash; reporting does not change it.
+ * Version 1 remains readable with its original per-path bodies and hash.
  *
  * The parser rejects a truncated stream, a bad magic, another version, an
  * unsafe path, a size or sha mismatch — before a single byte is applied.
  */
 
 import { createHash } from "node:crypto";
-import { MIRROR_KINDS, type MirrorKind } from "./transform.js";
+import { assertClaudeMcpProjection, MIRROR_KINDS, type MirrorKind } from "./transform.js";
 
 export const MIRROR_MAGIC = "CASTMIRROR2\n";
 export const MIRROR_VERSION = 2;
@@ -122,6 +120,7 @@ export function buildMirrorBundle(entries: BundleInput[], meta: BuildMeta): Buil
   const seen = new Set<string>();
   for (const e of sorted) {
     assertSafePath(e.path);
+    assertMirrorFileContent(e);
     if (seen.has(e.path)) throw new Error(`duplicate mirror path ${e.path}`);
     seen.add(e.path);
   }
@@ -162,6 +161,14 @@ export function assertSafePath(p: string): void {
   if (typeof p !== "string" || !p || p.startsWith("/") || /[\\:\x00-\x1f\x7f]/.test(p)
     || p.split("/").some((seg) => !seg || seg === "." || seg === ".." || seg.toLowerCase() === ".git")) {
     throw new Error(`unsafe mirror path: ${JSON.stringify(String(p).slice(0, 80))}`);
+  }
+}
+
+export function assertMirrorFileContent(file: Pick<BundleInput, "path" | "kind" | "bytes">): void {
+  if (file.path === ".claude.json" && file.kind !== "claude-mcp") throw new Error(".claude.json requires a selective claude-mcp projection");
+  if (file.kind === "claude-mcp") {
+    if (file.path !== ".claude.json") throw new Error("claude-mcp requires the .claude.json destination");
+    assertClaudeMcpProjection(JSON.parse(file.bytes.toString("utf8")));
   }
 }
 
@@ -248,7 +255,9 @@ export async function parseMirrorBundle(input: Buffer | AsyncIterable<Buffer | s
       if (sha256(body) !== f.sha256) throw new Error(`sha256 mismatch for ${f.path}`);
       unique.set(f.sha256, body);
     }
-    files.push({ ...f, bytes: body });
+    const file = { ...f, bytes: body };
+    assertMirrorFileContent(file);
+    files.push(file);
   }
   if (offset !== bytes.length) throw new Error("mirror bundle has trailing bytes");
   const hash = bundleHash(header, new Map(files.map((f) => [f.path, f.bytes])));

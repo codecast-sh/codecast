@@ -194,6 +194,80 @@ export function repoObjectRoute(id: string): string | null {
   return ref.type === "pr" ? `${ENTITY_ROUTE.pr}/${ref.repository}/${ref.number}` : `${ENTITY_ROUTE.commit}/${ref.repository}/${ref.sha}`;
 }
 
+// ---------------------------------------------------------------------------
+// Contextual pull request references
+//
+// Inside a conversation bound to a repository, people and agents write a pull
+// request the way GitHub itself autolinks it: `#3263`, `PR 3263`, `PR #3263`,
+// `pull request 3263`. The number alone names nothing until the surrounding
+// context supplies the repository, so the plugin cannot mint a full
+// `owner/repo#N` reference. It carries the number plus the text as written in
+// a `pr:#N|<label>` payload; the renderer either completes it from the
+// conversation's repository or prints the label back unchanged, so a surface
+// with no repository never alters the text.
+//
+// Group 1 is the words in front of the number (kept as prose), group 2 the
+// number. A `#` glued to a word, a path or an entity (`page.html#12`,
+// `&#123;`) is not a reference; `owner/repo#12` is matched first by the bare
+// id scan and never reaches this pattern.
+//
+// A list continues the reference: "PRs 3263 (rescheduled card), 3262 (verbal
+// yes), 3254 and 3253 (feedback)" names five pull requests. The match swallows
+// the whole run of `, N` / `and N` items, each optionally preceded by a
+// parenthetical note, and splitContextualPrRefs decides which of those
+// numbers are pull requests: only ones with the same digit count as the first,
+// so "PR 3263 (x), 3 items" ends the list at "3".
+// ---------------------------------------------------------------------------
+
+export const CONTEXTUAL_PR_REF_PREFIX = "pr:";
+
+const PR_LIST_SEP_SOURCE = "(?:\\s*\\([^()\\n]*\\))?(?:,\\s*(?:and\\s+)?|\\s+and\\s+)#?";
+
+export function contextualPrRefRegex(): RegExp {
+  return new RegExp(`(\\bPRs?\\s+#?|\\bpull requests?\\s+#?|(?<![\\w/&#])#)(\\d{1,6})\\b((?:${PR_LIST_SEP_SOURCE}\\d{1,6}\\b)*)`, "gi");
+}
+
+export type ContextualPrToken = { text: string } | { number: number; label: string };
+
+/**
+ * The tokens of one contextualPrRefRegex match: prose to keep as written, and
+ * the pull request numbers with the label each was written as (`#3263` or
+ * `3263`). `lead` and `digits` are the match's first two groups, `tail` its
+ * third — the list that followed the first number.
+ */
+export function splitContextualPrRefs(lead: string, digits: string, tail: string): ContextualPrToken[] {
+  const numberToken = (prefix: string, n: string): ContextualPrToken =>
+    ({ number: Number(n), label: prefix.endsWith("#") ? `#${n}` : n });
+  const tokens: ContextualPrToken[] = [];
+  if (lead !== "#") tokens.push({ text: lead });
+  tokens.push(numberToken(lead, digits));
+  const step = new RegExp(`^(${PR_LIST_SEP_SOURCE})(\\d{1,6})\\b`);
+  let rest = tail;
+  while (rest) {
+    const m = step.exec(rest);
+    if (!m || m[2].length !== digits.length) {
+      tokens.push({ text: rest });
+      break;
+    }
+    const sep = m[1].endsWith("#") ? m[1].slice(0, -1) : m[1];
+    if (sep) tokens.push({ text: sep });
+    tokens.push(numberToken(m[1], m[2]));
+    rest = rest.slice(m[0].length);
+  }
+  return tokens;
+}
+
+/** The link-text payload for a contextual reference: `pr:#3263|<label as written>`. */
+export function contextualPrRefPayload(number: number, label: string): string {
+  return `${CONTEXTUAL_PR_REF_PREFIX}#${number}|${label}`;
+}
+
+/** Reads a `pr:#N|label` payload back; null for anything else. */
+export function parseContextualPrRef(payload: string | undefined | null): { number: number; label: string } | null {
+  const m = /^pr:#(\d{1,6})\|(.*)$/.exec((payload ?? "").trim());
+  return m ? { number: Number(m[1]), label: m[2] } : null;
+}
+
 function isGitHubHost(host: string): boolean {
   return /^(www\.)?github\.com$/i.test(host);
 }

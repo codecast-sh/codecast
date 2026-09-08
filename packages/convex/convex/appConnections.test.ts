@@ -1,9 +1,16 @@
-// listConnections answers "is this app connected in MY workspace, and by whom".
-// What earns tests here is the boundary work, not the join:
+// listConnections answers "is this app connected in MY workspace, and by whom",
+// once per scope the app supports: the team I am looking at, and me. What
+// earns tests here is the boundary work, not the join:
 //
 //   Membership gates the team lens. The user row keeps pointing at a team after
 //   membership lapses (routing ≠ visibility), so a stale pointer must not keep
-//   showing a former member who connected what.
+//   showing a former member who connected what — and with no live team there
+//   are no team entries at all, not entries claiming "not connected" for a
+//   workspace the caller is not in.
+//
+//   The personal lens is always the caller. A personal connection follows its
+//   owner everywhere, so it is answered whatever team is (or is not) in view,
+//   and it is never another person's.
 //
 //   Absence stays honest. No installer row → `by: null`, never a made-up name.
 //   No revoke path (Slack) → no disconnect_id, so the UI cannot render a dead
@@ -16,7 +23,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
 import { listConnections } from "./appConnections";
-import { APP_IDS } from "@codecast/shared/contracts";
+import { APP_DESCRIPTORS, APP_IDS } from "@codecast/shared/contracts";
 
 const OWNER = "u_owner";
 const MATE = "u_mate";
@@ -37,6 +44,7 @@ function ctx(userId: string | null, tables: Record<string, any[]>) {
 
 function tables(extra: Record<string, any[]> = {}): Record<string, any[]> {
   return {
+    teams: [{ _id: TEAM, name: "Acme" }, { _id: "team_2", name: "Other" }],
     users: [
       { _id: OWNER, name: "Ash", email: "ash@example.com", team_id: TEAM },
       { _id: MATE, name: "Sam", email: "sam@example.com", team_id: TEAM },
@@ -57,8 +65,14 @@ function tables(extra: Record<string, any[]> = {}): Record<string, any[]> {
 const run = (c: any, args: Record<string, any> = {}) =>
   (listConnections as any)._handler(c, args);
 
+/** The TEAM entry per app (the lens every pre-scope test reads), plus the
+ *  personal entries under `<id>:personal`. */
 const byId = (result: { apps: any[] }) =>
-  Object.fromEntries(result.apps.map((a) => [a.id, a]));
+  Object.fromEntries(
+    result.apps.map((a) => [a.status === "coming_soon" || a.scope === "team" ? a.id : `${a.id}:personal`, a]),
+  );
+
+const notConnected = (id: string, scope: "team" | "personal" = "team") => ({ id, status: "not_connected", scope });
 
 const slackRow = (over: Record<string, any> = {}) => ({
   _id: "si_1",
@@ -90,25 +104,39 @@ const githubRow = (over: Record<string, any> = {}) => ({
 describe("listConnections", () => {
   test("unauthenticated returns an empty list, not a throw", async () => {
     const result = await run(ctx(null, tables()));
-    expect(result).toEqual({ apps: [] });
+    expect(result).toEqual({ apps: [], team: null });
   });
 
-  test("covers every catalog app, in catalog order", async () => {
+  test("covers every catalog app at every scope it supports, in catalog order", async () => {
     const result = await run(ctx(OWNER, tables()));
-    expect(result.apps.map((a: any) => a.id)).toEqual([...APP_IDS]);
+    expect(result.apps.map((a: any) => `${a.id}:${a.scope}`)).toEqual(
+      APP_IDS.flatMap((id) => APP_DESCRIPTORS[id].scopes.map((scope) => `${id}:${scope}`)),
+    );
+    expect(result.team).toEqual({ id: TEAM, name: "Acme" });
   });
 
-  test("nothing connected: every app not_connected — no coming_soon cards remain", async () => {
+  test("nothing connected: every entry not_connected at its scope — no coming_soon cards remain", async () => {
     const apps = byId(await run(ctx(OWNER, tables())));
-    expect(apps.slack).toEqual({ id: "slack", status: "not_connected" });
-    expect(apps.github).toEqual({ id: "github", status: "not_connected" });
-    // Gmail went live with the Google connector (ct-43290) — updated
-    // deliberately when its connectKind flipped to oauth-popup.
-    // Every catalog app is a live connector now: gmail via googleOAuth,
-    // linear/notion via the generic oauthConnectors table.
-    for (const id of ["gmail", "linear", "notion"]) {
-      expect(apps[id]).toEqual({ id, status: "not_connected" });
+    expect(apps.slack).toEqual(notConnected("slack"));
+    expect(apps.github).toEqual(notConnected("github"));
+    expect(apps["github:personal"]).toEqual(notConnected("github", "personal"));
+    // Every catalog app is a live connector: gmail via googleOAuth (personal
+    // only, so no team entry), linear/notion via the generic oauthConnectors table.
+    expect(apps.gmail).toBeUndefined();
+    expect(apps["gmail:personal"]).toEqual(notConnected("gmail", "personal"));
+    for (const id of ["linear", "notion"]) {
+      expect(apps[id]).toEqual(notConnected(id));
+      expect(apps[`${id}:personal`]).toEqual(notConnected(id, "personal"));
     }
+  });
+
+  test("with no live team there are no team entries, only personal ones", async () => {
+    const t = tables();
+    t.team_memberships = [];
+    const result = await run(ctx(OWNER, t));
+    expect(result.team).toBeNull();
+    expect(result.apps.every((a: any) => a.scope === "personal")).toBe(true);
+    expect(result.apps.map((a: any) => a.id)).toEqual(["slack", "github", "gmail", "linear", "notion"]);
   });
 
   test("a linear connection reports team scope, the workspace, who, and a disconnect id", async () => {
@@ -157,7 +185,20 @@ describe("listConnections", () => {
         ),
       ),
     );
-    expect(apps.linear).toEqual({ id: "linear", status: "not_connected" });
+    expect(apps.linear).toEqual(notConnected("linear"));
+  });
+
+  test("a personal linear connection is the caller's own, at any team", async () => {
+    const mine = {
+      _id: "ai_me", provider: "linear", scope_user_id: OWNER, connected_by: OWNER, account_label: "My Linear",
+      access_token_enc: "enc", granted_scopes: ["read"], created_at: 5, updated_at: 5,
+    };
+    const apps = byId(await run(ctx(OWNER, tables({ app_installations: [mine] }))));
+    expect(apps.linear).toEqual(notConnected("linear"));
+    expect(apps["linear:personal"]).toMatchObject({ status: "connected", scope: "personal", by_me: true, detail: "My Linear", disconnect_id: "ai_me" });
+    // A teammate sees nothing of it: personal is never another person's.
+    const mate = byId(await run(ctx(MATE, tables({ app_installations: [mine] }))));
+    expect(mate["linear:personal"]).toEqual(notConnected("linear", "personal"));
   });
 
   test("a google install reports personal scope, the email, and a disconnect id", async () => {
@@ -178,7 +219,7 @@ describe("listConnections", () => {
         ),
       ),
     );
-    expect(apps.gmail).toMatchObject({
+    expect(apps["gmail:personal"]).toMatchObject({
       status: "connected",
       scope: "personal",
       by_me: true,
@@ -210,16 +251,11 @@ describe("listConnections", () => {
     expect(apps.slack.by_me).toBe(true);
   });
 
-  test("personal slack install reports personal scope when no team install exists", async () => {
-    const row = slackRow({
-      team_id: undefined,
-      scope_user_id: OWNER,
-      installed_by_user_id: OWNER,
-    });
-    const apps = byId(await run(ctx(OWNER, tables({ slack_installations: [row] }))));
-    expect(apps.slack.status).toBe("connected");
-    expect(apps.slack.scope).toBe("personal");
-    expect(apps.slack.by_me).toBe(true);
+  test("personal slack install reports under the personal entry, beside the team's", async () => {
+    const mine = slackRow({ _id: "si_me", workspace_id: "T999", workspace_name: "mine", team_id: undefined, scope_user_id: OWNER, installed_by_user_id: OWNER });
+    const apps = byId(await run(ctx(OWNER, tables({ slack_installations: [slackRow(), mine] }))));
+    expect(apps.slack).toMatchObject({ status: "connected", scope: "team", detail: "acme" });
+    expect(apps["slack:personal"]).toMatchObject({ status: "connected", scope: "personal", by_me: true, detail: "mine" });
   });
 
   test("a stale team pointer without a membership row hides the team's installs", async () => {
@@ -230,8 +266,19 @@ describe("listConnections", () => {
     // OWNER's user row still points at TEAM, but the membership row is gone.
     t.team_memberships = t.team_memberships.filter((m) => m.user_id !== OWNER);
     const apps = byId(await run(ctx(OWNER, t)));
-    expect(apps.slack).toEqual({ id: "slack", status: "not_connected" });
-    expect(apps.github).toEqual({ id: "github", status: "not_connected" });
+    expect(apps.slack).toBeUndefined();
+    expect(apps.github).toBeUndefined();
+    expect(apps["slack:personal"]).toEqual(notConnected("slack", "personal"));
+  });
+
+  test("a personal github install is the owner's alone to see and to revoke", async () => {
+    const mine = githubRow({ _id: "ghi_me", team_id: undefined, scope_user_id: MATE, installed_by_user_id: MATE, installation_id: 77, account_login: "sam" });
+    const mate = byId(await run(ctx(MATE, tables({ github_app_installations: [mine] }))));
+    // MATE is a plain member: no team disconnect_id, but the personal one is theirs.
+    expect(mate.github).toEqual(notConnected("github"));
+    expect(mate["github:personal"]).toMatchObject({ status: "connected", scope: "personal", by_me: true, detail: "sam", disconnect_id: "ghi_me" });
+    const owner = byId(await run(ctx(OWNER, tables({ github_app_installations: [mine] }))));
+    expect(owner["github:personal"]).toEqual(notConnected("github", "personal"));
   });
 
   test("github install hands the revoke path's id to a team admin", async () => {
@@ -293,7 +340,8 @@ describe("listConnections", () => {
     const t = tables({ github_app_installations: [githubRow()] });
     t.users.find((u) => u._id === OWNER)!.active_team_id = "team_2";
     const apps = byId(await run(ctx(OWNER, t)));
-    expect(apps.github).toEqual({ id: "github", status: "not_connected" });
+    expect(apps.github).toBeUndefined();
+    expect(apps["github:personal"]).toEqual(notConnected("github", "personal"));
   });
 
   test("a vanished installer account reads as by: null, still connected", async () => {

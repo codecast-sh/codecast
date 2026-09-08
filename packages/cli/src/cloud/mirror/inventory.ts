@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import {
-  credentialContentReason, homeRelative, kindForPath, parseGitConfigList, portableText, renderGitconfig, type MirrorKind, type TransformContext,
+  credentialContentReason, homeRelative, kindForPath, parseGitConfigList, parseJsonLoose, portableText, projectClaudeMcp, renderGitconfig, type MirrorKind, type TransformContext,
 } from "./transform.js";
 
 import {
@@ -192,6 +192,26 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
   for (const name of await fs.promises.readdir(home)) if (INSTRUCTION_FILE_RE.test(name) || name === ".mcp.json") await collect(name);
   for (const inc of includes) await collect(inc);
 
+  if (!excluded(".claude.json")) {
+    const source = path.join(home, ".claude.json");
+    const stat = await fs.promises.lstat(source).catch((err: NodeJS.ErrnoException) => { if (err.code !== "ENOENT") throw err; return null; });
+    if (stat) {
+      const real = await fs.promises.realpath(source);
+      const rel = homeRelative(real, realHome);
+      if (rel === null || rel !== ".claude.json" && (isDeniedPath(rel) || isDefaultExcluded(rel) || isAccountDataPath(rel))) throw new Error("Claude MCP source resolves outside portable context");
+      const fd = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      let bytes: Buffer;
+      try { bytes = await fd.readFile(); } finally { await fd.close(); }
+      let projection: ReturnType<typeof projectClaudeMcp>;
+      try { projection = projectClaudeMcp(parseJsonLoose(bytes.toString("utf8"))); }
+      catch { throw new Error(`cannot parse Claude MCP source: ${source}`); }
+      projection.projects = Object.fromEntries(Object.entries(projection.projects ?? {}).filter(([root]) => homeRelative(root, home) !== null));
+      const entry: MirrorEntry = { path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify(projection)), root: ".claude.json" };
+      entries.set(entry.path, entry);
+      referenceQueue.push(entry);
+    }
+  }
+
   // Git: an allowlisted render of the global config and the global ignore file.
   const gitIdentity: Inventory["gitIdentity"] = {};
   const gitPairs = readGlobalGitConfig(home, undefined, opts.gitEnv);
@@ -233,12 +253,14 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
         const resolved = await resolveEntry(rel, !required.has(ref));
         if (!resolved) {
           const reason = skippedPaths.get(rel)?.reason;
+          if (required.has(ref) && /denied|account data/.test(reason ?? "")) throw new Error(`active context reference is denied: ${entry.path} -> ${rel}`);
           if (required.has(ref) && (!reason || /dangling|unresolved symlink/.test(reason))) throw new Error(`missing active context reference: ${entry.path} -> ${rel}`);
           if (required.has(ref)) warnings.push(`${entry.path}: unsupported host dependency ${rel} (${reason})`);
           skip(rel, "referenced path absent or excluded"); continue;
         }
         if (resolved.stat.isDirectory() && !required.has(ref) && !isReferencedDirectory(ref)) continue;
         await collect(rel, !required.has(ref));
+        if (required.has(ref) && /credential|private key/.test(skippedPaths.get(rel)?.reason ?? "")) throw new Error(`active context reference contains credential material: ${entry.path} -> ${rel}`);
       } catch (err) {
         if (required.has(ref) || !isAccessError(err)) throw err;
         skip(rel, `optional reference inaccessible (${(err as NodeJS.ErrnoException).code})`);

@@ -3,7 +3,7 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import {
   PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl, accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS,
-  getConnectionForTeam, updateStoredTokens, getFreshAccessTokenForTeam, claimRefresh, REFRESH_LEASE_MS,
+  getConnection, updateStoredTokens, getFreshAccessToken, claimRefresh, REFRESH_LEASE_MS,
 } from "./oauthConnectors";
 import { stampOf, stampMatches } from "./lib/tokenRefresh";
 import { signStateWith, verifyStateWith, encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
@@ -44,9 +44,27 @@ describe("PROVIDERS", () => {
 
 describe("connect state", () => {
   const SECRET = "linear-client-secret";
-  const connectCtx = () => ({
-    runQuery: async () => ({ user_id: OWNER, team_id: TEAM }),
+  const connectCtx = (team: string | null = TEAM) => ({
+    runQuery: async () => ({ user_id: OWNER, team_id: team }),
   }) as any;
+
+  test("a personal connect signs a state with no team, and needs none", async () => {
+    process.env.LINEAR_OAUTH_CLIENT_ID = "linear-client-id";
+    process.env.LINEAR_OAUTH_CLIENT_SECRET = SECRET;
+    const res = await (getConnectUrl as any)._handler(connectCtx(null), { provider: "linear", scope: "personal" });
+    expect(res.ok).toBe(true);
+    const payload = await verifyStateWith(SECRET, new URL(res.url).searchParams.get("state")!);
+    expect(payload).toMatchObject({ provider: "linear", user_id: OWNER, scope: "personal" });
+    expect(payload!.team_id).toBeUndefined();
+  });
+
+  test("a team connect with no team refuses and points at the personal path", async () => {
+    process.env.LINEAR_OAUTH_CLIENT_ID = "linear-client-id";
+    process.env.LINEAR_OAUTH_CLIENT_SECRET = SECRET;
+    const res = await (getConnectUrl as any)._handler(connectCtx(null), { provider: "linear" });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/personally/);
+  });
 
   test("the state getConnectUrl signs is one verifyStateWith accepts", async () => {
     process.env.LINEAR_OAUTH_CLIENT_ID = "linear-client-id";
@@ -200,7 +218,7 @@ describe("token refresh policy", () => {
  * The provider answers only when the test says so, which is how two
  * refreshes, a reconnect, or a disconnect are made to overlap the await.
  * ---------------------------------------------------------------------- */
-describe("getFreshAccessTokenForTeam (Linear)", () => {
+describe("getFreshAccessToken (Linear)", () => {
   const CLIENT_ID = "lin-client";
   const SECRET = "lin-secret-for-tests";
   const realFetch = globalThis.fetch;
@@ -216,7 +234,7 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
   });
 
   const registry: Record<string, any> = {
-    "oauthConnectors:getConnectionForTeam": getConnectionForTeam,
+    "oauthConnectors:getConnection": getConnection,
     "oauthConnectors:updateStoredTokens": updateStoredTokens,
     "oauthConnectors:storeConnection": storeConnection,
     "oauthConnectors:claimRefresh": claimRefresh,
@@ -261,7 +279,7 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
   }
 
   const pair = (n: number | string) => ({ access_token: `access-${n}`, refresh_token: `refresh-${n}`, expires_in: 86399, token_type: "Bearer" });
-  const NO_CONNECTION = { ok: false, error: "no_connection: Linear is not connected for this team" };
+  const NO_CONNECTION = { ok: false, error: "no_connection: Linear is not connected for this workspace or by you" };
 
   async function tables(opts: { expiresAt?: number } = {}) {
     return {
@@ -276,7 +294,7 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
     };
   }
   const run = (t: any, gates?: Record<string, ReturnType<typeof gate>>) =>
-    (getFreshAccessTokenForTeam as any)._handler(actionCtx(t, gates), { provider: "linear", team_id: TEAM });
+    (getFreshAccessToken as any)._handler(actionCtx(t, gates), { provider: "linear", team_id: TEAM });
   const stored = async (t: any) => ({
     access: await decryptRefreshToken(t.app_installations[0].access_token_enc, SECRET),
     refresh: await decryptRefreshToken(t.app_installations[0].refresh_token_enc, SECRET),
@@ -554,5 +572,57 @@ describe("getFreshAccessTokenForTeam (Linear)", () => {
     expect(t.app_installations[0].access_token_enc).toBe("new-enc");
     expect(t.app_installations[0].refresh_lease_id).toBeUndefined();
     expect(await (updateStoredTokens as any)._handler(ctx(t), { installation_id: "nope", expected_enc: enc, lease: "x", last_error: "e" })).toEqual({ ok: false, reason: "gone" });
+  });
+});
+
+describe("personal scope on the shared table", () => {
+  const stored = (c: any, over: Record<string, any> = {}) => (storeConnection as any)._handler(c, {
+    provider: "linear", user_id: OWNER, access_token_enc: "enc", granted_scopes: ["read"], pending_confirm_hash: "h",
+    ...over,
+  });
+
+  test("storeConnection with no team binds the row to the user alone", async () => {
+    const c = ctx({ users: [{ _id: OWNER }], teams: [], app_installations: [] });
+    const res = await stored(c);
+    expect(res.ok).toBe(true);
+    const row = await c.db.get(res.id);
+    expect(row.scope_user_id).toBe(OWNER);
+    expect(row.team_id).toBeUndefined();
+  });
+
+  test("a second personal connect for the same provider updates the same row", async () => {
+    const c = ctx({ users: [{ _id: OWNER }], teams: [], app_installations: [] });
+    const first = await stored(c);
+    const second = await stored(c, { access_token_enc: "enc-2" });
+    expect(second.id).toBe(first.id);
+    expect((await c.db.query("app_installations").collect()).length).toBe(1);
+  });
+
+  test("getConnection prefers the team's row and falls back to the person's", async () => {
+    const teamRow = { _id: "ai_team", provider: "linear", team_id: TEAM, connected_by: "u_other", access_token_enc: "team-enc", granted_scopes: [], created_at: 1, updated_at: 1 };
+    const mine = { _id: "ai_me", provider: "linear", scope_user_id: OWNER, connected_by: OWNER, access_token_enc: "my-enc", granted_scopes: [], created_at: 1, updated_at: 1 };
+    const both = ctx({ app_installations: [teamRow, mine] });
+    expect((await (getConnection as any)._handler(both, { provider: "linear", team_id: TEAM, user_id: OWNER }))?._id).toBe("ai_team");
+    // A team with no connection of its own borrows the acting user's.
+    expect((await (getConnection as any)._handler(both, { provider: "linear", team_id: "team_other", user_id: OWNER }))?._id).toBe("ai_me");
+    // Nobody else's personal row ever answers.
+    expect(await (getConnection as any)._handler(both, { provider: "linear", team_id: "team_other", user_id: "u_stranger" })).toBeNull();
+    // A pending personal row is no connection.
+    const pending = ctx({ app_installations: [{ ...mine, pending_confirm_hash: "h" }] });
+    expect(await (getConnection as any)._handler(pending, { provider: "linear", user_id: OWNER })).toBeNull();
+  });
+
+  test("only the owner may disconnect a personal connection", async () => {
+    const c = ctx({
+      users: [{ _id: OWNER }, { _id: "u_mate" }],
+      team_memberships: [{ _id: "tm1", team_id: TEAM, user_id: "u_mate" }],
+      app_installations: [{ _id: "ai_me", provider: "linear", scope_user_id: OWNER, connected_by: OWNER, access_token_enc: "enc", granted_scopes: [], created_at: 1, updated_at: 1 }],
+    });
+    const mate = await (deleteConnection as any)._handler(c, { user_id: "u_mate", installation_id: "ai_me" });
+    expect(mate.ok).toBe(false);
+    expect(await c.db.get("ai_me")).not.toBeNull();
+    const owner = await (deleteConnection as any)._handler(c, { user_id: OWNER, installation_id: "ai_me" });
+    expect(owner.ok).toBe(true);
+    expect(await c.db.get("ai_me")).toBeNull();
   });
 });

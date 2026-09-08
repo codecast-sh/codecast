@@ -152,6 +152,39 @@ test("actual supervisor death closes the lifetime pipe and retires sender with d
   expect(fs.readFileSync(marker + ".lost", "utf8"), stderr).toContain("supervisor pipe closed");
 });
 
+test("actual runner retains parent-death cleanup after TERM while its tick is still held", async () => {
+  const f = fixture();
+  const marker = path.join(f.root, "pids");
+  const fixtureHome = path.join(f.root, "home");
+  fs.mkdirSync(path.join(fixtureHome, ".codecast"), { recursive: true });
+  fs.writeFileSync(path.join(fixtureHome, ".codecast/config.json"), JSON.stringify({ user_id: "fixture" }));
+  const sender = path.join(f.root, "sender.ts");
+  const runner = path.join(import.meta.dir, "runner.ts");
+  fs.writeFileSync(sender, `import {runStandaloneMirror} from ${JSON.stringify(runner)}; import {spawn} from 'node:child_process'; import fs from 'node:fs'; void runStandaloneMirror({listHosts:async()=>{ const child=spawn('/bin/sh',['-c',"trap '' TERM; exec sleep 60"],{stdio:'ignore'}); fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify([process.pid,child.pid])); return await new Promise(()=>{}); },log:(message)=>fs.appendFileSync(${JSON.stringify(marker + ".trace")},message+'\\n')}); process.on('SIGTERM',()=>fs.writeFileSync(${JSON.stringify(marker + ".term")},'held')); fs.writeFileSync(${JSON.stringify(marker + ".ready")},'ready');`);
+  const supervisor = path.join(f.root, "supervisor.ts");
+  fs.writeFileSync(supervisor, `import {startMirrorProcess} from ${JSON.stringify(modulePath)}; startMirrorProcess({shouldRun:()=>true,log:console.error,delayMs:0,invocation:{command:process.execPath,args:[${JSON.stringify(sender)}]}}); setInterval(()=>{},1000);`);
+  const child = spawn(process.execPath, [supervisor], { detached: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, HOME: fixtureHome, CODECAST_DIR: path.join(fixtureHome, ".codecast"), CODECAST_NO_AUTO_UPDATE: "1" } });
+  f.children.push(child);
+  let stderr = "";
+  child.stderr!.on("data", (s) => { stderr += s; });
+  await waitFor(() => fs.existsSync(marker) && fs.existsSync(marker + ".ready"));
+  const [senderPid, descendantPid] = JSON.parse(fs.readFileSync(marker, "utf8"));
+  f.extraGroups.push(senderPid);
+  await capture(f);
+  const senderIdentity = f.identities.find((row) => row.pid === senderPid)!;
+  expect(senderIdentity.pgid).toBe(senderPid);
+  expect((await mirrorProcessSnapshot(1_000)).some((row) => sameMirrorProcess(row, senderIdentity))).toBe(true);
+  process.kill(senderPid, "SIGTERM");
+  await waitFor(() => fs.existsSync(marker + ".term"));
+  expect(process.kill(senderPid, 0)).toBe(true);
+  child.kill("SIGKILL");
+  await waitFor(async () => !(await mirrorProcessSnapshot(1_000)).some((row) => row.pgid === senderPid), 5_000);
+  assertGone(senderPid); assertGone(descendantPid); assertGone(-senderPid);
+  const trace = fs.readFileSync(marker + ".trace", "utf8");
+  expect(trace, stderr).toContain("supervisor pipe closed");
+  cleanupReceipts.push({ control: "actual runner TERM then supervisor death", senderPid, descendantPid, trace, termHandled: true, heldTickReleased: false, groupAbsentBeforeFixtureCleanup: true });
+}, 15_000);
+
 test("source, built and compiled invocations run with the repaired launchd PATH", async () => {
   const f = fixture();
   for (const extension of ["ts", "js"]) {

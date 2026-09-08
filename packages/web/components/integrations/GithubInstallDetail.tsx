@@ -8,13 +8,20 @@
 
 import { useSettingsData } from "../../hooks/useSyncSettings";
 import { BookMarked, Loader2 } from "lucide-react";
+import type { AppConnectionScope } from "@codecast/shared/contracts";
 import { LedgerLine } from "./parts";
 
-export function GithubInstallDetail({ teamId }: { teamId: string | undefined }) {
-  const { data: installations, error } = useSettingsData("githubInstallations", teamId ?? null);
+export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionScope; teamId: string | undefined }) {
+  // One query either way (githubApp.listInstallations): named a team it lists
+  // the team's installs, with none it lists the caller's own.
+  const team = scope === "team";
+  const { data: installations, error } = useSettingsData(
+    team ? "githubInstallations" : "personalGithubInstallations",
+    team ? teamId ?? null : undefined,
+  ) as { data: any[] | undefined; error: Error | null | undefined };
 
-  if (!teamId) {
-    return <p className="mt-2 text-xs text-sol-text-muted">The App binds to a team; this account has none.</p>;
+  if (team && !teamId) {
+    return <p className="mt-2 text-xs text-sol-text-muted">A team install binds to a team; this account has none.</p>;
   }
   if (error && installations === undefined) {
     return <p className="mt-2 text-xs text-sol-red">Couldn&apos;t load the installations: {error.message}</p>;
@@ -28,7 +35,11 @@ export function GithubInstallDetail({ teamId }: { teamId: string | undefined }) 
     );
   }
   if (installations.length === 0) {
-    return <p className="mt-2 text-xs text-sol-text-muted">No installation on this team yet.</p>;
+    return (
+      <p className="mt-2 text-xs text-sol-text-muted">
+        {team ? "No installation on this team yet." : "No personal installation yet."}
+      </p>
+    );
   }
 
   return (

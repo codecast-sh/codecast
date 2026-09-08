@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { execFile, spawnSync } from "../../proc.js";
 import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
-import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, portableText, type MirrorKind } from "./transform.js";
+import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
 
 export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode"] as const;
 export const CONTEXT_SIZE_CAP = 256 * 1024 * 1024;
@@ -16,6 +16,7 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/chrome", ".claude/daemon", ".claude/debug", ".claude/feedback", ".claude/image-cache",
   ".claude/jobs", ".claude/paste-cache", ".claude/tasks", ".claude/teams", ".claude/telemetry", ".claude/worktrees",
   ".claude/daemon-auth-status.json", ".claude/daemon-auth-cooldown", ".claude/stats-cache.json",
+  ".claude/.last-cleanup", ".claude/.last-update-result.json", ".claude/commands.zip",
   ".codex/auth.json", ".codex/sessions", ".codex/archived_sessions", ".codex/cache", ".codex/tmp", ".codex/.tmp",
   ".codex/shell_snapshots", ".codex/thread-writer-locks", ".codex/models_cache.json", ".codex/installation_id",
   ".codex/browser", ".codex/computer-use", ".codex/dictation-history", ".codex/history", ".codex/ipc",
@@ -23,8 +24,12 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".codex/attachments", ".codex/generated_images", ".codex/visualizations", ".codex/ambient-suggestions",
   ".codex/.codex-global-state.json", ".codex/.codex-global-state.json.bak", ".codex/chrome-native-hosts-v2.json",
   ".codex/realtime-voice-continuity.json", ".grok/sessions", ".grok/active_sessions.json", ".grok/agent_id",
+  ".codex/.personality_migration", ".codex/.sandbox_migration", ".codex/version.json",
   ".grok/logs", ".grok/memtrace", ".grok/relocations", ".grok/upload_queue", ".grok/models_cache.json",
+  ".grok/.metadata_version", ".grok/last-copy.txt", ".grok/grove/pin_gc_orphans.json", ".grok/slash-mru.json", ".grok/tip_cursor.json", ".grok/trusted_folders.toml", ".grok/version.json",
   ".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/tmp", ".gemini/history",
+  ".gemini/antigravity/brain", ".gemini/antigravity/code_tracker", ".gemini/antigravity/conversations", ".gemini/antigravity/implicit",
+  ".gemini/antigravity/installation_id", ".gemini/antigravity/user_settings.pb", ".gemini/antigravity/browserAllowlist.txt",
   ".config/gh", ".config/gcloud", ".ssh", ".aws", ".gnupg", ".kube", ".docker/config.json",
   ".app-store-connect", ".cloudflared", ".convex", ".railway", ".fly", ".supabase", ".vercel", ".netlify", ".wrangler",
   ".config/railway", ".config/fly", ".config/supabase", ".config/vercel", ".config/netlify", ".config/.wrangler",
@@ -147,7 +152,10 @@ export function activeContextReferences(text: string, source: string, home: stri
   }
   if (!isActiveConfig(kind)) return new Set();
   let config: unknown;
-  try { config = kind === "codex-toml" || kind === "toml-remap" ? Bun.TOML.parse(text) : parseJsonLoose(text); }
+  try {
+    const portable = transformByKind(kind, Buffer.from(text), { fromHome: home, toHome: home }).bytes.toString("utf8");
+    config = kind === "codex-toml" || kind === "toml-remap" ? Bun.TOML.parse(portable) : parseJsonLoose(portable);
+  }
   catch { throw new Error(`cannot parse active context config: ${source}`); }
   const required = new Set<string>();
   const visit = (value: unknown, dependency?: "command" | "path", mcp = false): void => {
@@ -214,6 +222,8 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
   const scanned = new Set<string>();
   const scannedDirs = new Set<string>();
   const scannedReferences = new Set<string>();
+  const credentialPaths = new Set<string>();
+  const securityPaths = new Set<string>();
   const excludes = configPatterns(opts.config?.cloud_mirror_exclude);
   const includes = configPatterns(opts.config?.cloud_mirror_include);
   const tracked = new Set<string>();
@@ -227,6 +237,8 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     if (rel === null && homeRel !== null && isAccountDataPath(homeRel) && !includes.some((p) => matchesContextPattern(p, homeRel, directory))) return true;
     return [rel, homeRel].some((p) => p !== null && (isDeniedPath(p, directory) || isDefaultExcluded(p) || isCodecastOwnedHomePath(p) || excludes.some((g) => matchesContextPattern(g, p, directory))));
   };
+  const securityDenied = (abs: string, directory: boolean) => [homeRelative(abs, root), homeRelative(abs, home)]
+    .some((rel) => rel !== null && isDeniedPath(rel, directory));
   const visit = function* (source: string, ancestors: Set<string>, includeAll = false, optionalReference = false): ContextSteps<void> {
     const logical = path.resolve(source);
     if (homeRelative(logical, root) === null && homeRelative(logical, home) === null || denied(logical, true)) return;
@@ -243,6 +255,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     }
     const actual: fs.Stats = yield { op: "stat", path: real };
     if (homeRelative(real, root) === null && homeRelative(real, home) === null || denied(real, actual.isDirectory())) {
+      if (securityDenied(real, actual.isDirectory()) || homeRelative(real, home) === null) securityPaths.add(logical);
       result.skipped.push({ path: logical, reason: "symlink resolves outside context roots or into a denied path" });
       return;
     }
@@ -267,7 +280,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     scanned.add(logical);
     const kind = kindForPath(rel);
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
-    if (credential) { result.skipped.push({ path: logical, reason: credential }); return; }
+    if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
     const emit = scope !== "project" || opts.includeTracked !== false || !tracked.has(rel);
     if (emit) {
       files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
@@ -278,6 +291,8 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
       result.warnings.push(...commandCompatibilityWarnings(text, rel));
       const required = activeContextReferences(text, logical, home, kindForPath(rel));
       for (const ref of new Set([...contextReferences(text, logical, home), ...required])) {
+        if (required.has(ref) && credentialPaths.has(ref)) throw new Error(`active context reference contains credential material: ${logical} -> ${ref}`);
+        if (required.has(ref) && (securityPaths.has(ref) || securityDenied(ref, true))) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
         if (scanned.has(ref) || scannedDirs.has(ref) || scannedReferences.has(ref) && !required.has(ref)) continue;
         scannedReferences.add(ref);
         if (homeRelative(ref, root) === null && homeRelative(ref, home) === null) { result.skipped.push({ path: ref, reason: "reference outside context roots" }); continue; }
@@ -292,7 +307,10 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
             if (required.has(ref)) throw new Error(`missing active context reference: ${logical} -> ${ref}`);
             result.skipped.push({ path: ref, reason: "referenced path not found" }); continue;
           }
+          if (required.has(ref) && securityDenied(ref, st.isDirectory())) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
           if (!st.isDirectory() || required.has(ref) || isReferencedDirectory(ref)) yield* visit(ref, new Set(), true, !required.has(ref));
+          if (required.has(ref) && credentialPaths.has(ref)) throw new Error(`active context reference contains credential material: ${logical} -> ${ref}`);
+          if (required.has(ref) && securityPaths.has(ref)) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
         } catch (err) {
           if (required.has(ref) || !isAccessError(err)) throw err;
           result.skipped.push({ path: ref, reason: `optional reference inaccessible (${(err as NodeJS.ErrnoException).code})` });
@@ -319,7 +337,7 @@ type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefi
 type ContextSteps<T> = Generator<ContextOperation, T, any>;
 
 export function isActiveConfig(kind: MirrorKind): boolean {
-  return ["claude-settings", "codex-toml", "codex-hooks", "gemini-settings", "opencode-json", "json-remap", "toml-remap"].includes(kind);
+  return ["claude-settings", "claude-mcp", "codex-toml", "codex-hooks", "gemini-settings", "opencode-json", "json-remap", "toml-remap"].includes(kind);
 }
 
 export function isAccessError(err: unknown): boolean {
