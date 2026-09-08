@@ -713,9 +713,12 @@ describe("identity matched read back", () => {
     process.env.HOME = home;
     process.env.PATH = path.join(home, "empty-path");
     process.env.CC_ACCOUNTS_FORCE_FILE = "1";
-    // The profile store keys off HOME; this keeps anything reading CODECAST_DIR
-    // out of the human's real state too.
+    // The profile store resolves its directory through defaultConfigDir, which
+    // reads CODECAST_DIR first (ct-49869). Point it at this test's own home so
+    // the fixtures below and the module under test agree on one directory, and
+    // nothing reaches the human's real state.
     isolated = isolateCodecastDir("cc-readback-home-");
+    process.env.CODECAST_DIR = path.join(home, ".codecast");
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
     invalidateAccountsCache();
