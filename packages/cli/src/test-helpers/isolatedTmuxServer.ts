@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { defaultConfigDir } from "../config/configDir.js";
 
 // A unix socket path is capped at ~104 bytes, and tmux adds `tmux-<uid>/default`
 // under TMUX_TMPDIR. macOS's os.tmpdir() is already a 50-character
@@ -33,7 +34,7 @@ import { spawnSync } from "node:child_process";
 function begin(): { dir: string; socket: string } {
   const run = `run-${process.pid}-${Date.now().toString(36)}`;
   const tail = path.join(run, `tmux-${process.getuid?.() ?? 0}`, "default");
-  const codecastDir = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  const codecastDir = defaultConfigDir();
   const base = [path.join(codecastDir, "test-tmux"), "/tmp/codecast-test-tmux"]
     .find((candidate) => path.join(candidate, tail).length < 100);
   if (!base) throw new Error("no directory short enough to hold a private tmux socket");

@@ -29,6 +29,7 @@ import { spawnSync } from "../proc.js";
 import { acquireFileLock } from "../lockFile.js";
 import { ComputerError } from "./errors.js";
 import { computerHelperTar } from "./helperPayload.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 /** The one path, forever. A test asserts this string; a future refactor that
  *  templates a version or a hash into it fails there rather than silently
@@ -47,7 +48,7 @@ export const HELPER_BUNDLE_ID = "sh.codecast.computer";
 export const HELPER_SIGNING_TEAM = "WRG9THCK9Q";
 
 export function computerHome(): string {
-  const root = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  const root = defaultConfigDir();
   return path.join(root, "computer");
 }
 

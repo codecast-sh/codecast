@@ -35,6 +35,7 @@ import { atomicWriteFile } from "./atomicWrite.js";
 import { acquireFileLock } from "./lockFile.js";
 import { codexBackendAuthHeaders, CodexUsageHttpError } from "./codexBackendUsage.js";
 import type { CodexUsageWindow } from "./codexUsage.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export const CODEX_RESET_CREDITS_URL =
   "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
@@ -209,7 +210,7 @@ export interface ResetCreditLedger {
 const MAX_ATTEMPTS = 200;
 
 export function resetCreditLedgerPath(): string {
-  const dir = process.env.CODECAST_DIR || path.join(process.env.HOME || os.homedir(), ".codecast");
+  const dir = defaultConfigDir();
   return path.join(dir, "codex-reset-credits.json");
 }
 

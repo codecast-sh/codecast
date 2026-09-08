@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileAsync } from "./proc.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export type GitCapability = "merge-tree-write-tree";
 
@@ -52,7 +53,7 @@ export function isUnsupportedMergeTreeWriteTreeError(err: unknown): boolean {
 }
 
 function defaultCachePath(): string {
-  const root = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  const root = defaultConfigDir();
   return path.join(root, "git-capabilities.json");
 }
 

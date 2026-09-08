@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DAEMON_EXIT_STAMP_FILE, EXIT_DO_NOT_RESTART } from "./supervision.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export const HANG_MARKER_FILENAME = "daemon-hang.json";
 
@@ -58,7 +59,7 @@ export interface DaemonExitStamp {
 }
 
 export function codecastDir(): string {
-  return process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  return defaultConfigDir();
 }
 
 export function hangMarkerPath(dir: string = codecastDir()): string {

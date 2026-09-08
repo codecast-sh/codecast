@@ -32,6 +32,7 @@ import * as os from "os";
 import * as path from "path";
 import { isLaunchToken, mintLaunchToken } from "./agentEnv.js";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export type LaunchEntry = {
   token: string;
@@ -73,7 +74,7 @@ export type LaunchTokenLedgerOptions = {
 let sharedLedger: { dir: string; ledger: LaunchTokenLedger } | null = null;
 
 export function launchTokenDir(): string {
-  return process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  return defaultConfigDir();
 }
 
 export function launchTokenLedger(): LaunchTokenLedger {

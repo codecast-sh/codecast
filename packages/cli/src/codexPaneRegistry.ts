@@ -21,6 +21,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { defaultConfigDir } from "./config/configDir.js";
 
 /** One live Codex pane: its tmux session name, the saved profile it launched
  *  under, and the conversation it belongs to (absent for panes started outside
@@ -40,7 +41,7 @@ const panes = new Map<string, CodexPane>();
 let writeChain: Promise<void> = Promise.resolve();
 
 function registryPath(): string {
-  const dir = process.env.CODECAST_DIR || path.join(process.env.HOME || os.homedir(), ".codecast");
+  const dir = defaultConfigDir();
   return path.join(dir, "codex-panes.json");
 }
 

@@ -78,6 +78,7 @@ const TEARDOWN_VERBS = [
 const ALLOWED_COMPARISON: Record<string, string> = {
   "contracts/liveness.ts": "defines the vocabulary; authorizesTeardown and confineToOwningDevice are the comparisons everyone else reuses",
   "index.ts": "`cast accounts verify` grades a stored credential with its own ProfileAudit verdict, which borrows the word `unverifiable` and decides nothing about a process",
+  "ccAccounts.ts": "matchProfileForCredential grades a stored profile against a credential — same borrowed word, and it names a profile, never a process (ct-49526)",
 };
 
 /**

@@ -31,6 +31,7 @@ import { sessionIdFromEnv } from "../sessionIdentity.js";
 import { HOOKS_DIR } from "./hooks.js";
 import { parseManifest } from "./manifest.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 /** One piece of repo-authored code an acquire may execute. */
 export interface TrustTarget {
@@ -82,7 +83,7 @@ export function digestOf(text: string): string {
 
 /** Absolute path of the trust store. Outside every repo, on purpose. */
 export function trustStorePath(): string {
-  const dir = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  const dir = defaultConfigDir();
   return path.join(dir, "workspace-trust.json");
 }
 
