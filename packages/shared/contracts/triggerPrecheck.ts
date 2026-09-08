@@ -43,3 +43,33 @@ export function describeTriggerPrecheckFailure(result: TriggerPrecheckResult): s
   if (result.error) return `precheck could not run: ${result.error}`;
   return `precheck exited ${result.exitCode ?? "with no status"}`;
 }
+
+/** Why a trigger is firing right now. Three of the four come from its own
+ *  schedule; `manual` is a person asking — `cast trigger run tr-42` or the web
+ *  Run now button. */
+export type TriggerFiringSource = "manual" | "scheduled" | "recurring" | "event";
+
+/** The source of one firing, from the trigger's schedule and whatever the run
+ *  request stamped on the row. A manual request outranks the schedule: the
+ *  same recurring trigger fires as `recurring` on its cadence and as `manual`
+ *  when someone presses Run now. */
+export function triggerFiringSource(
+  scheduleType: string | undefined,
+  requestedSource?: string
+): TriggerFiringSource {
+  if (requestedSource === "manual") return "manual";
+  if (scheduleType === "recurring") return "recurring";
+  if (scheduleType === "event") return "event";
+  return "scheduled";
+}
+
+/** Whether the --precheck gate applies to this firing.
+ *
+ *  Why (ct-49673): a person asking for a run IS the evidence the gate exists
+ *  to find, so a manual firing never asks a shell command for permission — a
+ *  silently skipped Run now looks like a broken button. An event firing
+ *  already carries its evidence in the webhook that woke it. Only the
+ *  schedule's own firings spend a session on a guess, so only they are gated. */
+export function triggerPrecheckApplies(source: TriggerFiringSource): boolean {
+  return source === "scheduled" || source === "recurring";
+}
