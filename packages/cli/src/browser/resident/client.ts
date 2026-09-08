@@ -6,7 +6,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
 import { hookPortFile as loopbackHookPortFile } from "../../loopbackIdentity.js";
@@ -16,10 +15,11 @@ import {
   RESIDENT_PROTOCOL_VERSION, RESIDENT_WS_PATH, isWireEvent,
   type AttachResult, type HelloResult, type ResidentStatus, type TargetsResult, type WireCall, type WireMessage,
 } from "./protocol.js";
+import { defaultConfigDir } from "../../config/configDir.js";
 
 /** Where the daemon writes its loopback port. loopbackIdentity.ts owns the path. */
 export function hookPortFile(): string {
-  return loopbackHookPortFile(path.join(process.env.HOME || os.homedir(), ".codecast"));
+  return loopbackHookPortFile(defaultConfigDir());
 }
 
 export function readHookPort(): number | null {

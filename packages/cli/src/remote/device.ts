@@ -25,11 +25,12 @@ import { execFileSync } from "../proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import { getMachineKey, hardwareId } from "../machineKey.js";
-import { codecastPath } from "../codecastDir.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
-const DEVICE_BINDING_FILE = codecastPath(".device_binding.json");
-const CONFIG_FILE = codecastPath("config.json");
+const DEVICE_BINDING_FILE = path.join(defaultConfigDir(), ".device_binding.json");
+const CONFIG_FILE = path.join(defaultConfigDir(), "config.json");
 
 let cachedDeviceId: string | null = null;
 let cachedHostname: string | null = null;

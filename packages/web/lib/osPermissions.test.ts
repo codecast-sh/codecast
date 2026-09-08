@@ -1,8 +1,10 @@
 import { test, expect, describe } from "bun:test";
 import {
+  COMPUTER_PERMISSION_KINDS,
   OS_PERMISSIONS,
   OS_PERMISSION_KINDS,
   browserPermissionToReadiness,
+  getComputerPermissions,
   isPermissionActionable,
   permissionActionLabel,
   permissionHint,
@@ -55,5 +57,41 @@ describe("actions in a browser", () => {
     expect(permissionHint("camera", "ask")).toMatch(/hasn't been allowed/);
     expect(permissionHint("notifications", "granted")).toBeNull();
     expect(permissionHint("screen", "n/a")).toBeNull();
+  });
+});
+
+// The codecast computer grants. They live in the same registry and draw the
+// same row, but they belong to a separate helper app — so the copy has to say
+// so, and a browser has nothing to show.
+describe("the codecast computer grants", () => {
+  test("both kinds carry a label and a paragraph, and neither gates setup", () => {
+    for (const k of COMPUTER_PERMISSION_KINDS) {
+      expect(OS_PERMISSIONS[k].kind).toBe(k);
+      expect(OS_PERMISSIONS[k].label.length).toBeGreaterThan(0);
+      expect(OS_PERMISSIONS[k].why).toContain("codecast computer");
+      expect(OS_PERMISSIONS[k].required).toBe(false);
+    }
+  });
+
+  test("they are not part of the map the app polls for itself", () => {
+    // The app's own four are read at boot and on a timer; these two are not,
+    // because each one launches the helper.
+    for (const k of COMPUTER_PERMISSION_KINDS) expect(OS_PERMISSION_KINDS).not.toContain(k as never);
+  });
+
+  test("a missing grant names the helper, never Codecast", () => {
+    // The generic sentence would say "turned off for Codecast", which is the
+    // one thing that is not true: the desktop app never holds these.
+    for (const k of COMPUTER_PERMISSION_KINDS) {
+      expect(permissionHint(k, "off")).toContain("codecast computer");
+      expect(permissionHint(k, "off")).not.toContain("Codecast in System Settings");
+      expect(permissionHint(k, "granted")).toBeNull();
+    }
+    expect(permissionHint("computerAccessibility", "off")).toMatch(/Accessibility/);
+    expect(permissionHint("computerScreen", "off")).toMatch(/Screen Recording/);
+  });
+
+  test("a browser has no helper, so it reports nothing to set up", async () => {
+    expect(await getComputerPermissions()).toEqual({ computerAccessibility: "n/a", computerScreen: "n/a" });
   });
 });

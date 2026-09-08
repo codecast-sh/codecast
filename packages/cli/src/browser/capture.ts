@@ -40,6 +40,7 @@ import { MAX_IMAGE_SIZE } from "../syncService.js";
 import { agentTempPath, TEMP_FILE_MODE } from "../tempFiles.js";
 import { SHOT_TEMP_KIND } from "./shotFile.js";
 import { fmt } from "../colors.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 // Bounds. The block lands in a conversation, not a log file: enough entries to
 // name the breakage, few enough that the error stays visible above it.
@@ -153,7 +154,7 @@ export function formatFailureContext(rec: Recording): FailureContextText {
 
 /** Persistent opt-out, read from the same config file `cast config` writes. */
 export function captureConfigOff(
-  configDir = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast"),
+  configDir = defaultConfigDir(),
 ): boolean {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(configDir, "config.json"), "utf-8"));

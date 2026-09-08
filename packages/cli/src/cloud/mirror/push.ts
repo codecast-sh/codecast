@@ -4,7 +4,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../atomicWrite.js";
-import { localConfigDir, readLocalConfig } from "../../config/readLocalConfig.js";
+import { readLocalConfig } from "../../config/readLocalConfig.js";
+import { defaultConfigDir } from "../../config/configDir.js";
+
 import { isCloudMirrorEnabled, type Config } from "../../config/types.js";
 import { deviceId as localDeviceId } from "../../remote/device.js";
 import { claudeProjectDirName } from "../../projectPathResolver.js";
@@ -255,7 +257,7 @@ export interface LocalMirrorStamp {
 export type LocalMirrorStamps = Record<string, LocalMirrorStamp>;
 
 export function localStampsFile(): string {
-  return path.join(localConfigDir(), "browser", "mirror-pushes.json");
+  return path.join(defaultConfigDir(), "browser", "mirror-pushes.json");
 }
 
 export function readLocalStamps(file = localStampsFile()): LocalMirrorStamps {
@@ -416,7 +418,7 @@ export function defaultDeps(signal?: AbortSignal): MirrorDeps {
     log: () => {},
     now: () => new Date(),
     loggedFailures: moduleLoggedFailures,
-    lock: (key, fn) => withMirrorLock(path.join(localConfigDir(), "mirror-locks", sha256(key)), fn, signal),
+    lock: (key, fn) => withMirrorLock(path.join(defaultConfigDir(), "mirror-locks", sha256(key)), fn, signal),
     readProjects: (host) => readProjectRegistrations(host),
     retireProjects: async (host, roots) => { for (const root of roots) await unregisterProjectContext(host, root); },
   };

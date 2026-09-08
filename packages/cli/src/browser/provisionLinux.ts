@@ -24,13 +24,13 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteHost } from "../remote/session-move.js";
 import { copyCredentialToRemote, ensureRemoteClaudeReady } from "../remote/session-move.js";
 import { remoteExec, scpTo } from "./remote.js";
 import { decryptToken } from "../tokenEncryption.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 /** The Xvfb display everything on the box shares. */
 export const SCREEN_DISPLAY = ":99";
@@ -296,7 +296,7 @@ export function buildLinuxCast(onProgress: (m: string) => void): { indexJs: stri
  * so the secret never sits in argv or a local temp file.
  */
 export function pushCodecastConfig(host: RemoteHost): void {
-  const cfgPath = path.join(process.env.HOME || os.homedir(), ".codecast", "config.json");
+  const cfgPath = path.join(defaultConfigDir(), "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   const token = typeof cfg.auth_token === "string" && cfg.auth_token.startsWith("enc:")
     ? decryptToken(cfg.auth_token)

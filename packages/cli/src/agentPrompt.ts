@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { defaultConfigDir } from "./config/configDir.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
 import { parseCodecastPaneRows, tmuxRunAsync } from "./tmux.js";
 import { formatAgentPrompt, mergeAgentPromptSources, resolveAgentPromptSource } from "./agentPromptOrigin.js";
@@ -12,7 +13,7 @@ export async function runAgentPrompt(args: string[]): Promise<void> {
     else if (args[at] === "--subagent") subagent = true;
     else throw new Error("Usage: cast _agent-prompt [--from <session>] [--subagent] < prompt.txt");
   }
-  const dir = join(process.env.HOME || "", ".codecast");
+  const dir = defaultConfigDir();
   const read = (name: string) => existsSync(join(dir, name)) ? JSON.parse(readFileSync(join(dir, name), "utf8")) : {};
   const cache = mergeAgentPromptSources(read("conversations.json"), read("app-server-threads.json"));
   const explicit = from ?? sessionIdFromEnv() ?? undefined;

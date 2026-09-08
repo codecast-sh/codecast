@@ -9,6 +9,8 @@
 // Same deps pattern as publish.ts / imageCommand.ts: index.ts hands in config
 // access, this module stays importable by tests.
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { stdinText } from "./sendBody.js";
@@ -21,20 +23,74 @@ import {
   THREAD_STATE_STATUS_LABEL,
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
+import { defaultConfigDir } from "./config/configDir.js";
 import { commandGroup } from "./commandGroups.js";
-import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
 
-// The on-disk stamp the reminder hook reads lives in threadStateStamp.ts:
-// the daemon needs it and must not load this command to get it. Re-exported
-// here so importers of `cast state`'s module keep working. ct-49546.
-export {
-  threadStateStampPath,
-  threadStateCounterPath,
-  writeThreadStatePulse,
-  readThreadStateStamp,
-  clearThreadStatePulse,
-  type ThreadStateStamp,
-} from "./threadStateStamp.js";
+// ── the local stamp the reminder hook reads ──────────────────────────────────
+//
+// The reminder hook (thread-state.sh, on Stop and UserPromptSubmit) must decide
+// whether to nudge without a network call on every event, so the decision is
+// kept on disk: a stamp file exists only while this session has a pinned state,
+// and a mark beside it holds the transcript message count the thread stood at
+// after the last write (plus a "nudged" flag once the reminder has fired).
+// `cast state` deletes the mark on every write, which is what makes the
+// reminder fire once per stretch and re-arm when the agent actually updates
+// its state.
+
+function threadStateDir(): string {
+  return path.join(defaultConfigDir(), "thread-state");
+}
+
+export function threadStateStampPath(sessionId: string): string {
+  return path.join(threadStateDir(), `${sessionId}.json`);
+}
+
+export function threadStateCounterPath(sessionId: string): string {
+  return path.join(threadStateDir(), "counters", sessionId);
+}
+
+/** What the stamp holds. `status` is the agent's declared answer to "who acts
+ * next" — the daemon reads it at turn end (daemon.ts declaredSettleVerdict)
+ * and settles the agent's status to "dormant" / "done" instead of plain idle
+ * when the stamp was written during the turn that just ended. */
+export interface ThreadStateStamp {
+  at: number;
+  status?: ThreadStateStatus;
+}
+
+/** Stamp "this session has a pinned state" (with the declared status) and
+ * reset the reminder's message baseline. */
+export function writeThreadStatePulse(sessionId: string, status?: ThreadStateStatus): void {
+  try {
+    fs.mkdirSync(threadStateDir(), { recursive: true });
+    const stamp: ThreadStateStamp = { at: Date.now(), ...(status ? { status } : {}) };
+    fs.writeFileSync(threadStateStampPath(sessionId), JSON.stringify(stamp));
+    const counter = threadStateCounterPath(sessionId);
+    if (fs.existsSync(counter)) fs.unlinkSync(counter);
+  } catch {}
+}
+
+/** The stamp for a session, or null when it has none / is unreadable. */
+export function readThreadStateStamp(sessionId: string): ThreadStateStamp | null {
+  try {
+    const raw = fs.readFileSync(threadStateStampPath(sessionId), "utf8");
+    const parsed = JSON.parse(raw) as { at?: unknown; status?: unknown };
+    if (typeof parsed.at !== "number") return null;
+    const status = parseThreadStateStatus(typeof parsed.status === "string" ? parsed.status : null);
+    return { at: parsed.at, ...(status ? { status } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+/** Drop the stamp — a session with no pinned state is never nudged. */
+export function clearThreadStatePulse(sessionId: string): void {
+  try {
+    for (const file of [threadStateStampPath(sessionId), threadStateCounterPath(sessionId)]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+  } catch {}
+}
 
 /** Words that mean "remove the pinned state" when they are the whole argument.
  * Deliberately excludes "done": an agent wrapping up is as likely to mean it as

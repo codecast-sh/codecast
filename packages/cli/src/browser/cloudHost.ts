@@ -36,6 +36,7 @@ import * as path from "node:path";
 import { agentSpawnPath } from "../agentSpawnPath.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 export type HostState = "running" | "stopped" | "pending" | "missing";
 
@@ -84,6 +85,7 @@ export function hostForDevice(deviceId: string): CloudHost | undefined {
 
 function registryPath(): string {
   return codecastPath("browser", "hosts.json");
+  return path.join(defaultConfigDir(), "browser", "hosts.json");
 }
 
 export function readHosts(): CloudHost[] {

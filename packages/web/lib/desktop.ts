@@ -23,6 +23,11 @@ declare global {
       getOsPermissions?: () => Promise<Record<string, string>>;
       requestOsPermission?: (kind: string) => Promise<string>;
       openOsPermissionSettings?: (kind: string) => Promise<void>;
+      // The grants that belong to the codecast computer helper, read through
+      // the cast CLI (the shell never asks macOS for them itself). Slow — it
+      // launches that helper — so it is its own call, not part of the map
+      // above. Absent on older builds; readiness is then "unknown".
+      getComputerPermissions?: () => Promise<Record<string, string>>;
       // Multi-window notification routing (see main.js). Absent on older
       // builds — gate on them; without them this window behaves as the only one.
       reportWindowState?: (state: DesktopWindowState) => void;

@@ -46,11 +46,11 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { codecastDir } from "../codecastDir.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 /** Where managed clones live. Mode 0700 — these hold live session cookies. */
 export function browserHome(): string {
-  const root = codecastDir();
+  const root = defaultConfigDir();
   return path.join(root, "browser");
 }
 

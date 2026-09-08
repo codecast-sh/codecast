@@ -13,8 +13,9 @@ import {
   watchDirFilter,
 } from "./syncScope.js";
 import type { Config } from "./config/types.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
-const CONFIG_DIR = process.env.HOME + "/.codecast";
+const CONFIG_DIR = defaultConfigDir();
 const RECONCILIATION_FILE = path.join(CONFIG_DIR, "last-reconciliation.json");
 
 export interface ReconciliationResult {

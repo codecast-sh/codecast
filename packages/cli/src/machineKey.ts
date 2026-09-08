@@ -29,6 +29,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { codecastDir } from "./codecastDir.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export const MACHINE_KEY_LEN = 32;
 
@@ -47,10 +48,13 @@ export interface MachineKeyResult {
 
 let cached: MachineKeyResult | null = null;
 
-/** Resolve the machine key against the CLI state directory, once per process. */
+/** Resolve the machine key against this machine's config dir, once per process.
+ *  It follows CODECAST_DIR with everything else (defaultConfigDir): a sandbox
+ *  that moves config.json must move the key that decrypts its token, or the
+ *  reader and the key it needs end up in different directories. */
 export function getMachineKey(): MachineKeyResult {
   if (cached) return cached;
-  cached = resolveMachineKey(codecastDir(), hardwareId);
+  cached = resolveMachineKey(defaultConfigDir(), hardwareId);
   return cached;
 }
 

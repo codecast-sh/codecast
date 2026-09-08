@@ -36,6 +36,7 @@ import { secureTempFile, TEMP_FILE_MODE } from "../tempFiles.js";
 import { repoRootFor } from "../gitPlane.js";
 import type { PublishDeps } from "../castApi.js";
 import { commandGroup } from "../commandGroups.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 const OK = `${c.green}✓${c.reset}`;
 const BAD = `${c.red}✗${c.reset}`;
@@ -417,7 +418,7 @@ async function settle(at: Attached, timeoutMs: number, quietMs = 400): Promise<S
 
 function cliConfig(): { user_id?: string; convex_url?: string; web_url?: string } {
   try {
-    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codecast", "config.json"), "utf-8"));
+    return JSON.parse(fs.readFileSync(path.join(defaultConfigDir(), "config.json"), "utf-8"));
   } catch {
     return {};
   }

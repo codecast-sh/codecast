@@ -37,6 +37,7 @@
       "meetingDetector.js",
       "notificationRouter.js",
       "osPermissions.js",
+      "computerPermissions.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",

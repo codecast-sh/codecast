@@ -12,13 +12,12 @@ import * as path from "node:path";
 import type { Config } from "./types.js";
 import { atomicWriteFile } from "../atomicWrite.js";
 
-/** Where the config lives when no one names a directory. Here rather than in
- *  readAuthConfig.ts because that module decrypts tokens and is deliberately
- *  kept off index.ts's import graph, while this one is already on it: a caller
- *  that wants only the path should not drag the auth reader along. */
-export function defaultConfigDir(): string {
-  return process.env.HOME + "/.codecast";
-}
+// A merge seam, not a second resolver: ct-49848 moved defaultConfigDir here and
+// its snippets.ts imports it from this module. The definition lives in
+// configDir.ts (one resolver, guarded by config/configDir.guard.test.ts); this
+// line only keeps that import path valid. Delete it once no one imports the
+// name from here.
+export { defaultConfigDir } from "./configDir.js";
 
 export function sharedConfigFile(configDir: string): string {
   return path.join(configDir, "config.json");

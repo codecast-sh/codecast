@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { codecastDir } from "./codecastDir.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export interface CachedUpload {
   storageId: string;
@@ -33,7 +34,7 @@ interface ImageCacheFile {
 const MAX_ENTRIES = 500;
 
 function cacheFilePath(): string {
-  const dir = codecastDir();
+  const dir = defaultConfigDir();
   return path.join(dir, "image-cache.json");
 }
 

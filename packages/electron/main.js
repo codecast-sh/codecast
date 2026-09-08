@@ -70,6 +70,7 @@ const {
   decideOffer,
 } = require("./meetingDetector");
 const { createOsPermissions } = require("./osPermissions");
+const { createComputerPermissions } = require("./computerPermissions");
 
 let notificationRefs = [];
 
@@ -2696,7 +2697,17 @@ const osPermissions = createOsPermissions({
 modernNotify = osPermissions.notify;
 ipcMain.handle("get-os-permissions", () => osPermissions.getAll());
 ipcMain.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
-ipcMain.handle("open-os-permission-settings", (_e, kind) => osPermissions.openSettings(String(kind)));
+
+// The two grants that belong to the codecast computer helper, not to this app
+// — see computerPermissions.js. They travel through the cast CLI, so nothing
+// here touches an accessibility or a screen API, and the one gesture that may
+// take the screen is the helper's own settings window behind a human's click.
+const computerPermissions = createComputerPermissions({});
+ipcMain.handle("get-computer-permissions", () => computerPermissions.getAll());
+ipcMain.handle("open-os-permission-settings", (_e, kind) => {
+  const k = String(kind);
+  return computerPermissions.owns(k) ? computerPermissions.openSettings(k) : osPermissions.openSettings(k);
+});
 
 // Sign-in hands its OAuth flow to the user's real browser (issue #20): the
 // embedded window has no Google/GitHub sessions. https-only — the renderer

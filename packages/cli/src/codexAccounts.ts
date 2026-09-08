@@ -21,7 +21,6 @@
 //     profile covering it (a re-login or codex's own refresh), re-snapshot.
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { createMtimeGatedCache, deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
 import { atomicWriteFile } from "./atomicWrite.js";
@@ -33,21 +32,12 @@ import {
   parseRateLimitsReadResult,
   type CodexUsageSnapshot,
 } from "./codexUsage.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 export class CodexAccountError extends Error {}
 
-/** $HOME first (bun's os.homedir() caches at startup and ignores later env
- * changes, which breaks $HOME-sandboxed tests), os.homedir() as fallback. */
-function homeDir(): string {
-  return process.env.HOME || os.homedir();
-}
-
-function codecastDir(): string {
-  return process.env.CODECAST_DIR || path.join(homeDir(), ".codecast");
-}
-
 function profilesRoot(): string {
-  return path.join(codecastDir(), "codex-accounts");
+  return path.join(defaultConfigDir(), "codex-accounts");
 }
 
 export function profileDir(name: string): string {
@@ -55,11 +45,11 @@ export function profileDir(name: string): string {
 }
 
 function indexPath(): string {
-  return path.join(codecastDir(), "codex-accounts.json");
+  return path.join(defaultConfigDir(), "codex-accounts.json");
 }
 
 function usageCachePath(): string {
-  return path.join(codecastDir(), "codex-usage-accounts.json");
+  return path.join(defaultConfigDir(), "codex-usage-accounts.json");
 }
 
 function activeAuthPath(): string {

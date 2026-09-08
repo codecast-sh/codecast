@@ -31,6 +31,7 @@ import { rewriteScreenshotForJson } from "./screenshotFile.js";
 import { readInstance } from "./instance.js";
 import { readState } from "../browser/instance.js";
 import { disclaimedHelperLaunch, probeHelperPermissions } from "../test-helpers/computerPermissionProbe.js";
+import { acquireFileLock } from "../lockFile.js";
 import type { ComputerActionResult, ComputerSnapshotResult } from "./types.js";
 
 const TEXTEDIT = "com.apple.TextEdit";
@@ -50,6 +51,13 @@ function helperIsInstalled(): boolean {
  * whether a test runs, and a skip that reports "not granted" when the helper is
  * simply missing sends whoever reads it to the wrong place.
  */
+/**
+ * Whether the capture assertions can run. Set by the SAME probe that decides
+ * `reason`: the probe costs about four seconds, which is most of a hook's
+ * budget, and asking twice for one answer is what made `beforeAll` time out.
+ */
+let screenshotsGranted = false;
+
 const reason = await (async (): Promise<string | null> => {
   if (process.platform !== "darwin") return "not macOS";
   if (!helperIsInstalled()) return `no helper at ${helperAppPath()} — run \`bun scripts/computer-verify.ts install <helper.tar>\``;
@@ -57,13 +65,25 @@ const reason = await (async (): Promise<string | null> => {
   // start (ct-49674) and its 5-second poll is shorter than the helper's own
   // answer time (ct-49671), so it reports "not granted" on a granted machine.
   const status = await probeHelperPermissions();
+  screenshotsGranted = status.screenshots === "granted";
   if (status.accessibility === "no-answer") return "the helper never answered the permission probe";
   if (status.accessibility !== "granted") return "Accessibility is not granted to `codecast computer`";
   return null;
 })();
 
-const granted = reason === null ? test : test.skip;
-let screenshotsGranted = false;
+/**
+ * Every case here is several round trips to a real helper driving a real app,
+ * and one snapshot alone runs to a second or two. bun's default per-test budget
+ * is 5s, which these outgrow — and a case cut off mid-request leaves the helper
+ * killed as a dangling process, so the FIRST timeout turns every later case
+ * into `permission_denied` from a reconnect that never re-handshakes. One
+ * honest budget at the wrapper keeps that cascade from starting.
+ */
+const CASE_TIMEOUT_MS = 60_000;
+const runCase = reason === null ? test : test.skip;
+const granted = (name: string, fn: () => Promise<void>): void => {
+  runCase(name, fn, CASE_TIMEOUT_MS);
+};
 
 /**
  * The client, launched the way the CLI launches it but pointed straight at the
@@ -80,6 +100,21 @@ function makeClient(): ComputerClient {
 
 let client: ComputerClient;
 let scratch: string;
+
+/**
+ * One TextEdit, one Mac. This suite drives a shared application BY NAME and its
+ * teardown kills it the same way, so two runs on one machine wreck each other:
+ * the second run's `pkill` takes the first run's target away mid-case, and the
+ * first then reports `window_not_found` and `app_not_found` against a product
+ * that is working. That is not hypothetical — a sibling worktree running these
+ * same tests produced exactly that, and it is why the failing set kept moving
+ * between runs. Runs therefore queue rather than race.
+ *
+ * The lock sits in the machine's temp dir, not under the checkout: the thing
+ * being shared is the Mac, and the racing runs live in different worktrees.
+ */
+const RUN_LOCK = path.join(os.tmpdir(), "cast-computer-granted-e2e.lock");
+let releaseRunLock: (() => void) | null = null;
 
 /** The frontmost app's bundle id, which is what the focus proof compares. */
 function frontApp(): string {
@@ -106,12 +141,31 @@ function requireElement(result: ComputerSnapshotResult, match: RegExp, what: str
 
 const snapshot = () => client.getAppState({ app: TEXTEDIT });
 
+const windowIds = async (): Promise<Set<number>> =>
+  new Set((await client.listWindows({ app: TEXTEDIT })).windows.flatMap((w) => (typeof w.id === "number" ? [w.id] : [])));
+
+/** Poll TextEdit's window list until `want` says yes, or give up loudly. */
+async function untilWindows(want: (ids: Set<number>) => boolean, what: string): Promise<Set<number>> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const ids = await windowIds();
+    if (want(ids)) return ids;
+    await Bun.sleep(250);
+  }
+  throw new Error(`TextEdit never ${what}`);
+}
+
 beforeAll(async () => {
   if (reason) {
     console.log(`cast computer granted e2e skipped: ${reason}`);
     return;
   }
   screenshotsGranted = (await probeHelperPermissions()).screenshots === "granted";
+  releaseRunLock = await acquireFileLock(RUN_LOCK, {
+    waitMs: 240_000,
+    staleMs: 300_000,
+    describe: "the cast computer granted e2e",
+    onWait: (holder) => console.log(`granted e2e: another run holds the Mac (pid ${holder}) — queueing behind it`),
+  });
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cast-computer-textedit-"));
   const doc = path.join(scratch, "cast-computer.txt");
   fs.writeFileSync(doc, "seed\n");
@@ -129,6 +183,16 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (reason) return;
+  // The budget covers queueing for the run lock above (up to 240s) plus a cold
+  // TextEdit; bun's default hook timeout is 5s, which neither fits in.
+}, 300_000);
+
+afterAll(async () => {
+  if (reason) {
+    releaseRunLock?.();
+    releaseRunLock = null;
+    return;
+  }
   // Quit TextEdit without saving, so the run leaves no document and no dialog.
   // `pkill` rather than a Cmd+Q chord: a synthetic quit would need the window
   // focused, which is exactly what this suite spends its time not doing.
@@ -143,6 +207,8 @@ afterAll(async () => {
     }
   }
   if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  releaseRunLock?.();
+  releaseRunLock = null;
 });
 
 describe("the observe half", () => {
@@ -210,30 +276,77 @@ describe("the act half", () => {
     expect(result.snapshot.treeText).toContain(value);
   });
 
-  granted("click acts through the accessibility path without asking for focus", async () => {
-    const before = await snapshot();
-    const target = findElement(before.snapshot.treeText, /Secondary Actions/i) ?? requireElement(before, /text/i, "text element");
-    const result = await client.action("click", { app: TEXTEDIT, elementIndex: target });
+  granted("click presses a control through the accessibility path, with no focus and no coordinates", async () => {
+    // The target has to be something that actually presses. This case first
+    // aimed at whatever tree line said "Secondary Actions", which in TextEdit
+    // is the scroll area ("scroll up, scroll down") — and a scroll area has no
+    // AXPress, so `click` fell through to a coordinate click and was correctly
+    // refused for want of focus. Measured on a granted Mac; the product was
+    // right and the target was wrong.
+    //
+    // A close button on a document this case opens and never edits is the
+    // honest target: it presses, it needs no focus, and the press has a visible
+    // result, so "the accessibility path worked" is observed rather than
+    // inferred from a returned string. An unmodified document closes without a
+    // save sheet, so nothing is left on screen.
+    const before = await windowIds();
+    const doc = path.join(scratch, "cast-computer-click.txt");
+    // Deliberately says nothing about what this case looks for: the rendered
+    // tree carries element VALUES as well as roles, so a document whose text
+    // named the control would be matched by the matcher below (it was, and the
+    // case aimed `click` at the text area instead of the button).
+    fs.writeFileSync(doc, "a second document, opened and never edited\n");
+    spawnSync("/usr/bin/open", ["-g", "-a", "TextEdit", doc], { timeout: 30_000 });
+    const opened = await untilWindows((ids) => [...ids].some((id) => !before.has(id)), "opened a second window");
+    const target = [...opened].find((id) => !before.has(id))!;
+
+    const front = frontApp();
+    const state = await client.getAppState({ app: TEXTEDIT, windowId: target });
+    // Anchored: a role at the START of the rendered line, never a phrase from
+    // some element's value further along it.
+    const closeButton = requireElement(state, /^close button\b/i, "close button");
+    const result = await client.action("click", { app: TEXTEDIT, elementIndex: closeButton, windowId: target });
+
     expect(result.action?.path).toBe("accessibility");
-    expect(result.snapshot.elementCount).toBeGreaterThan(0);
+    expect(result.action?.actionName).toBe("AXPress");
+    // Pressing a control is not a reason to raise anything (design 11.2).
+    expect(frontApp()).toBe(front);
+    await untilWindows((ids) => !ids.has(target), "closed the window whose close button was pressed");
   });
 
-  granted("synthetic input on a background window is refused and names the flag that fixes it", async () => {
-    // type-text, press-key and hotkey all need the target window focused
-    // (design 11.2 point 1). Refusing is the feature, not a limitation.
-    for (const [method, params] of [
-      ["typeText", { app: TEXTEDIT, text: "never typed" }],
-      ["pressKey", { app: TEXTEDIT, key: "Return" }],
-      ["hotkey", { app: TEXTEDIT, key: "CmdOrCtrl+A" }],
-    ] as const) {
-      const failure = await client.action(method, params).then(
-        () => null,
-        (err) => err as { code: string; message: string },
-      );
-      expect(failure, `${method} should refuse a background window`).not.toBeNull();
-      expect(failure!.code).toBe("window_not_focused");
-      expect(failure!.message).toMatch(/restore-window|restoreWindow/i);
-    }
+  granted("synthetic input is refused on a background window, and the accessibility route is taken where one exists", async () => {
+    // The rule in design 11.2 point 1 is about SYNTHETIC input, and the design's
+    // own verification table says two of these three verbs have an accessibility
+    // route: text replacement is `verified` with `focusedText`, and a select all
+    // chord is `verified` with `selection`. Measured on a granted Mac, that is
+    // exactly what the helper does, so asserting that all three are refused
+    // asserted a contract the design never had.
+    //
+    // press-key is the one with no accessibility route, so it is what proves
+    // the refusal — and the refusal is the safety property: a keystroke with no
+    // named recipient must never be delivered blind to whatever holds focus.
+    // Observe first. The case before this one closes a window, and the helper
+    // answers an index from a superseded tree with `window_stale` rather than
+    // acting on whatever now sits there — correctly, but it is not what this
+    // case is about. Snapshot-then-act is the model the design teaches anyway.
+    await snapshot();
+    const refused = await client.action("pressKey", { app: TEXTEDIT, key: "Return" }).then(
+      () => null,
+      (err) => err as { code: string; message: string },
+    );
+    expect(refused, "press-key should refuse a background window").not.toBeNull();
+    expect(refused!.code).toBe("window_not_focused");
+    expect(refused!.message).toMatch(/restore-window|restoreWindow/i);
+
+    // The other two need no focus, because they name the element they act on.
+    const typed = await client.action("typeText", { app: TEXTEDIT, text: `typed without focus ${Date.now()}` });
+    expect(typed.action?.path).toBe("accessibility");
+    expect(typed.action?.actionName).toBe("AXReplaceSelection");
+    expect(typed.action?.verification?.state).toBe("verified");
+
+    const selected = await client.action("hotkey", { app: TEXTEDIT, key: "CmdOrCtrl+A" });
+    expect(selected.action?.path).toBe("accessibility");
+    expect(selected.action?.verification?.state).toBe("verified");
   });
 });
 
@@ -246,6 +359,13 @@ describe("focus", () => {
     const target = requireElement(state, /text/i, "text element");
     await client.action("setValue", { app: TEXTEDIT, elementIndex: target, value: `no raise ${Date.now()}` });
     await client.action("click", { app: TEXTEDIT, elementIndex: target });
+    // A second act, through a different verb. Deliberately NOT `click` on the
+    // text area — a text area has no AXPress, so that click fell through to a
+    // coordinate click and was refused for want of focus, which says nothing
+    // about raising. `type-text` takes the accessibility route on a background
+    // window (proven in the act half), so it exercises a second verb here
+    // without smuggling in a focus requirement this case is not about.
+    await client.action("typeText", { app: TEXTEDIT, text: " and still no raise" });
 
     // 400 ms is the helper's own settle after a raise; if a verb raised, the
     // front would have moved by now.

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../atomicWrite.js";
 import { listStates, type PersistedWorkspaceState } from "./contract.js";
 import { codecastPath } from "../codecastDir.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
 interface PortReservation {
   repoRoot: string;
@@ -47,7 +48,7 @@ function tryReservationLock(file: string, owner: ReservationLockOwner): boolean 
 export async function withWorkspaceOperation<T>(repoRoot: string, name: string, fn: () => Promise<T>): Promise<T> {
   const root = fs.realpathSync(repoRoot);
   const key = createHash("sha256").update(JSON.stringify([root, name])).digest("hex");
-  const directory = codecastPath("workspace-ports", "operations");
+  const directory = path.join(defaultConfigDir(), "workspace-ports", "operations");
   const file = path.join(directory, `${key}.json`);
   const token = randomUUID();
   await withPortReservations(root, async () => {
@@ -79,7 +80,7 @@ export async function withPortReservations<T>(
   fn: (reservations: PortReservation[]) => Promise<T>,
 ): Promise<T> {
   const root = fs.realpathSync(repoRoot);
-  const directory = codecastPath("workspace-ports");
+  const directory = path.join(defaultConfigDir(), "workspace-ports");
   fs.mkdirSync(directory, { recursive: true });
   const lock = path.join(directory, ".codecast-capability.lock");
   const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };

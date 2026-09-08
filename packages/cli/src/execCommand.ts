@@ -34,8 +34,9 @@ import {
 } from "./launchCommand.js";
 import { spawn, whichBin } from "./proc.js";
 import { commandGroup } from "./commandGroups.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".codecast");
+const CONFIG_DIR = defaultConfigDir();
 const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
 
 export interface ResolveExecPromptDeps {
