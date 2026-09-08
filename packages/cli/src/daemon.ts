@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { isCodexSafetyError, isMachineDeliveredMessage } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
@@ -174,7 +174,8 @@ import { parseSessionFile, parseTranscriptFor, claudeBannerText, extractSlug, ex
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
+import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
@@ -289,7 +290,6 @@ import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveR
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { authorizesTeardown, verdictFromProbe, confineToOwningDevice, findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, agentReconstitutes, agentForksNatively, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -777,6 +777,10 @@ export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void>
   // this was the last claude on the keychain login, the drain listener fires a
   // usage refetch, and a ten minute wait for it is a stale meter (ct-49526).
   markClaudeSessionEnded(tmuxSession);
+  // The pane's surface is gone. Anything still alive in its process tree that
+  // survived the reap above speaks for nothing now, so its hook posts are
+  // dropped until a new launch re-fences the name (ct-49532).
+  launchTokenLedger().retirePane(tmuxSession);
 }
 
 // A gap shorter than this is neither a suspend nor a freeze worth recovering
@@ -1239,6 +1243,20 @@ const turnStartedAt = new Map<string, number>();
 // stamp that was written later in real time.
 export function markTurnStarted(sessionId: string, ts: number): void {
   if (ts > (turnStartedAt.get(sessionId) ?? 0)) turnStartedAt.set(sessionId, ts);
+  // The previous turn's completion stamp names a turn that is over; this turn
+  // mints its own at its Stop.
+  turnCompletedAtBySession.delete(sessionId);
+}
+
+// When the lead turn behind each session's CURRENT settle ended (ms). Stamped
+// by the Stop hook, dropped by the next turn start, so the value always names
+// the turn the current status belongs to.
+const turnCompletedAtBySession = new Map<string, number>();
+export function markTurnCompleted(sessionId: string, ts: number): void {
+  turnCompletedAtBySession.set(sessionId, ts);
+}
+export function turnCompletedAtFor(sessionId: string): number | undefined {
+  return turnCompletedAtBySession.get(sessionId);
 }
 
 // When this session's newest turn started, or null if none is on record. The
@@ -1285,7 +1303,42 @@ const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 // a CLI-first status addition throw on every heartbeatBatch validation and mark
 // live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
-type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
+type HookStatusData = {
+  status: AgentStatus;
+  ts: number;
+  permission_mode?: PermissionMode;
+  message?: string;
+  transcript_path?: string;
+  // The settle is a SESSION BOUNDARY, not a turn ending: SessionStart
+  // (startup/resume/clear) or a manual PostCompact landing the pane at an idle
+  // prompt. Carried to the server so the needs-input push, the settle
+  // classifier and unread all stand down for it (ct-49533).
+  session_boundary?: boolean;
+  // When the lead turn ended, in SECONDS like `ts`. Stamped by the Stop hook.
+  // A session the harness keeps alive for background work settles as "waiting"
+  // and its status then stops moving, so this is the only per-turn identity a
+  // consumer can dedupe on.
+  turn_completed_at?: number;
+  // Which LAUNCH posted this (ct-49532). Forwarded by codecast-status.sh from
+  // the pane env; absent from a hook script installed before it shipped.
+  launch_token?: string;
+};
+// The wire form of the record above. The hook builds ONE dict of extras,
+// urlencodes it for the push and writes the same dict to the fallback file, so
+// both transports deliver the extras as strings. Coercing them in one place
+// keeps every reader (the HTTP handler, the watcher, the boot replay) honest.
+type HookStatusWire = Omit<HookStatusData, "session_boundary" | "turn_completed_at"> & {
+  session_boundary?: boolean | string;
+  turn_completed_at?: number | string;
+};
+export function normalizeHookStatus(raw: HookStatusWire): HookStatusData {
+  const stamp = typeof raw.turn_completed_at === "string" ? parseInt(raw.turn_completed_at, 10) : raw.turn_completed_at;
+  return {
+    ...raw,
+    session_boundary: raw.session_boundary === true || raw.session_boundary === "1" || raw.session_boundary === "true" ? true : undefined,
+    turn_completed_at: typeof stamp === "number" && Number.isFinite(stamp) && stamp > 0 ? stamp : undefined,
+  };
+}
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
 const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
@@ -1354,6 +1407,22 @@ const hookStatusGate = new HookStatusGate<HookStatusData>((sessionId, data) => {
 export function setHookStatusSink(sink: (sessionId: string, data: HookStatusData) => void): void {
   hookStatusGate.setSink(sink);
 }
+// Is this hook post from the process that owns its pane? The ledger holds the
+// current launch token per pane and retires a pane on kill, close and relocate;
+// an orphan left behind by a kill or a resume carries a superseded token and is
+// dropped here rather than reported as the session's status (ct-49532). A post
+// with no token is a hook script from before this shipped — accepted for one
+// release, logged once per pane.
+function admitHookPost(sessionId: string, data: HookStatusData): boolean {
+  // "thinking" is UserPromptSubmit and nothing else, so it is the turn start a
+  // retired pane can come back on.
+  const verdict = launchTokenLedger().admit({ sessionId, token: data.launch_token, newTurn: data.status === "thinking" });
+  if (verdict.notable) {
+    log(`[IDENTITY] hook post ${verdict.decision === "drop" ? "dropped" : "accepted"} for session ${shortId(sessionId)} status=${data.status} (${verdict.reason})`);
+  }
+  return verdict.decision === "accept";
+}
+
 // Where codecast-status.sh drops a pending AskUserQuestion's full tool_input, keyed by
 // session id. The buffered turn isn't in the JSONL yet, so this sidecar is the only
 // full-fidelity source for the question while it waits to be answered.
@@ -1658,7 +1727,12 @@ function sendAgentStatus(
   // hibernatedAt stamps or clears the park on managed_sessions in the same
   // write as the status: `now` when the pass parks the pane, null when a resume
   // brings it back.
-  opts?: { hibernatedAt?: number | null },
+  //
+  // sessionBoundary marks a settle produced by a lifecycle event rather than by
+  // a turn ending (see HookStatusData). Only the hook path sets it, and the
+  // server clears it on every write that does not, so a boundary can never
+  // outlive the settle it describes.
+  opts?: { hibernatedAt?: number | null; sessionBoundary?: boolean },
 ): void {
   if (isSupersededAppServerSession(sessionId, conversationId)) return;
   const prevStatus = lastSentAgentStatus.get(sessionId);
@@ -1699,6 +1773,20 @@ function sendAgentStatus(
     }
     return acknowledged;
   }, "status", payload);
+  if (withTasks) {
+    lastOpenTasksSentAt.set(sessionId, Date.now());
+    lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
+  }
+  // The turn stamp rides EVERY settle of that turn, not only the Stop that
+  // minted it: a session the harness keeps alive for background work settles as
+  // "waiting" and then re-publishes that same status on the reconciles, so
+  // without the stamp the server sees one unchanging status across two turns
+  // and the second turn never announces its completion (ct-49533).
+  const settled = status === "idle" || SETTLE_VERDICT_STATUSES.has(status);
+  syncService.updateSessionAgentStatus(
+    conversationId, status, clientTs, permissionMode, withTasks ? openTasks : undefined, presumed, opts?.hibernatedAt,
+    { sessionBoundary: opts?.sessionBoundary, turnCompletedAt: settled ? turnCompletedAtBySession.get(sessionId) : undefined },
+  ).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
 }
 
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
@@ -1889,6 +1977,9 @@ function startHookServer(): http.Server {
       const permissionMode = url.searchParams.get("permission_mode") as PermissionMode | undefined;
       const message = url.searchParams.get("message") || undefined;
       const transcriptPath = url.searchParams.get("transcript_path") || undefined;
+      const launchToken = url.searchParams.get("launch_token") || undefined;
+      const sessionBoundary = url.searchParams.get("session_boundary") || undefined;
+      const turnCompletedAt = url.searchParams.get("turn_completed_at") || undefined;
 
       if (!sessionId || !status || !ts) {
         res.writeHead(400);
@@ -1907,13 +1998,16 @@ function startHookServer(): http.Server {
         return;
       }
 
-      const data: HookStatusData = {
+      const data: HookStatusData = normalizeHookStatus({
         status,
         ts: parseInt(ts, 10),
         ...(permissionMode && { permission_mode: permissionMode }),
         ...(message && { message }),
         ...(transcriptPath && { transcript_path: transcriptPath }),
-      };
+        ...(launchToken && { launch_token: launchToken }),
+        ...(sessionBoundary && { session_boundary: sessionBoundary }),
+        ...(turnCompletedAt && { turn_completed_at: turnCompletedAt }),
+      });
 
       if (hookStatusGate.deliver(sessionId, data) === "delivered") {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -4932,9 +5026,13 @@ async function executeRemoteCommand(
         // index. Same shell-safe token rule as the stable env above.
         const wtEnvRaw = worktreeEnvPrefix(cwd);
         const wtEnv = wtEnvRaw ? ` ${wtEnvRaw}` : "";
+        // Which launch this pane is running (ct-49532): recorded before the
+        // command is built, so a hook post from the process that occupied this
+        // pane before now carries a superseded token and is dropped.
+        const launchTokenEnvPart = launchTokenEnv(launchTokenLedger().issue(tmuxSession, assignedClaudeSessionId || undefined));
         const envPrefix = worktreeResult
-          ? `${AGENT_ENV_SCRUB} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
-          : `${AGENT_ENV_SCRUB}${wtEnv}${stableEnv}`;
+          ? `${AGENT_ENV_SCRUB}${launchTokenEnvPart} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
+          : `${AGENT_ENV_SCRUB}${launchTokenEnvPart}${wtEnv}${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -6210,7 +6308,7 @@ async function executeRemoteCommand(
             // `claude` that fell into the project's dontAsk default — the agent
             // came back stranded with every tool denied.
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
-            const blankCmdText = `${AGENT_ENV_SCRUB} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -11335,7 +11433,9 @@ async function hookClaimsForPid(pid: number, opts?: { fresh: true; registryDir?:
             const reg = JSON.parse(await fs.promises.readFile(full, "utf-8"));
             if (!isHookRegistration(reg) || typeof reg.pid !== "number" || typeof reg.ts !== "number") continue;
             const list = next.get(reg.pid) ?? [];
-            list.push({ sessionId: file.slice(0, -5), ts: reg.ts });
+            // launch_token: which launch wrote the claim (session-register.sh).
+            // Absent from an older hook script, which reads as unfenced.
+            list.push({ sessionId: file.slice(0, -5), ts: reg.ts, ...(typeof reg.launch_token === "string" && reg.launch_token ? { launchToken: reg.launch_token } : {}) });
             next.set(reg.pid, list);
           } catch {}
         }
@@ -11372,6 +11472,12 @@ async function processDeclaredSession(pid: number): Promise<string | null> {
   return processDeclaredSessionId(await describeProcessIdentity(pid));
 }
 
+/**
+ * True (and logged) when `pid` demonstrably runs a session other than
+ * `sessionId`, or runs the right session under a launch the pane has already
+ * replaced — an orphan of a previous launch is not this session's process even
+ * though it claims the same id (ct-49532).
+ */
 /** The controlling tty of a pid as "/dev/ttysNNN", or "" when it has none. */
 async function ttyOfPid(pid: number): Promise<string> {
   try {
@@ -11383,19 +11489,25 @@ async function ttyOfPid(pid: number): Promise<string> {
   }
 }
 
-/** True (and logged) when `pid` demonstrably runs a session other than `sessionId`,
- *  or started after `registeredAtSec` (epoch seconds) bound it to the session — a
- *  reused pid, which no identity claim can convict when the new process names no
- *  session of its own (registrationPredatesProcess). */
 async function rejectsForeignProcess(sessionId: string, pid: number, via: string, registeredAtSec?: number): Promise<boolean> {
+  const ledger = launchTokenLedger();
   const identity = await describeProcessIdentity(pid);
+  // A pid the OS handed to a new process after the registration bound it to
+  // this session: no identity claim can convict it, because the new process
+  // names no session of its own (ct-49537).
   if (registrationPredatesProcess(registeredAtSec, identity.processStartSec)) {
     log(`[IDENTITY] pid=${pid} (${via}) started after session ${shortId(sessionId)} was bound to it — reused pid, not using it`);
     return true;
   }
-  const { verdict, declared } = judgeProcessIdentity({ sessionId, ...identity });
+  const { verdict, declared, reason } = judgeProcessIdentity({
+    sessionId,
+    ...identity,
+    staleLaunchToken: (token) => ledger.isStaleToken(token),
+  });
   if (verdict !== "foreign") return false;
-  log(`[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
+  log(reason === "stale-token"
+    ? `[IDENTITY] pid=${pid} (${via}) is a superseded launch of ${shortId(sessionId)} — not using it`
+    : `[IDENTITY] pid=${pid} (${via}) runs session ${shortId(declared!)}, not ${shortId(sessionId)} — not using it`);
   return true;
 }
 
@@ -19481,6 +19593,7 @@ export async function conversationForbidsResurrection(
 
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  launchTokenLedger().retirePane(tmuxSession);
   resumeSessionCache.delete(sessionId);
   stopCodexPermissionPoller(sessionId);
   stopManagedSessionHeartbeat(sessionId);
@@ -20282,10 +20395,14 @@ export function resumeReuseCandidates(
 // but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
-export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
-  const prefix = agentType === "claude"
-    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
-    : AGENT_ENV_SCRUB;
+// launchToken names the launch this resume IS (ct-49532). A resume leaves the
+// previous process alive often enough that it is the main way an orphan ends up
+// posting for a pane it no longer owns; the new token is what the daemon fences
+// those posts out with.
+export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToken?: string): string {
+  const token = launchTokenEnv(launchToken);
+  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+    : `${AGENT_ENV_SCRUB}${token}`;
   const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
   return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
@@ -20717,6 +20834,10 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
     }
     try { await tmuxExec(["kill-session", "-t", home]); } catch {}
     await tmuxExec(["rename-session", "-t", tmuxSession, home]);
+    // The occupant's launch moves with it: its token now fences `home`, and the
+    // name it left is retired, so an orphan still posting under the old name is
+    // dropped instead of speaking for the session that takes the name next.
+    launchTokenLedger().relocatePane(tmuxSession, home);
     await setTmuxSessionOption(home, "@codecast_session_id", occupant);
     resumeSessionCache.set(occupant, home);
     sessionProcessCache.delete(occupant);
@@ -21127,7 +21248,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd, launchTokenLedger().issue(tmuxSession, sessionId));
     // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -21759,7 +21880,7 @@ async function startFreshSessionForDelivery(
   // default (which silently denies every tool until the user manually opens
   // permissions). This is the path that strands "started without bypass" threads.
   const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
-  const blankCmdText = `${AGENT_ENV_SCRUB} ${["claude", ...safeBlankArgs].join(" ")}`;
+  const blankCmdText = `${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
@@ -24200,7 +24321,7 @@ export async function readAgentStatusFiles(dir = AGENT_STATUS_DIR): Promise<Arra
     }
     let data: HookStatusData | null = null;
     try {
-      data = JSON.parse(raw) as HookStatusData;
+      data = normalizeHookStatus(JSON.parse(raw) as HookStatusWire);
     } catch {
       data = null;
     }
@@ -25618,12 +25739,23 @@ async function main(): Promise<void> {
     try {
       if (!data.status || !data.ts) return;
 
+      // Which launch is speaking (ct-49532). Both transports land here — the
+      // live push and the replayed status file — so this is the one place the
+      // fence has to hold. The re-entry from the idle hop below carries the
+      // same record, and re-admitting it is free: the verdict is a lookup.
+      if (!admitHookPost(sessionId, data)) return;
+
       const convId = conversationCache[sessionId];
       if (!convId) return;
 
       const prev = lastHookStatus.get(sessionId);
       if (prev && prev.ts > data.ts) return;
-      if (prev && prev.ts === data.ts && prev.status === data.status) return;
+      if (prev && prev.ts === data.ts && prev.status === data.status && !!prev.session_boundary === !!data.session_boundary) return;
+
+      // The Stop hook is the only event that names the end of a lead turn.
+      // Stamp it before the settle resolution below can turn this "idle" into
+      // a "waiting" whose status then stops moving (ct-49533).
+      if (data.turn_completed_at) markTurnCompleted(sessionId, data.turn_completed_at * 1000);
 
       if (deferHibernationHookStop(sessionId, data.status, () => handleStatusData(sessionId, data, filePath, opts))) return;
 
@@ -25641,7 +25773,7 @@ async function main(): Promise<void> {
       // the ts guards above drop this idle if a newer status landed
       // meanwhile, and the persist keeps the on disk record equal to what
       // lastHookStatus holds.
-      if (data.status === "idle" && !opts?.primed) {
+      if (data.status === "idle" && !opts?.primed && !data.session_boundary) {
         const transcript = data.transcript_path || claudeTranscriptFor(sessionId);
         if (transcript) {
           const settle = data;
@@ -25689,7 +25821,11 @@ async function main(): Promise<void> {
       // Monitor) is "waiting", not "idle": the harness will re-invoke the agent
       // when the task ends, so the ball is not in the user's court and the
       // session must not route into needs-input.
-      if (data.status === "idle") {
+      //
+      // A session boundary is exempt: no turn ended, so there is no verdict to
+      // derive and no open-task report to publish — and the transcript scan a
+      // resume would otherwise pay for is pure waste.
+      if (data.status === "idle" && !data.session_boundary) {
         const settled = resolveTurnEndStatus(
           sessionId,
           data.transcript_path ? { path: data.transcript_path, agentType: "claude" } : undefined,
@@ -25700,6 +25836,14 @@ async function main(): Promise<void> {
 
       const statusChanged = !prev || prev.status !== data.status;
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
+      // The KIND of the settle can move while its status does not: a boundary
+      // idle followed by a real idle, or two turns of a background-task session
+      // that both settle as "waiting". Both must reach the server, or the real
+      // settle inherits the boundary's exemption and the second turn never
+      // announces (ct-49533).
+      const settleKindChanged =
+        !!prev?.session_boundary !== !!data.session_boundary ||
+        (prev?.turn_completed_at ?? 0) !== (data.turn_completed_at ?? 0);
       // Keep the open task scan offset at the turn's edge while the agent
       // works (one stat when warm; the read runs under the prime semaphore),
       // so the Stop hook's sync scan covers only the turn's delta.
@@ -25763,8 +25907,25 @@ async function main(): Promise<void> {
       }
 
       publishHookStatus(syncService, convId, sessionId, data, statusChanged, !!modeChanged);
-      if (data.status === "stopped" && statusChanged && filePath) {
-        try { fs.unlinkSync(filePath); } catch {}
+      if (statusChanged || modeChanged || settleKindChanged || pendingOpenTasksChanged(sessionId)) {
+        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode, undefined, { sessionBoundary: data.session_boundary });
+        log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
+      } else {
+        // Nothing sent, so the open-task report the settle computed must not
+        // wait around to ride an unrelated later status.
+        pendingOpenTaskReports.delete(sessionId);
+      }
+
+      if (data.status === "stopped" && statusChanged) {
+        const restartTs = restartingSessionIds.get(sessionId);
+        if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
+          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
+          if (filePath) try { fs.unlinkSync(filePath); } catch {}
+        } else {
+          log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
+          syncService.markSessionCompleted(convId).catch(logConvexFailure);
+          if (filePath) try { fs.unlinkSync(filePath); } catch {}
+        }
       }
 
       if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
@@ -25872,7 +26033,7 @@ async function main(): Promise<void> {
     const sessionId = path.basename(filePath, ".json");
     if (!sessionId || !filePath.endsWith(".json")) return;
     fs.promises.readFile(filePath, "utf-8")
-      .then((raw) => handleStatusData(sessionId, JSON.parse(raw) as HookStatusData, filePath))
+      .then((raw) => handleStatusData(sessionId, normalizeHookStatus(JSON.parse(raw) as HookStatusWire), filePath))
       .catch(() => {});
   }
 

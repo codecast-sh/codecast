@@ -5,33 +5,17 @@ import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
-import { registerWorkspaceCommand } from "./workspace/cli.js";
+import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
-import { registerRemoteCommand } from "./remote/cli.js";
-import { registerCloudCommand } from "./cloud/cli.js";
 import { ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
-import { registerHostsCommand } from "./hosts/cli.js";
-import { registerMigrateCommand } from "./migrate/cli.js";
-import { registerPublishCommand } from "./publish.js";
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { registerCapabilityCommand } from "./capabilities/cli.js";
-import { registerDecideCommand } from "./decideCommand.js";
-import { registerImageCommand } from "./imageCommand.js";
-import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
-import { registerIntegrationsCommand } from "./integrations.js";
 import { registerPrCommand, readLocalGitContext } from "./prCommand.js";
-import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
-import { registerBrowserCommand } from "./browser/cli.js";
-import { registerAppCommand } from "./app/cli.js";
-import { registerComputerCommand } from "./computer/cli.js";
-import { registerExecCommand } from "./execCommand.js";
-import { registerGuideCommand } from "./guide.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -105,6 +89,8 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
+import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -3008,11 +2994,33 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
 // | head -1)` picked up jx7c6zk, the placeholder short id in cast own's own
 // examples, and tried to own a session that never existed. Help goes to stderr
 // here for the same reason: nothing usable may reach stdout on a failure.
+// The suggestion line is bounded by the same reason: it names only siblings at
+// the level the unknown token sits on, and never a destructive command unless
+// the token is a near-miss of that command (commandSuggestion.ts). ct-49545.
 function failUnknownCommand(operands: string[]): never {
   console.error(`error: unknown command '${operands[0]}'`);
+  const nextStep = unknownCommandNextStep(commandTree(program), operands);
+  if (nextStep) console.error(nextStep);
   console.error(`Run 'cast --help' for the list of commands.`);
   process.exit(1);
 }
+
+// Groups never reach failUnknownCommand — commander answers their unknown
+// subcommands itself, and its built-in ranking is pure string similarity, so
+// `cast doc delta` was answered with "(Did you mean delete?)" and
+// `cast workspace estry` with "(Did you mean destroy?)". Route every level of
+// the tree through the same guarded suggester the root uses, so no depth can
+// hand a typo an irreversible verb. Everything else about the error — exit
+// code, the group's own help — stays commander's. ct-49545.
+// (unknownCommand is commander's own hook; it is not in its published types.)
+(Command.prototype as Command & { unknownCommand: (this: Command) => void }).unknownCommand =
+  function unknownCommand(this: Command): void {
+    const typed = String(this.args[0] ?? "");
+    const groupPath: string[] = [];
+    for (let cmd: Command | null = this; cmd?.parent; cmd = cmd.parent) groupPath.unshift(cmd.name());
+    const nextStep = unknownCommandNextStep(commandTree(program), [...groupPath, typed]);
+    this.error(`error: unknown command '${typed}'${nextStep ? `\n${nextStep}` : ""}`);
+  };
 
 program
   .name("cast")
@@ -3030,24 +3038,24 @@ program
     program.outputHelp();
   });
 
-registerWorkspaceCommand(program);
-registerRemoteCommand(program);
-registerCloudCommand(program);
-registerHostsCommand(program);
-registerMigrateCommand(program);
-registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerCapabilityCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerIntegrationsCommand(program, { getCliEndpoint, detectCurrentSessionId, resolveProjectId });
-registerPrCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
-registerComputerCommand(program);
-registerExecCommand(program);
-registerGuideCommand(program);
+/** The "your pinned state is stale" nudge after a work write. Behind a dynamic
+ *  import so `cast state`'s module is paid for by the handful of commands that
+ *  nudge, not by every invocation of the CLI. ct-49546. */
+const warnIfThreadStateStale = () =>
+  import("./stateCommand.js").then((m) => m.warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId }));
+
+// Every heavy group as a placeholder carrying its name, aliases and
+// description, so `cast --help` and a typo read a complete tree for the price
+// of one leaf module. The group argv actually names is swapped in for its real
+// registration just before parse (commandGroups.ts). ct-49546.
+registerGroupStubs(program);
+
+/** What every group's register function is handed. One copy, because both
+ *  callers — the group argv names, and `cast agent-context` loading all of them
+ *  — must hand over the same thing. ct-49547. */
+function groupDeps(): GroupDeps {
+  return { getCliEndpoint, detectCurrentSessionId, resolveProjectId };
+}
 
 program
   .command("auth")
@@ -5471,9 +5479,8 @@ program
     row("Live", fleetCountText(healthState?.fleetCounts, "live"), 2);
     row("Hibernated", fleetCountText(healthState?.fleetCounts, "hibernated"), 2);
     console.log("");
+    const daemonState = healthState;
     const freezeState = healthState?.loopFreeze;
-    const daemonState = readDaemonState();
-    const freezeState = daemonState?.loopFreeze;
     console.log(`  ${fmt.muted("Event Loop")}`);
     // A hang outlives the daemon that suffered it: the freeze probe leaves a
     // marker on disk and the next boot folds it into the state file, so a stall
@@ -5598,10 +5605,27 @@ function doctorDeps(config: Config & { auth_token: string; convex_url: string })
   };
 }
 
+// The command surface, read off the tree commander dispatches against, so an
+// agent discovers `cast` from the binary instead of from prose that drifts.
+// The one caller of activateAllGroups: the dump has to describe every lazy
+// group, and no ordinary run may pay for that. Needs no auth and no daemon —
+// it is in internalCmds below for that reason. ct-49547.
+program
+  .command("agent-context")
+  .description("Print every cast command as JSON: paths, aliases, flags, arguments, and which are destructive")
+  .option("--json", "Print the full machine-readable command surface")
+  .action(async (options: { json?: boolean }) => {
+    const { activateAllGroups } = await import("./commandGroups.js");
+    await activateAllGroups(program, groupDeps());
+    const { buildAgentContext, formatAgentContextSummary } = await import("./agentContext.js");
+    const context = buildAgentContext(program, getVersion());
+    console.log(options.json ? JSON.stringify(context, null, 2) : formatAgentContextSummary(context));
+  });
+
 program
   .command("bench", { hidden: true })
-  .description("Measure the live daemon: loop lag, loopback route latency, the daemon.log freeze report, and an optional pane load")
-  .argument("<target>", "what to bench (daemon)")
+  .description("Measure the live daemon (loop lag, route latency, the daemon.log freeze report, an optional pane load), or CLI boot (import graph and CPU per invocation)")
+  .argument("<target>", "what to bench (daemon | boot)")
   .option("--duration <seconds>", "observation window, also the churn window under load", "60")
   .option("--load <n>", "spawn N stand-in agent panes against the live daemon")
   .option("--sample <k>", "panes to sample for delivery round trips", "5")
@@ -5610,9 +5634,41 @@ program
   .option("--json", "Print the JSON report instead of the markdown table")
   .option("--keep", "Keep the load panes, transcripts, and server conversations")
   .option("--project-dir <path>", "Scratch project dir for the load transcripts (must be syncable)")
+  .option("--runs <n>", "boot: timed runs per command (the median is reported)", "9")
+  .option("--binary <path>", "boot: time this compiled binary instead of the source entry (the import graph is still read from source)")
   .action(async (target: string, options: any) => {
+    if (target === "boot") {
+      // Needs no auth, no daemon and no network: it spawns this CLI with an
+      // empty HOME and measures the CPU it burns before it can answer, next to
+      // the static import graph that explains the number. The graph walk reads
+      // source, so this one runs from a checkout, not from the binary. ct-49546.
+      const srcDir = path.dirname(fileURLToPath(import.meta.url));
+      const entry = path.join(srcDir, "index.ts");
+      if (!fs.existsSync(entry)) {
+        console.error("cast bench boot reads the source tree; run it from a checkout (bun run src/main.ts bench boot)");
+        process.exit(1);
+      }
+      // --binary times a compiled artifact. The source path and the binary
+      // share one entry graph, so the graph half of the report still explains
+      // the clock; what changes is whether the clock includes the code
+      // splitting the compile step does (ct-49751).
+      const binary = options.binary ? path.resolve(options.binary) : undefined;
+      if (binary && !fs.existsSync(binary)) {
+        console.error(`no such binary: ${binary}`);
+        process.exit(1);
+      }
+      const { runBootBench, renderBootBench } = await import("./bench/bootBench.js");
+      const report = runBootBench({
+        entry,
+        runner: binary ? [binary] : [process.execPath, path.join(srcDir, "main.ts")],
+        cwd: srcDir,
+        runs: Number.parseInt(options.runs, 10),
+      });
+      console.log(options.json ? JSON.stringify(report, null, 2) : renderBootBench(report));
+      process.exit(0);
+    }
     if (target !== "daemon") {
-      console.error(`unknown bench target: ${target} (only "daemon")`);
+      console.error(`unknown bench target: ${target} (daemon | boot)`);
       process.exit(1);
     }
     const deps = doctorDeps(requireAuthedConfig());
@@ -9116,18 +9172,7 @@ program
   .option("--keep-config", "Keep ~/.codecast config directory")
   .option("-y, --yes", "Skip confirmation prompt")
   .action(async (options) => {
-    if (!options.yes) {
-      const rl = await import("readline");
-      const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        iface.question("This will remove cast, its daemon, auto-start config, and all local data. Continue? [y/N] ", resolve);
-      });
-      iface.close();
-      if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
-        console.log("Aborted");
-        process.exit(0);
-      }
-    }
+    await requireDestructiveConfirm(["uninstall"], { yes: options.yes });
 
     const home = process.env.HOME || "";
 
@@ -12185,10 +12230,10 @@ const EVENT_NAMES = TRIGGER_EVENT_NAMES.join(", ");
  * so the checkout's origin fills in --repo when the flag is absent. Pass
  * `--repo ""` to watch every repository on purpose.
  */
-function buildEventFilter(
+async function buildEventFilter(
   eventName: string,
   opts: { repo?: string; pr?: string },
-): { event_type: string; action?: string; repository?: string; pr_number?: number } {
+): Promise<{ event_type: string; action?: string; repository?: string; pr_number?: number }> {
   const shorthand = EVENT_SHORTHANDS[eventName];
   if (!shorthand) {
     console.error(`Unknown event: ${eventName}. Valid: ${EVENT_NAMES}`);
@@ -12215,7 +12260,7 @@ function buildEventFilter(
   const repository = opts.repo !== undefined
     ? opts.repo
     : isPrTriggerEvent(eventName)
-      ? (readLocalGitContext().repository ?? undefined)
+      ? ((await import("./prCommand.js")).readLocalGitContext().repository ?? undefined)
       : undefined;
   if (repository) filter.repository = repository;
 
@@ -12909,7 +12954,7 @@ trigger
       run_at = Date.now() + interval_ms;
     } else if (options.on) {
       schedule_type = "event";
-      event_filter = buildEventFilter(options.on, options);
+      event_filter = await buildEventFilter(options.on, options);
     } else if (options.in) {
       const delay = parseDuration(options.in);
       if (!delay) {
@@ -13309,7 +13354,7 @@ trigger
       body.interval_ms = interval;
     } else if (options.on) {
       body.schedule_type = "event";
-      body.event_filter = buildEventFilter(options.on, options);
+      body.event_filter = await buildEventFilter(options.on, options);
     } else if (options.in) {
       const delay = parseDuration(options.in);
       if (!delay) {
@@ -13731,6 +13776,7 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
   try {
     result = JSON.parse(text);
   } catch {
+    const { missingRouteError } = await import("./castApi.js");
     const missing = missingRouteError(urlPath, response.status);
     console.error(missing ? `Error: ${missing}` : `API error (${response.status}): ${text.slice(0, 200)}`);
     process.exit(1);
@@ -14401,7 +14447,7 @@ work
       console.log(`${c.green}ok${c.reset} spawned ${c.cyan}${spawned.sessionId}${c.reset} for ${c.cyan}${shortId}${c.reset}`);
       console.log(`  ${c.dim}${link}${c.reset}`);
     }
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 work
@@ -14433,7 +14479,7 @@ work
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
     if (sessionId) clearTaskPulseIfBound(sessionId, shortId);
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 work
@@ -14516,7 +14562,7 @@ work
     }
     await cliPost("/cli/work/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${shortId}${c.reset}`);
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 work
@@ -15357,11 +15403,7 @@ doc
   .argument("<id>", "Document ID")
   .option("--yes", "Confirm deletion (required)")
   .action(async (id: string, options: any) => {
-    if (!options.yes) {
-      console.error(`This permanently deletes the document. Re-run with --yes to confirm:`);
-      console.error(`  cast doc delete ${id} --yes`);
-      process.exit(1);
-    }
+    await requireDestructiveConfirm(["doc", "delete"], { yes: options.yes, args: [id] });
     await cliPost("/cli/docs/delete", { id });
     console.log(`${c.green}ok${c.reset} Deleted ${c.cyan}${id}${c.reset}`);
   });
@@ -15742,7 +15784,7 @@ plan
     if (options.author) body.author = options.author;
     await cliPost("/cli/plans/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
-    await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
+    await warnIfThreadStateStale();
   });
 
 plan
@@ -18300,7 +18342,7 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
-  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update'];
+  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update', 'agent-context'];
   if (!internalCmds.includes(cmdName)) {
     logCliCommand(cmdName, args);
     ensureDaemonRunning();
@@ -18336,5 +18378,15 @@ if (runFastPath(process.argv)) {
 } else {
   ensureCastAlias();
   autoBindFromEnv();
-  program.parse();
+  // The one command group argv names replaces its placeholder before commander
+  // sees anything, so parsing, the preAction hook and the unknown-subcommand
+  // suggester all run against the real command — and no other group is loaded.
+  // A verb with no group (`cast send`), `cast --help` and a typo resolve to
+  // nothing here and pay for no group at all. ct-49546.
+  activateGroup(program, groupTokenInArgv(process.argv), groupDeps())
+    .then(() => program.parse())
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
 }

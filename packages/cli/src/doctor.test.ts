@@ -13,6 +13,8 @@ import { writeDaemonExitStamp, writeHangMarker, type HangMarker } from "./daemon
 import { parseSessionFile } from "./parser.js";
 import { TEST_SCRATCH_DIRNAME } from "./syncScope.js";
 import type { Config } from "./config/types.js";
+import type { ProcRow } from "./processTable.js";
+import type { killProcessTree } from "./processTable.js";
 
 const baseConfig = { auth_token: "t", convex_url: "https://x.example" } as unknown as Config;
 
@@ -204,13 +206,13 @@ describe.skipIf(!runtime)("doctor stub agent", () => {
 describe("doctor tmux reap safety", () => {
   test.each([null, 0, NaN])("refuses an unknown live server PID %s", async livePid => {
     const { checkDoctorTmuxServers } = await import("./doctor.js");
-    const killed: number[][] = [];
+    const killed: ProcRow[][] = [];
     const result = await checkDoctorTmuxServers({ reapTmux: true }, [], {
       snapshotProcessTable: () => [{ pid: 100, ppid: 1, uid: 501, command: "tmux new-session" }],
       liveTmuxServerPid: async () => livePid,
       uid: () => 501,
       selfPid: 999,
-      killProcessTree: async pids => { killed.push(pids); return { terminated: 0, killed: 0 }; },
+      killProcessTree: (async targets => { killed.push(targets); return { terminated: 0, killed: 0 }; }) as typeof killProcessTree,
     });
     expect(killed).toEqual([]);
     expect(result).toMatchObject({ skip: true, detail: "tmux reap skipped: tmux-unreachable" });
@@ -218,13 +220,13 @@ describe("doctor tmux reap safety", () => {
 
   test("refuses an unknown user", async () => {
     const { checkDoctorTmuxServers } = await import("./doctor.js");
-    const killed: number[][] = [];
+    const killed: ProcRow[][] = [];
     const result = await checkDoctorTmuxServers({ reapTmux: true }, [], {
       snapshotProcessTable: () => [{ pid: 100, ppid: 1, uid: 501, command: "tmux new-session" }],
       liveTmuxServerPid: async () => 100,
       uid: () => undefined,
       selfPid: 999,
-      killProcessTree: async pids => { killed.push(pids); return { terminated: 0, killed: 0 }; },
+      killProcessTree: (async targets => { killed.push(targets); return { terminated: 0, killed: 0 }; }) as typeof killProcessTree,
     });
     expect(killed).toEqual([]);
     expect(result).toMatchObject({ skip: true, detail: "tmux reap skipped: owner-unknown" });
@@ -233,14 +235,14 @@ describe("doctor tmux reap safety", () => {
   test("preserves the hosting server, live server, foreign users and ownerless processes", async () => {
     const { checkDoctorTmuxServers } = await import("./doctor.js");
     const { parseProcessTable } = await import("./processTable.js");
-    const killed: number[][] = [];
+    const killed: ProcRow[][] = [];
     const cleanup: string[] = [];
     const result = await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
       snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 bun doctor\n300 1 502 tmux new-session\n400 1 tmux new-session"),
       liveTmuxServerPid: async () => 100,
       uid: () => 501,
       selfPid: 201,
-      killProcessTree: async pids => { killed.push(pids); return { terminated: 0, killed: 0 }; },
+      killProcessTree: (async targets => { killed.push(targets); return { terminated: 0, killed: 0 }; }) as typeof killProcessTree,
     });
     expect(killed).toEqual([]);
     expect(cleanup).toEqual([]);
@@ -251,16 +253,16 @@ describe("doctor tmux reap safety", () => {
   test("only reaps a positively identified stale generation", async () => {
     const { checkDoctorTmuxServers } = await import("./doctor.js");
     const { parseProcessTable } = await import("./processTable.js");
-    const killed: number[][] = [];
+    const killed: ProcRow[][] = [];
     const cleanup: string[] = [];
     await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
       snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 claude"),
       liveTmuxServerPid: async () => 100,
       uid: () => 501,
       selfPid: 999,
-      killProcessTree: async pids => { killed.push(pids); return { terminated: pids.length, killed: 0 }; },
+      killProcessTree: (async pids => { killed.push(pids); return { terminated: pids.length, killed: 0 }; }) as typeof killProcessTree,
     });
-    expect(killed).toEqual([[201, 200]]);
+    expect(killed.map(rows => rows.map(r => r.pid))).toEqual([[201, 200]]);
     expect(cleanup).toEqual(["reaped stale tmux server(s) 200"]);
   });
 });

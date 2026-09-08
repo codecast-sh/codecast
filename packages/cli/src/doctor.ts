@@ -246,7 +246,7 @@ export async function checkDoctorTmuxServers(
   }
   let killed = 0;
   for (const s of stale) {
-    const r = await io.killProcessTree([...s.tree, s.pid]);
+    const r = await io.killProcessTree([...s.tree, s.row]);
     killed += r.terminated + r.killed;
   }
   cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
@@ -558,32 +558,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   if (hasBin("tmux")) {
     passive.push({
       name: "tmux servers",
-      run: async () => {
-        const procs = snapshotProcessTable();
-        // This check kills process trees under --reap-tmux, so it looks at the
-        // servers this user owns and nothing else — the same list the daemon's
-        // hourly sweep acts on.
-        const stale = findStaleTmuxServers(procs, await liveTmuxServerPid(), process.getuid?.());
-        if (stale.length === 0) return { ok: true, detail: "one server on the default socket" };
-        const trees = stale.reduce((n, s) => n + s.tree.length, 0);
-        const agents = stale.reduce((n, s) => n + s.agents, 0);
-        const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux`;
-        if (!opts.reapTmux) {
-          return { ok: false, warn: true, detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` };
-        }
-        let killed = 0;
-        let left = 0;
-        for (const s of stale) {
-          const r = await killProcessTree([...s.tree, s.row]);
-          killed += r.terminated + r.killed;
-          // A survivor whose pid, start time and process group no longer agree
-          // is not ours to SIGKILL — the pid was recycled while we waited.
-          left += r.unverified;
-        }
-        cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
-        const leftover = left > 0 ? `, left ${left} whose identity no longer matched` : "";
-        return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)${leftover}` };
-      },
+      run: () => checkDoctorTmuxServers(opts, cleanup),
     });
   }
 
@@ -634,7 +609,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
           return { ok: false, warn: true, detail: "an interrupted bundle swap is pending repair — run `cast computer capabilities`" };
         }
         if (!helper.materialized) {
-          return { ok: true, skip: true, detail: "not set up yet (`cast computer capabilities` materializes it)" };
+          return { ok: true, skip: true, detail: "not set up yet (`cast computer setup` installs it and grants it)" };
         }
         if (!helper.atFixedPath) {
           return { ok: false, detail: `helper is not at its fixed path (${helper.appPath}); TCC grants will not survive updates` };
@@ -647,15 +622,16 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         }
         const status = await getPermissionStatus().catch(() => null);
         const missing = status?.permissions.filter((p) => p.status !== "granted") ?? [];
-        if (!status) return { ok: false, warn: true, detail: "Developer ID signed; could not read its permissions — run `cast computer permissions`" };
+        if (!status) return { ok: false, warn: true, detail: "Developer ID signed; could not read its permissions — run `cast computer setup`" };
         if (missing.length) {
           const names = missing.map((p) => (p.id === "accessibility" ? "Accessibility" : "Screen Recording")).join(" and ");
           // Bare `permissions` reads and shows nothing (ct-49667), so naming it
           // here sent a human to a command that could not fix the line they
-          // came to fix. `--open-settings` is what opens the pane; with no
-          // `--id` the helper shows both, which is right when both are missing.
-          const which = missing.length === 1 ? ` --id ${missing[0]!.id}` : "";
-          return { ok: false, warn: true, detail: `${names} not granted; run \`cast computer permissions --open-settings${which}\` to open System Settings and grant` };
+          // came to fix. `setup` is the one that can: it says what each grant
+          // allows, opens the pane for each missing one, and waits for it
+          // (ct-49790). A doctor line is read by a human at a terminal, which
+          // is exactly the caller `setup` is written for.
+          return { ok: false, warn: true, detail: `${names} not granted; run \`cast computer setup\` to grant` };
         }
         return { ok: true, detail: `${HELPER_BUNDLE_ID}, Developer ID signed, Accessibility and Screen Recording granted` };
       },

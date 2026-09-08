@@ -75,6 +75,37 @@ Destroying a workspace removes these links first. A directory-only ignore rule
 worktree's symlink, so git reports the link as untracked and refuses to remove
 the worktree without `--force`.
 
+### Approval — what runs needs a person's yes
+
+`install`, `generate`, `migrate` and `[teardown] run` are shell commands from a
+file in the repo, and the scripts in `.codecast/hooks/` are the same thing in
+script form. A pull can change any of them, and the next acquire would run the
+new version with no prompt.
+
+So codecast records a sha256 of each hook script and each command list the
+first time a person acquires the workspace, and refuses every acquire after one
+of them changes. The refusal names the file and shows the lines that differ.
+Review the change, then approve it:
+
+```
+cast ws trust             # approve everything as it is on disk now
+cast ws trust --list      # what is approved, and what changed
+cast ws trust after-create   # approve one script or slot
+cast ws trust --revoke    # forget every approval for this repo
+```
+
+`cast ws acquire --trust` approves and acquires in one step.
+
+Two rules make the record worth keeping. An agent-driven acquire — the daemon
+creating a worktree for a session, the warm pool building a slot, any `cast`
+run inside an agent session — never approves anything by itself; it gets the
+same refusal until a person runs `cast ws trust`. And the record lives in
+`~/.codecast/workspace-trust.json`, never in the repo, so nothing in the repo
+can approve itself in the commit that changed it.
+
+Commands that come from detection rather than from this file need no approval:
+a `bun install` inferred from a lockfile is codecast's, not the repo's.
+
 ## `[ports.<name>]`
 
 A named port per workspace, exported as `PORT_<NAME>`. The actual port is
@@ -111,6 +142,13 @@ Static environment variables exported into every setup command and hook.
 [env]
 NODE_ENV = "development"
 ```
+
+Codecast exports its own names on top of these, and those always win — a
+manifest cannot redefine them. A hook script gets `CODECAST_HOOK`,
+`CODECAST_ROOT_PATH` (the main checkout the worktree was cut from),
+`CODECAST_WORKTREE_PATH`, `CODECAST_WORKTREE_NAME`, `CODECAST_BRANCH`,
+`CODECAST_RESOURCE_INDEX`, `CODECAST_PARENT_BRANCH`, and both
+`CODECAST_PORT_<NAME>` and `PORT_<NAME>` for every named port.
 
 ## `[teardown]`
 

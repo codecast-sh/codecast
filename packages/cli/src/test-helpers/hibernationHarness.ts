@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import * as policy from "../hibernation.js";
 import { functionBlock } from "./sourceRegion.js";
 
@@ -35,7 +35,7 @@ export function createHibernationHarness() {
     throw new Error(`Unexpected IO: ${kind}`);
   };
   const deps = {
-    ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES,
+    ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES,
     isSupersededAppServerSession: () => false,
     serializeSessionStatus: (_id: string, fn: () => Promise<unknown>) => fn(),
     hasTmux: () => true,
@@ -57,6 +57,7 @@ export function createHibernationHarness() {
     "resumeSessionCache", "lastSentAgentStatus", "lastResumeAt", "lastHeartbeatLogged", "subagentActivityByParent",
     "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
     "lastAgentStatusSentAt",
+    "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt", "turnCompletedAtBySession",
     "pendingOpenTaskReports", "lastOpenTasksSentAt", "lastOpenTasksSentJson", "tmuxTargetLocks",
     "hibernationInFlight", "hibernationEvidenceJobs", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared",
   ].map((name) => `const ${name} = new Map();`).join("\n");
