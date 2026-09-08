@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireStartLock, probeLiveness, readState, writeState, type InstanceState, chromeLaunchArgs} from "./instance.js";
+import { acquireStartLock, probeLiveness, readState, strayPids, writeState, type InstanceState, chromeLaunchArgs} from "./instance.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 import { browserHome } from "./profile.js";
 
@@ -268,5 +268,15 @@ describe("chromeLaunchArgs", () => {
     expect(args).toContain("--disable-backgrounding-occluded-windows");
     expect(args).toContain("--disable-renderer-backgrounding");
     expect(args).not.toContain("--disable-background-timer-throttling");
+  });
+});
+
+describe("strayPids", () => {
+  test("a profile nobody holds has no strays, including the lookup's own shell", () => {
+    // Running pgrep through a shell puts the pattern in that shell's argv, so
+    // the lookup matches itself: `killStrays` then shoots its own shell and
+    // `waitForStraysGone` never reaches zero. macOS hides it (its `sh` execs a
+    // lone simple command and is gone); Debian's `sh` stays (ct-49945).
+    expect(strayPids(path.join(os.tmpdir(), "codecast-chrome-nobody-here"))).toEqual([]);
   });
 });

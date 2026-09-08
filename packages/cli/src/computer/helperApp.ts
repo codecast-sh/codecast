@@ -316,12 +316,20 @@ export interface MaterializeResult {
 /**
  * Put the embedded helper at the fixed path, replacing whatever is there when
  * the payload changed. Callers hold the prepare lock.
+ *
+ * `payload` names the bytes to install instead of the embedded ones. Nothing
+ * in the CLI passes it; the whole extract, verify, swap and stamp chain is
+ * only reachable from a real tar, and `helper.tar` is empty in a checkout, so
+ * the alternative was replacing `helperPayload.js` with `mock.module` — which
+ * bun installs process-wide and never lifts, so every later suite in the run
+ * inherits it (ct-49918, ct-49941). A parameter is the same seam with no blast
+ * radius.
  */
-export function materializeHelperApp(opts: { version?: string } = {}): MaterializeResult {
+export function materializeHelperApp(opts: { version?: string; payload?: Buffer } = {}): MaterializeResult {
   if (process.platform !== "darwin") {
     throw new ComputerError("unsupported_capability", "cast computer runs on macOS only");
   }
-  const payload = computerHelperTar();
+  const payload = opts.payload ?? computerHelperTar();
   if (!payload) {
     // Why: this used to throw before it ever looked at the fixed path, so a
     // machine with a valid, signed and already GRANTED helper installed could

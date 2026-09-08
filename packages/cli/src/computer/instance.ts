@@ -19,7 +19,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../atomicWrite.js";
 import { acquireFileLock } from "../lockFile.js";
-import { execSync } from "../proc.js";
+import { execFileSync } from "../proc.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { readState, writeState } from "../browser/instance.js";
 import { computerHome } from "./helperApp.js";
@@ -147,7 +147,14 @@ export function acquireStartLock(waitMs = 30_000, onWait?: (holderPid: number) =
  */
 export function strayHelperPids(socketDir: string): number[] {
   try {
-    const out = execSync(`pgrep -f -- ${JSON.stringify(`--agent ${socketDir}`)}`, {
+    // Run pgrep DIRECTLY, never through a shell. `execSync` spawns `/bin/sh -c
+    // pgrep -f -- "--agent <dir>"`, and that shell's own argv carries the
+    // pattern, so pgrep matches it and every call reports a stray. macOS hides
+    // the bug because its `sh` execs a lone simple command and so is gone by
+    // the time pgrep reads the process table; Debian's `sh` stays and matches.
+    // The cost was not cosmetic: `discardSocketDir` bails on any stray, so off
+    // macOS no stale socket directory was ever removed.
+    const out = execFileSync("pgrep", ["-f", "--", `--agent ${socketDir}`], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     });
