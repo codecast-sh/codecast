@@ -187,3 +187,40 @@ describe("buildAgentContext", () => {
     expect(summary).toContain("cast agent-context --json");
   });
 });
+
+describe("the dump survives a pipe", () => {
+  // Regression for ct-49907. stdout to a pipe is asynchronous, and the runtime
+  // exits once the event loop drains, so a ~580KB payload printed with
+  // console.log lost whatever the pipe had not accepted — the same run
+  // redirected to a FILE was complete, which is why it hid for so long. Every
+  // programmatic reader of this command gets a pipe, so a truncated document
+  // was the normal case for the audience the command exists for.
+  //
+  // The assertion is deliberately the parse, not a byte count: a length pin
+  // would drift with every command added, while "a consumer can read it" is
+  // the property that was broken.
+  test("a piped run returns one complete JSON document", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-agent-context-pipe-"));
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    try {
+      // `sh -c … | cat` rather than a direct spawn: a captured stdout is a pipe
+      // either way, but going through a second process is the shape a caller
+      // actually uses and the one that truncated.
+      const entry = path.join(import.meta.dir, "main.ts");
+      const result = spawnSync("/bin/sh", ["-c", `"${process.execPath}" "${entry}" agent-context --json | cat`], {
+        env: { ...process.env, ...PINNED_ENV, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), NO_COLOR: "1", CODECAST_NO_AUTO_UPDATE: "1" },
+        encoding: "utf-8",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: 300_000,
+      });
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(result.stdout) as AgentContext;
+      // The tail of the document, so a truncation cannot pass by parsing a
+      // prefix that happens to close.
+      expect(parsed.commands.length).toBeGreaterThan(0);
+      expect(result.stdout.trimEnd().endsWith("}")).toBe(true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 300_000);
+});
