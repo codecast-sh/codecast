@@ -560,6 +560,11 @@ function FileHeaderName({
   );
 }
 
+function FilePatchDiff({ patch, ...props }: { patch: string } & Omit<React.ComponentProps<typeof DiffView>, "hunks">) {
+  const { hunks } = useMemo(() => parsePatch(patch), [patch]);
+  return <DiffView {...props} hunks={hunks} />;
+}
+
 function FileDiffContent({
   file,
   onComment,
@@ -658,8 +663,6 @@ function FileDiffContent({
     );
   }
 
-  const { hunks } = parsePatch(file.patch);
-
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
       <div className="sticky top-0 z-10 bg-sol-bg-alt border-b border-sol-border/30 px-3 py-1 flex items-center justify-between">
@@ -695,8 +698,8 @@ function FileDiffContent({
           )}
         </div>
       </div>
-      <DiffView
-        hunks={hunks}
+      <FilePatchDiff
+        patch={file.patch}
         language={language}
         maxLines={100}
         commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
@@ -752,7 +755,6 @@ function UnifiedDiffView({
       {files.map((file, index) => {
         const status = getFileStatus(file.status);
         const language = getFileExtension(file.filename);
-        const patchData = file.patch ? parsePatch(file.patch) : null;
 
         return (
           <div key={file.filename} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`}>
@@ -769,9 +771,9 @@ function UnifiedDiffView({
                 <span className="text-sol-red">-{file.deletions}</span>
               </span>
             </div>
-            {patchData ? (
-              <DiffView
-                hunks={patchData.hunks}
+            {file.patch ? (
+              <FilePatchDiff
+                patch={file.patch}
                 language={language}
                 maxLines={500}
                 commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
