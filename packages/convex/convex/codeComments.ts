@@ -18,6 +18,7 @@ import {
   canAccessPullRequest,
   isTeamMember,
   requireAccessibleTask,
+  workspaceGrantsAccess,
 } from "./lib/access";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { recordExternalEvent } from "./externalEvents";
@@ -49,6 +50,15 @@ export async function canAccessComment(
   comment: Doc<"review_comments">,
 ): Promise<boolean> {
   if (comment.author_user_id && String(comment.author_user_id) === String(userId)) return true;
+
+  // A row carrying a workspace key is decided by it ALONE (ct-49560). Review
+  // notes are the only rows that carry one, and the repository branch below
+  // would otherwise show a note written in a private directory to everyone on
+  // the team that installed the App — the leak the workspace key exists to
+  // prevent (CLAUDE.md, workspace is access).
+  if (typeof comment.workspace === "string" && comment.workspace) {
+    return await workspaceGrantsAccess(ctx, userId, comment.workspace);
+  }
 
   if (comment.pull_request_id) {
     const pr = await ctx.db.get(comment.pull_request_id);
@@ -613,7 +623,9 @@ export const update = mutation({
     if (comment.author_user_id && String(comment.author_user_id) !== String(userId)) {
       throw new Error("Forbidden: only the author may edit a comment");
     }
-    await ctx.db.patch(args.comment_id, { content: args.content, updated_at: Date.now() });
+    // An edited note has not been sent: clearing sent_at puts it back in the
+    // batch so `cast review send` delivers the words the author now means.
+    await ctx.db.patch(args.comment_id, { content: args.content, updated_at: Date.now(), sent_at: undefined });
     return { ok: true };
   },
 });
