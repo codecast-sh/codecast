@@ -488,12 +488,21 @@ describe("registration cost", () => {
     // helper bundle would put that graph on the cost of `cast --help` and of
     // every unrelated verb.
     //
-    // commandGroups.js is the one exception, and it is free: it holds this
-    // group's description (the single copy, which the registration below reads
-    // back), bootGraph.guard.test.ts proves it imports no repo module at all,
-    // and it is already loaded before this file can be — its `load()` is what
-    // imports this file. ct-49848.
-    expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual(["../commandGroups.js"]);
+    // Two modules are exceptions, and both are free for the same reason:
+    // index.ts imports each of them itself, and index.ts is what loads this
+    // file (through the group's `load()`), so both are already in the module
+    // registry before this one can be evaluated. commandGroups.js holds this
+    // group's description, the single copy the registration below reads back
+    // (ct-49848); commandSuggestion.js is the guarded suggester that gives a
+    // typo under `cast computer` a next step (ct-49879).
+    //
+    // The second assertion is what keeps that reasoning true instead of
+    // remembered: drop either import from index.ts and this fails here, where
+    // the carve-out is claimed, rather than quietly costing every verb.
+    const free = ["../commandGroups.js", "../commandSuggestion.js"];
+    expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual(free);
+    const startup = staticImports(path.resolve(import.meta.dir, "..", "index.ts"));
+    for (const module of free) expect(startup).toContain(module.replace("../", "./"));
   });
 
   test("nothing on the CLI's startup path pulls the computer feature in", () => {

@@ -27,7 +27,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
@@ -57,6 +56,8 @@ import { tokenize } from "./batch.js";
 import { evalInPage, grantPermissions } from "./pageEval.js";
 import { ownerKey } from "./owner.js";
 import { inlineImageMarker } from "../inlineImage.js";
+import { defaultShotPath, SHOT_TEMP_KIND } from "./shotFile.js";
+import { agentTempPath, secureTempFile } from "../tempFiles.js";
 import { uploadOne } from "../imageCommand.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
 import type { PublishDeps } from "../castApi.js";
@@ -179,12 +180,13 @@ function engineAutoShotSource(o: Ctx): AutoShotSource {
   return {
     tabKey: `engine:${o.session}`,
     capture: async () => {
-      const out = path.join(os.tmpdir(), `cast-autoshot-${process.pid}.jpg`);
+      const out = agentTempPath(SHOT_TEMP_KIND, `cast-autoshot-${process.pid}.jpg`);
       const res = runEngine(["screenshot", out, "--screenshot-format", "jpeg", "--screenshot-quality", "60"], {
         ...o,
         timeoutMs: 20_000,
       });
       if (res.status !== 0) throw new Error(res.stderr || "screenshot failed");
+      secureTempFile(out);
       const buf = fs.readFileSync(out);
       fs.rmSync(out, { force: true });
       return buf;
@@ -971,7 +973,7 @@ async function takeShot(
   c: Ctx,
   deps: PublishDeps,
 ): Promise<string> {
-  const out = pathArg ?? path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
+  const out = pathArg ?? defaultShotPath();
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const extra = [...(o.extra ?? [])];
   if (o.full) extra.push("--full-page");
@@ -985,6 +987,7 @@ async function takeShot(
     die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
   }
   if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
+  if (!pathArg) secureTempFile(out);
 
   // The legend mapping each [N] label to a snapshot ref is the point of an
   // annotated shot; it arrives on the engine's stdout.

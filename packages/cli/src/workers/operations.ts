@@ -1,3 +1,4 @@
+import { reportUnroutableProbe } from "../slowSync.js";
 export const WORKER_KINDS = ["probe", "scan", "ingest"] as const;
 export type WorkerKind = typeof WORKER_KINDS[number];
 export type ProbeOperation = "ps" | "tmux" | "lsappinfo" | "launchctl" | "keychain";
@@ -51,6 +52,17 @@ const psShapes = new Set([
   JSON.stringify(["aux"]), JSON.stringify(["-axo", "pid=,ppid="]), JSON.stringify(["-axo", "pid=,ppid=,args="]),
   JSON.stringify(["-eo", "pid=,ppid=,pcpu=,rss=,etime="]), JSON.stringify(["-axww", "-o", "pid=,ppid=,uid=,command="]),
 ]);
+// An env entry the frame can carry: the kernel's rule, not C's. A key is any
+// non-empty text without `=` (the separator) or NUL (the terminator). Requiring
+// a C identifier protected nothing — the env reaches `execFile` as a dict,
+// never a shell — and rejected `BASH_FUNC_name%%`, which any exported shell
+// function puts in the environment, turning the whole offload off (ct-49915,
+// reasoned out in protocol.test.ts). The size ceilings below are what keep a
+// frame encodable.
+const carriableEnvEntry = ([k, v]: [string, string | undefined]): boolean =>
+  k.length > 0 && k.length <= 4096 && !k.includes("=") && !k.includes("\0") &&
+  (v === undefined || (typeof v === "string" && v.length <= 32768 && !v.includes("\0")));
+
 export function validProbePayload(value: unknown): value is ProbePayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const p = value as ProbePayload;
@@ -75,7 +87,7 @@ export function validProbePayload(value: unknown): value is ProbePayload {
   if (o.cwd !== undefined && !safeText(o.cwd)) return false;
   if (o.env !== undefined) {
     if (!o.env || typeof o.env !== "object" || Array.isArray(o.env) || Object.keys(o.env).length > 512) return false;
-    if (!Object.entries(o.env).every(([k, v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && (v === undefined || typeof v === "string" && v.length <= 32768 && !v.includes("\0")))) return false;
+    if (!Object.entries(o.env).every(carriableEnvEntry)) return false;
     if (JSON.stringify(o.env).length > 131072) return false;
   }
   return true;
@@ -84,7 +96,11 @@ export function probeForExec(file: string, args: string[], options: unknown): Pr
   const operation = ({ ps: "ps", tmux: "tmux", lsappinfo: "lsappinfo", launchctl: "launchctl", security: "keychain" } as const)[file];
   if (!operation) return null;
   const payload = { operation, args, options: options ?? {} };
-  return validProbePayload(payload) ? payload : null;
+  if (validProbePayload(payload)) return payload;
+  // The fallback still answers the caller, but it is also how the offload
+  // turns itself off — silently, for the life of the process, until ct-49915.
+  reportUnroutableProbe(operation, args, payload.options);
+  return null;
 }
 export function validProbeResult(r: unknown): r is ProbeResult {
   if (!r || typeof r !== "object" || Array.isArray(r)) return false;

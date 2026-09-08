@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { descendantRows, snapshotProcessTableAsync } from "./processTable.js";
 import { killTmuxSessionAndTree } from "./daemon.js";
+import { stillRunning } from "./test-helpers/processLiveness.js";
 
 const run = promisify(execFile);
 const tmux = (args: string[]): Promise<{ stdout: string }> => run("tmux", args, { timeout: 10_000 });
@@ -32,10 +33,6 @@ sleep 400
 
 const session = `cc-reap-e2e-${process.pid}`;
 const scriptPath = path.join(os.tmpdir(), `${session}.sh`);
-
-const isAlive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-};
 
 afterAll(async () => {
   await tmux(["kill-session", "-t", session]).catch(() => {});
@@ -66,8 +63,9 @@ describe.skipIf(!hasTmux)("killTmuxSessionAndTree", () => {
 
     await killTmuxSessionAndTree(session);
 
-    const survivors = [panePid, ...tree].filter(isAlive);
-    expect(survivors).toEqual([]);
+    // Still RUNNING, not merely holding a pid: an unreaped zombie answers
+    // `kill(pid, 0)` and would read as a survivor forever.
+    expect(await stillRunning([panePid, ...tree])).toEqual([]);
     await expect(tmux(["has-session", "-t", session])).rejects.toThrow();
   }, 90_000);
 });

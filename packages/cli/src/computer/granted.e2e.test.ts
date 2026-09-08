@@ -362,7 +362,6 @@ describe("focus", () => {
     const state = await snapshot();
     const target = requireElement(state, /text/i, "text element");
     await client.action("setValue", { app: TEXTEDIT, elementIndex: target, value: `no raise ${Date.now()}` });
-    await client.action("click", { app: TEXTEDIT, elementIndex: target });
     // A second act, through a different verb. Deliberately NOT `click` on the
     // text area — a text area has no AXPress, so that click fell through to a
     // coordinate click and was refused for want of focus, which says nothing

@@ -18,7 +18,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import { browserSocketUrl, CdpConnection, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
@@ -43,7 +42,7 @@ import {
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { emitFailureContext } from "./capture.js";
 import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
-import { writeShotFile } from "./shotFile.js";
+import { defaultShotPath, writeShotFile } from "./shotFile.js";
 import { autoShotsEnabled, cdpAutoShotSource, clearAutoShots, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
 import { registerEngineCommands } from "./cliEngine.js";
@@ -63,9 +62,8 @@ import {
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { buildHostsCommand } from "../hosts/cli.js";
-import { downscaleWithSips, uploadOne } from "../imageCommand.js";
+import { uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
-import { MAX_IMAGE_SIZE } from "../syncService.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
@@ -819,9 +817,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           ref: o.ref ? parseInt(o.ref.replace(/^#?e/, ""), 10) : undefined,
           format: o.jpeg ? "jpeg" : "png",
         });
-        const out =
-          o.out ??
-          path.join(os.tmpdir(), `cast-shot-${Date.now()}.${o.jpeg ? "jpg" : "png"}`);
+        const out = o.out ?? defaultShotPath(o.jpeg ? "jpg" : "png");
         // Puts the picture in the conversation under this command's output,
         // the way an extension screenshot appears. `--no-inline` opts out.
         const abs = writeShotFile(buf, out, o);
@@ -1181,13 +1177,10 @@ A step with no ref uses whatever the last \`find\` matched.`,
           // so a batched shot behaves identically — downscale, inline marker.
           capture: async (args) => {
             const buf = await screenshot(page, { fullPage: args.includes("--full") });
-            const out = path.join(os.tmpdir(), `cast-shot-${Date.now()}.png`);
-            let bytes = buf;
-            if (bytes.length > MAX_IMAGE_SIZE) {
-              const smaller = downscaleWithSips(bytes, "image/png");
-              if (smaller && smaller.length < bytes.length) bytes = smaller;
-            }
-            fs.writeFileSync(out, bytes);
+            const out = defaultShotPath();
+            // The flow prints its own line per step and inlines the picture
+            // itself, so this writer only has to downscale and secure the file.
+            writeShotFile(buf, out, { quiet: true, inline: false });
             return out;
           },
           navigate: async (url) => {

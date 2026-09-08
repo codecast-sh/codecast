@@ -31,7 +31,12 @@ export async function ackCustody(f:any) {
   const executor=new Function('syncService','retryQueue','updateState','log',body+';return execute;')(sync,queue,()=>{},()=>{});
   queue.setExecutor(executor);
   const setup=(id:string)=>{cache[id]='conv-'+id;tables.conversations.push({_id:cache[id],user_id:'fixture-owner',has_pending_messages:true});const p=path.join(home,id+'.jsonl');fs.writeFileSync(p,claudeLine(id+'-baseline','baseline'));return p;};
-  const paste=(id:string,suffix:string)=>{const pendingId=id+'-'+suffix;tables.pending_messages.push({_id:pendingId,conversation_id:cache[id],from_user_id:'fixture-owner',client_id:pendingId+'-client',content:'prompt '+suffix,created_at:Date.now(),retry_count:0,status:'injected'});d.fixtureAck.injectedMessageTs.set(pendingId,{conversationId:cache[id],ts:Date.now(),confirmed:true});return pendingId;};
+  // `pasted` is the fact collectPastedInjectedIds reads: a pre-paste mark is
+  // not a paste, and an ack on one would terminalize a row whose paste never
+  // showed (ct-49854). This helper models a paste that DID land, so it says
+  // so — without it every case here silently collected no ids and acked
+  // nothing, which read as a delivery regression rather than a stale fixture.
+  const paste=(id:string,suffix:string)=>{const pendingId=id+'-'+suffix;tables.pending_messages.push({_id:pendingId,conversation_id:cache[id],from_user_id:'fixture-owner',client_id:pendingId+'-client',content:'prompt '+suffix,created_at:Date.now(),retry_count:0,status:'injected'});d.fixtureAck.injectedMessageTs.set(pendingId,{conversationId:cache[id],ts:Date.now(),confirmed:true,pasted:true});return pendingId;};
   const run=(p:string,id:string)=>d.processSessionFile(p,id,home,sync,'user',undefined,cache,queue,pending,{},()=>{});
   const status=(id:string)=>tables.pending_messages.find((p:any)=>p._id===id)?.status;
   try {

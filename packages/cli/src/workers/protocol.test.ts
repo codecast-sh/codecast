@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { FrameDecoder, encodeFrame, validateFrame, type WorkerFrame } from "./protocol.js";
 import { validProbePayload, validTmuxRead, probeForExec } from "./operations.js";
 import { workerEnv, workerInvocation } from "./invocation.js";
+import { resetUnroutableProbeReportForTests, setSlowSyncSink } from "../slowSync.js";
 const frame: WorkerFrame = { v: 1, kind: "probe", type: "request", id: "a_1", operation: "read", payload: { operation: "ps", args: ["aux"], options: {} }, deadline: Date.now() + 5000 };
 test("fragmented and coalesced UTF8 NDJSON frames decode without losing correlation", () => {
   const bytes = Buffer.from(encodeFrame(frame) + encodeFrame({ v: 1, kind: "probe", type: "result", id: "a_1", operation: "read", result: { status: 0, signal: null, killed: false, stdout: "é雪", stderr: "" } }));
@@ -75,4 +76,44 @@ test("worker runtime import closure excludes daemon, CLI boot and auth; Convex s
     }
   }
   expect(seen.size).toBeGreaterThan(5);
+});
+
+test("an exported shell function still routes: the env key rule is the kernel's, not C's", () => {
+  // A bash profile with `export -f` puts `BASH_FUNC_name%%` in the
+  // environment. Requiring a C identifier rejected it, and because callers
+  // pass the whole of `process.env`, that ONE entry sent every probe back to
+  // the daemon's event loop for the life of the process — silently (ct-49915).
+  const env = { PATH: "/usr/bin", "BASH_FUNC_R%%": "() { ls; }", HOME: "/home/x" };
+  const payload = probeForExec("ps", ["aux"], { env, timeout: 5000 });
+  expect(payload).not.toBeNull();
+  // Carried whole: the child gets the environment the caller asked for, so the
+  // routed probe and the direct one cannot answer differently.
+  expect(payload!.options.env).toEqual(env);
+  expect(validProbePayload(payload)).toBe(true);
+  expect(encodeFrame({ v: 1, kind: "probe", type: "request", id: "e_1", operation: "read", payload, deadline: Date.now() + 5000 })).toContain("BASH_FUNC_R%%");
+});
+
+test("a key the OS itself could not hand a process is still refused", () => {
+  for (const key of ["", "A=B", "A\0B"]) {
+    expect(validProbePayload({ operation: "ps", args: ["aux"], options: { env: { [key]: "x" } } })).toBe(false);
+  }
+});
+
+test("a probe that cannot be routed says so once, instead of turning the offload off in silence", () => {
+  resetUnroutableProbeReportForTests();
+  const reports: string[] = [];
+  setSlowSyncSink((message) => reports.push(message));
+  try {
+    // Too many entries to encode: a real refusal, and the one the reader needs
+    // named, because the fallback runs on the daemon's own loop.
+    const env = Object.fromEntries(Array.from({ length: 513 }, (_, i) => [`V${i}`, "x"]));
+    expect(probeForExec("ps", ["aux"], { env })).toBeNull();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toContain("runs on the daemon loop");
+    expect(probeForExec("ps", ["aux"], { env })).toBeNull();
+    expect(reports).toHaveLength(1);
+  } finally {
+    setSlowSyncSink(null);
+    resetUnroutableProbeReportForTests();
+  }
 });
