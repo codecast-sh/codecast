@@ -7,13 +7,26 @@
 // harness's own `tmuxRun` calls AND the daemon's, since injectViaTmux offers no
 // way to name a socket — is pointed at a server of this process's own.
 //
-// IMPORT THIS MODULE FIRST, before anything that pulls in daemon.js. The daemon
-// snapshots `process.env` into SAFE_ENV at module load (daemon.ts:265) and every
-// tmux call it makes uses that snapshot, so an env var set after daemon.js has
-// been evaluated never reaches it. ESM evaluates a module's imports in source
-// order, which is the only reason a plain `import "./isolatedTmuxServer.js"` on
-// the first line works — hence the side effect on import rather than a function
-// the caller remembers to run.
+// THIS MODULE MUST BE EVALUATED BEFORE daemon.js. The daemon snapshots
+// `process.env` into SAFE_ENV at module load and every tmux call it makes uses
+// that snapshot, so an env var set after daemon.js has been evaluated never
+// reaches it — hence the side effect on import rather than a function the
+// caller remembers to run.
+//
+// A first-line `import "./isolatedTmuxServer.js"` in each real-tmux suite is
+// NOT enough to guarantee that, and relying on it cost a day (ct-49907). It
+// orders the imports inside its own file, but `bun test src/` loads every test
+// file into one process sharing one module registry, and ~74 unit-test files
+// import daemon.js for reasons unrelated to tmux. Whichever of those bun loads
+// first freezes SAFE_ENV for the whole run, and the daemon then addresses the
+// machine's default tmux server while the harness panes sit on this private
+// one. Nothing errors: the two halves just never see each other, so a pane is
+// spawned successfully and then reported absent, and suites fail far from the
+// cause. So the ordering is imposed by `packages/cli/bunfig.toml`, which
+// preloads this module ahead of every test module; the per-file import stays
+// as documentation and for anyone running a file with preload disabled.
+// messagingHarness.ts checks at pane spawn that the daemon really did land on
+// this server.
 //
 // tmux derives its socket path from TMUX_TMPDIR (<dir>/tmux-<uid>/default), so
 // setting that one variable moves clients, the server they start, and every
