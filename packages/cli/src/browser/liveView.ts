@@ -15,12 +15,13 @@
 
 import { execFileSync } from "node:child_process";
 import * as net from "node:net";
-import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { RemoteHost } from "../remote/session-move.js";
 import { HLS_PORT, NOVNC_PORT, RTSP_PORT, VNC_PORT } from "./provisionLinux.js";
+import { SHOT_TEMP_KIND } from "./shotFile.js";
+import { agentTempPath } from "../tempFiles.js";
 
 /**
  * Bring the machine-level VNC to local loopback and return the noVNC URL.
@@ -121,7 +122,7 @@ export function machineShot(host: RemoteHost, display = ":99"): string {
      `ffmpeg -y -loglevel error -f x11grab -i ${display} -frames:v 1 /tmp/cast-machine-shot.png`],
     { timeout: 30_000, stdio: ["ignore", "ignore", "pipe"] },
   );
-  const local = path.join(os.tmpdir(), `cast-machine-${Date.now()}.png`);
+  const local = agentTempPath(SHOT_TEMP_KIND, `cast-machine-${Date.now()}.png`);
   execFileSync(
     "scp",
     ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
