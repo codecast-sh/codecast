@@ -43,9 +43,9 @@ describe("openDriver fallback", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  test("no browser at all → BrowserNotLive('dead'), the verdict that permits a relaunch", async () => {
+  test("no browser at all → BrowserNotLive('exited'), the verdict that permits a relaunch", async () => {
     await expect(openDriver()).rejects.toBeInstanceOf(BrowserNotLive);
-    await expect(openDriver()).rejects.toMatchObject({ liveness: "dead" });
+    await expect(openDriver()).rejects.toMatchObject({ liveness: "exited" });
   });
 
   test("an unreachable daemon port under opt-in falls through to the direct verdict", async () => {
@@ -56,11 +56,11 @@ describe("openDriver fallback", () => {
     fs.writeFileSync(path.join(process.env.CODECAST_DIR!, "hook-port"), "1");
     const err = await openDriver().catch((e) => e);
     expect(err).toBeInstanceOf(BrowserNotLive);
-    expect(err.liveness).toBe("dead");
+    expect(err.liveness).toBe("exited");
     expect(err.problem.message).toMatch(/no managed browser is running/);
   });
 
-  test("a recorded browser whose process is gone is 'dead' without any network wait", async () => {
+  test("a recorded browser whose process is gone is 'exited' without any network wait", async () => {
     const state: InstanceState = {
       pid: 999_999_999, port: 1, wsUrl: "ws://127.0.0.1:1/devtools/browser/x", userDataDir: "/tmp/none",
       headless: true, sourceProfile: null, channel: "chrome", startedAt: 0, activeTargetId: null,
@@ -68,11 +68,11 @@ describe("openDriver fallback", () => {
     writeState(state);
     const started = Date.now();
     const err = await openDriver().catch((e) => e);
-    expect(err.liveness).toBe("dead");
+    expect(err.liveness).toBe("exited");
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
-  test("a live process that does not answer is 'unresponsive', never 'dead'", async () => {
+  test("a live process that does not answer is 'unverifiable', never 'exited'", async () => {
     // Our own pid is alive; port 1 answers nothing. This is the verdict that
     // must never be confused with "gone", because "gone" invites a restart.
     const state: InstanceState = {
@@ -82,7 +82,7 @@ describe("openDriver fallback", () => {
     writeState(state);
     const err = await openDriver({ patienceMs: 600 }).catch((e) => e);
     expect(err).toBeInstanceOf(BrowserNotLive);
-    expect(err.liveness).toBe("unresponsive");
+    expect(err.liveness).toBe("unverifiable");
     expect(err.problem.hint).toMatch(/Do not stop\/start/);
   });
 });
