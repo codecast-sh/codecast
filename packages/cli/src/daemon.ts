@@ -18992,10 +18992,15 @@ function deferHibernationHookStop(sessionId: string, status: AgentStatus, replay
   return true;
 }
 
-export function publishHookStatus(sync: SyncService, conversationId: string, sessionId: string, data: HookStatusData, statusChanged: boolean, modeChanged = false): void {
-  if (deferHibernationHookStop(sessionId, data.status, () => publishHookStatus(sync, conversationId, sessionId, data, statusChanged, modeChanged))) return;
-  if (statusChanged || modeChanged || pendingOpenTasksChanged(sessionId)) {
-    sendAgentStatus(sync, conversationId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+export function publishHookStatus(sync: SyncService, conversationId: string, sessionId: string, data: HookStatusData, statusChanged: boolean, modeChanged = false, settleKindChanged = false): void {
+  if (deferHibernationHookStop(sessionId, data.status, () => publishHookStatus(sync, conversationId, sessionId, data, statusChanged, modeChanged, settleKindChanged))) return;
+  // settleKindChanged: the KIND of the settle can move while its status does
+  // not — a boundary idle followed by a real idle, or two turns of a
+  // background-task session that both settle as "waiting". Both must reach the
+  // server, or the real settle inherits the boundary's exemption and the
+  // second turn never announces (ct-49533).
+  if (statusChanged || modeChanged || settleKindChanged || pendingOpenTasksChanged(sessionId)) {
+    sendAgentStatus(sync, conversationId, sessionId, data.status, data.ts * 1000, data.permission_mode, undefined, { sessionBoundary: data.session_boundary });
   } else pendingOpenTaskReports.delete(sessionId);
   if (data.status === "stopped" && statusChanged) {
     const restartTs = restartingSessionIds.get(sessionId);
@@ -26073,26 +26078,16 @@ async function main(): Promise<void> {
         recentSessionInjections.delete(convId);
       }
 
-      publishHookStatus(syncService, convId, sessionId, data, statusChanged, !!modeChanged);
-      if (statusChanged || modeChanged || settleKindChanged || pendingOpenTasksChanged(sessionId)) {
-        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode, undefined, { sessionBoundary: data.session_boundary });
+      publishHookStatus(syncService, convId, sessionId, data, statusChanged, !!modeChanged, settleKindChanged);
+      if (statusChanged || modeChanged || settleKindChanged) {
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
-      } else {
-        // Nothing sent, so the open-task report the settle computed must not
-        // wait around to ride an unrelated later status.
-        pendingOpenTaskReports.delete(sessionId);
       }
 
-      if (data.status === "stopped" && statusChanged) {
-        const restartTs = restartingSessionIds.get(sessionId);
-        if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
-          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
-          if (filePath) try { fs.unlinkSync(filePath); } catch {}
-        } else {
-          log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
-          syncService.markSessionCompleted(convId).catch(logConvexFailure);
-          if (filePath) try { fs.unlinkSync(filePath); } catch {}
-        }
+      // The status file is this transport's copy of a settle that has now been
+      // published; the completion itself belongs to publishHookStatus, behind
+      // the hibernation defer.
+      if (data.status === "stopped" && statusChanged && filePath) {
+        try { fs.unlinkSync(filePath); } catch {}
       }
 
       if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
