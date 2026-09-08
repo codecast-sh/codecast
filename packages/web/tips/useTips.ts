@@ -97,7 +97,10 @@ export function useTips() {
     track('tip_completed', { tip_id: tipId, type: getTip(tipId)?.type });
   }, [updateTips]);
 
-  const setLevel = useCallback((level: ClientTips['level']) => {
+  // NonNullable: the stored field is optional (unset means the default), but
+  // "unset it" is not a level anyone can pick, and tips_level_changed with an
+  // undefined level would report a change to nothing (ct-49565).
+  const setLevel = useCallback((level: NonNullable<ClientTips['level']>) => {
     updateTips({ level });
     track('tips_level_changed', { level });
   }, [updateTips]);

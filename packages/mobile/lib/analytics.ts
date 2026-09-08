@@ -12,9 +12,14 @@
 // native modules degrade to no-ops instead; telemetry resumes once users get a
 // build that bundles them.
 import { initAnalytics as initPlatformAnalytics } from "@platform/analytics/native";
+import { CODECAST_EVENTS } from "@codecast/shared/analytics";
 
 export function initAnalytics() {
   initPlatformAnalytics({
+    // Same catalog and same per-session cap as web and Convex (ct-49565), so a
+    // funnel that spans surfaces cannot disagree with itself about property
+    // names. Mobile sends screens today; a named event added here is checked.
+    catalog: CODECAST_EVENTS,
     posthogKey: process.env.EXPO_PUBLIC_POSTHOG_KEY,
     posthogHost: process.env.EXPO_PUBLIC_POSTHOG_HOST,
     sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN,

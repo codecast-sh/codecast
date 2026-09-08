@@ -91,6 +91,56 @@ describe("createServerAnalytics", () => {
     expect(calls.length).toBe(0);
   });
 
+  it("sends only what the catalog describes", async () => {
+    const { calls, fetch } = mockFetch();
+    const catalog = { cli_authed: { method: { type: "string", values: ["browser", "setup_token"] } } } as const;
+    const a = createServerAnalytics({ posthogKey: "phc_x", source: "convex", fetch, catalog });
+    await a.capture("cli_authed", "u1", { method: "browser" });
+    await a.capture("cli_authed", "u1", { method: "magic_link" });
+    await a.capture("cli_authd", "u1", { method: "browser" });
+    await a.capture("cli_authed", "u1", { method: "browser", email: "a@b.c" });
+    expect(calls.length).toBe(1);
+    expect(a.sent).toBe(1);
+  });
+
+  it("stops at the per-process cap", async () => {
+    const { calls, fetch } = mockFetch();
+    const a = createServerAnalytics({ posthogKey: "phc_x", source: "convex", fetch, sessionEventCap: 2 });
+    for (let i = 0; i < 5; i++) await a.capture("e", "u1");
+    expect(calls.length).toBe(2);
+  });
+
+  it("sends nothing when the environment says not to", async () => {
+    for (const env of [{ DO_NOT_TRACK: "1" }, { CI: "true" }, { APP_TELEMETRY_OFF: "1" }]) {
+      const { calls, fetch } = mockFetch();
+      const a = createServerAnalytics({
+        posthogKey: "phc_x",
+        source: "convex",
+        fetch,
+        env,
+        optOutVars: ["APP_TELEMETRY_OFF"],
+      });
+      await a.capture("e", "u1");
+      await a.capturePersonless("e");
+      expect(`${Object.keys(env)[0]}: ${a.optedOut} ${calls.length}`).toBe(`${Object.keys(env)[0]}: true 0`);
+    }
+  });
+
+  it("consults no environment unless one is passed", async () => {
+    const previous = process.env.CI;
+    process.env.CI = "true";
+    try {
+      const { calls, fetch } = mockFetch();
+      const a = createServerAnalytics({ posthogKey: "phc_x", source: "convex", fetch });
+      await a.capture("e", "u1");
+      expect(a.optedOut).toBe(false);
+      expect(calls.length).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env.CI;
+      else process.env.CI = previous;
+    }
+  });
+
   it("a failing fetch never rejects the caller", async () => {
     const a = createServerAnalytics({
       posthogKey: "phc_x",

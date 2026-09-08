@@ -132,6 +132,43 @@ describe("identity and events (web)", () => {
     expect(last(phCalls, "capture")).toEqual(["session_created", { kind: "fork" }]);
   });
 
+  it("sends only what the catalog describes, and never a bad payload", () => {
+    const catalog = { session_created: { kind: { type: "string", values: ["fork", "spawn"] } } } as const;
+    web.initAnalytics({ ...base, catalog });
+    web.track("session_created", { kind: "fork" });
+    expect(last(phCalls, "capture")).toEqual(["session_created", { kind: "fork" }]);
+
+    const before = count(phCalls, "capture");
+    web.track("session_creatd", { kind: "fork" }); // typo
+    web.track("session_created", { kind: "clone" }); // not in the enum
+    web.track("session_created", { kind: "fork", prompt: "secret" }); // undeclared key
+    expect(count(phCalls, "capture")).toBe(before);
+  });
+
+  it("stops sending at the session cap", () => {
+    web.initAnalytics({ ...base, sessionEventCap: 2 });
+    for (let i = 0; i < 5; i++) web.track("session_created", { i });
+    expect(count(phCalls, "capture")).toBe(2);
+  });
+
+  it("loads no PostHog at all when the browser sets Do Not Track", () => {
+    const previous = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", { value: { doNotTrack: "1" }, configurable: true });
+    try {
+      web.initAnalytics(base);
+      web.identifyUser("users:abc123");
+      web.track("session_created", { kind: "fork" });
+      expect(count(phCalls, "init")).toBe(0);
+      expect(count(phCalls, "identify")).toBe(0);
+      expect(count(phCalls, "capture")).toBe(0);
+      // Sentry still reports crashes: a crash report is not the behavioural
+      // tracking Do Not Track asks us to stop.
+      expect(count(sentryCalls, "init")).toBe(1);
+    } finally {
+      Object.defineProperty(globalThis, "navigator", { value: previous, configurable: true });
+    }
+  });
+
   it("captureError forwards to Sentry with context as extra", () => {
     web.initAnalytics(base);
     const err = new Error("boom");

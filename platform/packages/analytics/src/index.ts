@@ -9,6 +9,12 @@
 // server capture), so browser, mobile and server events merge into one PostHog
 // person. Keep that convention in any app that adopts this package.
 
+import type { EventCatalog } from "./catalog";
+
+// The catalog, the validator, the burst cap and the opt-out resolver, so an app
+// declaring its events imports one specifier.
+export * from "./catalog";
+
 export type Environment = "development" | "production";
 
 export interface AnalyticsConfig {
@@ -24,6 +30,19 @@ export interface AnalyticsConfig {
   platform: string;
   /** App name. Sent as a PostHog super property so apps sharing one project stay filterable. */
   appName?: string;
+  /**
+   * Typed event catalog. Present: track() drops any event the catalog does not
+   * describe. Absent: any name and shape goes through, which is what callers
+   * had before the catalog existed.
+   */
+  catalog?: EventCatalog;
+  /** Per-session ceiling on transmitted events. Defaults to SESSION_EVENT_CAP. */
+  sessionEventCap?: number;
+  /**
+   * Force telemetry off. The runtimes resolve DO_NOT_TRACK and CI themselves;
+   * this is for an app's own preference toggle.
+   */
+  optedOut?: boolean;
 }
 
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
@@ -53,6 +72,12 @@ export function resolveConfig(config: AnalyticsConfig): ResolvedAnalyticsConfig 
   }
   if (config.sentryDsn !== undefined && typeof config.sentryDsn !== "string") {
     throw new AnalyticsConfigError("sentryDsn must be a string");
+  }
+  if (
+    config.sessionEventCap !== undefined &&
+    (!Number.isInteger(config.sessionEventCap) || config.sessionEventCap < 0)
+  ) {
+    throw new AnalyticsConfigError("sessionEventCap must be a non-negative integer");
   }
   const host = config.posthogHost || DEFAULT_POSTHOG_HOST;
   if (!/^https?:\/\//.test(host)) {

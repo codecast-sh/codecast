@@ -12,15 +12,38 @@ import {
   type AnalyticsConfig,
   type ResolvedAnalyticsConfig,
 } from "./index";
+import { createTrackGate, resolveOptOut, type TrackGate } from "./catalog";
 
 let config: ResolvedAnalyticsConfig | null = null;
 let initialized = false;
+let optedOut = false;
+let gate: TrackGate | null = null;
 const preInit = createPreInitBuffer();
+
+/**
+ * The browser's Do Not Track signal. A browser has no env, so this is the whole
+ * opt-out surface here; the env vars (CI and friends) belong to the node
+ * surfaces. `navigator.webdriver` is deliberately NOT read: automation is how
+ * the team verifies that capture works at all, and a headless run already
+ * stamps environment=development.
+ */
+function browserDoNotTrack(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const nav = navigator as Navigator & { msDoNotTrack?: string };
+  const win = typeof window !== "undefined" ? (window as Window & { doNotTrack?: string }) : undefined;
+  return nav.doNotTrack === "1" || nav.msDoNotTrack === "1" || win?.doNotTrack === "1";
+}
 
 export function initAnalytics(input: AnalyticsConfig) {
   if (initialized) return;
   initialized = true;
   config = resolveConfig(input);
+  optedOut = input.optedOut || resolveOptOut({ doNotTrack: browserDoNotTrack() }).optedOut;
+  gate = createTrackGate({
+    catalog: config.catalog,
+    sessionCap: config.sessionEventCap,
+    optedOut,
+  });
 
   const isDev = config.environment === "development";
 
@@ -35,7 +58,10 @@ export function initAnalytics(input: AnalyticsConfig) {
     });
   }
 
-  if (config.posthogKey) {
+  // An opted-out browser never loads PostHog at all: no init, no persistence
+  // written, no autocapture listeners. Sentry stays up — a crash report is not
+  // the behavioural tracking DO_NOT_TRACK asks us to stop.
+  if (config.posthogKey && !optedOut) {
     posthog.init(config.posthogKey, {
       api_host: config.posthogHost,
       autocapture: true,
@@ -58,7 +84,7 @@ export function identifyUser(userId: string, traits?: Record<string, unknown>) {
     return;
   }
   if (config?.sentryDsn) setSentryUser({ id: userId, ...traits });
-  if (config?.posthogKey) posthog.identify(userId, traits);
+  if (config?.posthogKey && !optedOut) posthog.identify(userId, traits);
 }
 
 export function resetUser() {
@@ -67,7 +93,7 @@ export function resetUser() {
     return;
   }
   if (config?.sentryDsn) setSentryUser(null);
-  if (config?.posthogKey) posthog.reset();
+  if (config?.posthogKey && !optedOut) posthog.reset();
 }
 
 export function track(event: string, properties?: Record<string, unknown>) {
@@ -75,7 +101,12 @@ export function track(event: string, properties?: Record<string, unknown>) {
     preInit.add(() => track(event, properties));
     return;
   }
-  if (config?.posthogKey) posthog.capture(event, properties);
+  // The gate is the whole boundary: opt out, then the per-session cap, then the
+  // catalog. A held call replays through it too, so nothing skips the check by
+  // arriving early.
+  const allowed = gate?.check(event, properties);
+  if (!allowed?.ok) return;
+  if (config?.posthogKey) posthog.capture(event, allowed.properties);
 }
 
 export function captureError(error: Error, context?: Record<string, unknown>) {
@@ -85,6 +116,8 @@ export function captureError(error: Error, context?: Record<string, unknown>) {
 export function _resetRuntimeForTests() {
   config = null;
   initialized = false;
+  optedOut = false;
+  gate = null;
   preInit.clear();
 }
 
