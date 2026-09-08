@@ -458,18 +458,31 @@ describe("cold-boot injection matrix (real clients)", () => {
       // The budget is for the DELETE, not for anything the test is waiting on.
       // Measured on the codex cell (ct-49852): the tmux kill takes 4-59ms, the
       // endpoint closes in under 1ms, and `fs.rmSync` of the pane's directories
-      // takes 0.7-5.4s — 25s once with the disk contended. A fresh CODEX_HOME is
-      // why: codex bootstraps ~730MB into it that the tests never use — three
-      // 220MB copies of its own binary under `tmp/arg0/` so it can re-exec under
-      // another argv[0], and a git clone of the plugin marketplace (~2.6k files)
-      // under `.tmp/`. bun's default 5s hook budget sits inside that spread, so
-      // two runs in four failed a delivery that had already passed, on "a
-      // beforeEach/afterEach hook timed out for this test". 60s is an order of
-      // magnitude over the median removal and 2.4x the worst one measured.
+      // took 0.7-5.4s — 25s once with the disk contended. What it was deleting
+      // was codex's own bootstrap: a git clone of the plugin marketplace and an
+      // arg0 re-exec directory, neither of which the matrix reads. bun's
+      // default 5s hook budget sat inside that spread, so two runs in four
+      // failed a delivery that had already passed, on "a beforeEach/afterEach
+      // hook timed out for this test".
+      //
+      // Both directories are now shared across the panes of a run rather than
+      // built and deleted per pane (shareCodexBootstrap in messagingHarness.ts).
+      // A codex home that finished bootstrapping went from 90.7MB and 7897 files
+      // to 2.8MB and 115, and its delete from 2.0-3.2s to 10-91ms; measured in
+      // this hook across the three codex cells, 713/609/867ms became 29/85/51ms
+      // — lower than the standalone figure because a cell often tears the pane
+      // down while the clone is still in flight, which is also why the old cost
+      // varied so widely (ct-49885). The 60s budget stays: it costs a passing
+      // run nothing, and it is what keeps a contended disk, or a client that
+      // grows a new bootstrap, from failing a delivery that already succeeded.
+      // `teardown_ms` is logged so the claim stays checkable from any run
+      // rather than resting on this comment.
       afterEach(() => {
+        const started = Date.now();
         try { pane?.tearDown(); } catch {}
         pane = null;
         endpoint.close();
+        logMatrix(client, "teardown", { teardown_ms: Date.now() - started });
       }, 60_000);
 
       test("cold boot: a multi-line message starts a turn and lands verbatim", async () => {

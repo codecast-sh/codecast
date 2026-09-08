@@ -477,6 +477,41 @@ describe("an invented verb fails loudly", () => {
     expect(stdout()).toBe("");
     expect(stderr()).toContain("unknown command 'computer bogus'");
   });
+
+  // This group's action handler is why commander never fires its unknownCommand
+  // hook here, so the shared suggester has to be called by hand. These pin that
+  // it is — a near miss is answered with the verb it was reaching for.
+  test("a near miss is answered with the verb it was reaching for", async () => {
+    const r = await run(["clik"]);
+    expect(r.exit).toBe(1);
+    expect(stderr()).toContain("Next step: did you mean 'cast computer click'?");
+  });
+
+  test("`cast computer help <typo>` is answered the same way", async () => {
+    const r = await run(["help", "list-window"]);
+    expect(r.exit).toBe(1);
+    expect(stdout()).toBe("");
+    expect(stderr()).toContain("unknown command 'computer list-window'");
+    expect(stderr()).toContain("'cast computer list-windows'");
+  });
+
+  test("a token nowhere near a verb gets no guess, only the help pointer", async () => {
+    const r = await run(["zzzzzzzz"]);
+    expect(r.exit).toBe(1);
+    expect(stderr()).not.toContain("Next step");
+    expect(stderr()).toContain("Run 'cast computer --help'");
+  });
+
+  test("the suggestion never leaves this group, and never reaches for setup", async () => {
+    // Two separate promises. The suggester walks siblings only, so a typo here
+    // can never be answered with a top-level command; and `computer setup` is
+    // in the destructive table, so it is offered only to a token one edit away
+    // from it — `capabilities` is not that token.
+    const r = await run(["capabilites"]);
+    expect(r.exit).toBe(1);
+    expect(stderr()).toContain("'cast computer capabilities'");
+    expect(stderr()).not.toContain("setup");
+  });
 });
 
 describe("registration cost", () => {
@@ -488,12 +523,18 @@ describe("registration cost", () => {
     // helper bundle would put that graph on the cost of `cast --help` and of
     // every unrelated verb.
     //
-    // commandGroups.js is the one exception, and it is free: it holds this
-    // group's description (the single copy, which the registration below reads
-    // back), bootGraph.guard.test.ts proves it imports no repo module at all,
-    // and it is already loaded before this file can be — its `load()` is what
-    // imports this file. ct-49848.
-    expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual(["../commandGroups.js"]);
+    // Two exceptions, both free. commandGroups.js holds this group's
+    // description (the single copy, which the registration below reads back),
+    // bootGraph.guard.test.ts proves it imports no repo module at all, and it
+    // is already loaded before this file can be — its `load()` is what imports
+    // this file (ct-49848). commandSuggestion.js is the shared typo suggester,
+    // and its whole graph is one table of literals (destructiveCommands.ts,
+    // zero imports) — the price of routing this group's unknown verb through
+    // the same guard every other group uses (ct-49879).
+    expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual([
+      "../commandGroups.js",
+      "../commandSuggestion.js",
+    ]);
   });
 
   test("nothing on the CLI's startup path pulls the computer feature in", () => {
