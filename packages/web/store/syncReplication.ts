@@ -28,6 +28,7 @@ import {
 import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey } from "./inboxStore";
 import { writePatchesToIDB } from "./idbCache";
 import { followerPersistencePatches } from "./followerPersistence";
+import { syncTransaction } from "./syncTransaction";
 import {
   isReplicatedCollectionKey,
   REPLICATED_STORE_KEYS,
@@ -144,6 +145,14 @@ const isReplicated = (key: string) => REPLICATED_STORE_KEYS.includes(key);
 // lock whose echo never comes — the write was superseded elsewhere — would
 // otherwise re-assert the follower's stale value over every host row forever.
 export function applyUpdatesToStore(updates: MutUpdate[], opts?: { optimistic?: boolean }): void {
+  // One replayed page is one logical change, but it writes a key at a time —
+  // and every one of those writes used to visit every subscriber. Replicated
+  // applies ride the same transaction as a feeder's, so the page costs one
+  // visit (ct-49548).
+  syncTransaction(() => applyUpdatesToStoreInner(updates, opts));
+}
+
+function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: boolean }): void {
   const state = useInboxStore.getState();
   for (const u of updates) {
     if (u.fields && opts?.optimistic) {

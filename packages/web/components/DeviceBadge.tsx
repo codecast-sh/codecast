@@ -75,9 +75,14 @@ export type Device = {
  * roster pushes.
  */
 export function useRosterDevice(deviceId: string | null | undefined): Device | undefined {
-  return useInboxStore((s) =>
-    deviceId ? (s.machineRoster as Device[]).find((d) => d.device_id === deviceId) : undefined,
-  );
+  return useInboxStore((s) => rosterDeviceOf(s.machineRoster as Device[], deviceId));
+}
+
+/** The projection behind useRosterDevice, callable as one dep of a caller's own
+ *  useTrackedStore — a dense list folds every row's store reads into a single
+ *  subscription instead of one per hook (ct-49746). */
+export function rosterDeviceOf(roster: Device[] | null | undefined, deviceId: string | null | undefined): Device | undefined {
+  return deviceId ? roster?.find((d) => d.device_id === deviceId) : undefined;
 }
 
 /**
