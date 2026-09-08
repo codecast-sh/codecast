@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
 import { stdinText } from "./sendBody.js";
 import { fmt, c } from "./colors.js";
 import {

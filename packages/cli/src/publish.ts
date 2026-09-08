@@ -719,3 +719,8 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
       return runPublish(deps, target, options);
     });
 }
+
+// The publish surface still owns these for callers that reach for them here;
+// the implementations moved to castApi.ts when the CLI's command groups were
+// split so the fast path stops loading the publish graph (ct-49546).
+export type { PublishDeps } from "./castApi.js";

@@ -14,7 +14,7 @@
 import { execFileSync } from "child_process";
 import path from "path";
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "./publish.js";
+import { apiPost, type PublishDeps } from "./castApi.js";
 import { readLocalGitContext } from "./prCommand.js";
 import { buildReviewBatchPrompt, reviewNoteLocation } from "@codecast/shared/comments";
 
