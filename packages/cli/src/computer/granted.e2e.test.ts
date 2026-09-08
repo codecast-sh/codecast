@@ -64,9 +64,14 @@ const reason = await (async (): Promise<string | null> => {
   // Not `getPermissionStatus`: from a test its disclaimed spawn cannot even
   // start (ct-49674) and its 5-second poll is shorter than the helper's own
   // answer time (ct-49671), so it reports "not granted" on a granted machine.
+  //
+  // A probe that could not answer THROWS out of here, and that is deliberate:
+  // it was a skip, and on a loaded full-directory run the poll timed out and
+  // this suite skipped itself on a Mac that had every grant. `0 pass 12 skip`
+  // reads as a pass in every tally that matters (ct-49883). Only a definite
+  // not-granted below may skip.
   const status = await probeHelperPermissions();
   screenshotsGranted = status.screenshots === "granted";
-  if (status.accessibility === "no-answer") return "the helper never answered the permission probe";
   if (status.accessibility !== "granted") return "Accessibility is not granted to `codecast computer`";
   return null;
 })();
@@ -159,7 +164,6 @@ beforeAll(async () => {
     console.log(`cast computer granted e2e skipped: ${reason}`);
     return;
   }
-  screenshotsGranted = (await probeHelperPermissions()).screenshots === "granted";
   releaseRunLock = await acquireFileLock(RUN_LOCK, {
     waitMs: 240_000,
     staleMs: 300_000,

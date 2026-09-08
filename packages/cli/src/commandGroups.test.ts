@@ -120,6 +120,20 @@ describe("typo recovery inside a lazy group", () => {
     );
   }, 30_000);
 
+  // `cast computer` is the one group that installs an action handler on itself,
+  // which is exactly what stops commander from firing unknownCommand — so the
+  // claim "every level of the tree routes through the guarded suggester" is a
+  // promise about that group's own registration, not about this hook. It calls
+  // the suggester by hand (computer/cli.ts), and cli.test.ts pins the stderr it
+  // prints; this pins that the tree it walks still answers. ct-49879.
+  test("a group with its own action handler is still answered from the same tree", async () => {
+    const program = freshProgram();
+    await activateGroup(program, "computer", deps);
+    expect(unknownCommandNextStep(commandTree(program), ["computer", "clik"])).toBe(
+      "Next step: did you mean 'cast computer click'?",
+    );
+  }, 30_000);
+
   test("a mistyped group name is answered without activating anything", () => {
     const program = freshProgram();
     expect(unknownCommandNextStep(commandTree(program), ["browsr"])).toContain("'cast browser'");
