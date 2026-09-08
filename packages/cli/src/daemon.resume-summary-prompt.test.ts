@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AGENT_ENV_SCRUB, buildResumeEnvPrefix } from "./daemon.js";
+import { mintLaunchToken } from "./agentEnv.js";
 
 // Regression coverage for the auto-resume wedge: `claude --resume` on an old/large
 // session (>70min AND >100k tokens) pops an interactive "Resume from summary?" menu.
@@ -41,6 +42,15 @@ describe("buildResumeEnvPrefix", () => {
 
   test("gemini resume keeps only the env scrub", () => {
     expect(buildResumeEnvPrefix("gemini")).toBe(AGENT_ENV_SCRUB);
+  });
+
+  test("carries the resume's launch token, right after the env scrub head", () => {
+    const token = mintLaunchToken();
+    // The resume is the launch that supersedes whatever the pane ran before, so
+    // its token is what the daemon fences the old process's hook posts with.
+    expect(buildResumeEnvPrefix("claude", undefined, token)).toContain(` CODECAST_LAUNCH_TOKEN=${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=`);
+    expect(buildResumeEnvPrefix("gemini", undefined, token)).toBe(`${AGENT_ENV_SCRUB} CODECAST_LAUNCH_TOKEN=${token}`);
+    expect(buildResumeEnvPrefix("claude", undefined, token).startsWith("env -u CLAUDECODE")).toBe(true);
   });
 
   // 2026-08-27: the tmux server carried CLAUDE_CODE_CHILD_SESSION=1 from the

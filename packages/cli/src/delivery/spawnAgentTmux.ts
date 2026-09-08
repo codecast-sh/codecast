@@ -31,6 +31,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { isLaunchToken, LAUNCH_TOKEN_VAR } from "../agentEnv.js";
 import { tmuxExecSync as defaultTmuxExecSync } from "../tmux.js";
 import type { Config } from "../config/types.js";
 import type { AgentClientId } from "@codecast/shared/contracts";
@@ -90,6 +91,13 @@ export interface SpawnAgentTmuxRequest {
   conversationId?: string;
   /** Kill a same-named stale session first (default: true). */
   killExisting?: boolean;
+  /**
+   * The launch token for this spawn (launchToken.ts), stamped into the pane env
+   * so the hook scripts forward it. A hook post from a process left over in
+   * this pane name then carries a superseded token and is dropped instead of
+   * speaking for the launch that replaced it (ct-49532).
+   */
+  launchToken?: string;
 }
 
 export type SpawnAgentTmuxResult =
@@ -190,8 +198,13 @@ export async function spawnAgentTmux(
     tmux(["set-option", "-q", "-t", req.tmuxSession, "@codecast_agent_type", req.agentType]);
 
     // `-l` (literal): the command text is typed into the pane, never expanded by
-    // the daemon's shell, so an injection attempt stays inert text.
-    tmux(["send-keys", "-t", req.tmuxSession, "-l", req.command]);
+    // the daemon's shell, so an injection attempt stays inert text. The token
+    // assignment in front of it is hex by construction (isLaunchToken), so it
+    // stays a variable assignment and can carry nothing else.
+    const command = isLaunchToken(req.launchToken)
+      ? `${LAUNCH_TOKEN_VAR}=${req.launchToken} ${req.command}`
+      : req.command;
+    tmux(["send-keys", "-t", req.tmuxSession, "-l", command]);
     tmux(["send-keys", "-t", req.tmuxSession, "Enter"]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
