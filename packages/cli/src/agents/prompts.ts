@@ -1,3 +1,15 @@
+/**
+ * Foreign prose in these prompts.
+ *
+ * Every field a plan or task carries was written by a person, and for a task
+ * imported from GitHub or Linear that person is anyone who can open an issue.
+ * These builders hand that text to a spawned agent, so it goes through the one
+ * fence (@codecast/shared): the plan as reference, the task as the assignment,
+ * and every title escaped where it sits on a line of ours (ct-49593).
+ */
+import { inlineForeignText } from "@codecast/shared/contracts";
+import { renderFencedPlanRecord, renderFencedTaskRecord } from "@codecast/shared/tasks";
+
 // --- Model Stylesheet Types & Resolution ---
 
 export interface ResolvedModel {
@@ -162,7 +174,7 @@ function buildDoneContext(doneTasks: any[], fidelity?: FidelityLevel): string {
 
     case "summary_medium": {
       const recent = doneTasks.slice(-3);
-      return `\nAlready completed (${doneTasks.length} total, topics: ${summarizeTaskTopics(doneTasks)}):\nRecent:\n${recent.map((t: any) => `- ${t.title}`).join("\n")}`;
+      return `\nAlready completed (${doneTasks.length} total, topics: ${summarizeTaskTopics(doneTasks)}):\nRecent:\n${recent.map((t: any) => `- ${inlineForeignText(t.title)}`).join("\n")}`;
     }
 
     case "summary_high": {
@@ -171,7 +183,7 @@ function buildDoneContext(doneTasks: any[], fidelity?: FidelityLevel): string {
       const summary = earlier.length > 0
         ? `${earlier.length} earlier tasks (${summarizeTaskTopics(earlier)})`
         : "";
-      return `\nAlready completed (${doneTasks.length} total):\n${summary ? `- ${summary}\n` : ""}${recent.map((t: any) => `- ${t.title}`).join("\n")}`;
+      return `\nAlready completed (${doneTasks.length} total):\n${summary ? `- ${summary}\n` : ""}${recent.map((t: any) => `- ${inlineForeignText(t.title)}`).join("\n")}`;
     }
 
     case "compact": {
@@ -180,12 +192,12 @@ function buildDoneContext(doneTasks: any[], fidelity?: FidelityLevel): string {
       const summary = earlier.length > 0
         ? `${earlier.length} earlier tasks completed (covering: ${summarizeTaskTopics(earlier)})`
         : "";
-      return `\nAlready completed (${doneTasks.length} total):\n${summary ? `- ${summary}\n` : ""}${recent.map((t: any) => `- ${t.title}`).join("\n")}`;
+      return `\nAlready completed (${doneTasks.length} total):\n${summary ? `- ${summary}\n` : ""}${recent.map((t: any) => `- ${inlineForeignText(t.title)}`).join("\n")}`;
     }
 
     case "full":
     default:
-      return `\nAlready completed:\n${doneTasks.map((t: any) => `- ${t.title}`).join("\n")}`;
+      return `\nAlready completed:\n${doneTasks.map((t: any) => `- ${inlineForeignText(t.title)}`).join("\n")}`;
   }
 }
 
@@ -193,7 +205,7 @@ function summarizeTaskTopics(tasks: any[]): string {
   const labels = new Set<string>();
   for (const t of tasks) {
     if (t.labels) t.labels.forEach((l: string) => labels.add(l));
-    const words = t.title.split(/\s+/).slice(0, 3).join(" ");
+    const words = inlineForeignText(t.title).split(/\s+/).slice(0, 3).join(" ");
     if (words) labels.add(words);
     if (labels.size >= 6) break;
   }
@@ -236,8 +248,8 @@ export function buildRetroPrompt(plan: any, tasks: any[], progressLog?: any[]): 
   const totalTime = tasks.reduce((sum: number, t: any) => sum + (t.actual_minutes || 0), 0);
 
   const taskSummaries = tasks.map((t: any) => {
-    const parts = [`- [${t.status}] ${t.title} (${t.short_id})`];
-    if (t.execution_concerns) parts.push(`  concern: ${t.execution_concerns}`);
+    const parts = [`- [${t.status}] ${inlineForeignText(t.title)} (${t.short_id})`];
+    if (t.execution_concerns) parts.push(`  concern: ${inlineForeignText(t.execution_concerns)}`);
     if (t.retry_count) parts.push(`  retries: ${t.retry_count}`);
     return parts.join("\n");
   }).join("\n");
@@ -247,12 +259,12 @@ export function buildRetroPrompt(plan: any, tasks: any[], progressLog?: any[]): 
   ).join("\n") || "No drive rounds";
 
   const logEntries = (progressLog || plan.entries || plan.progress_log || []).slice(-10)
-    .map((e: any) => `- ${e.content || e.entry}`).join("\n");
+    .map((e: any) => `- ${inlineForeignText(e.content || e.entry)}`).join("\n");
 
   return `Generate a structured retrospective for this plan. Return ONLY valid JSON.
 
-Plan: ${plan.title} (${plan.short_id})
-Goal: ${plan.goal || "N/A"}
+Plan: ${inlineForeignText(plan.title)} (${plan.short_id})
+Goal: ${inlineForeignText(plan.goal) || "N/A"}
 Status: ${plan.status}
 Stats: ${done.length} done, ${failed.length} dropped, ${blocked.length} blocked, ${withConcerns.length} with concerns
 Total retries: ${totalRetries}
@@ -283,13 +295,19 @@ Kinds for open items: ${OPEN_ITEM_KINDS.join(", ")}`;
 
 // --- Prompt Builders ---
 
-export function buildImplementerPrompt(plan: any, task: any): string {
-  const acceptance = task.acceptance_criteria?.length
-    ? task.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")
-    : "None specified";
+/** The plan's own prose, fenced as reference. Null when the plan says nothing. */
+function fencedPlan(plan: any): string | null {
+  return renderFencedPlanRecord({
+    short_id: plan.short_id,
+    title: plan.title,
+    goal: plan.goal,
+    acceptance_criteria: plan.acceptance_criteria,
+  });
+}
 
+export function buildImplementerPrompt(plan: any, task: any): string {
   const steps = task.steps?.length
-    ? task.steps.map((s: any, i: number) => `${i + 1}. ${s.done ? "[x]" : "[ ]"} ${s.title}${s.verification ? ` (verify: ${s.verification})` : ""}`).join("\n")
+    ? task.steps.map((s: any, i: number) => `${i + 1}. ${s.done ? "[x]" : "[ ]"} ${inlineForeignText(s.title)}${s.verification ? ` (verify: ${inlineForeignText(s.verification)})` : ""}`).join("\n")
     : "";
 
   const doneTasks = (plan.tasks || []).filter((t: any) => t.status === "done");
@@ -300,11 +318,19 @@ export function buildImplementerPrompt(plan: any, task: any): string {
     ? `\nThread: ${task.thread_id} (share context only with tasks in the same thread)`
     : "";
 
+  // Two blocks, two sources: the plan is reference, the task is the work
+  // order. The scaffolding around them is ours and stays outside.
   const planContext = [
-    `Plan: ${plan.title} (${plan.short_id})`,
-    plan.goal ? `Goal: ${plan.goal}` : "",
-    `Task: ${task.title} (${task.short_id})`,
-    task.description ? `\n${task.description}` : "",
+    `Plan: ${inlineForeignText(plan.title)} (${plan.short_id})`,
+    fencedPlan(plan),
+    `Task: ${task.short_id}`,
+    renderFencedTaskRecord({
+      short_id: task.short_id,
+      title: task.title,
+      description: task.description,
+      acceptance_criteria: task.acceptance_criteria,
+      external: task.external,
+    }, "assignment"),
     doneContext,
     threadContext,
   ].filter(Boolean).join("\n");
@@ -315,9 +341,6 @@ Start by binding to this task: \`cast task start ${task.short_id}\`
 
 ## Context
 ${planContext}
-
-## Acceptance Criteria
-${acceptance}
 ${steps ? `\n## Steps\n${steps}\n` : ""}
 ## How to work
 
@@ -341,23 +364,28 @@ Use these markers (exact format, the orchestrator parses them):
 
 export function buildReviewerPrompt(plan: any, task: any, branchName: string): string {
   const planContext = [
-    `Plan: ${plan.title} (${plan.short_id})`,
-    plan.goal ? `Goal: ${plan.goal}` : "",
+    `Plan: ${inlineForeignText(plan.title)} (${plan.short_id})`,
+    fencedPlan(plan),
   ].filter(Boolean).join("\n");
 
-  const acceptance = task.acceptance_criteria?.length
-    ? task.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")
-    : "None specified";
+  // The reviewer checks the task against its spec, so the task is reference
+  // here rather than an assignment.
+  const taskBlock = renderFencedTaskRecord({
+    short_id: task.short_id,
+    title: task.title,
+    description: task.description,
+    acceptance_criteria: task.acceptance_criteria,
+    external: task.external,
+  }) || "No task detail recorded.";
 
   return `You are a code reviewer agent. Your job is to review a completed task's changes and provide a pass/fail verdict.
 
 ## Context
 ${planContext}
-Task: ${task.title} (${task.short_id})
+Task: ${task.short_id}
 Branch: ${branchName}
 
-## Acceptance Criteria
-${acceptance}
+${taskBlock}
 
 ## Workflow
 
@@ -404,8 +432,8 @@ Mark the task with execution status:
 
 export function buildCriticPrompt(plan: any, scope: string, roundNumber: number): string {
   const planContext = [
-    `Plan: ${plan.title} (${plan.short_id})`,
-    plan.goal ? `Goal: ${plan.goal}` : "",
+    `Plan: ${inlineForeignText(plan.title)} (${plan.short_id})`,
+    fencedPlan(plan),
   ].filter(Boolean).join("\n");
 
   return `You are a critic agent for drive round ${roundNumber}. Your job is to find issues in the current state of the project.
@@ -469,11 +497,17 @@ export interface TaskPromptInput {
 const TASK_PROMPT_VARIABLES: Record<string, (t: TaskPromptInput) => string> = {
   id: (t) => t.id,
   slug: (t) => t.slug,
-  title: (t) => t.title,
-  description: (t) => t.description || "No description provided.",
+  // Why: these expand into the prompt a spawned run receives, so a title or
+  // description written by whoever filed the task is escaped, capped and (for
+  // the description) fenced before it lands there (ct-49593).
+  title: (t) => inlineForeignText(t.title),
+  description: (t) => renderFencedTaskRecord({
+    short_id: t.slug,
+    description: t.description,
+  }, "assignment") || "No description provided.",
   priority: (t) => t.priority || "none",
   status: (t) => t.status || "Unknown",
-  labels: (t) => t.labels?.join(", ") || "None",
+  labels: (t) => inlineForeignText(t.labels?.join(", ")) || "None",
 };
 
 export const DEFAULT_TASK_PROMPT_TEMPLATE = `Task: "{{title}}" ({{slug}})

@@ -1,3 +1,4 @@
+import { FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText } from "@codecast/shared/contracts";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { spawnSync } from "../proc.js";
 import * as fs from "fs";
@@ -603,9 +604,16 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
         });
         const task = await resp.json() as any;
         if (task && !task.error) {
-          initialContext["task_title"] = task.title || "";
-          initialContext["task_description"] = task.description || "";
-          initialContext["acceptance_criteria"] = (task.acceptance_criteria || []).join("\n- ");
+          // Why: every value here is expanded into node prompts through $vars
+          // and the `# Context` list, so it is escaped and capped as it enters
+          // the context rather than at each of those sites (ct-49593).
+          initialContext["task_title"] = inlineForeignText(task.title);
+          initialContext["task_description"] = capForeignText(
+            escapeForeignControlChars(task.description || ""),
+            FOREIGN_TEXT_CAPS.descriptionChars,
+          );
+          initialContext["acceptance_criteria"] = (task.acceptance_criteria || [])
+            .map((c: string) => inlineForeignText(c)).join("\n- ");
         }
       } catch {}
     }
@@ -622,9 +630,13 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
         });
         const plan = await resp.json() as any;
         if (plan && !plan.error) {
-          initialContext["plan_title"] = plan.title || "";
-          initialContext["plan_goal"] = plan.goal || "";
-          initialContext["plan_acceptance_criteria"] = (plan.acceptance_criteria || []).join("\n- ");
+          initialContext["plan_title"] = inlineForeignText(plan.title);
+          initialContext["plan_goal"] = capForeignText(
+            escapeForeignControlChars(plan.goal || ""),
+            FOREIGN_TEXT_CAPS.descriptionChars,
+          );
+          initialContext["plan_acceptance_criteria"] = (plan.acceptance_criteria || [])
+            .map((c: string) => inlineForeignText(c)).join("\n- ");
         }
       } catch {}
     }
