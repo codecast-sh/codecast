@@ -26,10 +26,12 @@ import { useInboxStore } from "../store/inboxStore";
 // agentTasks.webListRuns payload. `_id` is the conversation a run lives in
 // (inject runs share their schedule's home conversation); `run_key` is unique
 // per run; `trigger_message_id` is the message that fired it.
+// A "skipped_precheck" entry is a firing the --precheck gate refused: no agent
+// ran, so it has no conversation and nothing to open. `title` is the reason.
 export type TriggerRun = {
   _id: string;
   run_key: string;
-  kind: "spawn" | "inject";
+  kind: "spawn" | "inject" | "skipped_precheck";
   short_id?: string;
   title: string;
   created_at: number;
@@ -37,6 +39,8 @@ export type TriggerRun = {
   idle_summary?: string;
   trigger_message_id?: string;
   trigger_message_timestamp?: number;
+  precheck_command?: string;
+  precheck_output?: string;
 };
 
 // A schedule's run history, from the store (hooks/useSyncTriggers feeds and
@@ -47,8 +51,11 @@ export function useTriggerRuns(taskId: string | null | undefined): TriggerRun[] 
 }
 
 // Navigate to a run's trigger message through the store's atomic deep-link
-// channel. Shared by the run list below and the strip's run chips.
+// channel. Shared by the run list below and the strip's run chips. A skipped
+// run has no conversation, so this is a no-op for one — the surfaces below
+// render those as plain rows rather than buttons.
 export function openRunInStore(run: TriggerRun) {
+  if (run.kind === "skipped_precheck") return;
   useInboxStore.getState().requestNavigate(
     run._id,
     run.trigger_message_id
@@ -70,6 +77,40 @@ export function shortAgo(ms: number): string {
 // Resting run-dot fill: mixed toward the card surface (not an alpha tint) so
 // the timeline's connector line doesn't show through the dot it passes under.
 const DOT_RESTING = "bg-[color-mix(in_srgb,var(--sol-orange)_55%,var(--sol-card))]";
+
+// A firing the precheck refused. Same timeline geometry as a real run — dot,
+// number, age — but hollow and unclickable, because there is no session to
+// open. Two lines of information the user actually needs: what the gate said,
+// and what the gate was.
+function SkippedRunRow({ run, num, now }: { run: TriggerRun; num: number; now: number }) {
+  return (
+    <ShortcutTooltip
+      label={run.precheck_command ? `precheck: ${run.precheck_command}` : "skipped by the precheck"}
+      hint={run.precheck_output || undefined}
+    >
+      <div
+        data-testid="trigger-run-skipped"
+        className="relative flex items-center gap-2 w-full min-w-0 rounded-md py-1 pr-1.5 text-left text-[11px] opacity-80"
+      >
+        <span className="w-4 h-4 shrink-0 flex items-center justify-center">
+          <span className="w-[7px] h-[7px] rounded-full border border-sol-text-dim/70 bg-sol-bg" />
+        </span>
+        <span className="shrink-0 w-7 font-mono text-[10px] tabular-nums text-sol-text-dim">
+          #{num}
+        </span>
+        <ShortcutTooltip label={new Date(run.created_at).toLocaleString()}>
+          <span className="shrink-0 w-[4.75rem] text-[10px] text-sol-text-dim tabular-nums">
+            {fmtDuration(Math.max(0, now - run.created_at))} ago
+          </span>
+        </ShortcutTooltip>
+        <span className="shrink-0 px-1 rounded border border-sol-border bg-sol-bg-alt/60 text-[9px] text-sol-text-dim">
+          skipped
+        </span>
+        <span className="truncate min-w-0 text-sol-text-dim">{run.title}</span>
+      </div>
+    </ShortcutTooltip>
+  );
+}
 
 export function TriggerRunList({
   runs,
@@ -109,6 +150,11 @@ export function TriggerRunList({
         {visible.map((run, i) => {
           const num = runs.length - i;
           const latest = i === 0;
+          if (run.kind === "skipped_precheck") {
+            return (
+              <SkippedRunRow key={run.run_key} run={run} num={num} now={now} />
+            );
+          }
           // Inject runs all live in the home conversation — flagging each of
           // them "this session" would stamp every row. Only a spawned run is
           // distinctly the session being viewed.
@@ -209,12 +255,16 @@ export function TriggerRunRail({
   nextRunAt?: number;
   className?: string;
 }) {
-  if (runs.length === 0) return null;
+  // One text line tall: a skipped firing has no session to open and no age
+  // worth a node here, so the rail shows sessions only. The full history,
+  // skips included, is on the trigger's own page.
+  const sessions = runs.filter((r) => r.kind !== "skipped_precheck");
+  if (sessions.length === 0) return null;
   const msToNext = nextRunAt !== undefined ? nextRunAt - now : undefined;
   return (
     <div className={`flex items-center gap-2 min-w-0 ${className ?? ""}`}>
       <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
-        {runs.length} run{runs.length === 1 ? "" : "s"}
+        {sessions.length} run{sessions.length === 1 ? "" : "s"}
       </span>
       <div className="flex items-center min-w-0 overflow-x-auto">
         {msToNext !== undefined && (
@@ -231,11 +281,11 @@ export function TriggerRunRail({
             <span aria-hidden className="shrink-0 w-px h-3 mx-0.5 bg-sol-cyan/50" />
           </>
         )}
-        {runs.map((r, i) => {
+        {sessions.map((r, i) => {
           // Inject runs all share the home conversation, so only a spawned
           // run can claim "this is the session you're looking at".
           const here = r.kind === "spawn" && r._id === conversationId;
-          const num = runs.length - i;
+          const num = sessions.length - i;
           const tooltip =
             r.kind === "inject"
               ? `#${num} · fired ${fmtClock(r.created_at)}`
