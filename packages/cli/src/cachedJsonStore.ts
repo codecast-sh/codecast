@@ -214,3 +214,29 @@ export class CachedJsonStore<V> {
     process.once("exit", () => this.flushSync());
   }
 }
+
+/**
+ * A store whose file lives under a directory that can move — CODECAST_DIR.
+ *
+ * Building the store at import time pins it to whatever the directory resolved
+ * to then, so a test that redirected CODECAST_DIR afterwards still wrote the
+ * human's real file: one run of the CLI suite rewrote ~/.codecast/positions.json
+ * and could drop a position the live daemon had just written (ct-49597).
+ *
+ * The returned accessor resolves the path on every call and builds a new store
+ * when it changes. The store it replaces keeps its own journal and exit flush,
+ * so nothing already queued for the old file is lost.
+ */
+export function rebindingStore<V>(
+  resolvePath: () => string,
+  opts: { flushDelayMs?: number; keepOnLoad?: (key: string, value: V) => boolean } = {},
+): () => CachedJsonStore<V> {
+  let current: { filePath: string; store: CachedJsonStore<V> } | null = null;
+  return () => {
+    const filePath = resolvePath();
+    if (current?.filePath !== filePath) {
+      current = { filePath, store: new CachedJsonStore<V>({ filePath, ...opts }) };
+    }
+    return current.store;
+  };
+}

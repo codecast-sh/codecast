@@ -9,7 +9,7 @@
 // Test DBs are built in a temp dir with the same schema opencode uses and seeded
 // either from the sanitized fixture (real structure, zero private data) or from
 // hand-authored synthetic rows — nothing reads the developer's real opencode.db.
-import { describe, test, expect } from "bun:test";
+import { afterAll, describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "fs";
 import * as os from "os";
@@ -25,6 +25,13 @@ import { classifyOpencodeTranscriptTail } from "./daemon.js";
 import { parseOpencodeSessionFile } from "./parser.js";
 import { clearPosition } from "./positionTracker.js";
 import type { TranscriptDirEvent } from "./transcriptDirWatcher.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// The watcher persists its watermark through positionTracker, which writes
+// positions.json under CODECAST_DIR; without the redirect this suite rewrote
+// the human's real file (ct-49597).
+const isolatedCodecastDir = isolateCodecastDir("cast-test-opencode-");
+afterAll(() => isolatedCodecastDir.restore());
 
 const FIX = path.join(__dirname, "__fixtures__", "opencode");
 

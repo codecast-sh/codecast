@@ -15,6 +15,7 @@ import * as path from "path";
 import { compareVersions, isBelowMinimum } from "@platform/cli-kit/update";
 import { execFileSync, spawnSync } from "./proc.js";
 import { isDevMode } from "./update.js";
+import { codecastDir } from "./codecastDir.js";
 
 const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
 const DESKTOP_BASE = "https://dl.codecast.sh/desktop";
@@ -25,7 +26,7 @@ const APP_PLIST = path.join(APP_PATH, "Contents", "Info.plist");
 // a downloaded artifact, so signer authenticity is mandatory).
 const EXPECTED_TEAM_ID = "WRG9THCK9Q";
 
-const CONFIG_DIR = path.join(process.env.HOME || "", ".codecast");
+const CONFIG_DIR = codecastDir();
 const STATE_FILE = path.join(CONFIG_DIR, "desktop-update-state.json");
 const WORK_DIR = path.join(process.env.HOME || "", "Library", "Caches", "codecast-desktop-update");
 const SHIPIT_CACHE = path.join(process.env.HOME || "", "Library", "Caches", "sh.codecast.desktop.ShipIt");

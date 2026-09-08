@@ -27,8 +27,8 @@
 import { execFileSync } from "./proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { codecastDir } from "./codecastDir.js";
 
 export const MACHINE_KEY_LEN = 32;
 
@@ -47,10 +47,10 @@ export interface MachineKeyResult {
 
 let cached: MachineKeyResult | null = null;
 
-/** Resolve the machine key against the real ~/.codecast, once per process. */
+/** Resolve the machine key against the CLI state directory, once per process. */
 export function getMachineKey(): MachineKeyResult {
   if (cached) return cached;
-  cached = resolveMachineKey(path.join(os.homedir(), ".codecast"), hardwareId);
+  cached = resolveMachineKey(codecastDir(), hardwareId);
   return cached;
 }
 
