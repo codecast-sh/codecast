@@ -18,6 +18,15 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "agents-that-talk-to-each-other",
+    title: "Agents that talk to each other",
+    dek: "A Claude Code agent shipped a change that silently stalled 27 transcripts. A Codex agent in the same checkout found it, fixed it, and told the first one. No human relayed a word.",
+    author: "the codecast team",
+    date: "2026-09-10",
+    dateLabel: "September 10, 2026",
+    readingMinutes: 6,
+  },
+  {
     slug: "a-url-for-everything-your-agent-makes",
     title: "A URL for everything your agent makes",
     dek: "Reports, dashboards, design proposals — agents produce them daily, and chat transcripts bury them. cast publish turns a file into a live page with versions, comments, and a link you can actually send.",

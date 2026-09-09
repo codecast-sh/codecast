@@ -118,6 +118,24 @@ const codex = (p:string,id:string) => d.processCodexSession(p,id,sync,'user',und
 const cursor = (p:string,id:string) => d.processCursorTranscriptFile(p,id,sync,'user',undefined,cache,queue,pending,()=>{});
 const normalize = (ms:any[]) => JSON.parse(JSON.stringify(ms.map(m=>({...m,timestamp:0}))));
 try {
+  if (process.argv[3] === 'files') {
+    const id='file-attachments';
+    const attachment={type:'assistant',uuid:'sent-file',cwd:home,timestamp:'2026-09-05T12:00:00.000Z',message:{role:'assistant',content:[{type:'tool_use',id:'file-tool',name:'SendUserFile',input:{files:['report.md'],caption:'Report',display:'render'}}]}};
+    const p=file(id,claudeLine('plain-message','ordinary message')+JSON.stringify(attachment)+'\n');
+    await claude(p,id);
+    assert.equal(getPosition(p),fs.statSync(p).size);
+    assert.ok(rows.has('plain-message'));
+    assert.deepEqual(rows.get('sent-file').files,[{name:'report.md',localPath:path.join(home,'report.md'),toolUseId:'file-tool',caption:'Report',display:'render'}]);
+    fs.appendFileSync(p,claudeLine('later-message','later message'));
+    await claude(p,id);
+    assert.equal(getPosition(p),fs.statSync(p).size);
+    assert.ok(rows.has('later-message'));
+    const before=sends.length;
+    await claude(p,id);
+    assert.equal(sends.length,before);
+    console.log(JSON.stringify({files:true,messages:rows.size,positions:true,enabled,parentParses,workerPid:ingestWorkerHost()?.state.pid}));
+    await closeFixtureWorkers();process.exit(0);
+  }
   if (process.argv[3] === 'cursor-recovery') {
     const sources = [
       {id:'cursor-recovery-claude',content:claudeLine('recovered-first','first')+claudeLine('recovered-second','second'),run:claude},

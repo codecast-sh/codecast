@@ -32,16 +32,19 @@ import {
   ingestStatusLineUsage,
   CcAccountError,
   createMtimeGatedCache,
-  writeAccountToken,
-  removeAccountToken,
-  accountTokenInfo,
   accountSourcePrefix,
-  accountTokenFilePath,
-  SETUP_TOKEN_LIFETIME_MS,
-  extractSetupToken,
-  parseRateLimitFingerprint,
-  sameAccountFingerprint,
-  attributeFingerprint,
+  accountLaunchFilePath,
+  accountLaunchInfo,
+  profileStoreDir,
+  profileStoreKeychainService,
+  readProfileStoreCredentials,
+  writeProfileStoreCredentials,
+  deleteProfileStore,
+  ensureProfileStore,
+  absorbProfileStore,
+  credentialIsFresher,
+  adoptProfileStoreCredential,
+  probeSecureStorageSupport,
   activeAccountSummary,
   matchProfileForCredential,
   tokenKey,
@@ -492,6 +495,17 @@ describe("logged-out stub containment (sandboxed $HOME)", () => {
       path.join(home, ".codecast", "cc-accounts", "footage.json"),
       JSON.stringify({ credentials: JSON.parse(LOGGED_OUT_STUB), oauthAccount: OAUTH_ACCOUNT, saved_at: 1 }),
     );
+    // The profile's own credential store never takes a stub, so it still holds
+    // the good pair and the read recovers it. Only once that copy is gone is
+    // the profile truly unusable.
+    expect(() => useProfile("footage")).not.toThrow();
+    // (that switch re-snapshotted the good active login; poison again, and this
+    // time without a store copy to fall back on)
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", "footage.json"),
+      JSON.stringify({ credentials: JSON.parse(LOGGED_OUT_STUB), oauthAccount: OAUTH_ACCOUNT, saved_at: 1 }),
+    );
+    deleteProfileStore("footage");
     expect(() => useProfile("footage")).toThrow(/unusable|logged-out/);
     // The switch failed BEFORE writing anything: the active credential still
     // has its real tokens.
@@ -1336,151 +1350,218 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-account setup-token (launch-time env file)
+// Per-profile credential stores (the per-session account)
 // ---------------------------------------------------------------------------
 
-describe("account setup-token file", () => {
+describe("per-profile credential stores (sandboxed $HOME, file store)", () => {
   let home: string;
-  const savedHome = process.env.HOME;
+  let sandbox: IsolatedCodecastDir;
+  const savedEnv: Record<string, string | undefined> = {};
+  const credFor = (token: string, expiresAt: number, refreshExpiresAt?: number) =>
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: token,
+        refreshToken: `rt-${token}`,
+        expiresAt,
+        ...(refreshExpiresAt ? { refreshTokenExpiresAt: refreshExpiresAt } : {}),
+        scopes: ["user:inference", "user:profile"],
+        subscriptionType: "max",
+        rateLimitTier: "default_claude_max_20x",
+      },
+    });
+  const login = (token: string, uuid: string, email: string) => {
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor(token, Date.now() + 3_600_000));
+    fs.writeFileSync(
+      path.join(home, ".claude.json"),
+      JSON.stringify({ oauthAccount: { accountUuid: uuid, emailAddress: email } }),
+    );
+    invalidateAccountsCache();
+  };
+  const storeFile = (name: string) => path.join(profileStoreDir(name), ".credentials.json");
+
   beforeEach(() => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-token-test-"));
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-store-test-"));
+    sandbox = isolateCodecastDir("cc-store-dir-");
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
     process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    invalidateAccountsCache();
   });
   afterEach(() => {
-    process.env.HOME = savedHome;
-    fs.rmSync(home, { recursive: true, force: true });
-  });
-
-  const TOKEN = "sk-ant-oat01-" + "x".repeat(60);
-
-  it("stores the token as a 0600 export file under ~/.codecast and reports its lifetime", () => {
-    const file = writeAccountToken("union", TOKEN);
-    expect(file).toBe(path.join(home, ".codecast", "cc-account-union.env"));
-    expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
-    expect(fs.readFileSync(file, "utf-8")).toBe(`export CLAUDE_CODE_OAUTH_TOKEN='${TOKEN}'\n`);
-    const info = accountTokenInfo("union")!;
-    expect(info.file).toBe(file);
-    expect(info.expires_at - info.stored_at).toBe(SETUP_TOKEN_LIFETIME_MS);
-  });
-
-  it("rejects anything that is not a setup-token (keychain access tokens, API keys, blanks)", () => {
-    for (const bad of ["", "sk-ant-api03-abc", "at-123", "sk-ant-oat01-short", "sk-ant-oat01-" + "x".repeat(60) + " trailing"]) {
-      expect(() => writeAccountToken("union", bad)).toThrow(CcAccountError);
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
     }
-    expect(accountTokenInfo("union")).toBeNull();
+    sandbox.restore();
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
   });
 
-  it("validates the profile name so the file path can't escape ~/.codecast", () => {
-    expect(() => accountTokenFilePath("../x")).toThrow(CcAccountError);
-    expect(accountTokenInfo("../x")).toBeNull();
+  it("names the store the way Claude Code does: an NFC-normalized absolute dir, hashed into the keychain service", () => {
+    const dir = profileStoreDir("work");
+    expect(path.isAbsolute(dir)).toBe(true);
+    expect(dir).toBe(path.join(sandbox.dir, "cc-store", "work"));
+    // sha256("/tmp/x")[:8] — the same derivation the CLI binary applies.
+    expect(profileStoreKeychainService("/tmp/x")).toBe("Claude Code-credentials-2e56aa36");
+    expect(profileStoreKeychainService("/tmp/x")).toBe(profileStoreKeychainService("/tmp/x".normalize("NFD")));
+    expect(() => profileStoreDir("../x")).toThrow(CcAccountError);
+    expect(accountLaunchInfo("../x")).toBeNull();
     expect(accountSourcePrefix("../x")).toBe("");
   });
 
-  it("builds a source-the-file launch prefix only when a token is stored; warns and falls back otherwise", () => {
+  it("saving a profile fills its store and launch file; the launch prefix exports the store dir, never a secret", () => {
+    login("at-work", "u-work", "work@x.com");
+    saveProfile("work");
+    const cred = JSON.parse(fs.readFileSync(storeFile("work"), "utf-8"));
+    expect(cred.claudeAiOauth.accessToken).toBe("at-work");
+    expect((fs.statSync(storeFile("work")).mode & 0o777).toString(8)).toBe("600");
+    const launch = accountLaunchFilePath("work");
+    expect(fs.readFileSync(launch, "utf-8")).toBe(`export CLAUDE_SECURESTORAGE_CONFIG_DIR='${profileStoreDir("work")}'\n`);
+    expect((fs.statSync(launch).mode & 0o777).toString(8)).toBe("600");
+    const info = accountLaunchInfo("work")!;
+    expect(info.file).toBe(launch);
+    expect(info.expires_at).toBeGreaterThan(Date.now() + 300 * 24 * 3600_000);
+    // "work" IS the machine's login: a session pinned to it runs on the keychain.
+    expect(accountSourcePrefix("work")).toBe("export CODECAST_CC_ACCOUNT=work; ");
+    // Once another account is the login, "work" is dormant and its store carries the session.
+    login("at-other", "u-other", "other@x.com");
+    saveProfile("other");
+    expect(accountSourcePrefix("work")).toBe(`. ${launch} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=work; `);
+    expect(accountSourcePrefix("work")).not.toContain("at-work");
+    expect(accountSourcePrefix(undefined)).toBe("");
+  });
+
+  it("falls back to the keychain with a warning when a dormant profile has no launch credential", () => {
+    login("at-a", "u-a", "a@x.com");
+    saveProfile("a");
+    login("at-b", "u-b", "b@x.com");
+    deleteProfileStore("a");
     const warnings: string[] = [];
-    expect(accountSourcePrefix(undefined, (m) => warnings.push(m))).toBe("");
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe("");
+    expect(accountSourcePrefix("a", (m) => warnings.push(m))).toBe("");
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("cast accounts token union");
-    const file = writeAccountToken("union", TOKEN);
-    // The account NAME rides along so the statusLine hook can attribute the
-    // session's live usage; the token stays inside the sourced file.
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(
-      `. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=union; `,
-    );
+    expect(warnings[0]).toContain("sign into it again");
+    // ensureProfileStore repairs it offline from the snapshot.
+    expect(ensureProfileStore("a")).toBe("provisioned");
+    expect(ensureProfileStore("a")).toBe("ready");
+    expect(accountSourcePrefix("a", (m) => warnings.push(m))).toContain("CODECAST_CC_ACCOUNT=a");
     expect(warnings).toHaveLength(1);
-    // The secret never appears on the launch line.
-    expect(accountSourcePrefix("union")).not.toContain("sk-ant");
   });
 
-  it("removes the file on --rm and reports whether one existed", () => {
-    expect(removeAccountToken("union")).toBe(false);
-    writeAccountToken("union", TOKEN);
-    expect(removeAccountToken("union")).toBe(true);
-    expect(accountTokenInfo("union")).toBeNull();
+  it("a login the endpoint refused has no launch credential until a person signs in again", () => {
+    login("at-a", "u-a", "a@x.com");
+    saveProfile("a");
+    login("at-b", "u-b", "b@x.com");
+    const indexPath = path.join(sandbox.dir, "cc-accounts.json");
+    const index = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+    index.profiles.a.login_expired_at = Date.now();
+    fs.writeFileSync(indexPath, JSON.stringify(index));
+    invalidateAccountsCache();
+    expect(ensureProfileStore("a")).toBe("login_expired");
+    expect(accountLaunchInfo("a")).toBeNull();
+    expect(accountSourcePrefix("a")).toBe("");
+    const payload = getAccountsHeartbeatPayload()!;
+    const row = payload.profiles.find((p) => p.name === "a")!;
+    expect(row.token).toBeUndefined();
+    expect(row.login_expired_at).toBeDefined();
+  });
+
+  it("reads take the store's pair when a session rotated it, and absorb writes it back into the snapshot", async () => {
+    login("at-a", "u-a", "a@x.com");
+    saveProfile("a");
+    login("at-b", "u-b", "b@x.com");
+    // A live claude on a's store rotated the grant.
+    const rotated = credFor("at-a2", Date.now() + 8 * 3600_000);
+    fs.writeFileSync(storeFile("a"), rotated);
+    expect(credentialIsFresher(rotated, credFor("at-a", Date.now() + 3_600_000))).toBe(true);
+    expect(credentialIsFresher(credFor("at-a", Date.now() + 3_600_000), rotated)).toBe(false);
+    // useProfile reads through the overlay: the keychain gets the rotated pair.
+    useProfile("a");
+    expect(JSON.parse(fs.readFileSync(path.join(home, ".claude", ".credentials.json"), "utf-8")).claudeAiOauth.accessToken).toBe("at-a2");
+    // The snapshot itself still carried the old pair until absorbed.
+    const snapshotPath = path.join(sandbox.dir, "cc-accounts", "a.json");
+    expect(JSON.parse(fs.readFileSync(snapshotPath, "utf-8")).credentials.claudeAiOauth.accessToken).toBe("at-a");
+    expect(await absorbProfileStore("a")).toBe(true);
+    expect(JSON.parse(fs.readFileSync(snapshotPath, "utf-8")).credentials.claudeAiOauth.accessToken).toBe("at-a2");
+    expect(await absorbProfileStore("a")).toBe(false);
+  });
+
+  it("deleting a profile removes its store and launch file", () => {
+    login("at-a", "u-a", "a@x.com");
+    saveProfile("a");
+    login("at-b", "u-b", "b@x.com");
+    expect(fs.existsSync(storeFile("a"))).toBe(true);
+    deleteProfile("a");
+    expect(fs.existsSync(profileStoreDir("a"))).toBe(false);
+    expect(fs.existsSync(accountLaunchFilePath("a"))).toBe(false);
+    expect(accountLaunchInfo("a")).toBeNull();
+  });
+
+  it("a logged-out stub never reaches a store", () => {
+    login("at-a", "u-a", "a@x.com");
+    saveProfile("a");
+    login("at-b", "u-b", "b@x.com");
+    deleteProfileStore("a");
+    const snapshotPath = path.join(sandbox.dir, "cc-accounts", "a.json");
+    const snap = JSON.parse(fs.readFileSync(snapshotPath, "utf-8"));
+    snap.credentials.claudeAiOauth.accessToken = "";
+    snap.credentials.claudeAiOauth.refreshToken = "";
+    fs.writeFileSync(snapshotPath, JSON.stringify(snap));
+    expect(ensureProfileStore("a")).toBe("unusable");
+    expect(fs.existsSync(storeFile("a"))).toBe(false);
+  });
+
+  it("adopts a browser sign-in only when it is the profile's own account; a stranger's login is put back", async () => {
+    login("at-a", "u-a", "a@x.com");
+    saveProfile("a");
+    login("at-b", "u-b", "b@x.com");
+    const indexPath = path.join(sandbox.dir, "cc-accounts.json");
+    const index = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+    index.profiles.a.login_expired_at = Date.now();
+    fs.writeFileSync(indexPath, JSON.stringify(index));
+    invalidateAccountsCache();
+    // The browser signed into someone else: refused, store restored.
+    fs.writeFileSync(storeFile("a"), credFor("at-stranger", Date.now() + 3_600_000));
+    const strangerFetch = (async () =>
+      new Response(JSON.stringify({ account: { uuid: "u-stranger", email: "s@x.com" } }), { status: 200 })) as unknown as typeof fetch;
+    await expect(adoptProfileStoreCredential("a", { fetchImpl: strangerFetch })).rejects.toThrow(/signed into s@x.com, not a@x.com/);
+    expect(fs.existsSync(storeFile("a"))).toBe(false);
+    expect(accountLaunchInfo("a")).toBeNull();
+    fs.mkdirSync(profileStoreDir("a"), { recursive: true });
+    // The right account: adopted, login-expired mark cleared, launchable again.
+    fs.writeFileSync(storeFile("a"), credFor("at-a-fresh", Date.now() + 3_600_000));
+    const ownFetch = (async () =>
+      new Response(JSON.stringify({ account: { uuid: "u-a", email: "a@x.com" } }), { status: 200 })) as unknown as typeof fetch;
+    expect(await adoptProfileStoreCredential("a", { fetchImpl: ownFetch })).toEqual({ uuid: "u-a", email: "a@x.com" });
+    const snapshotPath = path.join(sandbox.dir, "cc-accounts", "a.json");
+    expect(JSON.parse(fs.readFileSync(snapshotPath, "utf-8")).credentials.claudeAiOauth.accessToken).toBe("at-a-fresh");
+    expect(JSON.parse(fs.readFileSync(indexPath, "utf-8")).profiles.a.login_expired_at).toBeUndefined();
+    expect(accountLaunchInfo("a")).not.toBeNull();
+  });
+
+  it("probes support once per binary: an empty store must report no login", async () => {
+    const calls: Array<{ bin: string; args: string[]; dir: string | undefined }> = [];
+    const exec = async (bin: string, args: string[], env: NodeJS.ProcessEnv) => {
+      calls.push({ bin, args, dir: env.CLAUDE_SECURESTORAGE_CONFIG_DIR });
+      return JSON.stringify({ loggedIn: calls.length === 1 ? false : true });
+    };
+    const bin = path.join(home, "claude");
+    fs.writeFileSync(bin, "#!/bin/sh\n");
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe(true);
+    expect(calls[0].args).toEqual(["auth", "status", "--json"]);
+    expect(calls[0].dir).toBeDefined();
+    expect(fs.existsSync(calls[0].dir!)).toBe(false); // probe dir cleaned up
+    // Cached: the same binary is not asked twice.
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe(true);
+    expect(calls).toHaveLength(1);
+    // A changed binary is asked again — and this one still sees the login.
+    fs.writeFileSync(bin, "#!/bin/sh\n# v2\n");
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe(false);
+    expect(calls).toHaveLength(2);
   });
 });
 
-describe("setup-token extraction + account fingerprint", () => {
-  const TOKEN = "sk-ant-oat01-" + "Ab_-".repeat(20);
-
-  it("pulls the token out of pane text (joined lines) and ignores other key shapes", () => {
-    const pane = ` Your OAuth token (valid for 1 year):\n\n ${TOKEN}\n\n Store this token securely.`;
-    expect(extractSetupToken(pane)).toBe(TOKEN);
-    expect(extractSetupToken("sk-ant-api03-" + "x".repeat(60))).toBeNull();
-    expect(extractSetupToken("Opening browser to sign in…")).toBeNull();
-  });
-
-  it("reads the unified rate-limit windows off response headers", () => {
-    const h = new Headers({
-      "anthropic-ratelimit-unified-5h-reset": "1788324000",
-      "anthropic-ratelimit-unified-5h-utilization": "0.34",
-      "anthropic-ratelimit-unified-7d-reset": "1788861600",
-      "anthropic-ratelimit-unified-7d-utilization": "0.27",
-    });
-    expect(parseRateLimitFingerprint(h)).toEqual({
-      five_hour_reset: 1788324000,
-      seven_day_reset: 1788861600,
-      five_hour_utilization: 0.34,
-      seven_day_utilization: 0.27,
-    });
-    expect(parseRateLimitFingerprint(new Headers())).toEqual({
-      five_hour_reset: null,
-      seven_day_reset: null,
-      five_hour_utilization: null,
-      seven_day_utilization: null,
-    });
-  });
-
-  it("same account = both reset timestamps match; unknown windows never match", () => {
-    const a = { five_hour_reset: 1, seven_day_reset: 2, five_hour_utilization: 0.1, seven_day_utilization: 0.5 };
-    expect(sameAccountFingerprint(a, { ...a, five_hour_utilization: 0.9 })).toBe(true);
-    expect(sameAccountFingerprint(a, { ...a, five_hour_reset: 3 })).toBe(false);
-    expect(sameAccountFingerprint(a, { ...a, seven_day_reset: 9 })).toBe(false);
-    const unknown = { five_hour_reset: null, seven_day_reset: null, five_hour_utilization: null, seven_day_utilization: null };
-    expect(sameAccountFingerprint(unknown, unknown)).toBe(false);
-  });
-});
-
-describe("attributeFingerprint (token → saved profile via usage snapshots)", () => {
-  const now = 1_788_320_000_000; // ms
-  const profiles = { a: { uuid: "u-a" }, b: { uuid: "u-b" }, c: { email: "c@x.com" } };
-  const usage = {
-    "u-a": { fetched_at: now, session: { percent: 1, resets_at: 1_788_324_000_000 }, weekly: { percent: 1, resets_at: 1_788_861_600_000 } },
-    "u-b": { fetched_at: now, session: { percent: 1, resets_at: 1_788_330_000_000 }, weekly: { percent: 1, resets_at: 1_788_900_000_000 } },
-    "c@x.com": { fetched_at: now - 86_400_000, session: { percent: 1, resets_at: 1_788_200_000_000 }, weekly: { percent: 1, resets_at: 1_788_950_000_000 } },
-  } as any;
-  const fp = (five: number | null, seven: number | null) =>
-    ({ five_hour_reset: five, seven_day_reset: seven, five_hour_utilization: null, seven_day_utilization: null });
-
-  it("names the one profile whose 7d and (open) 5h windows match, to the second", () => {
-    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, usage, now)).toBe("a");
-    expect(attributeFingerprint(fp(1_788_324_001, 1_788_861_600), profiles, usage, now)).toBe("a"); // ±2s
-  });
-
-  it("an open 5h window that disagrees rules the profile out even when 7d matches", () => {
-    expect(attributeFingerprint(fp(1_788_325_000, 1_788_861_600), profiles, usage, now)).toBeNull();
-  });
-
-  it("a stale snapshot (5h window already closed) attributes on the 7d reset alone", () => {
-    expect(attributeFingerprint(fp(1_788_400_000, 1_788_950_000), profiles, usage, now)).toBe("c");
-  });
-
-  it("unknown 7d reset, no snapshot, or an ambiguous match yields null", () => {
-    expect(attributeFingerprint(fp(1, null), profiles, usage, now)).toBeNull();
-    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), { z: { uuid: "u-z" } }, usage, now)).toBeNull();
-    const twin = { ...usage, "u-b": usage["u-a"] };
-    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, twin, now)).toBeNull();
-  });
-});
-
-// Regression for 2026-09-02: three profiles (claude2, claude3, fresh) all held
-// ONE access token under three names, and the machine ran account B while
-// ~/.claude.json still labelled it A. Root cause: a switch to a profile saved
-// without an identity block left the OUTGOING account's label in place, so
-// every later save-on-switch re-saved the live token under the wrong profile.
-// The mint flow then rejected every token it minted, because attribution
-// judged it against a store that agreed with itself and with nothing real.
 describe("switch identity integrity (sandboxed $HOME)", () => {
   let home: string;
   const savedEnv: Record<string, string | undefined> = {};

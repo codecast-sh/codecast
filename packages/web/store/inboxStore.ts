@@ -247,7 +247,7 @@ export type { ThreadCardOpenEntry } from "./threadTypes";
 // is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
 // synchronously, a pinned split renders as a split immediately instead of
 // flashing a peek overlay until the server clientState arrives.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace", "nav_sections"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -1381,6 +1381,12 @@ export type ClientUI = {
   theme?: "light" | "dark";
   visual_style?: "classic" | "minimal";
   sidebar_collapsed?: boolean;
+  // The sidebar sections the chevrons pin open (true) or closed (false), by
+  // section key. A section the user never touched is absent and follows the
+  // route ("you are on /tasks, so Tasks is open"); a pin is the user saying
+  // otherwise, so it outlives the route — and the reload. Unstamped: the
+  // sidebar's shape is a per-device layout preference like the rest.
+  nav_sections?: Record<string, boolean>;
   zen_mode?: boolean;
   sticky_headers_disabled?: boolean;
   diff_panel_open?: boolean;
@@ -2698,6 +2704,26 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
   counts: Record<InboxSectionKey, number>;
+}
+
+// The number a section header claims, for every surface that renders those
+// sections (the web panel and the mobile inbox both call this).
+//
+// `counts` is every row PLACED in the bucket — the flat cards plus the members
+// nested under a same-bucket lead. That is the honest number only while those
+// nested rows are on screen. With the subagent toggle off they render nowhere,
+// so the header claimed rows the reader could neither see nor reach: prod on
+// 2026-09-10 showed NEEDS INPUT (121) above 33 cards, while the sidebar badge
+// (flat cards only) said 34. A chip filter narrows a section the same way, so a
+// filtered section always reports the cards it shows.
+export function sectionHeaderCount(
+  shown: readonly InboxSession[],
+  full: readonly InboxSession[],
+  placedCount: number,
+  showSubagents: boolean,
+): number | undefined {
+  if (shown.length !== full.length) return undefined;
+  return showSubagents ? placedCount : shown.length;
 }
 
 // The store-state subset the chokepoint reads. Structural (never the store
@@ -11082,6 +11108,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.clientState.ui.zen_mode = zen;
       writeCriticalUiPrefs({ zen_mode: zen });
     }
+    // The sidebar's pinned sections ride along with the panes. Assigned whole,
+    // including with nothing: a layout saved with no pins (or an older save,
+    // from before this field) hands every section back to its route default.
+    const sections = snap.navSections ?? {};
+    if (JSON.stringify(this.clientState.ui.nav_sections ?? {}) !== JSON.stringify(sections)) {
+      this.clientState.ui.nav_sections = { ...sections };
+      writeCriticalUiPrefs({ nav_sections: this.clientState.ui.nav_sections });
+    }
     // The chip rides along with the panes. Both axes are assigned together
     // rather than through the single-axis setters, whose "don't clobber the
     // other axis's exclude" guards exist for one-chip clicks; here the whole
@@ -11114,6 +11148,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       zen: st.clientState.ui?.zen_mode ?? false,
       path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
   },
@@ -11127,6 +11162,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // update from a different page shouldn't silently retarget the switch.
       path: path ?? prev?.path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     st.updateSavedView(id, { prefs: snap });
   },

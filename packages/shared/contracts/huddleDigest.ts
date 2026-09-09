@@ -116,7 +116,15 @@ export function huddleTranscriptCommand(transcriptId: string): string {
 // What the agent receives. The digest, then how to read the whole transcript —
 // the words themselves stay on the server so a ten minute huddle does not land
 // as five thousand tokens of prose the agent did not ask for.
-export function formatHuddleSummaryTag(transcriptId: string, d: HuddleDigestInput): string {
+export function formatHuddleSummaryTag(
+  transcriptId: string,
+  d: HuddleDigestInput,
+  // The session already received these words live while the huddle ran (its
+  // own room feeds it by default). Saying so is what keeps the digest a
+  // record instead of a second ask — an agent told "here is what was decided"
+  // twice does the work twice.
+  opts: { heardLive?: boolean } = {},
+): string {
   const digest = formatHuddleDigest(d);
   const attrs = [
     `transcript="${attr(transcriptId)}"`,
@@ -126,7 +134,9 @@ export function formatHuddleSummaryTag(transcriptId: string, d: HuddleDigestInpu
   ].join(" ");
   return [
     `<huddle-summary ${attrs}>`,
-    "A huddle just ended in this session's room. This is its summary; the full speaker-attributed transcript stays on the server.",
+    opts.heardLive
+      ? "The huddle in this session's room just ended. You already heard it live, line by line, while it ran — this is the same conversation summarized, not a new request. Act on it only where it asks for something you have not done."
+      : "A huddle just ended in this session's room. This is its summary; the full speaker-attributed transcript stays on the server.",
     "",
     digest,
     "",
