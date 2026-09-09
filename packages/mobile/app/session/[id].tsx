@@ -3425,6 +3425,27 @@ const DESIGN_MOCK_CONVO: ConversationData = {
 // safe-area inset. The collapsing metadata strip is positioned just under it.
 const HEADER_BAR_HEIGHT = 40;
 
+// Android IME inset, driven straight from the keyboard events. KAV's Android
+// path can't be trusted for this: it never resets to 0 from a hide event —
+// it RE-DERIVES padding as (own frame height − getWindowVisibleDisplayFrame
+// height), and under edge-to-edge the KAV spans the full window while the
+// visible frame excludes the status bar and any still-animating IME slice.
+// Every dismissal therefore left ~a-status-bar-plus of phantom padding, and
+// IME churn right after a send strobed the composer between padded and
+// unpadded (glitchy bottom on the tablet). Event-driven padding has no frame
+// math: didShow carries the IME height above the system bars, didHide is an
+// authoritative 0.
+function useAndroidImeInset(): number {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setInset(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setInset(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  return inset;
+}
+
 function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
   const isCurrent = node.id === currentId || node.is_current;
   const date = new Date(node.started_at);
@@ -3655,6 +3676,7 @@ export default function SessionDetailScreen() {
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const androidImeInset = useAndroidImeInset();
 
   // Self-heal a stub URL → real id. A freshly created session lands here under a
   // local stub id (beginOptimisticSession) for instant render; once the server
@@ -4656,13 +4678,16 @@ export default function SessionDetailScreen() {
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <KeyboardAvoidingView
-        style={styles.container}
-        // 'padding' on both platforms. Edge-to-edge Android does NOT resize the
-        // window for the IME (with no KAV behavior the composer sits hidden under
-        // the keyboard), and 'height' — which re-derives the container height
-        // from a cached initial frame on every layout — oscillated by about a
-        // row while the list re-laid out during streaming.
-        behavior="padding"
+        // iOS: KAV 'padding' (resets cleanly via keyboardWillHide). Android:
+        // edge-to-edge does not resize the window for the IME, but KAV's own
+        // Android path leaves phantom padding after every dismissal (see
+        // useAndroidImeInset) — so the behavior is disabled there and the
+        // event-driven inset pads the container instead. 'height' is no
+        // better: it re-derives the container height from a cached initial
+        // frame on every layout and oscillated by about a row while the list
+        // re-laid out during streaming.
+        style={[styles.container, Platform.OS === 'android' && androidImeInset > 0 ? { paddingBottom: androidImeInset } : null]}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
         {/* Compact custom title bar — back + title + actions in one slim band,
