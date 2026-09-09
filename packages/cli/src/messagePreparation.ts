@@ -1,7 +1,9 @@
 import { redactSecrets } from './redact.js';
 import { detectImageMediaType } from './imagePayload.js';
+import { filesForWire, type SyncFile } from './userFiles.js';
 
 export type PreparationImage = { mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string };
+export type { SyncFile as PreparationFile } from './userFiles.js';
 export type PreparationMessage = {
   uuid?: string;
   messageUuid?: string;
@@ -12,6 +14,7 @@ export type PreparationMessage = {
   toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
   toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
   images?: PreparationImage[];
+  files?: SyncFile[];
   subtype?: string;
   model?: string;
 };
@@ -40,6 +43,7 @@ export function beginMessagePreparation(messages: PreparationMessage[], origin: 
     toolCalls: msg.toolCalls,
     toolResults: msg.toolResults,
     images: msg.images,
+    files: msg.files,
     subtype: msg.subtype,
     model: msg.model,
   });
@@ -78,6 +82,7 @@ export function finishPreparationMessage(msg: PreparationMessage) {
     tool_calls: msg.toolCalls?.map(tc => ({ id: tc.id, name: tc.name, input: truncate(redactSecrets(JSON.stringify(tc.input)), 50_000) })),
     tool_results: msg.toolResults?.map(tr => ({ tool_use_id: tr.toolUseId, content: truncate(redactSecrets(tr.content), 50_000), is_error: tr.isError })),
     images: images?.length ? images : undefined,
+    files: filesForWire(msg.files),
     subtype: msg.subtype,
     model: msg.model,
     timestamp: msg.timestamp,

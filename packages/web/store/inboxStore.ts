@@ -2700,6 +2700,26 @@ export interface PlacedInbox {
   counts: Record<InboxSectionKey, number>;
 }
 
+// The number a section header claims, for every surface that renders those
+// sections (the web panel and the mobile inbox both call this).
+//
+// `counts` is every row PLACED in the bucket — the flat cards plus the members
+// nested under a same-bucket lead. That is the honest number only while those
+// nested rows are on screen. With the subagent toggle off they render nowhere,
+// so the header claimed rows the reader could neither see nor reach: prod on
+// 2026-09-10 showed NEEDS INPUT (121) above 33 cards, while the sidebar badge
+// (flat cards only) said 34. A chip filter narrows a section the same way, so a
+// filtered section always reports the cards it shows.
+export function sectionHeaderCount(
+  shown: readonly InboxSession[],
+  full: readonly InboxSession[],
+  placedCount: number,
+  showSubagents: boolean,
+): number | undefined {
+  if (shown.length !== full.length) return undefined;
+  return showSubagents ? placedCount : shown.length;
+}
+
 // The store-state subset the chokepoint reads. Structural (never the store
 // type itself) so tests and computeVisualOrder's narrowed state can call it.
 export type PlaceInboxState = {
