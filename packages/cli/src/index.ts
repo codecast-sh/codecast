@@ -4,6 +4,7 @@ import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { planForkFanout } from "./forkFanout.js";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
@@ -74,7 +75,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -98,9 +99,8 @@ import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
-import { isClaudeTranscriptOutOfWatchScope, isTestArtifactPath } from "./syncScope.js";
-import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
+import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
+import { getStuckSyncs } from "./syncHealth.js";
 import {
   getLastReconciliation,
   isTranscriptFileInSyncScope,
@@ -1266,96 +1266,6 @@ function getAgentLabel(agentType?: string): string | null {
 
 const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
 
-const STUCK_SYNC_THRESHOLD_MS = 5 * 60 * 1000;
-const STUCK_SYNC_MIN_BYTES = 4096;
-
-type StuckSync = {
-  filePath: string;
-  sessionId: string;
-  unsyncedBytes: number;
-  fileSize: number;
-  lastSyncedAt: number;
-  conversationId?: string;
-};
-
-// Read the first ~2KB (enough for the session_meta line) and decide whether this
-// Codex rollout is app-server-managed. On any read error, treat it as not managed
-// so a genuine wedge is never silently hidden.
-function isAppServerManagedRollout(filePath: string): boolean {
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(filePath, "r");
-    const buf = Buffer.alloc(2048);
-    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
-    return isAppServerManagedCodexSessionHead(buf.toString("utf-8", 0, bytes));
-  } catch {
-    return false;
-  } finally {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch { /* ignore */ }
-    }
-  }
-}
-
-function getStuckSyncs(): StuckSync[] {
-  const ledger = getAllSyncRecords();
-  const now = Date.now();
-  const out: StuckSync[] = [];
-
-  for (const [filePath, record] of Object.entries(ledger)) {
-    let stats: fs.Stats;
-    try {
-      stats = fs.statSync(filePath);
-    } catch {
-      continue;
-    }
-    // A never-synced record (lastSyncedAt === 0) is NOT a wedged sync — it's a
-    // file the sync loop hasn't (and for out-of-scope files, won't) ever synced.
-    // Reporting it formats epoch 0 as "last sync 20618 days ago" and points the
-    // user at "cast restart", which can't help. Genuine stuck syncs have synced
-    // at least once, so they carry a real timestamp.
-    if (record.lastSyncedAt <= 0) continue;
-    // Files the sync loop refuses to sync (a test run's transcripts) are never
-    // actionable here — skip them defensively.
-    if (isTestArtifactPath(filePath)) continue;
-    // A ledger row the live watcher would never advance (e.g. a workflow run's
-    // journal.jsonl an older sweep synced) is not a wedge either.
-    if (isClaudeTranscriptOutOfWatchScope(filePath)) continue;
-    // Codex rollouts started by codecast are synced live by the app-server path,
-    // which never advances the transcript-file ledger. The watchdog's stale scan
-    // already skips them; without the same skip here they always read as stuck
-    // (file grows past lastSyncedPosition) even though every message is synced.
-    if (filePath.includes("/.codex/sessions/") && isAppServerManagedRollout(filePath)) continue;
-    if (filePath.includes("/.codex/sessions/") && stats.size <= getPosition(filePath)) continue;
-    const unsynced = stats.size - record.lastSyncedPosition;
-    if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
-    if (stats.mtimeMs <= record.lastSyncedAt) continue;
-    if (now - record.lastSyncedAt < STUCK_SYNC_THRESHOLD_MS) continue;
-    // lastSyncedAt alone can't tell a wedge from a session that sat quiet for an
-    // hour and just burst back to life (dead session auto-resumed): both have a
-    // stale stamp, but the resumed session's unsynced bytes are seconds old and
-    // the daemon is already draining them. Only flag when the unsynced content
-    // itself has been waiting past the threshold; keep the conservative
-    // (flagging) behavior when no timestamp is readable.
-    const unsyncedBornAt = readOldestUnsyncedTimestamp(filePath, record.lastSyncedPosition);
-    if (unsyncedBornAt !== null && now - unsyncedBornAt < STUCK_SYNC_THRESHOLD_MS) continue;
-
-    const base = path.basename(filePath, ".jsonl");
-    const m = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-    out.push({
-      filePath,
-      sessionId: m ? m[0] : base,
-      unsyncedBytes: unsynced,
-      fileSize: stats.size,
-      lastSyncedAt: record.lastSyncedAt,
-      conversationId: record.conversationId,
-    });
-  }
-
-  out.sort((a, b) => b.unsyncedBytes - a.unsyncedBytes);
-  return out;
-}
-
 function formatBytesShort(n: number): string {
   if (n < 1024) return `${n}B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
@@ -1421,7 +1331,7 @@ function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
   return { blocked: true, restarted: false };
 }
 
-function showStatus(): void {
+async function showStatus(): Promise<void> {
   const pid = getDaemonPid();
   const launchdStatus = getMacLaunchdDaemonStatus();
   const config = readConfig();
@@ -1531,7 +1441,7 @@ function showStatus(): void {
 
   console.log("");
 
-  const stuck = getStuckSyncs();
+  const stuck = await getStuckSyncs();
   if (stuck.length > 0) {
     const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
     row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
@@ -1846,7 +1756,7 @@ async function runOnboarding(config: Config): Promise<void> {
   }
 
   console.log("\nStatus:");
-  showStatus();
+  await showStatus();
 
   // Closing pointer: showWelcome() scrolled away during the prompts, so the last
   // thing on screen must tell the user where their sessions actually appear.
@@ -2899,6 +2809,7 @@ async function runSync(): Promise<void> {
             toolCalls: msg.toolCalls,
             toolResults: msg.toolResults,
             images: msg.images,
+            files: msg.files,
             subtype: msg.subtype,
           });
         }
@@ -2983,6 +2894,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
           toolCalls: msg.toolCalls,
           toolResults: msg.toolResults,
           images: msg.images,
+          files: msg.files,
           subtype: msg.subtype,
         });
       }
@@ -4361,12 +4273,12 @@ accountsCmd
       for (const p of profiles) {
         const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
         const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
-        const tok = accountTokenInfo(p.name);
-        const tokenNote = tok
-          ? (tok.expires_at <= Date.now()
-            ? ` ${c.yellow}· token expired${c.reset}`
-            : ` ${c.dim}· token, ${Math.ceil((tok.expires_at - Date.now()) / 86400000)}d left${c.reset}`)
-          : "";
+        const launch = accountLaunchInfo(p.name);
+        const tokenNote = p.login_expired_at
+          ? ` ${c.yellow}· login expired — cast accounts signin ${p.name}${c.reset}`
+          : launch
+            ? (launch.expires_at <= Date.now() ? ` ${c.yellow}· refresh lifetime over — cast accounts signin ${p.name}${c.reset}` : ` ${c.dim}· sessions${c.reset}`)
+            : "";
         console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
       }
     } catch (err) {
@@ -4431,31 +4343,32 @@ accountsCmd
   });
 
 accountsCmd
-  .command("token <name>")
+  .command("signin <name>")
+  .alias("login")
   .description(
-    "Store a `claude setup-token` for a saved profile so sessions can run on that account\n" +
-    "without switching the machine's login: cast spawn --account <name> \"<task>\".\n" +
-    "Mint it with `claude setup-token` while the browser is signed into THAT account,\n" +
-    "then paste it here (hidden prompt) or pipe it on stdin. Tokens last one year."
+    "Sign into a saved profile again when its login expired. Opens the browser on the\n" +
+    "OAuth page for that account; the credential lands in the profile's own store, so the\n" +
+    "machine's current login is untouched. Sessions pinned to the profile work again after."
   )
-  .option("--rm", "Forget the stored token (the token itself stays valid until revoked at claude.ai → Settings → Claude Code)")
-  .action(async (name: string, options: any) => {
+  .action(async (name: string) => {
     try {
-      if (options.rm) {
-        const existed = removeAccountToken(name);
-        console.log(existed ? `${c.green}✓${c.reset} removed token for ${c.cyan}${name}${c.reset}` : `${c.dim}no token stored for ${name}${c.reset}`);
-        return;
-      }
-      const token = await promptHiddenSecret(`Paste the setup-token for ${name}: `);
-      const file = writeAccountToken(name, token);
-      const info = accountTokenInfo(name)!;
-      console.log(`${c.green}✓${c.reset} token stored for ${c.cyan}${name}${c.reset} (${file}, expires ${new Date(info.expires_at).toISOString().slice(0, 10)})`);
-      console.log(`${c.dim}  launch on it: cast spawn --account ${name} "<task>"${c.reset}`);
+      const profile = listProfiles().find((p) => p.name === name);
+      if (!profile) throw new CcAccountError(`No saved profile "${name}" on this machine`);
+      const dir = profileStoreDir(name);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      console.log(`${c.dim}Signing into ${profile.email ?? name} in the browser…${c.reset}`);
+      const run = spawnSync("claude", ["auth", "login", "--claudeai", ...(profile.email ? ["--email", profile.email] : [])], {
+        stdio: "inherit",
+        env: { ...process.env, CLAUDE_SECURESTORAGE_CONFIG_DIR: dir },
+      });
+      if (run.status !== 0) throw new CcAccountError("the sign-in did not complete");
+      const identity = await adoptProfileStoreCredential(name);
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${name}${c.reset} signed in again${identity.email ? ` (${identity.email})` : ""}`);
+      ensureProfileStore(name);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
-    // Token metadata rides the accounts inventory — show it in Settings now.
     await publishAccountsInventory();
   });
 
@@ -5031,9 +4944,7 @@ program
 program
   .command("status")
   .description("Show daemon status, connection state, and sync information")
-  .action(() => {
-    showStatus();
-  });
+  .action(showStatus);
 
 program
   .command("attach")
@@ -5205,7 +5116,7 @@ program
     // pre-fix is wedged, this command unsticks it by dropping the cached ID so the
     // next pass calls createConversation (which looks up by session_id + current
     // user_id and returns the right one).
-    const stuck = getStuckSyncs().filter(s => s.conversationId);
+    const stuck = (await getStuckSyncs()).filter(s => s.conversationId);
     if (stuck.length === 0) {
       console.log("No stuck session files with cached conversation IDs found.");
       return;
@@ -10936,14 +10847,18 @@ async function fileSessionsUnderLabel(
 program
   .command("fork")
   .description(
-    "Fork a conversation into one or more parallel branches\n\n" +
+    "Fork a conversation into parallel branches\n\n" +
     "Each branch keeps the full history up to the fork point, then heads off in\n" +
-    "its own direction. Every branch becomes a live session in your inbox — an\n" +
-    "independent thread you can review and continue.\n\n" +
+    "its own direction as a live session in your inbox. With two or more\n" +
+    "directions this thread IS one of them: it takes the first and continues in\n" +
+    "place, the rest become branches. One direction spins off a branch and this\n" +
+    "thread carries on with its own work. Each branch receives its direction as\n" +
+    "its human's next message.\n\n" +
     "Examples:\n" +
-    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # 3 branches from here\n" +
+    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # this thread takes Redis, 2 branches\n" +
+    "  cast fork --all-branches \"use Redis\" \"use Postgres\"       # 2 branches, this thread stays out\n" +
     "  cast fork --at 42 \"what if we cache\" \"what if we don't\"   # branch at message 42\n" +
-    "  cast fork \"explore the bold refactor\"                     # one branch\n" +
+    "  cast fork \"explore the bold refactor\"                     # one branch, this thread continues\n" +
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
@@ -10953,7 +10868,8 @@ program
   .option("--tip", "Fork at the very end instead, keeping everything including the latest user message — use when forking on your own initiative, where there is no fork request to strip")
   .option("--from <index>", "Alias for --at (back-compat)")
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
-  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id")
+  .option("--all-branches", "Make every direction a branch and keep this thread out of the fan-out (default with two or more directions: this thread takes the first)")
+  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id. This thread's own direction stays here unless --all-branches")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -11076,11 +10992,13 @@ program
       }
     }
 
-    // Multi-direction fork: branch once per direction from the same anchor, then
-    // seed each branch with its direction over the same pending-message rail
-    // `cast send` uses. Each lands in the inbox as its own session. The seed is
-    // the direction verbatim — the branch just receives its next instruction;
-    // keeping it ignorant of the fan-out is what keeps branches independent.
+    // Seeded fork: branch once per branch direction from the same anchor. The
+    // fork mutation queues each direction to its branch as the human's own next
+    // turn (raw text, no sender), so a branch never learns it is a fork and has
+    // nobody to report back to. With two or more directions this thread takes
+    // the first itself (planForkFanout) — the roster below tells the agent to
+    // continue with it in place.
+    const fanout = planForkFanout(directions, { allBranches: !!options.allBranches });
     if (options.cloud && directions.length === 0) {
       console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
       process.exit(1);
@@ -11116,7 +11034,7 @@ program
 
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean; worktree?: string }[] = [];
-      for (const direction of directions) {
+      for (const direction of fanout.branchDirections) {
         let cloudPlacement: Record<string, unknown> = {};
         let worktreeName: string | undefined;
         if (cloud) {
@@ -11155,17 +11073,9 @@ program
         }
         const result = await response.json() as any;
         const newShortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
-        // Seed via cliFetch (not cliPost) so a failed seed flags this branch
-        // instead of exiting and abandoning the branches already created.
-        let seeded = false;
-        try {
-          const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
-          });
-          seeded = seedResp.ok;
-        } catch {}
+        // The mutation queued the seed in the same transaction as the branch;
+        // a missing id means an older server that only titled the row.
+        const seeded = !!result.seed_message_id;
         roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded, worktree: worktreeName });
       }
 
@@ -11175,7 +11085,7 @@ program
       }
 
       if (options.json) {
-        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, branches: roster }, null, 2));
+        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, parent_direction: fanout.parentDirection ?? null, branches: roster }, null, 2));
         return;
       }
 
@@ -11188,11 +11098,21 @@ program
         `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:${labelNote}`
       );
       for (const b of roster) {
-        const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
+        const warn = b.seeded ? "" : ` ${c.yellow}(seed not queued — send it with cast send ${b.short_id})${c.reset}`;
         console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${promptGist(b.direction)}${warn}`);
       }
       if (labelResult?.failures) {
         console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} branch${labelResult.failures === 1 ? "" : "es"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
+      }
+      // The agent running this command reads the result mid-turn: it is now
+      // the thread for the first direction and simply keeps going.
+      if (fanout.parentDirection !== undefined) {
+        const one = roster.length === 1;
+        console.log(
+          `\n${c.bold}This thread is the branch for the first direction — continue with it now:${c.reset}\n` +
+          `  ${promptGist(fanout.parentDirection)}\n` +
+          `${c.dim}The other branch${one ? " runs on its own" : "es run on their own"} in the human's inbox; do not message, monitor, or wait on ${one ? "it" : "them"}.${c.reset}`
+        );
       }
       return;
     }

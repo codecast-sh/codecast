@@ -19,7 +19,7 @@ import * as path from "path";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync, whichBin } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
@@ -56,12 +56,14 @@ import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
   hasLiveClaudeOnActiveCredential,
+  liveClaudeProfiles,
   liveClaudeSessions,
   markClaudeSessionEnded,
   markClaudeSessionLive,
   onLiveClaudeDrained,
   reconcileLiveClaudeSessions,
   seedLiveClaudeSessions,
+  setActiveProfileResolver,
   type LiveClaudeSession,
 } from "./ccLiveGate.js";
 import {
@@ -82,12 +84,18 @@ import {
   activeAccountSummary,
   listProfiles,
   accountSourcePrefix,
-  accountTokenInfo,
-  writeAccountToken,
-  extractSetupToken,
-  fetchRateLimitFingerprint,
-  sameAccountFingerprint,
-  attributeFingerprintToProfile,
+  activeProfileName,
+  ensureProfileStore,
+  deleteProfileStore,
+  probeSecureStorageSupport,
+  absorbProfileStore,
+  adoptProfileStoreCredential,
+  profileStoreDir,
+  readProfileStoreCredentialsAsync,
+  readProfileSecretCredentialsAsync,
+  writeActiveCredential,
+  credentialIsFresher,
+  CcAccountError,
   readActiveOauth,
   createMtimeGatedCache,
   ingestStatusLineUsage,
@@ -188,6 +196,7 @@ import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
+import { createStuckSyncReader } from "./syncHealth.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
@@ -2761,7 +2770,7 @@ async function pollDaemonCommands(): Promise<void> {
         device_id: deviceId(),
         device_label: deviceLabel(),
         boot_id: BOOT_ID,
-        ...syncHealthFields(),
+        ...await syncHealthFields(),
       }),
     });
     if (!response.ok) {
@@ -2890,7 +2899,9 @@ export function freezeBeatFields(freeze: LoopFreezeSummary): {
   };
 }
 
-function syncHealthFields(): {
+const readStuckSyncs = createStuckSyncReader();
+
+async function syncHealthFields(): Promise<{
   pending_sync_count: number;
   oldest_pending_ms: number;
   pending_sync_messages: number;
@@ -2900,8 +2911,8 @@ function syncHealthFields(): {
   loop_freeze_1h_ms: number;
   loop_freeze_max_ms: number;
   loop_freeze_top: string;
-} {
-  const health = retryQueueRef?.getHealth();
+}> {
+  const health = retryQueueRef?.getHealth(await readStuckSyncs());
   return {
     pending_sync_count: health?.pending ?? 0,
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
@@ -3087,258 +3098,83 @@ async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: b
 }
 
 // ---------------------------------------------------------------------------
-// Setup-token mint flow (switch_account {mint}): per-session accounts pin a
-// session to a profile's `claude setup-token` (see accountSourcePrefix), so
-// every saved login needs one. The CLI's own `setup-token` runs the OAuth
-// flow and prints the token; this block (1) runs it in a utility pane with
-// $BROWSER pointed at a hook that RECORDS the sign-in URL instead of opening
-// it, (2) drives the one-button approval in the agent browser — a clone of the
-// human's Chrome, so signed into the same claude.ai account — falling back to
-// the default browser for a human click, (3) reads the token off the pane,
-// (4) proves it belongs to the machine's login by comparing rate-limit
-// fingerprints with the keychain credential (the browser may be signed into
-// another account; the token itself can't say whose it is), (5) stores it
-// under that profile. Outcome goes back through reportMintFlow, the web's
-// reactive state channel — the same shape as the login flow below.
+// Per-profile credential stores: every saved login can carry sessions of its
+// own, with no browser involved (ccAccounts.ts, "Per-profile credential
+// stores"). Runs on every beat and stays offline: a store is filled from the
+// snapshot codecast already keeps. The one-time probe guards against a Claude
+// Code that ignores CLAUDE_SECURESTORAGE_CONFIG_DIR: a pinned session would
+// land on the keychain login in silence, so no launch file exists until the
+// installed binary has proved it honors the variable. A saved login the
+// endpoint refused (login_expired_at) is not repaired here; it is shown in
+// Settings with a sign-in button, and that click is the only time a browser
+// opens (signInProfile below).
 // ---------------------------------------------------------------------------
 
-const MINT_FLOW_TMUX = "cc-mint-flow";
-const MINT_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
-const MINT_FLOW_POLL_MS = 2000;
-// Re-mint this close to the one-year expiry: CC never warns, and a dead token
-// silently drops every pinned session onto the keychain login.
-const MINT_RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000;
-let mintFlowActive = false;
-let mintFlowGeneration = 0;
-// One auto-mint attempt per account per daemon lifetime — a rejected mint
-// (wrong browser account, closed tab) is not nagged; the web's "try again"
-// relaunches explicitly. Attempts are also stamped on disk so a daemon
-// restart (deploys, watchdog) doesn't re-open the consent tab within hours.
-const autoMintDecidedAccounts = new Set<string>();
-const AUTO_MINT_RETRY_MS = 6 * 60 * 60 * 1000;
+let secureStorageSupport: { bin: string; supported: boolean } | null = null;
+let profileStoresInFlight = false;
+let lastStoreReport = "";
 
-function autoMintAttemptsPath(): string {
-  return path.join(CONFIG_DIR, "cc-mint-attempts.json");
-}
-
-function readAutoMintAttempts(): Record<string, number> {
+async function ensureProfileStores(reason: string): Promise<void> {
+  if (isRemoteDevice() || profileStoresInFlight) return;
+  profileStoresInFlight = true;
   try {
-    const parsed = JSON.parse(fs.readFileSync(autoMintAttemptsPath(), "utf-8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function stampAutoMintAttempt(key: string): void {
-  try {
-    const attempts = readAutoMintAttempts();
-    attempts[key] = Date.now();
-    fs.writeFileSync(autoMintAttemptsPath(), JSON.stringify(attempts), { mode: 0o600 });
-  } catch {}
-}
-
-function mintUrlPath(): string {
-  return path.join(CONFIG_DIR, "mint-flow.url");
-}
-
-/** The $BROWSER hook: CC hands it the OAuth URL as its one argument. */
-function writeMintBrowserHook(): string {
-  const hook = path.join(CONFIG_DIR, "mint-browser-hook.sh");
-  fs.writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' "$1" > ${shellEscapeForSh(mintUrlPath())}\n`, { mode: 0o700 });
-  return hook;
-}
-
-// Same PATH rule as the login flow (the pane inherits launchd's PATH); the
-// trailing sleep keeps a dying CLI's last words capturable.
-export function buildMintFlowCommand(hookPath: string): string {
-  return `PATH=${shellEscapeForSh(agentSpawnPath())} BROWSER=${shellEscapeForSh(hookPath)} claude setup-token; sleep 4`;
-}
-
-// The agent browser approves in ~6s when it is signed into claude.ai, and it
-// usually is NOT — so this budget is what a signed-in run needs, not what a
-// signed-out one takes to give up. A minute of it bought nothing and read as
-// "the sign-in never opened": the fallback is the browser the human is looking
-// at, and reaching it fast is worth more than the automatic click.
-const MINT_AGENT_APPROVE_MS = 20 * 1000;
-
-async function approveMintInBrowser(url: string): Promise<"agent" | "opened"> {
-  const res = await runCastCommand(["browser", "do", `open ${url}`, "find Authorize", "click"], { timeoutMs: MINT_AGENT_APPROVE_MS });
-  if (res.code === 0) return "agent";
-  const why = (res.stderr.trim() || res.stdout.trim()).split("\n").pop()?.slice(0, 160) ?? `exit ${res.code}`;
-  log(`[MINT-FLOW] agent-browser approval failed (${why}) — opening the default browser for a manual approve`);
-  spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore", detached: true }).unref();
-  return "opened";
-}
-
-async function startMintFlow(profile: string, force = false): Promise<string> {
-  if (isRemoteDevice()) {
-    throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
-  }
-  if (mintFlowActive && !force) return "mint_flow_already_running";
-  const gen = ++mintFlowGeneration;
-  mintFlowActive = true;
-  try {
-    // Only the ACTIVE login can be minted for: that is the account the
-    // browser is signed into, and the one we can fingerprint-check against.
-    const active = activeAccountSummary();
-    const covering = listProfiles().find((p) => p.active);
-    if (!covering) throw new Error("the machine's current login isn't saved as a profile yet");
-    if (covering.name !== profile) {
-      throw new Error(
-        `"${profile}" is not the machine's current login (${active?.email ?? "unknown"}, saved as "${covering.name}") — switch to it first`,
+    const bin = launchBinary("claude", { warn: log });
+    const resolved = path.isAbsolute(bin) ? bin : (whichBin(bin) ?? bin);
+    if (!secureStorageSupport || secureStorageSupport.bin !== resolved) {
+      const supported = await probeSecureStorageSupport(resolved, { env: { ...process.env, PATH: agentSpawnPath() } });
+      secureStorageSupport = { bin: resolved, supported };
+      log(
+        supported
+          ? `[CC-STORE] ${resolved} honors per-session credential stores`
+          : `[CC-STORE] ${resolved} ignores CLAUDE_SECURESTORAGE_CONFIG_DIR — sessions cannot be pinned to saved logins until Claude Code is updated`,
       );
     }
-    fs.rmSync(mintUrlPath(), { force: true });
-    const hook = writeMintBrowserHook();
-    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
-    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", MINT_FLOW_TMUX, buildMintFlowCommand(hook)], { timeout: 5000 });
-    log(`[MINT-FLOW] started setup-token mint for "${profile}"${active?.email ? ` (${active.email})` : ""}${force ? " [forced relaunch]" : ""}`);
-    void watchMintFlow(profile, active?.email, gen)
-      .catch((err) => log(`[MINT-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => { if (gen === mintFlowGeneration) mintFlowActive = false; });
-    return "mint_flow_started";
-  } catch (err) {
-    if (gen === mintFlowGeneration) mintFlowActive = false;
-    throw err;
-  }
-}
-
-async function watchMintFlow(profile: string, email: string | undefined, gen: number): Promise<void> {
-  const deadline = Date.now() + MINT_FLOW_TIMEOUT_MS;
-  let lastPane = "";
-  let urlHandled = false;
-
-  // `storedFor` is the profile the token actually landed under — the active
-  // login's profile in the common case, another saved profile when the browser
-  // was signed into that account instead (see attributeFingerprint).
-  const finish = async (status: "confirmed" | "rejected", rawReason?: string, storedFor?: string): Promise<void> => {
-    // The reason renders inline on the Settings page — keep it one line.
-    const reason = rawReason?.replace(/\s+/g, " ").trim().slice(0, 200);
-    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
-    fs.rmSync(mintUrlPath(), { force: true });
-    const owner = storedFor ?? profile;
-    log(`[MINT-FLOW] ${status}${reason ? `: ${reason}` : ` — token stored for "${owner}"`}`);
-    // The token's metadata reaches the web on the inventory beat; push it now.
-    if (status === "confirmed") sendHeartbeat().catch(() => {});
-    const ownerEmail = owner === profile ? email : listProfiles().find((p) => p.name === owner)?.email;
-    await syncServiceRef?.reportMintFlow(status, owner, ownerEmail, reason).catch((err) => {
-      log(`[MINT-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  };
-
-  const storeMinted = async (token: string): Promise<void> => {
-    let owner: string | null = null;
-    try {
-      // Keep the comparison credential usable: an idle login may have lapsed.
-      if (((await activeCredentialExpiresAt()) ?? 0) <= Date.now() + 60_000) {
-        await refreshActiveCredential().catch(() => null);
-      }
-      const activeToken = readActiveOauth()?.accessToken;
-      const [mineRes, minted] = await Promise.all([
-        typeof activeToken === "string" && activeToken
-          ? fetchRateLimitFingerprint(activeToken).then((fp) => ({ fp }), (err) => ({ err }))
-          : Promise.resolve({ err: new Error("no usable keychain login") }),
-        fetchRateLimitFingerprint(token),
-      ]);
-      if ("fp" in mineRes && sameAccountFingerprint(mineRes.fp, minted)) {
-        owner = profile;
-      } else {
-        // Not the machine's login — the browser was signed into another
-        // account. If it is one we have saved, the token is still worth
-        // keeping: file it there.
-        owner = attributeFingerprintToProfile(minted);
-        // Only the direct comparison can rule `profile` out. When it never ran
-        // (no usable keychain login, a probe that threw), a snapshot pointing
-        // back at `profile` is the best evidence we have — throwing it away
-        // rejected tokens that were correct.
-        if (owner === profile && "fp" in mineRes) owner = null;
-      }
-      if (!owner) {
-        return finish(
-          "rejected",
-          `the browser is signed into a Claude account that matches no saved profile (this machine's login is ${email ?? "unknown"}) — sign into a saved account at claude.ai and try again`,
-        );
-      }
-      writeAccountToken(owner, token);
-    } catch (err) {
-      return finish("rejected", `could not verify or store the token: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    return finish("confirmed", undefined, owner);
-  };
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, MINT_FLOW_POLL_MS));
-    if (gen !== mintFlowGeneration) return;
-    if (!urlHandled) {
-      let url = "";
-      try { url = fs.readFileSync(mintUrlPath(), "utf-8").trim(); } catch {}
-      if (url.startsWith("http")) {
-        urlHandled = true;
-        void approveMintInBrowser(url)
-          .then((how) => log(`[MINT-FLOW] sign-in URL handed to ${how === "agent" ? "the agent browser (auto-approved)" : "the default browser"}`))
-          .catch((err) => log(`[MINT-FLOW] browser hand-off failed: ${err instanceof Error ? err.message : String(err)}`));
-      }
-    }
-    let pane: string;
-    try {
-      // -J joins wrapped lines: the token is ~100 chars and the pane is narrower.
-      pane = tmuxExecSync(["capture-pane", "-p", "-J", "-t", MINT_FLOW_TMUX], { timeout: 3000 });
-    } catch {
-      // A capture can fail because tmux was slow under load (2026-09-01: a 3s
-      // timeout mid-flow was read as "CLI exited" and killed a live approval).
-      // Only a missing session means the CLI is gone.
-      try {
-        tmuxExecSync(["has-session", "-t", MINT_FLOW_TMUX], { timeout: 3000 });
-        continue;
-      } catch {}
-      // Pane gone = the CLI exited; its last capture may still hold the token.
-      const late = extractSetupToken(lastPane);
-      if (late) return storeMinted(late);
-      const tail = summarizeLoginPaneTail(lastPane);
-      return finish(
-        "rejected",
-        tail && !/paste code here/i.test(tail)
-          ? tail
-          : "claude setup-token exited before the browser approval completed",
-      );
-    }
-    lastPane = pane;
-    const token = extractSetupToken(pane);
-    if (token) return storeMinted(token);
-  }
-  return finish("rejected", "timed out waiting for the browser approval (5 min)");
-}
-
-// The active login needs a live per-session token (only the active one can be
-// minted — see startMintFlow). Runs on every beat; acts once per account per
-// daemon lifetime, and again a week before a token's expiry.
-function maybeAutoMintToken(): void {
-  if (isRemoteDevice() || mintFlowActive) return;
-  try {
-    const active = listProfiles().find((p) => p.active);
-    if (!active) return;
-    const key = active.uuid || active.email || active.name;
-    if (autoMintDecidedAccounts.has(key)) return;
-    const tok = accountTokenInfo(active.name);
-    if (tok && tok.expires_at > Date.now() + MINT_RENEW_BEFORE_MS) return;
-    autoMintDecidedAccounts.add(key);
-    const lastAttempt = readAutoMintAttempts()[key] ?? 0;
-    if (Date.now() - lastAttempt < AUTO_MINT_RETRY_MS) {
-      log(`[MINT-FLOW] auto-mint for "${active.name}" skipped — attempted ${Math.round((Date.now() - lastAttempt) / 60000)}m ago (retry after 6h, or "mint now" in Settings)`);
+    const profiles = listProfiles();
+    if (!secureStorageSupport.supported) {
+      for (const p of profiles) deleteProfileStore(p.name);
       return;
     }
-    stampAutoMintAttempt(key);
-    syncServiceRef?.reportMintFlow("pending", active.name, active.email).catch(() => {});
-    startMintFlow(active.name)
-      .then((r) => log(`[MINT-FLOW] auto-mint for "${active.name}": ${r}`))
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log(`[MINT-FLOW] auto-mint launch failed: ${msg}`);
-        syncServiceRef?.reportMintFlow("rejected", active.name, active.email, msg).catch(() => {});
-      });
+    const provisioned: string[] = [];
+    const needsSignIn: string[] = [];
+    for (const p of profiles) {
+      const state = ensureProfileStore(p.name);
+      if (state === "provisioned") provisioned.push(p.name);
+      else if (state !== "ready") needsSignIn.push(p.name);
+    }
+    if (provisioned.length) {
+      log(`[CC-STORE] provisioned launch credentials for ${provisioned.join(", ")} (${reason})`);
+      sendHeartbeat().catch(() => {});
+    }
+    const report = needsSignIn.join(",");
+    if (report !== lastStoreReport) {
+      lastStoreReport = report;
+      if (report) log(`[CC-STORE] saved logins that need a person to sign in again: ${needsSignIn.join(", ")}`);
+    }
   } catch (err) {
-    log(`[MINT-FLOW] auto-mint check failed: ${err instanceof Error ? err.message : String(err)}`);
+    log(`[CC-STORE] provisioning failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    profileStoresInFlight = false;
+  }
+}
+
+/** Fold what live sessions rotated in their stores back into the snapshots,
+ *  and hand the active profile's fresher pair to the keychain when a session
+ *  pinned to it (launched while it was dormant) rotated the grant there. */
+async function absorbProfileStores(): Promise<void> {
+  const active = activeProfileName();
+  for (const name of liveClaudeProfiles()) {
+    if (await absorbProfileStore(name)) log(`[CC-STORE] absorbed the pair a live session rotated for "${name}"`);
+  }
+  if (!active) return;
+  const activeHeld = liveClaudeSessions().some((s) => s.account === active);
+  if (!activeHeld) return;
+  if (await absorbProfileStore(active)) {
+    const [snapshot, keychain] = await Promise.all([readProfileSecretCredentialsAsync(active), readActiveCredentialAsync()]);
+    if (snapshot && credentialIsFresher(snapshot, keychain)) {
+      writeActiveCredential(snapshot);
+      log(`[CC-STORE] keychain updated from the pair a session pinned to "${active}" rotated`);
+      pushCredentialToRemoteHosts("token_refresh").catch(() => {});
+    }
   }
 }
 
@@ -3385,12 +3221,15 @@ export function summarizeLoginPaneTail(pane: string): string | null {
 // trailing sleep keeps a dead CLI's pane alive past the watcher's next 2s
 // poll — an instantly-dying pane vanishes before the first capture and
 // reduces the failure report to the generic fallback.
-export function buildLoginFlowCommand(email: string | undefined): string {
-  const login = `PATH=${shellEscapeForSh(agentSpawnPath())} claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
+export function buildLoginFlowCommand(email: string | undefined, storeDir?: string): string {
+  // A profile sign-in lands in that profile's own credential store, so the
+  // machine's keychain login is untouched by it.
+  const store = storeDir ? `CLAUDE_SECURESTORAGE_CONFIG_DIR=${shellEscapeForSh(storeDir)} ` : "";
+  const login = `PATH=${shellEscapeForSh(agentSpawnPath())} ${store}claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
   return `${login}; sleep 4`;
 }
 
-async function startLoginFlow(email: string | undefined, force = false): Promise<string> {
+async function startLoginFlow(email: string | undefined, force = false, profile?: string): Promise<string> {
   // A second click while a flow is live joins it — the browser tab is already
   // open, and a second `claude auth login` would fight it for the callback
   // port. A FORCED relaunch (the banner's "reopen" action) supersedes it
@@ -3400,12 +3239,13 @@ async function startLoginFlow(email: string | undefined, force = false): Promise
   const gen = ++loginFlowGeneration;
   loginFlowActive = true;
   try {
-    const baselineHash = credentialHashOf(await readActiveCredentialAsync());
+    const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
+    const baselineHash = credentialHashOf(await readCredential());
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
-    const cmd = buildLoginFlowCommand(email);
+    const cmd = buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined);
     await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", LOGIN_FLOW_TMUX, cmd], { timeout: 5000 });
-    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
-    void watchLoginFlow(baselineHash, email, gen)
+    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""}${profile ? ` into profile "${profile}"` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
+    void watchLoginFlow(baselineHash, email, gen, profile)
       .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => { if (gen === loginFlowGeneration) loginFlowActive = false; });
     return "login_flow_started";
@@ -3418,20 +3258,53 @@ async function startLoginFlow(email: string | undefined, force = false): Promise
 // Poll until the credential store proves the sign-in (hash changed + healthy),
 // the pane dies (the CLI exited — success or failure, the grace re-check
 // tells them apart), or the timeout lapses (abandoned browser tab).
-async function watchLoginFlow(baselineHash: string | null, requestedEmail: string | undefined, gen: number): Promise<void> {
+async function watchLoginFlow(
+  baselineHash: string | null,
+  requestedEmail: string | undefined,
+  gen: number,
+  profile?: string,
+): Promise<void> {
   const deadline = Date.now() + LOGIN_FLOW_TIMEOUT_MS;
   let lastPane = "";
+  const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
 
   // The keychain and the pane are read off the loop: this polls every 2s for
   // the whole sign in, and a busy keychain answered `security` in 2 to 3s.
   const confirmedNow = async (): Promise<boolean> => {
-    const raw = await readActiveCredentialAsync();
+    const raw = await readCredential();
     if (!raw) return false;
     const health = credentialHealth(raw, Date.now());
     return credentialHashOf(raw) !== baselineHash && health.pushable;
   };
 
+  const finishRejected = async (reason: string): Promise<void> => {
+    log(`[LOGIN-FLOW] rejected: ${reason}`);
+    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+    await syncServiceRef?.completeLoginFlow("rejected", requestedEmail, reason, profile).catch((err) => {
+      log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    });
+  };
+
   const finishConfirmed = async (): Promise<void> => {
+    if (profile) {
+      // The store now holds whatever account the browser signed into; adopt
+      // it only once it has proved to be the profile's own.
+      let identity: { email?: string };
+      try {
+        identity = await adoptProfileStoreCredential(profile);
+      } catch (err) {
+        return finishRejected(err instanceof Error ? err.message : String(err));
+      }
+      log(`[LOGIN-FLOW] confirmed — profile "${profile}" signed in again${identity.email ? ` as ${identity.email}` : ""}`);
+      await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+      sendHeartbeat().catch(() => {});
+      await syncServiceRef?.completeLoginFlow("confirmed", identity.email ?? requestedEmail, undefined, profile).catch((err) => {
+        log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+        return 0;
+      });
+      return;
+    }
     const email = activeAccountSummary()?.email ?? requestedEmail;
     log(`[LOGIN-FLOW] confirmed${email ? ` — signed in as ${email}` : ""}`);
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
@@ -3447,15 +3320,6 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
       return 0;
     });
     if (revived) log(`[LOGIN-FLOW] server queued revive for ${revived} auth-blocked session(s)`);
-  };
-
-  const finishRejected = async (reason: string): Promise<void> => {
-    log(`[LOGIN-FLOW] rejected: ${reason}`);
-    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
-    await syncServiceRef?.completeLoginFlow("rejected", requestedEmail, reason).catch((err) => {
-      log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
-      return 0;
-    });
   };
 
   while (Date.now() < deadline) {
@@ -3475,7 +3339,7 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
       // the CLI printed "Login successful." and exited with an unchanged
       // keychain item). A healthy pushable credential after a clean exit
       // means the machine is signed in, whatever the hash says.
-      const health = credentialHealth(await readActiveCredentialAsync(), Date.now());
+      const health = credentialHealth(await readCredential(), Date.now());
       if (health.pushable) return finishConfirmed();
       const tail = summarizeLoginPaneTail(lastPane);
       return finishRejected(tail ?? "the sign-in window closed before completing");
@@ -3518,7 +3382,8 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
     const expiresAt = await activeCredentialExpiresAt();
     if (expiresAt != null && expiresAt - Date.now() < CC_TOKEN_REFRESH_THRESHOLD_MS) {
       if (hasLiveClaudeOnActiveCredential()) {
-        const holders = liveClaudeSessions().filter((s) => !s.account);
+        const active = activeProfileName();
+        const holders = liveClaudeSessions().filter((s) => !s.account || s.account === active);
         log(
           `[CC-AUTH] Refresh deferred: ${holders.length} live claude session(s) hold the active credential ` +
             `(${holders.map((s) => s.id).join(", ")}) — reading back what the CLI rotates (${reason})`,
@@ -3536,6 +3401,10 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
         }
       }
     }
+    // Sessions on per-profile stores rotate there; fold that back first so the
+    // snapshots (and, for the active profile, the keychain) never lag a live
+    // session's rotation by more than one tick.
+    await absorbProfileStores().catch((err) => log(`[CC-STORE] absorb failed: ${err instanceof Error ? err.message : String(err)}`));
     // Propagate a fresher active credential into its saved profile: a manual
     // /login, the refresh above, or — when the gate deferred — the rotation a
     // live claude performed. Cheap no-op when already in step.
@@ -3730,7 +3599,10 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
           `${readOauthAccount()?.emailAddress ?? "unknown"}; using the verified identity`,
       );
     }
-    const res = await refreshUsageSnapshots(opts.force ? { minIntervalMs: 0 } : {});
+    const res = await refreshUsageSnapshots({
+      ...(opts.force ? { minIntervalMs: 0 } : {}),
+      heldProfiles: liveClaudeProfiles(),
+    });
     if (res.probed.length > 0 || res.failed.length > 0 || res.expired.length > 0) {
       const failNote = res.failed.length
         ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
@@ -3947,7 +3819,7 @@ async function sendHeartbeat(): Promise<void> {
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
-        ...syncHealthFields(),
+        ...await syncHealthFields(),
       }),
     });
 
@@ -3981,7 +3853,7 @@ async function sendHeartbeat(): Promise<void> {
         void wakeCloudDevice(w.device_id, w.label ?? undefined);
       }
     }
-    maybeAutoMintToken();
+    void ensureProfileStores("heartbeat");
     // Team-gated agent snippets follow the team feature flags: install when a
     // team turns chat/calls on, disable when the last team turns it off.
     if (data.snippet_availability && typeof data.snippet_availability === "object") {
@@ -4874,11 +4746,11 @@ async function executeRemoteCommand(
         // passed through to the CLI.
         const requestedModelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
         const requestedEffort: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
-        // Per-session Claude account: a saved profile whose setup-token file is
-        // sourced into this launch's env, so the session runs on that account
+        // Per-session Claude account: a saved profile whose credential store is
+        // exported into this launch's env, so the session runs on that account
         // while the keychain login (and every other session) stays put.
-        // Validated by name shape here; a missing token file is logged and the
-        // launch falls back to the keychain (see accountSourcePrefix).
+        // Validated by name shape here; a profile with no launch credential is
+        // logged and the launch falls back to the keychain (accountSourcePrefix).
         const requestedAccount: string | undefined =
           agentType === "claude" && typeof parsed.cc_account === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.cc_account)
             ? parsed.cc_account
@@ -5137,9 +5009,9 @@ async function executeRemoteCommand(
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-        // Same file-not-argv rule for the per-session Claude account token.
+        // Same file-not-argv rule for the per-session Claude account store.
         const accountPrefix = accountSourcePrefix(requestedAccount, log);
-        // An empty prefix means the account did not resolve to a token file and
+        // An empty prefix means the account did not resolve to a launch file and
         // the launch falls back to the keychain login — which the OAuth refresh
         // gate must then treat as held. Attribute what runs, not what was asked.
         const launchedAccount = accountPrefix ? requestedAccount : undefined;
@@ -5247,7 +5119,7 @@ async function executeRemoteCommand(
           await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
           if (agentType === "claude") {
             // The OAuth refresh gate: this pane holds the machine's active
-            // credential unless it was pinned to a profile's setup-token. The
+            // credential unless it was pinned to a dormant profile's store. The
             // stamp carries the same account name accountSourcePrefix exports as
             // CODECAST_CC_ACCOUNT, so the gate survives a daemon restart even for
             // panes started by an older build (ct-49526).
@@ -5666,17 +5538,10 @@ async function executeRemoteCommand(
           break;
         }
 
-        // mint mode: mint a setup-token for the machine's current login (the
-        // web "mint now" action or automatic provisioning). Returns at once —
-        // the browser approval outlives any command TTL — and the detached
-        // watcher reports the outcome through reportMintFlow (see MINT-FLOW).
+        // mint mode (web clients that predate per-profile stores): there is
+        // nothing to mint any more — stores are provisioned on the beat.
         if (typeof parsed.mint === "string" && parsed.mint) {
-          try {
-            result = await startMintFlow(parsed.mint, parsed.force === true);
-          } catch (err) {
-            error = `Mint launch failed: ${err instanceof Error ? err.message : String(err)}`;
-            syncServiceRef?.reportMintFlow("rejected", parsed.mint, undefined, error).catch(() => {});
-          }
+          error = "Session credentials are provisioned automatically now; a dead saved login is repaired by signing into it again from Settings";
           break;
         }
 
@@ -5828,13 +5693,17 @@ async function executeRemoteCommand(
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const email: string | undefined =
           typeof parsed.email === "string" && parsed.email ? parsed.email : undefined;
+        // A profile sign-in repairs one saved login in its own store; the
+        // machine's keychain login stays as it is.
+        const profile: string | undefined =
+          typeof parsed.profile === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.profile) ? parsed.profile : undefined;
         try {
-          result = await startLoginFlow(email, parsed.force === true);
+          result = await startLoginFlow(email, parsed.force === true, profile);
         } catch (err) {
           error = `Sign-in launch failed: ${err instanceof Error ? err.message : String(err)}`;
           // The web is watching cc_login_flow, not command errors — report the
           // failure there too so the CTA comes back instead of spinning.
-          syncServiceRef?.completeLoginFlow("rejected", email, error).catch(() => {});
+          syncServiceRef?.completeLoginFlow("rejected", email, error, profile).catch(() => {});
         }
         break;
       }
@@ -7986,7 +7855,7 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
   }
 }
 
-export type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string };
+export type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string };
 
 // A cached conversation_id can become invalid against the current api_token in two ways:
 // the conversation was deleted (Convex returns "Conversation not found") or the auth token
@@ -8002,7 +7871,7 @@ function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
 
-function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string } {
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string } {
   return {
     messageUuid: msg.uuid,
     role: mapRole(msg.role),
@@ -8012,6 +7881,7 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
     toolCalls: msg.toolCalls,
     toolResults: msg.toolResults,
     images: msg.images,
+    files: msg.files,
     subtype: msg.subtype,
     model: msg.model,
   };
@@ -17120,6 +16990,7 @@ function buildAppServerProgressSignature(messages: RawMessage[]): string {
     toolCalls: message.toolCalls,
     toolResults: message.toolResults,
     images: message.images,
+    files: message.files,
     subtype: message.subtype,
     model: message.model,
   })));
@@ -21376,7 +21247,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       : null;
     const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
     resumeAccountPrefix = accountSourcePrefix(pinnedAccount, log);
-    // An empty prefix means the pin did not resolve to a token file, so this
+    // An empty prefix means the pin did not resolve to a launch file, so this
     // resume lands on the keychain login after all — and then it DOES hold the
     // credential the refresh gate protects. Attribute what happens, not what
     // was asked for.
@@ -25273,6 +25144,9 @@ async function main(): Promise<void> {
   // reconcile confirms them against tmux; without the seed the daemon would
   // come back believing the machine is idle and rotate the single-use refresh
   // token out from under a running claude (ct-49526).
+  // Which pinned sessions hold the keychain grant depends on which profile is
+  // the machine's login; the gate asks on every mark.
+  setActiveProfileResolver(activeProfileName);
   seedLiveClaudeSessions()
     .then((restored) => {
       if (restored.length) log(`[CC-AUTH] Restored ${restored.length} live claude session(s) into the refresh gate`);

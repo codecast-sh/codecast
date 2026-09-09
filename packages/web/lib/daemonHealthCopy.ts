@@ -80,15 +80,15 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
       const stalled = formatDuration(health.stalledMs);
       // Prefer the honest message count; fall back to logical ops for older
       // daemons that don't report it yet.
-      const count = health.messages > 0 ? health.messages : health.pending;
-      const unit = health.messages > 0 ? "message" : "operation";
+      const count = health.messages > 0 ? health.messages : health.conversations > 0 ? health.conversations : health.pending;
+      const unit = health.messages > 0 ? "message" : health.conversations > 0 ? "conversation" : "operation";
       const convoNote =
-        health.conversations > 0
+        health.messages > 0 && health.conversations > 0
           ? ` across ${health.conversations} conversation${health.conversations === 1 ? "" : "s"}`
           : "";
       return {
         colorVar: "--sol-yellow",
-        label: `syncing ${count}, oldest ${stalled} behind`,
+        label: `sync stalled · ${count} ${unit}${count === 1 ? "" : "s"}`,
         detail: `The CLI daemon is online but ${count} ${unit}${count === 1 ? "" : "s"}${convoNote} have been waiting to sync for ${stalled}.`,
         command: "cast status",
       };

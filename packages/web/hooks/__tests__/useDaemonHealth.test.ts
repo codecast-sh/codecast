@@ -21,6 +21,21 @@ import { describeDaemonHealth, describeDeviceFreeze } from "../../lib/daemonHeal
 const NOW = 1_000_000_000_000;
 
 describe("computeDaemonHealth", () => {
+  it("reports stalled transcripts with no queued messages and clears when they recover", () => {
+    const input = { daemon_last_seen: NOW - 5000, daemon_pending_sync_count: 27,
+      daemon_pending_sync_messages: 0, daemon_pending_sync_conversations: 27,
+      daemon_oldest_pending_ms: 6 * 60_000 };
+    const health = computeDaemonHealth(input, NOW);
+    expect(health.kind).toBe("sync_stalled");
+    expect(describeDaemonHealth(health)).toMatchObject({
+      label: "sync stalled · 27 conversations",
+      detail: "The CLI daemon is online but 27 conversations have been waiting to sync for 6 min.",
+      command: "cast status",
+    });
+    const recovered = computeDaemonHealth({ ...input, daemon_pending_sync_count: 0,
+      daemon_pending_sync_conversations: 0, daemon_oldest_pending_ms: 0 }, NOW);
+    expect(describeDaemonHealth(recovered)).toBeNull();
+  });
   it("returns unknown when no daemon has ever checked in", () => {
     expect(computeDaemonHealth(null, NOW)).toEqual({ kind: "unknown" });
     expect(computeDaemonHealth({}, NOW)).toEqual({ kind: "unknown" });

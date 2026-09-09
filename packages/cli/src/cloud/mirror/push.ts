@@ -15,7 +15,7 @@ import { withMirrorLock, type ApplyResult, type MirrorStamp } from "./apply.js";
 import { buildMirrorBundle, sha256, type BuiltBundle } from "./bundle.js";
 import { MIRROR_MANAGED_ROOTS, collectMirrorFiles, type Inventory } from "./inventory.js";
 import { projectDestination, projectPathMappings, readProjectRegistrations, unregisterProjectContext, type ProjectRegistration } from "./projectRefresh.js";
-import { collectProjectContextAsync } from "./discovery.js";
+import { CLAUDE_RUNTIME_ROOTS, collectProjectContextAsync } from "./discovery.js";
 import { transformByKind, type MirrorKind } from "./transform.js";
 
 export const MIRROR_APPLY_COMMAND = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin';
@@ -139,7 +139,7 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
     },
     target_home: opts.hostHome,
     project_roots: projects.map((p) => path.posix.relative(opts.hostHome, p.targetRoot)),
-    unmanaged_roots: retired.flatMap((p) => [path.posix.relative(opts.hostHome, p.targetRoot), `.claude/projects/${claudeProjectDirName(p.targetRoot)}/memory`]),
+    unmanaged_roots: [...CLAUDE_RUNTIME_ROOTS, ...retired.flatMap((p) => [path.posix.relative(opts.hostHome, p.targetRoot), `.claude/projects/${claudeProjectDirName(p.targetRoot)}/memory`])],
     managed_roots: [...new Set([...MIRROR_MANAGED_ROOTS, ...entries.map((e) => e.path)])],
     take_over: opts.takeOver ?? false,
     skipped,

@@ -26,7 +26,7 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
@@ -84,7 +84,11 @@ const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
 
-function formatIdleDuration(updatedAt: number): string {
+// A row with no activity stamp yet (its fast fields ride the liveness overlay
+// and have not landed) shows no age: Date.now() minus nothing is 1970, which
+// rendered as "20705d".
+function formatIdleDuration(updatedAt: number | null | undefined): string {
+  if (!updatedAt) return "";
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return "<1m";
@@ -3756,9 +3760,11 @@ function SessionListPanelImpl({
   // reach the shared classifier), identically on every client and the server.
   // The header number is the chokepoint's section COUNT (flat cards plus
   // members nested under a same-bucket lead — what the tally and the CLI
-  // report) while no chip narrows the list; a filter that removed nothing
-  // leaves the full count in force.
-  const countOf = (shown: InboxSession[], full: InboxSession[], n: number) => (shown.length === full.length ? n : undefined);
+  // report) while no chip narrows the list and the nested rows are on screen;
+  // shared sectionHeaderCount, so this panel and mobile can't drift.
+  const showSubagents = s.clientState.ui?.show_subagents ?? true;
+  const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
+    sectionHeaderCount(shown, full, n, showSubagents);
   const statusPinned = filteredPinned;
   const statusNew = filteredNew;
   const statusNeedsInput = filteredNeedsInput;
@@ -3952,7 +3958,8 @@ function SessionListPanelImpl({
           !sess.is_pinned &&
           !sess.inbox_snoozed_until &&
           sess._id !== activeSessionId &&
-          (sess.updated_at ?? 0) < staleCutoff,
+          // An unstamped row is unknown, not ancient: never offer it for dismissal.
+          !!sess.updated_at && sess.updated_at < staleCutoff,
       )
       .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   }, [s.sessions, activeSessionId, staleCutoff]);
@@ -4068,7 +4075,6 @@ function SessionListPanelImpl({
   const [globalCardExtra, setGlobalCardExtra] = useState(0);
   // Reset each render; renderSection (a closure over this) consumes it in call order.
   let globalRenderedCards = 0;
-  const showSubagents = s.clientState.ui?.show_subagents ?? true;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
   const viewMode: InboxViewMode =
     s.clientState.ui?.inbox_view_mode ?? ((s.clientState.ui?.inbox_flat_view ?? false) ? "time" : "grouped");

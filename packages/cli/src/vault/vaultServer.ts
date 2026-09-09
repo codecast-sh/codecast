@@ -6,7 +6,11 @@
 // authenticate differently from the one that spawns shells.
 //
 // Every path the browser sends goes through vaultScope.resolveVaultPath. Nothing
-// in this file may construct a filesystem path any other way.
+// in this file may construct a filesystem path any other way. The one route
+// that takes a machine path rather than a vault-relative one, /vault/locate,
+// hands it whole to vaultRegistry.locateVault — it names a directory to
+// register, the same thing `cast vault add <dir>` accepts, and the token that
+// reaches it already spawns shells on /term/*.
 
 import { spawn } from "child_process";
 import * as fs from "fs";
@@ -26,6 +30,7 @@ import { isVaultMarkdownPath, VAULT_MAX_SERVE_BYTES } from "@codecast/shared/con
 import type {
   VaultFileEntry,
   VaultInfo,
+  VaultLocateResponse,
   VaultOpRequest,
   VaultScanResponse,
   VaultWriteResponse,
@@ -33,7 +38,7 @@ import type {
   VaultWsHello,
 } from "@codecast/shared/contracts";
 import { moveToTrash, writeVaultFile } from "./vaultFs.js";
-import { findVault, listVaults, setVaultNoteCount } from "./vaultRegistry.js";
+import { findVault, listVaults, locateVault, setVaultNoteCount } from "./vaultRegistry.js";
 import {
   isRepoVaultRoot,
   isVaultDocumentPath,
@@ -354,6 +359,13 @@ export function handleVaultHttp(
   const dispatch = async (): Promise<void> => {
     if (req.method === "GET" && parsed.pathname === "/vault/roots") {
       return sendJson(res, 200, headers, { vaults: listVaults(opts.configDir) });
+    }
+    if (req.method === "GET" && parsed.pathname === "/vault/locate") {
+      const localPath = params.get("path") ?? "";
+      const located = localPath && path.isAbsolute(localPath) ? locateVault(opts.configDir, localPath) : null;
+      if (!located) return sendJson(res, 404, headers, { error: "no such path" });
+      const body: VaultLocateResponse = located;
+      return sendJson(res, 200, headers, body);
     }
 
     const vault = findVault(opts.configDir, params.get("vault") ?? "");
