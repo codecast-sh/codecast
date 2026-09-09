@@ -49,7 +49,7 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from ".
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -6283,6 +6283,40 @@ export const listFavoriteSessions = query({
     sortInboxRows(results);
     if (!includeLiveness) for (const row of results) stripInboxLiveness(row);
     return { sessions: results };
+  },
+});
+
+// The Killed shelf — a user's kills newest-first, paged ON DEMAND from the
+// sidebar's Killed bucket ("Load more"). The inbox scan excludes killed rows
+// at the index (window-cap efficiency, see scanInboxConversations), and the
+// shared working-set selection mirrors that exclusion on every replica, so a
+// kill reaches a client only as a stamp on a row it already cached. This is
+// the one channel that serves the rows themselves: kills older than the
+// client's cache, and kills on a client that never held the row. One-shot
+// pagination, never a subscription — it costs nothing until someone reaches
+// for history. Rows go through enrichInboxSessionRow like favorites do, so a
+// shelf row is byte-identical to an inbox row and can never clobber a cached
+// rich row with a thin one. Subagent children are skipped: they render nested
+// under their parent, and the parent is what the shelf lists.
+export const listKilledSessions = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+    const now = Date.now();
+    const result = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_killed", (q) => q.eq("user_id", userId).gt("inbox_killed_at", 0))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    const rows: any[] = [];
+    for (const conv of result.page) {
+      if (isOrphanOrSubagent(conv)) continue;
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false);
+      stripInboxLiveness(row);
+      rows.push(row);
+    }
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
   },
 });
 
