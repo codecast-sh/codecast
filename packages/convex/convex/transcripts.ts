@@ -50,6 +50,7 @@ import {
   formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
   isRecRoomKey,
+  ownRoomChunkHeader,
   parseRoomKey,
 } from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
@@ -66,6 +67,34 @@ const ROUTE_VALIDATOR = v.object({
   mode: v.union(v.literal("live"), v.literal("after")),
   sent_seq: v.number(),
 });
+
+type Route = { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; sent_seq: number };
+
+/** The routes a room gets for free, on the transcript's first breath.
+ *
+ *  A session room has one: the session itself, live. Talking in a session's
+ *  huddle IS talking to its agent — the words reach it on every conversational
+ *  gap instead of waiting for a digest nobody would read to it. Seeded here
+ *  rather than by the client so it holds for every way a run starts (a joining
+ *  window's auto-scribe, the manual toggle, web and mobile alike) and for
+ *  whoever ends up scribing.
+ *
+ *  A caller that named its own routes has decided already; a route the same
+ *  caller asked for wins on kind and target, so an explicit "after" feed to
+ *  this session is not silently upgraded to live. */
+export function withDefaultRoutes(roomKey: string, routes: Route[]): Route[] {
+  const own = ownRoomTarget(roomKey);
+  if (!own) return routes;
+  if (routes.some((r) => r.kind === "session" && r.target === own)) return routes;
+  return [...routes, { kind: "session", target: own, mode: "live", sent_seq: 0 }];
+}
+
+/** The session this room BELONGS to, if it is a session room: the one route
+ *  target that is the huddle's own home rather than somewhere to report to. */
+export function ownRoomTarget(roomKey: string): string | null {
+  const target = huddleDigestTarget(roomKey);
+  return target?.kind === "session" ? target.conversationId : null;
+}
 
 // A transcript the caller may write to: they started it and it is live.
 async function requireOwnLiveTranscript(
@@ -147,7 +176,10 @@ export const start = mutation({
       started_by: userId,
       status: "live",
       started_at: Date.now(),
-      routes: (args.routes ?? []).map((r) => ({ ...r, added_by: userId })),
+      routes: withDefaultRoutes(args.room_key, args.routes ?? []).map((r) => ({
+        ...r,
+        added_by: userId,
+      })),
       last_seq: 0,
     });
     return { transcript_id: id, existing: false, role: "scribe" };
@@ -683,7 +715,11 @@ async function scheduleHuddleDigest(
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
     as_user: t.started_by,
     to: target.conversationId,
-    body: formatHuddleSummaryTag(String(t._id), digest),
+    body: formatHuddleSummaryTag(String(t._id), digest, {
+      heardLive: t.routes.some(
+        (r) => r.kind === "session" && r.target === target.conversationId && r.mode === "live",
+      ),
+    }),
   });
 }
 
@@ -1448,10 +1484,14 @@ export const deliverRoutes = internalAction({
       const asUser = route.added_by ?? transcript.started_by;
       try {
         if (route.kind === "session") {
+          // A session hearing its OWN room is being spoken to, not sent a
+          // report about a meeting elsewhere, and the two want different
+          // words in front of the same chunk.
+          const own = ownRoomTarget(transcript.room_key) === route.target;
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,
             to: route.target,
-            body: `Huddle transcript (live)\n\n${chunk}`,
+            body: `${own ? ownRoomChunkHeader() : "Huddle transcript (live)"}\n\n${chunk}`,
           });
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {

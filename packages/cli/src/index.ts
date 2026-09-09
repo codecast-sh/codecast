@@ -4,6 +4,7 @@ import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { planForkFanout } from "./forkFanout.js";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
@@ -74,7 +75,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -2899,6 +2900,7 @@ async function runSync(): Promise<void> {
             toolCalls: msg.toolCalls,
             toolResults: msg.toolResults,
             images: msg.images,
+            files: msg.files,
             subtype: msg.subtype,
           });
         }
@@ -2983,6 +2985,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
           toolCalls: msg.toolCalls,
           toolResults: msg.toolResults,
           images: msg.images,
+          files: msg.files,
           subtype: msg.subtype,
         });
       }
@@ -4361,12 +4364,12 @@ accountsCmd
       for (const p of profiles) {
         const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
         const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
-        const tok = accountTokenInfo(p.name);
-        const tokenNote = tok
-          ? (tok.expires_at <= Date.now()
-            ? ` ${c.yellow}· token expired${c.reset}`
-            : ` ${c.dim}· token, ${Math.ceil((tok.expires_at - Date.now()) / 86400000)}d left${c.reset}`)
-          : "";
+        const launch = accountLaunchInfo(p.name);
+        const tokenNote = p.login_expired_at
+          ? ` ${c.yellow}· login expired — cast accounts signin ${p.name}${c.reset}`
+          : launch
+            ? (launch.expires_at <= Date.now() ? ` ${c.yellow}· refresh lifetime over — cast accounts signin ${p.name}${c.reset}` : ` ${c.dim}· sessions${c.reset}`)
+            : "";
         console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
       }
     } catch (err) {
@@ -4431,31 +4434,32 @@ accountsCmd
   });
 
 accountsCmd
-  .command("token <name>")
+  .command("signin <name>")
+  .alias("login")
   .description(
-    "Store a `claude setup-token` for a saved profile so sessions can run on that account\n" +
-    "without switching the machine's login: cast spawn --account <name> \"<task>\".\n" +
-    "Mint it with `claude setup-token` while the browser is signed into THAT account,\n" +
-    "then paste it here (hidden prompt) or pipe it on stdin. Tokens last one year."
+    "Sign into a saved profile again when its login expired. Opens the browser on the\n" +
+    "OAuth page for that account; the credential lands in the profile's own store, so the\n" +
+    "machine's current login is untouched. Sessions pinned to the profile work again after."
   )
-  .option("--rm", "Forget the stored token (the token itself stays valid until revoked at claude.ai → Settings → Claude Code)")
-  .action(async (name: string, options: any) => {
+  .action(async (name: string) => {
     try {
-      if (options.rm) {
-        const existed = removeAccountToken(name);
-        console.log(existed ? `${c.green}✓${c.reset} removed token for ${c.cyan}${name}${c.reset}` : `${c.dim}no token stored for ${name}${c.reset}`);
-        return;
-      }
-      const token = await promptHiddenSecret(`Paste the setup-token for ${name}: `);
-      const file = writeAccountToken(name, token);
-      const info = accountTokenInfo(name)!;
-      console.log(`${c.green}✓${c.reset} token stored for ${c.cyan}${name}${c.reset} (${file}, expires ${new Date(info.expires_at).toISOString().slice(0, 10)})`);
-      console.log(`${c.dim}  launch on it: cast spawn --account ${name} "<task>"${c.reset}`);
+      const profile = listProfiles().find((p) => p.name === name);
+      if (!profile) throw new CcAccountError(`No saved profile "${name}" on this machine`);
+      const dir = profileStoreDir(name);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      console.log(`${c.dim}Signing into ${profile.email ?? name} in the browser…${c.reset}`);
+      const run = spawnSync("claude", ["auth", "login", "--claudeai", ...(profile.email ? ["--email", profile.email] : [])], {
+        stdio: "inherit",
+        env: { ...process.env, CLAUDE_SECURESTORAGE_CONFIG_DIR: dir },
+      });
+      if (run.status !== 0) throw new CcAccountError("the sign-in did not complete");
+      const identity = await adoptProfileStoreCredential(name);
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${name}${c.reset} signed in again${identity.email ? ` (${identity.email})` : ""}`);
+      ensureProfileStore(name);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
-    // Token metadata rides the accounts inventory — show it in Settings now.
     await publishAccountsInventory();
   });
 
@@ -10936,14 +10940,18 @@ async function fileSessionsUnderLabel(
 program
   .command("fork")
   .description(
-    "Fork a conversation into one or more parallel branches\n\n" +
+    "Fork a conversation into parallel branches\n\n" +
     "Each branch keeps the full history up to the fork point, then heads off in\n" +
-    "its own direction. Every branch becomes a live session in your inbox — an\n" +
-    "independent thread you can review and continue.\n\n" +
+    "its own direction as a live session in your inbox. With two or more\n" +
+    "directions this thread IS one of them: it takes the first and continues in\n" +
+    "place, the rest become branches. One direction spins off a branch and this\n" +
+    "thread carries on with its own work. Each branch receives its direction as\n" +
+    "its human's next message.\n\n" +
     "Examples:\n" +
-    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # 3 branches from here\n" +
+    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # this thread takes Redis, 2 branches\n" +
+    "  cast fork --all-branches \"use Redis\" \"use Postgres\"       # 2 branches, this thread stays out\n" +
     "  cast fork --at 42 \"what if we cache\" \"what if we don't\"   # branch at message 42\n" +
-    "  cast fork \"explore the bold refactor\"                     # one branch\n" +
+    "  cast fork \"explore the bold refactor\"                     # one branch, this thread continues\n" +
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
@@ -10953,7 +10961,8 @@ program
   .option("--tip", "Fork at the very end instead, keeping everything including the latest user message — use when forking on your own initiative, where there is no fork request to strip")
   .option("--from <index>", "Alias for --at (back-compat)")
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
-  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id")
+  .option("--all-branches", "Make every direction a branch and keep this thread out of the fan-out (default with two or more directions: this thread takes the first)")
+  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id. This thread's own direction stays here unless --all-branches")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -11076,11 +11085,13 @@ program
       }
     }
 
-    // Multi-direction fork: branch once per direction from the same anchor, then
-    // seed each branch with its direction over the same pending-message rail
-    // `cast send` uses. Each lands in the inbox as its own session. The seed is
-    // the direction verbatim — the branch just receives its next instruction;
-    // keeping it ignorant of the fan-out is what keeps branches independent.
+    // Seeded fork: branch once per branch direction from the same anchor. The
+    // fork mutation queues each direction to its branch as the human's own next
+    // turn (raw text, no sender), so a branch never learns it is a fork and has
+    // nobody to report back to. With two or more directions this thread takes
+    // the first itself (planForkFanout) — the roster below tells the agent to
+    // continue with it in place.
+    const fanout = planForkFanout(directions, { allBranches: !!options.allBranches });
     if (options.cloud && directions.length === 0) {
       console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
       process.exit(1);
@@ -11116,7 +11127,7 @@ program
 
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean; worktree?: string }[] = [];
-      for (const direction of directions) {
+      for (const direction of fanout.branchDirections) {
         let cloudPlacement: Record<string, unknown> = {};
         let worktreeName: string | undefined;
         if (cloud) {
@@ -11155,17 +11166,9 @@ program
         }
         const result = await response.json() as any;
         const newShortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
-        // Seed via cliFetch (not cliPost) so a failed seed flags this branch
-        // instead of exiting and abandoning the branches already created.
-        let seeded = false;
-        try {
-          const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
-          });
-          seeded = seedResp.ok;
-        } catch {}
+        // The mutation queued the seed in the same transaction as the branch;
+        // a missing id means an older server that only titled the row.
+        const seeded = !!result.seed_message_id;
         roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded, worktree: worktreeName });
       }
 
@@ -11175,7 +11178,7 @@ program
       }
 
       if (options.json) {
-        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, branches: roster }, null, 2));
+        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, parent_direction: fanout.parentDirection ?? null, branches: roster }, null, 2));
         return;
       }
 
@@ -11188,11 +11191,21 @@ program
         `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:${labelNote}`
       );
       for (const b of roster) {
-        const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
+        const warn = b.seeded ? "" : ` ${c.yellow}(seed not queued — send it with cast send ${b.short_id})${c.reset}`;
         console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${promptGist(b.direction)}${warn}`);
       }
       if (labelResult?.failures) {
         console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} branch${labelResult.failures === 1 ? "" : "es"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
+      }
+      // The agent running this command reads the result mid-turn: it is now
+      // the thread for the first direction and simply keeps going.
+      if (fanout.parentDirection !== undefined) {
+        const one = roster.length === 1;
+        console.log(
+          `\n${c.bold}This thread is the branch for the first direction — continue with it now:${c.reset}\n` +
+          `  ${promptGist(fanout.parentDirection)}\n` +
+          `${c.dim}The other branch${one ? " runs on its own" : "es run on their own"} in the human's inbox; do not message, monitor, or wait on ${one ? "it" : "them"}.${c.reset}`
+        );
       }
       return;
     }

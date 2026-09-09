@@ -23,6 +23,16 @@ function image(value: unknown): void {
   strings(value, ['data', 'localPath', 'storageId', 'toolUseId']);
 }
 
+// A file the agent sent the human. Unlike an image it never carries a payload:
+// it is a path on the way in and a storage id on the way out, and a row with
+// neither carries the reason instead.
+function sentFile(value: unknown): void {
+  fields(value, ['localPath', 'name', 'mediaType', 'size', 'storageId', 'toolUseId', 'caption', 'display', 'error']);
+  requireValue(typeof value.name === 'string');
+  strings(value, ['localPath', 'mediaType', 'storageId', 'toolUseId', 'caption', 'display', 'error']);
+  requireValue(value.size === undefined || Number.isFinite(value.size));
+}
+
 function* jsonBytes(value: unknown, depth = 0): Generator<number> {
   requireValue(depth <= 128);
   if (typeof value === 'string') {
@@ -77,10 +87,10 @@ async function walk(values: Generator<number>, checkpoint: () => void): Promise<
 function* input(value: unknown, origin: PreparationOrigin): Generator<number> {
   requireValue(Array.isArray(value));
   for (const msg of value) {
-    fields(msg, ['uuid', 'messageUuid', 'role', 'content', 'timestamp', 'thinking', 'toolCalls', 'toolResults', 'images', 'subtype', 'model', 'stopReason']);
+    fields(msg, ['uuid', 'messageUuid', 'role', 'content', 'timestamp', 'thinking', 'toolCalls', 'toolResults', 'images', 'files', 'subtype', 'model', 'stopReason']);
     requireValue(typeof msg.role === 'string' && (origin === 'transcript' || ['human', 'assistant', 'system'].includes(msg.role)) && typeof msg.content === 'string' && Number.isFinite(msg.timestamp));
     strings(msg, ['uuid', 'messageUuid', 'thinking', 'subtype', 'model', 'stopReason']);
-    for (const key of ['toolCalls', 'toolResults', 'images']) requireValue(msg[key] === undefined || Array.isArray(msg[key]));
+    for (const key of ['toolCalls', 'toolResults', 'images', 'files']) requireValue(msg[key] === undefined || Array.isArray(msg[key]));
     for (const call of msg.toolCalls ?? []) {
       fields(call, ['id', 'name', 'input']);
       requireValue(typeof call.id === 'string' && typeof call.name === 'string');
@@ -93,6 +103,7 @@ function* input(value: unknown, origin: PreparationOrigin): Generator<number> {
       yield 0;
     }
     for (const img of msg.images ?? []) { image(img); yield 0; }
+    for (const file of msg.files ?? []) { sentFile(file); yield 0; }
     yield 0;
   }
 }
@@ -107,10 +118,10 @@ export function validatePreparationImage(value: unknown): void {
 }
 
 function* wire(value: unknown): Generator<number> {
-  fields(value, ['message_uuid', 'role', 'content', 'timestamp', 'thinking', 'tool_calls', 'tool_results', 'images', 'subtype', 'model']);
+  fields(value, ['message_uuid', 'role', 'content', 'timestamp', 'thinking', 'tool_calls', 'tool_results', 'images', 'files', 'subtype', 'model']);
   requireValue(['user', 'assistant', 'system'].includes(value.role) && typeof value.content === 'string' && Number.isFinite(value.timestamp));
   strings(value, ['message_uuid', 'thinking', 'subtype', 'model']);
-  for (const key of ['tool_calls', 'tool_results', 'images']) requireValue(value[key] === undefined || Array.isArray(value[key]));
+  for (const key of ['tool_calls', 'tool_results', 'images', 'files']) requireValue(value[key] === undefined || Array.isArray(value[key]));
   for (const call of value.tool_calls ?? []) {
     fields(call, ['id', 'name', 'input']);
     requireValue(typeof call.id === 'string' && typeof call.name === 'string' && typeof call.input === 'string');
@@ -127,6 +138,16 @@ function* wire(value: unknown): Generator<number> {
     requireValue(typeof img.media_type === 'string');
     strings(img, ['storage_id', 'data', 'tool_use_id']);
     requireValue(img.storage_id ? img.data === undefined : img.storage_id === undefined && typeof img.data === 'string' && img.data.length > 0);
+    yield 0;
+  }
+  requireValue(value.files === undefined || value.files.length <= 10);
+  for (const file of value.files ?? []) {
+    fields(file, ['name', 'media_type', 'size', 'storage_id', 'tool_use_id', 'caption', 'display', 'error']);
+    requireValue(typeof file.name === 'string' && typeof file.media_type === 'string');
+    strings(file, ['storage_id', 'tool_use_id', 'caption', 'display', 'error']);
+    requireValue(file.size === undefined || Number.isFinite(file.size));
+    // Either the bytes made it to storage, or the row says why they did not.
+    requireValue(typeof file.storage_id === 'string' || typeof file.error === 'string');
     yield 0;
   }
 }

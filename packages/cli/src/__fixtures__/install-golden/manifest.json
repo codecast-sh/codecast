@@ -11,7 +11,7 @@
   "messaging": {
     "config": {
       "messaging_enabled": true,
-      "messaging_version": "9"
+      "messaging_version": "10"
     },
     "stdout": "* Messaging — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

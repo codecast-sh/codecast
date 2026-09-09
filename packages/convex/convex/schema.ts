@@ -1090,6 +1090,22 @@ export default defineSchema({
       storage_id: v.optional(v.id("_storage")),
       tool_use_id: v.optional(v.string()),
     }))),
+    // Files the agent handed to the human with SendUserFile. Separate from
+    // images because these are DELIVERIES, not screenshots the agent looked at:
+    // each one is a document the person is meant to open, so it carries its own
+    // name, size and caption, and the client renders a card, not a picture. A
+    // row with `error` and no storage_id is a delivery that could not be
+    // carried (too large, gone, upload failed) — kept, so the card can say so.
+    files: v.optional(v.array(v.object({
+      name: v.string(),
+      media_type: v.string(),
+      size: v.optional(v.number()),
+      storage_id: v.optional(v.id("_storage")),
+      tool_use_id: v.optional(v.string()),
+      caption: v.optional(v.string()),
+      display: v.optional(v.string()),
+      error: v.optional(v.string()),
+    }))),
     subtype: v.optional(v.string()),
     client_id: v.optional(v.string()),
     // Model that generated this assistant turn (from the agent transcript),
