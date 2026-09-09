@@ -9,7 +9,7 @@ import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus } from "@codecast/shared/contracts";
-import { PATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
 import {
   openTasksVouchForWaiting,
   OPEN_TASKS_FRESH_MS,
@@ -5514,10 +5514,12 @@ export const forkFromMessage = mutation({
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
     session_id: v.optional(v.string()),
-    // The branch's seed prompt (cast fork "<direction>"). Used ONLY to title the
-    // new row — sibling branches otherwise all read "Fork: <parent title>" and
-    // are indistinguishable in the inbox (the direction itself arrives later as
-    // a separate seed message).
+    // The branch's seed prompt (cast fork "<direction>"). It titles the new
+    // row (sibling branches otherwise all read "Fork: <parent title>") and is
+    // queued to the branch as the human's own next turn: raw text, no sender,
+    // stamped with a fork-seed client_id so the web can mark it (see
+    // @codecast/shared/contracts/forkSeed). Enqueued in this same transaction
+    // so a retried fork can never seed twice or create a branch nobody seeds.
     direction: v.optional(v.string()),
     target_agent_type: v.optional(v.union(
       v.literal("claude_code"),
@@ -5848,9 +5850,29 @@ export const forkFromMessage = mutation({
     // larger ones chain via _continueFork.
     await advanceForkCopy(makeForkCtx(ctx), newConversationId);
 
+    // Seed the branch. The direction lands as the person's next instruction —
+    // the same rail the web composer uses, marked human so the wake rules for
+    // a person writing into a thread apply — never as a session-to-session
+    // message from the parent: that wrapper tells the branch who forked it
+    // and invites it to report back, which is the one thing a branch must
+    // not do. Delivery waits for the branch's session to come up.
+    let seedMessageId: Id<"pending_messages"> | undefined;
+    const seed = args.direction?.trim();
+    if (seed) {
+      const branch = await ctx.db.get(newConversationId);
+      if (branch) {
+        seedMessageId = await enqueuePendingMessage(ctx, branch, userId, {
+          content: seed,
+          client_id: forkSeedClientId(forkSessionId),
+          human: true,
+        });
+      }
+    }
+
     return {
       conversation_id: newConversationId,
       short_id: newConversationId.toString().slice(0, 7),
+      seed_message_id: seedMessageId,
     };
   },
 });
@@ -8530,10 +8552,25 @@ export async function scanInboxConversations(
   ctx: any,
   userId: Id<"users">,
   now: number,
-  opts: { includeLiveness: boolean; extraConvIds?: string[]; teamScope?: Id<"teams"> },
+  opts: {
+    includeLiveness: boolean;
+    extraConvIds?: string[];
+    teamScope?: Id<"teams">;
+    // Also read the user's recently updated SUBAGENT rows (one indexed range,
+    // never merged into the candidate set). This is the fast-field ownership
+    // window: the list strips message_count/updated_at from exactly the child
+    // rows in it, and the liveness overlay stamps exactly those children, so
+    // the two channels read one window and can never disagree about which
+    // child rows carry the fields. Off for team scope, whose list never
+    // strips them.
+    subagentWindow?: boolean;
+  },
 ): Promise<{
   conversations: any[];
   maps: InboxSessionMaps;
+  // The subagent window (see opts.subagentWindow): newest INBOX_WINDOW_CAP
+  // subagent rows inside the recency window. Empty when not requested.
+  recentSubagents: any[];
   // Rows that reached the candidate set by a deliberate act rather than by
   // recency: a label's filed extras, and sessions ASSIGNED to this user but run
   // by another account. Both are exempt from the cluster cutoff (they are old
@@ -8665,8 +8702,24 @@ export async function scanInboxConversations(
   // queries, whose latency was almost entirely sequential await depth (each
   // await is a db round trip; under load the sum crossed the system-op
   // timeout: "Your request timed out performing too many system operations").
-  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows] =
-    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ]);
+  // The subagent window is a sibling range of the same index the recent
+  // window reads (is_subagent: true). Children never crowd the top-level caps:
+  // they are returned on their own, not merged into the candidate set.
+  const recentSubagentsQ: Promise<any[]> = opts.subagentWindow && !opts.teamScope
+    ? ctx.db
+      .query("conversations")
+      .withIndex("by_user_subagent_updated", (q: any) =>
+        q.eq("user_id", userId).eq("is_subagent", true).gte("updated_at", sessionWindowCutoff)
+      )
+      .order("desc")
+      .filter((q: any) => q.or(
+        q.eq(q.field("status"), "active"),
+        q.eq(q.field("status"), "completed")
+      ))
+      .take(INBOX_WINDOW_CAP)
+    : Promise.resolve([]);
+  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows, recentSubagents] =
+    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ, recentSubagentsQ]);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
@@ -8806,7 +8859,7 @@ export async function scanInboxConversations(
 
   return {
     conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
-    ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds,
+    ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds, recentSubagents,
   };
 }
 
@@ -8870,15 +8923,24 @@ export async function computeInboxSessions(
   // liveness threshold compare against the minute, so two executions inside
   // one minute over the same data are byte identical (sync-convergence C2).
   const now = inboxEpoch(Date.now());
+  const fastFieldsInOverlay = !includeLiveness && opts.fastFieldsInOverlay === true;
   const scan = await scanInboxConversations(ctx, userId, now, {
     includeLiveness,
     extraConvIds: opts.extraConvIds,
     teamScope: opts.teamScope,
+    subagentWindow: fastFieldsInOverlay,
   });
   const { conversations, maps, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds } = scan;
+  // The child rows whose fast fields the overlay owns (see the scan's
+  // subagentWindow). A child outside the window keeps message_count and
+  // updated_at on its list row: the overlay never sees it, so a stripped row
+  // would stay null on the client forever (an idle Agent-tool subagent showed
+  // an idle age of 20705 days — Date.now() minus nothing).
+  const overlayOwnedChildIds = new Set<string>(scan.recentSubagents.map((c: any) => c._id.toString()));
 
   let hiddenCount = 0;
   const results: any[] = [];
+  const childRowIds = new Set<string>();
   // Parked rows skip the per-row children scan (see enrichInboxSessionRow), so
   // their implementation-session pointer resolves from the candidate pool
   // instead — a recently active plan-handoff child is already in the recent
@@ -9016,12 +9078,18 @@ export async function computeInboxSessions(
     for (const child of r.subagentChildren) {
       const childRow = buildSubagentChildRow(child, maps, now, r.conv._id);
       stampChildRow?.(child, childRow);
+      childRowIds.add(childRow._id.toString());
       results.push(childRow);
     }
   }
 
   sortInboxRows(results);
-  if (!includeLiveness) for (const row of results) stripInboxLiveness(row, opts.fastFieldsInOverlay === true);
+  if (!includeLiveness) {
+    for (const row of results) {
+      const id = row._id.toString();
+      stripInboxLiveness(row, fastFieldsInOverlay && (!childRowIds.has(id) || overlayOwnedChildIds.has(id)));
+    }
+  }
   return { sessions: results, hidden_count: hiddenCount, truncated: truncatedList(truncated) };
 }
 
@@ -9591,7 +9659,7 @@ export async function computeSessionsLiveness(
   // The epoch is the payload's ONLY clock: no raw Date.now() may reach the
   // result, so two executions inside one minute are byte identical (C2).
   const now = inboxEpoch(Date.now());
-  const scan = await scanInboxConversations(ctx, userId, now, { includeLiveness: true, teamScope });
+  const scan = await scanInboxConversations(ctx, userId, now, { includeLiveness: true, teamScope, subagentWindow: true });
   const { conversations, maps, truncated } = scan;
   // Decisions FIRST: a parent already asking through a pending `cast decide`
   // never spends child message probes (see buildAskingParents), and a child
@@ -9709,6 +9777,26 @@ export async function computeSessionsLiveness(
       };
       liveness[cid] = deriveLivenessAt(c, maps, childReads, null, now);
     }
+  }
+  // The subagent window's children of shown parents, idle ones included: the
+  // list strips message_count/updated_at from exactly these rows (they change
+  // on every streamed message of an Agent-tool subagent, which has no managed
+  // session and so never enters the live pool), so this overlay is their only
+  // writer. Grouped by parent_conversation_id, the same link the list's
+  // children scan reads, so the two sets agree child for child. No probe: an
+  // AUQ answer comes from this execution's pool probes or the cache, as for
+  // the pool children above.
+  for (const c of scan.recentSubagents) {
+    const cid = c._id.toString();
+    if (liveness[cid] || (c.message_count ?? 0) === 0) continue;
+    const pid = c.parent_conversation_id?.toString();
+    if (!pid || !shownIds.has(pid)) continue;
+    const childReads: LivenessRowReads = {
+      lastMsgRole: c.last_message_role,
+      lastUserMessage: c.last_message_preview || null,
+      auqOpen: probedAuqOpen.get(cid) ?? childAuqProbeCache.get(`${cid}:${c.message_count ?? 0}`) ?? false,
+    };
+    liveness[cid] = deriveLivenessAt(c, maps, childReads, null, now);
   }
 
   const projection: InboxProjection = {

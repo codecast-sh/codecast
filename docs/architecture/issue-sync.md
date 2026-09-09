@@ -106,11 +106,19 @@ credential resolver applies one rule, team first, then the acting user:
 inside `issueSync.tokenFor` for GitHub. A source stores the acting user
 (`user_id`) beside its team for exactly this reason.
 
-Two boundaries stay team only. Repository browsing (`repos.ts`) stamps every
-cached row with a team, so a personal installation cannot admit a viewer
-there. Webhook routing (`githubWebhooks.resolveTeamForRepository`) attributes
-PR and commit activity to the team that installed the App; a personal
-installation routes nothing to a team.
+Routing. A webhook carries no "where" beyond the repository, so an
+installation routes by one rule (`githubApp.routingTeamForInstallation`): a
+team install to its team; a personal install to wherever its owner is
+working now, their active team with a live membership
+(`lib/access.activeTeamMembershipFor`). PR and commit rows, PR triggers
+(`githubWebhooks.resolveTeamForRepository`) and repository browsing
+(`repos.ts`, which stamps cached rows with a team) all run through the
+owner's grant in that team. Switching teams moves where NEW activity lands;
+leaving the team ends it; an owner in no team routes nowhere and the install
+serves only their own imports and pushes. A team-visible session on the
+PR's branch still donates its team first. GitHub allows one install per
+account, so an org already installed for a team is refused as a personal
+install rather than moved (`storeInstallation`).
 
 Revoke rules: a team Linear or Notion connection by any member, a team GitHub
 installation by a team admin, a personal connection of any provider by its

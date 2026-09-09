@@ -20,6 +20,7 @@ import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFr
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
+import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
@@ -167,6 +168,7 @@ type Message = {
   tool_calls?: ToolCall[];
   tool_results?: ToolResult[];
   images?: ImageData[];
+  files?: SentFileData[];
   subtype?: string;
   message_uuid?: string;
   usage?: {
@@ -2909,6 +2911,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             }
             if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskGet') {
               return <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} />;
+            }
+            if (tc.name === 'SendUserFile') {
+              return <SentFileBlock key={tc.id} files={(message.files ?? []).filter(f => f.tool_use_id === tc.id)} />;
             }
             if (tc.name === 'SendMessage') {
               return <SendMessageBlock key={tc.id} tool={tc} />;

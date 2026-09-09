@@ -23,7 +23,7 @@ import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
-import { AccountUsageBars, LoginExpiredBadge, UsageRefreshButton } from "./AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
 
 type ProfileRow = {
   name: string;
@@ -265,6 +265,7 @@ export function AccountUsageChip() {
                 {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ?? e.p.tier}` : ""}
               </span>
               <LoginExpiredBadge profile={e.p} />
+              {e.provider === "claude" && device && <ProfileSignInButton device={device} profile={e.p} />}
               {e.isActive ? (
                 <span className="shrink-0 text-[10px] font-medium text-sol-green">active</span>
               ) : e.provider === "claude" ? (

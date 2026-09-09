@@ -653,6 +653,134 @@ test("Claude global and project pins mask only matching commands and recover whe
   expect(readHostMcpOverrides(home).claude).toEqual({});
 });
 
+test("Claude MCP freshness ignores host startup state and unrelated MCP fields but detects owned drift", async () => {
+  const root = path.join(home, "work/app");
+  const server = { command: "portable", args: ["--root", root], env: { PORTABLE_SETTING: "one" } };
+  const bundle = await bundleOf([{ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify({ mcpServers: { local: server }, projects: { [root]: { mcpServers: { project: server } } } })) }]);
+  expect((await apply(bundle)).errors).toEqual([]);
+  const fingerprint = readStamp(home)!.files[".claude.json"]!.written;
+  const host = JSON.parse(read(".claude.json"));
+  host.oauthAccount = { accessToken: "fixture-host-login" };
+  host.numStartups = 20;
+  host.history = ["host session"];
+  host.projects[root].hasTrustDialogAccepted = true;
+  host.projects[path.join(home, "other")] = { hasTrustDialogAccepted: true, mcpServers: { host: { command: "host-tool" } } };
+  host.mcpServers.host = { command: "host-tool" };
+  host.mcpServers.local.hostSetting = "host-specific";
+  host.mcpServers.local.env.HOST_SETTING = "host-specific";
+  host.projects[root].mcpServers.host = { command: "host-tool" };
+  host.mcpServers.local = Object.fromEntries(Object.entries(host.mcpServers.local).reverse());
+  write(".claude.json", JSON.stringify(host, null, 4));
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  expect(verifyMirrorStamp(home)?.hash).toBe(bundle.hash);
+  const repeat = await apply(bundle);
+  expect(repeat.host_edited).toEqual([]);
+  expect(repeat.errors).toEqual([]);
+  expect(readStamp(home)!.files[".claude.json"]!.written).toBe(fingerprint);
+  expect(JSON.parse(read(".claude.json"))).toEqual(host);
+  for (const change of [
+    (value: any) => { value.mcpServers.local.command = "remote-edit"; },
+    (value: any) => { delete value.mcpServers.local; },
+    (value: any) => { value.projects[root].mcpServers.project.args = ["changed"]; },
+    (value: any) => { delete value.projects[root].mcpServers.project.env.PORTABLE_SETTING; },
+    (value: any) => { value.projects[root].mcpServers = null; },
+  ]) {
+    const changed = structuredClone(host);
+    change(changed);
+    write(".claude.json", JSON.stringify(changed));
+    expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  }
+  write(".claude.json", JSON.stringify(host));
+  fs.chmodSync(path.join(home, ".claude.json"), 0o644);
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  fs.chmodSync(path.join(home, ".claude.json"), 0o600);
+  write(".claude.json", "not JSON");
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+});
+
+test("Claude MCP deleted fields stay verified after unrelated host changes and repeated empty bundles", async () => {
+  const file = (value: unknown): BundleInput[] => [{ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify(value)) }];
+  const initial = { mcpServers: { local: { command: "portable", args: ["old"] } } };
+  expect((await apply(await bundleOf(file(initial)))).errors).toEqual([]);
+  const next = await bundleOf(file({ mcpServers: { local: { command: "portable" } } }));
+  expect((await apply(next)).errors).toEqual([]);
+  const host = JSON.parse(read(".claude.json"));
+  host.numStartups = 2;
+  host.mcpServers.local.hostSetting = true;
+  write(".claude.json", JSON.stringify(host));
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  host.mcpServers.local.args = ["reappeared"];
+  write(".claude.json", JSON.stringify(host));
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(next)).host_edited).toEqual([".claude.json"]);
+  expect(JSON.parse(read(".claude.json")).mcpServers.local.args).toEqual(["reappeared"]);
+  delete host.mcpServers.local.args;
+  write(".claude.json", JSON.stringify(host));
+  expect((await apply(next)).host_edited).toEqual([]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  const empty = await bundleOf([]);
+  expect((await apply(empty)).errors).toEqual([]);
+  expect(JSON.parse(read(".claude.json")).mcpServers.local).toEqual({ hostSetting: true });
+  const retired = JSON.parse(read(".claude.json"));
+  retired.numStartups++;
+  retired.mcpServers.host = { command: "host-tool" };
+  write(".claude.json", JSON.stringify(retired));
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  retired.mcpServers.local.command = "returned";
+  write(".claude.json", JSON.stringify(retired));
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(empty)).host_edited).toEqual([".claude.json"]);
+  delete retired.mcpServers.local.command;
+  write(".claude.json", JSON.stringify(retired));
+  expect((await apply(empty)).host_edited).toEqual([]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+test("empty mirrored MCP objects do not claim future host children", async () => {
+  const bundle = await bundleOf([{ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from('{"mcpServers":{"local":{"command":"portable","env":{}}}}') }]);
+  expect((await apply(bundle)).errors).toEqual([]);
+  const host = JSON.parse(read(".claude.json"));
+  host.mcpServers.local.env.HOST_ONLY = "one";
+  write(".claude.json", JSON.stringify(host));
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  expect((await apply(bundle)).host_edited).toEqual([]);
+  expect((await apply(await bundleOf([]))).errors).toEqual([]);
+  const removed = JSON.parse(read(".claude.json"));
+  expect(removed.mcpServers.local).toEqual({ env: { HOST_ONLY: "one" } });
+  removed.mcpServers.local.env.HOST_ONLY = "two";
+  write(".claude.json", JSON.stringify(removed));
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+test("legacy whole-file Claude MCP stamps migrate on apply and ignore auth churn during refresh", async () => {
+  const bundle = await bundleOf([{ path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from('{"mcpServers":{"local":{"command":"portable"}}}') }]);
+  expect((await apply(bundle)).errors).toEqual([]);
+  const legacy = readStamp(home)!;
+  delete legacy.files[".claude.json"]!.mcp_fields;
+  legacy.files[".claude.json"]!.written = sha256(read(".claude.json"));
+  write(MIRROR_STAMP_REL, JSON.stringify(legacy));
+  const host = JSON.parse(read(".claude.json"));
+  host.oauthAccount = { accessToken: "fixture-host-token" };
+  write(".claude.json", JSON.stringify(host));
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  const migrated = await apply(bundle, { refresh: () => {
+    const current = JSON.parse(read(".claude.json"));
+    current.numStartups = 12;
+    write(".claude.json", JSON.stringify(current));
+  } });
+  expect(migrated.errors).toEqual([]);
+  expect(migrated.host_edited).toEqual([]);
+  expect(readStamp(home)!.files[".claude.json"]!.mcp_fields).toEqual([["mcpServers", "local", "command"]]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  const changed = await apply(bundle, { refresh: () => {
+    const current = JSON.parse(read(".claude.json"));
+    current.mcpServers.local.command = "changed during boot";
+    write(".claude.json", JSON.stringify(current));
+  } });
+  expect(changed.errors).toEqual([{ path: ".claude.json", error: "mirrored MCP content changed during refresh" }]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+});
+
 test("chunked verification covers a binary final chunk and mode drift on an unchanged bundle", async () => {
   const bytes = Buffer.alloc(2 * 64 * 1024 + 17, 0xff);
   const file: BundleInput = { path: ".agents/skills/asset.bin", kind: "verbatim", mode: "0600", bytes };
