@@ -5400,8 +5400,10 @@ const styles = StyleSheet.create({
   },
   assistantBubble: {
     backgroundColor: 'transparent',
-    alignSelf: 'flex-start',
-    maxWidth: '100%',
+    // Stretch, don't shrink-wrap: a flex-start bubble sizes to its widest
+    // intrinsic child — for tool calls that's the one-line header, so on wide
+    // screens (tablets) the expanded tool/diff card squeezed to header width.
+    alignSelf: 'stretch',
   },
   assistantBubbleFirst: {
     marginTop: 8,
