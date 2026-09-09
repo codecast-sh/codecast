@@ -807,6 +807,10 @@ export default defineSchema({
     .index("by_user_live_stashed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
+    // The Killed shelf (listKilledSessions): a user's kills newest-first, paged
+    // on demand — the inbox scan excludes killed rows, so this is their one
+    // server channel.
+    .index("by_user_killed", ["user_id", "inbox_killed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .index("by_restored_from", ["restored_from_conversation_id"])
     // `persistent` and `anchor_id` are plain fields with no index: anchors
