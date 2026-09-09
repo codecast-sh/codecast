@@ -2702,8 +2702,26 @@ export interface PlacedInbox {
 
 // The store-state subset the chokepoint reads. Structural (never the store
 // type itself) so tests and computeVisualOrder's narrowed state can call it.
+export type KilledShelf = {
+  ids: readonly string[];
+  cursor: string | null;
+  /** True once the server reported the last page. */
+  complete: boolean;
+  loading: boolean;
+};
+export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, complete: false, loading: false };
+
+// How far back the Killed bucket lists kills from THIS replica's cache on its
+// own. A kill is a working-set nonmember on every replica (inWorkingSet mirrors
+// the server's cap exclusion of killed rows), so the bucket reads the stamps
+// the sync log already patched onto cached rows — recent enough to be the
+// kills you just made, bounded so a heavy account's history does not pile up
+// in the sidebar. Older kills page in through the Killed shelf.
+export const KILLED_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
+
 export type PlaceInboxState = {
   sessions: Record<string, InboxSession>;
+  killedShelf?: Pick<KilledShelf, "ids">;
   sessionsWithQueuedMessages: Set<string>;
   pendingMessages: Record<string, Message[]>;
   clientState: { ui?: { inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
@@ -3035,6 +3053,7 @@ export function placeInboxRows(
     Object.keys(pendingCreates).sort().join(","),
     placementDecisionsSig(decisions),
     state.questionResolutions,
+    state.killedShelf?.ids,
   ];
   const memo = _placedMemo.get(slot);
   const sameKey = memo != null && memo.key.length === key.length && key.every((v, i) => Object.is(v, memo.key[i]));
@@ -3133,7 +3152,24 @@ export function placeInboxRows(
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
-  dismissed.sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
+  // Kills are working-set nonmembers on every replica (inWorkingSet mirrors the
+  // server's cap exclusion of killed rows), so none of them reached the loop
+  // above — the Killed bucket would list only pinned kills and plain
+  // dismissals. List them from this replica's own cached stamps instead:
+  // recent kills by kill time, plus whatever the Killed shelf paged in.
+  // Presentation only — membership, the tally and the digest are untouched.
+  // Subagent children keep nesting under their parent as everywhere else.
+  const listedDismissed = new Set(dismissed.map((s) => s._id));
+  const listKilled = (s: InboxSession | undefined) => {
+    if (!s?.inbox_killed_at || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
+    listedDismissed.add(s._id);
+    dismissed.push(s);
+  };
+  const killedHorizon = now - KILLED_RECENT_MS;
+  for (const s of Object.values(scoped)) if ((s.inbox_killed_at ?? 0) >= killedHorizon) listKilled(s);
+  for (const id of state.killedShelf?.ids ?? []) listKilled(scoped[id]);
+  const retiredAt = (s: InboxSession) => s.inbox_dismissed_at || s.inbox_killed_at || 0;
+  dismissed.sort((a, b) => retiredAt(b) - retiredAt(a));
   stashed.sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
   snoozed.sort((a, b) => (a.inbox_snoozed_until || 0) - (b.inbox_snoozed_until || 0));
   const allIds = new Set(sorted.map((s) => s._id));
@@ -5113,6 +5149,11 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // are still streaming in. `loaded` counts rows crawled so far this run;
   // `loading` is true until the final page lands.
   syncProgress: Record<string, { loading: boolean; loaded: number }>;
+  // The Killed shelf: kills paged in on demand by the sidebar's "Load more"
+  // (hooks/killedShelf.ts, listKilledSessions). Rows land in the never-prune
+  // sessions cache; this holds only WHICH ids the shelf lists plus the paging
+  // cursor. Ephemeral and per window — it is a reading position, not state.
+  killedShelf: KilledShelf;
   // First-load state of the LIVE data subscriptions (sessions / docs / tasks),
   // keyed by scope. Deliberately separate from `syncProgress`, which tracks the
   // background reconcile crawl: that crawl pages through EVERY row at a throttled
@@ -10129,6 +10170,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   taskActiveSessions: {} as Record<string, any>,
   taskOriginBadges: {},
   syncProgress: {},
+  killedShelf: EMPTY_KILLED_SHELF,
   liveLoading: {},
   syncLogLag: {},
   syncLogApplyStats: { direct: 0, refetch: 0 },

@@ -27,6 +27,7 @@ import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
+import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
@@ -3525,6 +3526,9 @@ function SessionListPanelImpl({
     // back a new ref every heartbeat, and unread must wake the list only when
     // the SET changes (store/inboxStore.sessionUnreadWakeSig).
     s => sessionUnreadWakeSig(s),
+    // The Killed shelf's reading position — which paged-in kills the bucket
+    // lists, and whether "Load more" is mid-flight (hooks/killedShelf.ts).
+    s => s.killedShelf,
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -3623,7 +3627,7 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
   );
   const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion } = placed;
 
@@ -3873,12 +3877,15 @@ function SessionListPanelImpl({
     // thousands of stale sessions all at once (dismissed_at = today), so filtering
     // by dismissal time would still show them all; filtering by recency hides that
     // old noise while keeping things you recently worked on but set aside. Hidden
-    // ones stay searchable and reachable by direct link.
+    // ones stay searchable and reachable by direct link. A KILL is exempt: it is
+    // the user's own act, never bulk noise, and the shelf pages old kills in on
+    // purpose — an activity window would hide exactly what "Load more" fetched.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
     const filtered = filterByChip(dismissedList).filter(
-      (sess) => (sess.updated_at ?? 0) >= cutoff,
+      (sess) => !!sess.inbox_killed_at || (sess.updated_at ?? 0) >= cutoff,
     );
-    return filtered.sort((a, b) => (b.dismissed_at || b.updated_at || 0) - (a.dismissed_at || a.updated_at || 0));
+    const retiredAt = (sess: InboxSession) => sess.inbox_dismissed_at || sess.inbox_killed_at || sess.dismissed_at || sess.updated_at || 0;
+    return filtered.sort((a, b) => retiredAt(b) - retiredAt(a));
   }, [filterByChip, dismissedList]);
   const filteredSnoozed = useMemo(() => filterByChip(snoozedList), [filterByChip, snoozedList]);
   const filteredStashed = useMemo(() => {
@@ -4418,9 +4425,13 @@ function SessionListPanelImpl({
     variant: "stashed" | "dismissed" | "snoozed";
     onKill: (id: string) => void;
     headerAction?: React.ReactNode;
+    /** Rendered under the rows once every locally-known row is shown (the
+     *  Killed bucket's "Load more"). A bucket with a footer stays mounted when
+     *  empty — the footer is how its rows arrive. */
+    footer?: React.ReactNode;
   }) => {
-    const { label, items, expanded, onToggle, variant, onKill, headerAction } = opts;
-    if (items.length === 0) return null;
+    const { label, items, expanded, onToggle, variant, onKill, headerAction, footer } = opts;
+    if (items.length === 0 && !footer) return null;
     // A hidden bucket is not a dead bucket: a stashed agent keeps running, and
     // an armed schedule can keep driving a killed/stashed conversation. Same
     // predicate as the card's green dot (isLive) so header and rows can't
@@ -4546,9 +4557,11 @@ function SessionListPanelImpl({
                 Show {Math.min(hHidden, SECTION_RENDER_STEP)} more · {hHidden} hidden
               </button>
             )}
+            {hHidden === 0 && footer}
           </div>
           );
         })()}
+        {expanded && topLevel.length === 0 && footer}
       </div>
     );
   };
@@ -5245,6 +5258,22 @@ function SessionListPanelImpl({
           onToggle: () => setOpenBuckets((o) => ({ ...o, dismissed: !o.dismissed })),
           variant: "dismissed",
           onKill: handleKillDismissed,
+          // The rows above are this replica's cached kills (recent by kill time)
+          // plus what the shelf already paged in; older or never-cached kills
+          // are one click away. Chip filters apply to shelf rows like any other.
+          footer: s.killedShelf.complete ? (
+            s.killedShelf.ids.length > 0 && (
+              <div className="w-full px-3 py-1.5 text-[10px] text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
+            )
+          ) : (
+            <button
+              onClick={() => { void loadMoreKilledSessions(convex); }}
+              disabled={s.killedShelf.loading}
+              className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan disabled:hover:text-sol-text-dim disabled:opacity-60 transition-colors text-left border-b border-sol-border/30"
+            >
+              {s.killedShelf.loading ? "Loading older kills…" : "Load older kills"}
+            </button>
+          ),
         })}
         </>)}
       </div>

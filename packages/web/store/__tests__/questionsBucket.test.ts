@@ -82,8 +82,9 @@ describe("the questions bucket", () => {
     ];
     const placed = place(rows, { k: decide("k1"), x: decide("x1") });
     expect(placed.questions).toEqual([]);
-    // The dismissed row keeps its own set-aside slice (dismissed outranks asking).
-    expect(ids(placed.dismissed)).toEqual(["x1"]);
+    // Both keep their set-aside slice (dismissed outranks asking): the dismissed
+    // row by placement, the fresh kill by the Killed bucket's cached-kill union.
+    expect(ids(placed.dismissed).sort()).toEqual(["k1", "x1"]);
   });
 
   it("a nested child never renders loose — its PRESENT parent lifts instead", () => {
