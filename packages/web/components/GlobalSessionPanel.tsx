@@ -84,7 +84,11 @@ const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
 
-function formatIdleDuration(updatedAt: number): string {
+// A row with no activity stamp yet (its fast fields ride the liveness overlay
+// and have not landed) shows no age: Date.now() minus nothing is 1970, which
+// rendered as "20705d".
+function formatIdleDuration(updatedAt: number | null | undefined): string {
+  if (!updatedAt) return "";
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return "<1m";
@@ -3952,7 +3956,8 @@ function SessionListPanelImpl({
           !sess.is_pinned &&
           !sess.inbox_snoozed_until &&
           sess._id !== activeSessionId &&
-          (sess.updated_at ?? 0) < staleCutoff,
+          // An unstamped row is unknown, not ancient: never offer it for dismissal.
+          !!sess.updated_at && sess.updated_at < staleCutoff,
       )
       .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   }, [s.sessions, activeSessionId, staleCutoff]);

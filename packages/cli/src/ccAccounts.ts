@@ -325,7 +325,9 @@ export function patchOauthAccount(oauthAccount: Record<string, any>): void {
 // Profile secret store (keychain on darwin, 0600 files elsewhere)
 // ---------------------------------------------------------------------------
 
-function readProfileSecret(name: string): string | null {
+/** The snapshot item alone. Readers want readProfileSecret, which also
+ *  consults the profile's store (a session may have rotated the grant). */
+function readProfileSecretRaw(name: string): string | null {
   if (useFileStore()) {
     const f = profileSecretFile(name);
     if (!fs.existsSync(f)) return null;
@@ -338,10 +340,24 @@ function readProfileSecret(name: string): string | null {
   }
 }
 
-/** The same read for the daemon's timers, with the keychain call off the loop. */
-async function readProfileSecretAsync(name: string): Promise<string | null> {
+async function readProfileSecretRawAsync(name: string): Promise<string | null> {
   if (useFileStore()) return fs.promises.readFile(profileSecretFile(name), "utf-8").catch(() => null);
   return keychainReadAsync(profileSecretArgs(name)).catch(() => null);
+}
+
+/** The profile as this module trusts it: the snapshot, with the store's
+ *  credentials substituted when a session has rotated them since. */
+function readProfileSecret(name: string): string | null {
+  const raw = readProfileSecretRaw(name);
+  if (!raw) return null;
+  return overlayProfileStore(name, raw, readProfileStoreCredentials(name));
+}
+
+/** The same read for the daemon's timers, with the keychain calls off the loop. */
+async function readProfileSecretAsync(name: string): Promise<string | null> {
+  const raw = await readProfileSecretRawAsync(name);
+  if (!raw) return null;
+  return overlayProfileStore(name, raw, await readProfileStoreCredentialsAsync(name));
 }
 
 function profileSecretArgs(name: string): string[] {
@@ -354,36 +370,46 @@ function profileSecretFile(name: string): string {
 function deleteProfileSecret(name: string): void {
   if (useFileStore()) {
     fs.rmSync(profileSecretFile(name), { force: true });
-    return;
+  } else {
+    try {
+      execFileSync(
+        "security",
+        ["delete-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`],
+        { stdio: "ignore" },
+      );
+    } catch {
+      // Keychain item already gone (index-only entry) — nothing to delete.
+    }
   }
-  try {
-    execFileSync(
-      "security",
-      ["delete-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`],
-      { stdio: "ignore" },
-    );
-  } catch {
-    // Keychain item already gone (index-only entry) — nothing to delete.
-  }
+  deleteProfileStore(name);
 }
 
+/** Every profile write lands in the snapshot AND the profile's store, so a
+ *  session launched on the store always starts from the freshest pair. */
 function writeProfileSecret(name: string, content: string): void {
   if (useFileStore()) {
     // Same reason as writeActiveCredential: a saved profile holds the same
     // token, so the mode is stated rather than inherited from the old file.
     atomicWriteFile(profileSecretFile(name), content, { mode: 0o600 });
-    return;
+  } else {
+    execFileSync("security", [
+      "add-generic-password",
+      "-U",
+      "-a",
+      os.userInfo().username,
+      "-s",
+      `${PROFILE_KEYCHAIN_PREFIX}${name}`,
+      "-w",
+      content,
+    ]);
   }
-  execFileSync("security", [
-    "add-generic-password",
-    "-U",
-    "-a",
-    os.userInfo().username,
-    "-s",
-    `${PROFILE_KEYCHAIN_PREFIX}${name}`,
-    "-w",
-    content,
-  ]);
+  try {
+    const credentials = JSON.stringify(parseProfile(content).credentials);
+    if (credentialHealth(credentials).usable) writeProfileStoreCredentials(name, credentials);
+  } catch {
+    // An unparseable or logged-out blob never reaches a store: the launch
+    // reader would rather find nothing than a stub.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -773,6 +799,18 @@ export function saveProfile(name: string): CcProfileMeta {
   return { name, ...meta, active: true };
 }
 
+/** The saved profile covering the machine's login, from files alone (index +
+ *  active stamp): cheap enough for the live gate, which asks on every mark.
+ *  Before the first stamp (a fresh daemon) it falls back to the full read. */
+export function activeProfileName(): string | undefined {
+  const key = readActiveStamp()?.key;
+  if (key) {
+    const hit = Object.entries(readProfileIndex().profiles).find(([, m]) => m.uuid === key || m.email === key);
+    if (hit) return hit[0];
+  }
+  return listProfiles().find((p) => p.active)?.name;
+}
+
 export function listProfiles(): CcProfileMeta[] {
   const index = readProfileIndex();
   const activeUuid = activeAccountSummary()?.uuid;
@@ -808,7 +846,6 @@ export function deleteProfile(name: string): CcProfileMeta {
     );
   }
   deleteProfileSecret(name);
-  removeAccountToken(name);
   delete index.profiles[name];
   writeProfileIndex(index);
   invalidateAccountsCache();
@@ -816,198 +853,375 @@ export function deleteProfile(name: string): CcProfileMeta {
 }
 
 // ---------------------------------------------------------------------------
-// Per-account launch token (`claude setup-token`)
+// Per-profile credential stores (the per-session account)
 //
-// A setup-token is a static one-year OAuth token that Claude Code reads from
-// CLAUDE_CODE_OAUTH_TOKEN, which outranks the keychain login. Nothing about it
-// rotates, so none of the refresh / save-on-switch / split-grant machinery
-// above applies: it is a string in a 0600 file, sourced into ONE session's env
-// at launch. That makes the account a per-session choice instead of the
-// machine-global swap `useProfile` performs. The token can only make model
-// requests (no profile/usage scope), so identity and usage still come from the
-// keychain snapshot — the two live side by side under one profile name.
+// Claude Code reads CLAUDE_SECURESTORAGE_CONFIG_DIR as the home of ITS
+// credential store, and only the store: the config dir, transcripts and
+// settings stay in ~/.claude. The keychain item is named after the directory
+// ("Claude Code-credentials-<8 hex of sha256(dir)>"), so every saved profile
+// gets a directory of its own, and a session launched with that env var runs
+// on that profile's login while the keychain login (and every other session)
+// stays put. The store holds the same {claudeAiOauth} blob the profile snapshot
+// carries, and Claude Code refreshes it in place with its own cross-process
+// lock, so a long session never lapses and nothing here ever needs a browser.
+//
+// The profile snapshot (codecast-cc-account-<name>) stays the record this
+// module reads; the store is where a live claude rotates. Every profile write
+// lands in both, and every profile read takes the store's copy when it is
+// fresher, so the two never hold different grants for long and a rotation by
+// a session reaches the snapshot before anything here touches the refresh
+// token (absorbProfileStore does the write-back on the daemon's timer).
+//
+// The ACTIVE profile is the exception: sessions pinned to it run on the
+// keychain (accountSourcePrefix exports no store for it). Its store would hold
+// the same grant as the keychain, and a refresh token is single use, so two
+// stores rotating it would strand each other. The switch-away re-snapshot puts
+// the fresh pair in the store the moment the profile goes dormant, which is
+// when the store starts being used.
 // ---------------------------------------------------------------------------
 
-const SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
-/** Anthropic mints setup-tokens for one year and never warns before expiry;
- *  the file mtime (written at store time) is the only clock we have. */
-export const SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+const STORE_KEYCHAIN_PREFIX = "Claude Code-credentials-";
+/** Claude Code's own file fallback name inside a store dir (and the store on
+ *  platforms without a keychain). */
+const STORE_CREDENTIAL_FILE = ".credentials.json";
+const STORE_META_FILE = "meta.json";
+/** A CC OAuth grant carries refreshTokenExpiresAt; when a blob lacks it, assume
+ *  the year CC itself grants and let the next write correct it. */
+const STORE_ASSUMED_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 
-export function accountTokenFilePath(name: string): string {
+/** The store directory for a profile. Absolute and NFC-normalized, because
+ *  Claude Code hashes exactly the string it is handed. */
+export function profileStoreDir(name: string): string {
   assertValidProfileName(name);
-  return path.join(defaultConfigDir(), `cc-account-${name}.env`);
+  return path.join(defaultConfigDir(), "cc-store", name).normalize("NFC");
 }
 
-/** Store a setup-token for a profile as a 0600 `export` file (same shape and
- *  quoting as the provider-key file, so the launch line only ever carries the
- *  PATH). Rejects anything that isn't a setup-token so a pasted keychain
- *  access token or API key can't be sourced into a session by mistake. */
-export function writeAccountToken(name: string, token: string): string {
-  const t = token.trim();
-  if (!t.startsWith(SETUP_TOKEN_PREFIX) || /\s/.test(t) || t.length < SETUP_TOKEN_PREFIX.length + 20) {
-    throw new CcAccountError(`Not a Claude setup-token (expected ${SETUP_TOKEN_PREFIX}…) — mint one with: claude setup-token`);
-  }
-  const file = accountTokenFilePath(name);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  atomicWriteFile(file, renderProviderEnvFile({ CLAUDE_CODE_OAUTH_TOKEN: t }), { mode: 0o600 });
-  return file;
+/** The keychain service Claude Code derives for a store directory. */
+export function profileStoreKeychainService(dir: string): string {
+  return `${STORE_KEYCHAIN_PREFIX}${createHash("sha256").update(dir.normalize("NFC")).digest("hex").slice(0, 8)}`;
 }
 
-export function removeAccountToken(name: string): boolean {
-  const file = accountTokenFilePath(name);
-  const existed = fs.existsSync(file);
-  try { fs.rmSync(file, { force: true }); } catch {}
-  return existed;
+function storeCredentialFile(dir: string): string {
+  return path.join(dir, STORE_CREDENTIAL_FILE);
 }
 
-export interface AccountTokenInfo {
-  file: string;
+interface StoreMeta {
   stored_at: number;
-  expires_at: number;
+  refresh_expires_at: number;
 }
 
-/** Non-secret facts about a stored token, or null when the profile has none. */
-export function accountTokenInfo(name: string): AccountTokenInfo | null {
-  let file: string;
-  try { file = accountTokenFilePath(name); } catch { return null; }
+function readStoreMeta(dir: string): StoreMeta | null {
   try {
-    const stored_at = fs.statSync(file).mtimeMs;
-    return { file, stored_at, expires_at: stored_at + SETUP_TOKEN_LIFETIME_MS };
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, STORE_META_FILE), "utf-8"));
+    if (typeof parsed?.stored_at === "number" && typeof parsed?.refresh_expires_at === "number") return parsed;
+  } catch {}
+  return null;
+}
+
+function oauthFields(credJson: string | null): { expiresAt: number; refreshToken?: string; refreshExpiresAt?: number } | null {
+  const oauth = oauthOf(credJson);
+  if (!oauth) return null;
+  return {
+    expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : 0,
+    refreshToken: tokenField(oauth.refreshToken),
+    refreshExpiresAt: typeof oauth.refreshTokenExpiresAt === "number" ? oauth.refreshTokenExpiresAt : undefined,
+  };
+}
+
+/** Fresher = a later access expiry, or a rotated refresh token that is not
+ *  older. A rotation alone counts: the other copy's refresh token is spent
+ *  from that moment. */
+export function credentialIsFresher(candidate: string | null, incumbent: string | null): boolean {
+  const a = oauthFields(candidate);
+  if (!a) return false;
+  const b = oauthFields(incumbent);
+  if (!b) return true;
+  if (a.expiresAt > b.expiresAt) return true;
+  return a.expiresAt === b.expiresAt && !!a.refreshToken && a.refreshToken !== b.refreshToken;
+}
+
+/** The credential blob in a profile's store, or null when the store is empty. */
+export function readProfileStoreCredentials(name: string): string | null {
+  let dir: string;
+  try { dir = profileStoreDir(name); } catch { return null; }
+  if (useFileStore()) {
+    try { return fs.readFileSync(storeCredentialFile(dir), "utf-8"); } catch { return null; }
+  }
+  try {
+    return execFileSync("security", ["find-generic-password", "-s", profileStoreKeychainService(dir), "-w"], { encoding: "utf-8" }).trim() || null;
   } catch {
     return null;
   }
 }
 
-/** The token as it appears in `claude setup-token`'s output (or any pane /
- *  clipboard text). Tokens are ~100 chars of URL-safe base64. */
-export function extractSetupToken(text: string): string | null {
-  const m = /sk-ant-oat01-[A-Za-z0-9_-]{40,}/.exec(text);
-  return m ? m[0] : null;
+/** The same read for the daemon's timers, keychain call off the loop. */
+export async function readProfileStoreCredentialsAsync(name: string): Promise<string | null> {
+  let dir: string;
+  try { dir = profileStoreDir(name); } catch { return null; }
+  if (useFileStore()) return fs.promises.readFile(storeCredentialFile(dir), "utf-8").catch(() => null);
+  return keychainReadAsync(["find-generic-password", "-s", profileStoreKeychainService(dir), "-w"]).then((s) => s || null, () => null);
 }
 
-// ---------------------------------------------------------------------------
-// Account attribution for a scope-less token. A setup-token can't read its own
-// profile or usage, but every model response carries the account's unified
-// rate-limit windows. Two credentials whose 5h AND 7d reset timestamps match
-// to the second belong to the same account — that is how a freshly minted
-// token is proven to belong to the machine's login before it is stored under
-// that profile (the browser may have been signed into a different account).
-// ---------------------------------------------------------------------------
-
-export interface RateLimitFingerprint {
-  five_hour_reset: number | null;
-  seven_day_reset: number | null;
-  five_hour_utilization: number | null;
-  seven_day_utilization: number | null;
-}
-
-export function parseRateLimitFingerprint(headers: { get(name: string): string | null }): RateLimitFingerprint {
-  const num = (name: string): number | null => {
-    const raw = headers.get(name);
-    if (raw == null || raw === "") return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  };
-  return {
-    five_hour_reset: num("anthropic-ratelimit-unified-5h-reset"),
-    seven_day_reset: num("anthropic-ratelimit-unified-7d-reset"),
-    five_hour_utilization: num("anthropic-ratelimit-unified-5h-utilization"),
-    seven_day_utilization: num("anthropic-ratelimit-unified-7d-utilization"),
-  };
-}
-
-/** Same account iff both reset timestamps are known and identical. Utilization
- *  is deliberately ignored — it moves between two probes seconds apart. */
-export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFingerprint): boolean {
-  return (
-    a.five_hour_reset != null &&
-    a.seven_day_reset != null &&
-    a.five_hour_reset === b.five_hour_reset &&
-    a.seven_day_reset === b.seven_day_reset
-  );
-}
-
-/** Which SAVED profile a scope-less token belongs to, judged from the usage
- *  snapshots (each carries that account's window reset times, fetched with the
- *  profile's own token). The 7d reset is stable for a week and must match; the
- *  5h reset must match too while the snapshot's window is still open (a closed
- *  window has rolled since, so its stale reset proves nothing). Exactly one
- *  hit names the owner; none or several = unknown. This is how a token minted
- *  while the browser was signed into a NON-active account still lands under
- *  the right profile instead of being thrown away. */
-export function attributeFingerprint(
-  fp: RateLimitFingerprint,
-  profiles: Record<string, { uuid?: string; email?: string }>,
-  usage: Record<string, CcUsageSnapshot>,
-  now: number,
-): string | null {
-  if (fp.seven_day_reset == null) return null;
-  const near = (ms: number | undefined, s: number | null): boolean =>
-    ms != null && s != null && Math.abs(ms / 1000 - s) <= 2;
-  const hits: string[] = [];
-  for (const [name, meta] of Object.entries(profiles)) {
-    const snap = usage[meta.uuid || meta.email || ""];
-    if (!snap || !near(snap.weekly?.resets_at, fp.seven_day_reset)) continue;
-    const sessionOpen = snap.session?.resets_at != null && snap.session.resets_at > now;
-    if (sessionOpen && !near(snap.session?.resets_at, fp.five_hour_reset)) continue;
-    hits.push(name);
+/** Put a credential blob in a profile's store (0700 dir, keychain item or
+ *  0600 file) and record the non-secret facts the launch reader needs. */
+export function writeProfileStoreCredentials(name: string, credentialJson: string, now: number = Date.now()): string {
+  const dir = profileStoreDir(name);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (useFileStore()) {
+    atomicWriteFile(storeCredentialFile(dir), credentialJson, { mode: 0o600 });
+  } else {
+    execFileSync("security", [
+      "add-generic-password",
+      "-U",
+      "-a",
+      os.userInfo().username,
+      "-s",
+      profileStoreKeychainService(dir),
+      "-w",
+      credentialJson,
+    ]);
   }
-  return hits.length === 1 ? hits[0] : null;
+  const fields = oauthFields(credentialJson);
+  const meta: StoreMeta = {
+    stored_at: now,
+    refresh_expires_at: fields?.refreshExpiresAt ?? now + STORE_ASSUMED_LIFETIME_MS,
+  };
+  atomicWriteFile(path.join(dir, STORE_META_FILE), JSON.stringify(meta), { mode: 0o600 });
+  atomicWriteFile(accountLaunchFilePath(name), renderProviderEnvFile({ CLAUDE_SECURESTORAGE_CONFIG_DIR: dir }), { mode: 0o600 });
+  return dir;
 }
 
-export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: number = Date.now()): string | null {
-  return attributeFingerprint(fp, readProfileIndex().profiles, readUsageCache().accounts, now);
+/** Remove a profile's store: keychain item, directory and launch file. */
+export function deleteProfileStore(name: string): boolean {
+  let dir: string;
+  try { dir = profileStoreDir(name); } catch { return false; }
+  const existed = fs.existsSync(dir) || fs.existsSync(accountLaunchFilePath(name));
+  if (!useFileStore()) {
+    try {
+      execFileSync("security", ["delete-generic-password", "-s", profileStoreKeychainService(dir)], { stdio: "ignore" });
+    } catch {
+      // No item — an index-only profile, or a store that was never written.
+    }
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(accountLaunchFilePath(name), { force: true });
+  return existed;
 }
 
-const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
-const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
+/** The profile snapshot with the store's credentials substituted when the
+ *  store is fresher (a session rotated them). Pure: nothing is written. */
+function overlayProfileStore(name: string, raw: string | null, storeRaw: string | null): string | null {
+  if (!raw || !storeRaw) return raw;
+  let profile: CcProfile;
+  try { profile = parseProfile(raw); } catch { return raw; }
+  if (!credentialIsFresher(storeRaw, JSON.stringify(profile.credentials))) return raw;
+  let credentials: any;
+  try { credentials = JSON.parse(storeRaw); } catch { return raw; }
+  if (!credentials?.claudeAiOauth) return raw;
+  return JSON.stringify({ ...profile, credentials });
+}
 
-/** One-token model call whose only purpose is the rate-limit headers. Costs a
- *  handful of input tokens on the account; never touches the credential store. */
-export async function fetchRateLimitFingerprint(bearerToken: string): Promise<RateLimitFingerprint> {
-  const res = await fetch(CC_MESSAGES_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${bearerToken}`,
-      "anthropic-beta": "oauth-2025-04-20",
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-      "user-agent": "codecast-account-probe",
+/** Write a store's fresher credentials back into the profile snapshot. The
+ *  daemon runs this on its usage timer for every profile a session may be
+ *  rotating; returns true when the snapshot moved. */
+export async function absorbProfileStore(name: string): Promise<boolean> {
+  const [raw, storeRaw] = await Promise.all([readProfileSecretRawAsync(name), readProfileStoreCredentialsAsync(name)]);
+  const merged = overlayProfileStore(name, raw, storeRaw);
+  if (!merged || merged === raw) return false;
+  writeProfileSecret(name, merged);
+  return true;
+}
+
+/** A profile's credentials as this module trusts them (store overlay applied),
+ *  as the {claudeAiOauth} blob string, or null. */
+export async function readProfileSecretCredentialsAsync(name: string): Promise<string | null> {
+  const raw = await readProfileSecretAsync(name);
+  if (!raw) return null;
+  try {
+    return JSON.stringify(parseProfile(raw).credentials);
+  } catch {
+    return null;
+  }
+}
+
+export type ProfileStoreState = "ready" | "provisioned" | "unusable" | "login_expired";
+
+/** Make sure a profile's store holds a usable credential. Idempotent and
+ *  offline: the store is filled from the profile snapshot codecast already
+ *  keeps. A profile whose saved login is dead stays that way until a person
+ *  signs into it again (signInProfileStore / adoptProfileStoreCredential). */
+export function ensureProfileStore(name: string, now: number = Date.now()): ProfileStoreState {
+  if (readProfileIndex().profiles[name]?.login_expired_at) return "login_expired";
+  const raw = readProfileSecretRaw(name);
+  const storeRaw = readProfileStoreCredentials(name);
+  if (storeRaw && credentialHealth(storeRaw, now).usable && fs.existsSync(accountLaunchFilePath(name))) return "ready";
+  if (!raw) return "unusable";
+  let credentials: string;
+  try {
+    credentials = JSON.stringify(parseProfile(overlayProfileStore(name, raw, storeRaw) ?? raw).credentials);
+  } catch {
+    return "unusable";
+  }
+  if (!credentialHealth(credentials, now).usable) return "unusable";
+  writeProfileStoreCredentials(name, credentials, now);
+  return "provisioned";
+}
+
+/** Adopt whatever a browser sign-in left in a profile's store: prove it is the
+ *  profile's own account (the browser may have been signed into another one),
+ *  then make it the profile snapshot and clear the login-expired mark. On a
+ *  mismatch the store is put back to the snapshot's credentials and the
+ *  reason is thrown for the UI. */
+export async function adoptProfileStoreCredential(
+  name: string,
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<{ email?: string; uuid?: string }> {
+  const now = opts.now ?? Date.now();
+  const storeRaw = await readProfileStoreCredentialsAsync(name);
+  const health = credentialHealth(storeRaw, now);
+  if (!storeRaw || !health.usable) {
+    throw new CcAccountError(`the sign-in left no usable credential in the store (${health.reason ?? "empty"})`);
+  }
+  const token = oauthOf(storeRaw)?.accessToken;
+  if (typeof token !== "string" || !token) throw new CcAccountError("the store credential carries no access token");
+  const identity = await fetchAccountIdentity(token, opts);
+  const meta = readProfileIndex().profiles[name];
+  const expectedUuid = normalizeField(meta?.uuid);
+  const expectedEmail = normalizeField(meta?.email);
+  const sameAccount = expectedUuid
+    ? normalizeField(identity.uuid) === expectedUuid
+    : !!expectedEmail && normalizeField(identity.email) === expectedEmail;
+  if (meta && (expectedUuid || expectedEmail) && !sameAccount) {
+    // The wrong account must never launch under this profile's name: drop the
+    // store (the profile stays login-expired, so no launch file comes back
+    // until its own account signs in).
+    deleteProfileStore(name);
+    throw new CcAccountError(
+      `the browser signed into ${identity.email ?? identity.uuid ?? "another account"}, not ${meta.email ?? name} — sign into that account and try again`,
+    );
+  }
+  const raw = await readProfileSecretRawAsync(name);
+  let prior: CcProfile | null = null;
+  try { prior = raw ? parseProfile(raw) : null; } catch { prior = null; }
+  const profile: CcProfile = {
+    credentials: JSON.parse(storeRaw),
+    oauthAccount: {
+      ...(prior?.oauthAccount ?? {}),
+      ...(identity.uuid ? { accountUuid: identity.uuid } : {}),
+      ...(identity.email ? { emailAddress: identity.email } : {}),
     },
-    body: JSON.stringify({ model: CC_PROBE_MODEL, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
-    signal: AbortSignal.timeout(20000),
-  });
-  const fp = parseRateLimitFingerprint(res.headers);
-  // A limit-parked account answers 429 — with the same window headers, which
-  // is all the fingerprint needs (2026-09-01: a mint for an exhausted account
-  // was thrown away because the probe treated its 429 as a failure).
-  if (!res.ok && !(fp.five_hour_reset != null && fp.seven_day_reset != null)) {
-    const body = await res.text().catch(() => "");
-    throw new CcAccountError(`Account probe failed: HTTP ${res.status} ${body.slice(0, 160)}`);
+    saved_at: now,
+  };
+  writeProfileSecret(name, JSON.stringify(profile));
+  const index = readProfileIndex();
+  if (index.profiles[name]) {
+    const { login_expired_at: _cleared, ...rest } = index.profiles[name];
+    index.profiles[name] = { ...rest, ...profileMeta(profile) };
+    writeProfileIndex(index);
   }
-  return fp;
+  invalidateAccountsCache();
+  return identity;
 }
 
-/** Launch-line prefix that sources the profile's token file, or "" when no
- *  account was requested. A requested account with no stored token is reported
- *  through `warn` and falls back to the keychain login rather than failing the
- *  launch — the session still starts, on the machine's default account. */
+/** The 0600 env file a launch sources for a profile: exports the store dir. */
+export function accountLaunchFilePath(name: string): string {
+  assertValidProfileName(name);
+  return path.join(defaultConfigDir(), `cc-account-${name}.env`);
+}
+
+export interface AccountLaunchInfo {
+  file: string;
+  stored_at: number;
+  expires_at: number;
+}
+
+/** Non-secret facts about a profile's launch credential, or null when the
+ *  profile cannot carry a session (no store, or a login the endpoint refused). */
+export function accountLaunchInfo(name: string): AccountLaunchInfo | null {
+  let file: string;
+  let dir: string;
+  try {
+    file = accountLaunchFilePath(name);
+    dir = profileStoreDir(name);
+  } catch {
+    return null;
+  }
+  if (!fs.existsSync(file)) return null;
+  const meta = readStoreMeta(dir);
+  if (!meta) return null;
+  if (readProfileIndex().profiles[name]?.login_expired_at) return null;
+  return { file, stored_at: meta.stored_at, expires_at: meta.refresh_expires_at };
+}
+
+/** Whether Claude Code at `claudeBin` honors CLAUDE_SECURESTORAGE_CONFIG_DIR.
+ *  A version that ignores it silently runs every pinned session on the keychain
+ *  login, so the daemon asks once per binary: with the store pointed at an empty
+ *  directory, `auth status` must report no login. Cached by binary identity. */
+export async function probeSecureStorageSupport(
+  claudeBin: string,
+  opts: { env?: NodeJS.ProcessEnv; execImpl?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string> } = {},
+): Promise<boolean> {
+  const cachePath = path.join(defaultConfigDir(), "cc-store", ".support.json");
+  let identity = claudeBin;
+  try {
+    const st = fs.statSync(claudeBin);
+    identity = `${claudeBin}:${st.size}:${Math.floor(st.mtimeMs)}`;
+  } catch {}
+  try {
+    const cached = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    if (cached?.identity === identity && typeof cached.supported === "boolean") return cached.supported;
+  } catch {}
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-store-probe-"));
+  let supported = false;
+  try {
+    const env = { ...(opts.env ?? process.env), CLAUDE_SECURESTORAGE_CONFIG_DIR: probeDir };
+    const exec =
+      opts.execImpl ??
+      (async (bin: string, args: string[], e: NodeJS.ProcessEnv) => {
+        const { execFile } = await import("child_process");
+        return new Promise<string>((resolve, reject) => {
+          execFile(bin, args, { env: e, encoding: "utf-8", timeout: 30_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+        });
+      });
+    const out = await exec(claudeBin, ["auth", "status", "--json"], env);
+    supported = JSON.parse(out)?.loggedIn === false;
+  } catch {
+    supported = false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true, mode: 0o700 });
+    atomicWriteFile(cachePath, JSON.stringify({ identity, supported }), { mode: 0o600 });
+  } catch {}
+  return supported;
+}
+
+/** Launch-line prefix for a pinned session, or "" when no account was
+ *  requested. The active profile's sessions run on the keychain (see the
+ *  section comment), so only the name rides along for them. A dormant profile
+ *  with no launch credential is reported through `warn` and the session
+ *  starts on the keychain login rather than not at all. */
 export function accountSourcePrefix(name: string | undefined, warn?: (msg: string) => void): string {
   if (!name) return "";
-  const info = accountTokenInfo(name);
+  try {
+    assertValidProfileName(name);
+  } catch {
+    return "";
+  }
+  // The name rides along in the env so the statusLine hook and the refresh
+  // gate can say which account the session runs on.
+  const nameExport = `export CODECAST_CC_ACCOUNT=${name}; `;
+  if (activeProfileName() === name) return nameExport;
+  const info = accountLaunchInfo(name);
   if (!info) {
-    warn?.(`cc_account "${name}" requested but no setup-token stored (cast accounts token ${name}) — launching on the keychain login`);
+    warn?.(`cc_account "${name}" requested but its saved login has no launch credential (sign into it again from Settings) — launching on the keychain login`);
     return "";
   }
   if (info.expires_at <= Date.now()) {
-    warn?.(`cc_account "${name}" setup-token is past its one-year lifetime — re-mint with: claude setup-token | cast accounts token ${name}`);
+    warn?.(`cc_account "${name}" saved login is past its refresh lifetime — sign into it again from Settings`);
   }
-  // The name rides along in the env so the statusLine hook can say which
-  // account its live usage belongs to: the setup-token is scope-less, so
-  // nothing else in the payload distinguishes a pinned session from one on the
-  // keychain login. Safe on the command line — accountTokenFilePath already
-  // refused anything but a profile name, and the token stays inside the file.
-  return `${sourceFilePrefix(info.file)}export CODECAST_CC_ACCOUNT=${name}; `;
+  return `${sourceFilePrefix(info.file)}${nameExport}`;
 }
 
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its
@@ -1464,7 +1678,6 @@ export async function repairProfileIdentities(
   for (const row of audit) {
     if (row.verdict === "duplicate") {
       deleteProfileSecret(row.name);
-      removeAccountToken(row.name);
       row.repair = "dropped-credential";
       dirty = true;
     } else if (row.verdict === "mislabeled") {
@@ -1915,7 +2128,14 @@ async function writeJsonAsync(file: string, value: unknown): Promise<void> {
 }
 
 export async function refreshUsageSnapshots(
-  opts: { fetchImpl?: typeof fetch; now?: number; minIntervalMs?: number } = {},
+  opts: {
+    fetchImpl?: typeof fetch;
+    now?: number;
+    minIntervalMs?: number;
+    // Profiles a live claude runs on (their store, ccLiveGate): the session
+    // rotates those itself, and a second rotation here would strand it.
+    heldProfiles?: ReadonlySet<string>;
+  } = {},
 ): Promise<UsageRefreshSummary> {
   const now = opts.now ?? Date.now();
   const minInterval = opts.minIntervalMs ?? 4 * 60 * 1000;
@@ -1968,6 +2188,10 @@ export async function refreshUsageSnapshots(
       const prev = cache.accounts[key];
       if (prev && now - prev.fetched_at < minInterval) {
         summary.skipped.push(name); // inside the throttle — rotating now would buy nothing
+        continue;
+      }
+      if (opts.heldProfiles?.has(name)) {
+        summary.skipped.push(name); // a live session rotates this store; read it back next pass
         continue;
       }
       const rotated = await refreshProfileCredential(name, { fetchImpl: opts.fetchImpl, now });
@@ -2139,7 +2363,7 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
         stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
       const usage = readUsageCache().accounts;
       const profiles = listProfiles().map(({ name, email, uuid, tier, subscription, login_expired_at }) => {
-        const tok = accountTokenInfo(name);
+        const tok = accountLaunchInfo(name);
         return {
           name,
           email,

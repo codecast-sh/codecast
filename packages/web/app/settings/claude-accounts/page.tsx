@@ -2,10 +2,11 @@ import { useSettingsData } from "../../../hooks/useSyncSettings";
 "use client";
 
 import { copyToClipboard } from "../../../lib/utils";
-// First-class management of Claude Code accounts. Saved logins and setup
-// tokens are device-local and execute daemon-side; secrets never leave the
-// machine. Enrolling an account needs one /login in a terminal, then sessions
-// launch with that account's token whenever one is available.
+// First-class management of Claude Code accounts. Saved logins are
+// device-local and execute daemon-side; secrets never leave the machine.
+// Enrolling an account needs one /login in a terminal; from then on every
+// saved login carries sessions through its own credential store, and the only
+// time a browser opens again is a "sign in again" a person clicks here.
 
 import { useState } from "react";
 import { useMutation } from "convex/react";
@@ -15,7 +16,6 @@ import {
   isExhaustionCurrent,
   isValidProfileName,
   profileHasToken,
-  MINT_FLOW_STALE_MS,
   type CcUsage,
 } from "@codecast/convex/convex/ccAccountsShared";
 import { AppLoader } from "../../../components/AppLoader";
@@ -25,7 +25,13 @@ import { Switch } from "../../../components/ui/switch";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
 import { Check, Copy, KeyRound, Laptop, Pin, TimerReset, Trash2, Zap } from "lucide-react";
-import { AccountUsageBars, LoginExpiredBadge, UsageRefreshButton } from "../../../components/AccountUsageMeter";
+import {
+  AccountUsageBars,
+  LoginExpiredBadge,
+  ProfileSignInButton,
+  UsageRefreshButton,
+  type ProfileLoginFlow,
+} from "../../../components/AccountUsageMeter";
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
@@ -50,21 +56,23 @@ type DeviceAccounts = {
   /** Absent on servers that predate the field — treated as on. */
   auto_continue?: boolean;
   auto_switch_state?: { last_action_at?: number; last_action?: string; exhausted_at?: number };
-  mint_flow?: {
-    status: "pending" | "confirmed" | "rejected";
-    profile?: string;
-    email?: string;
-    reason?: string;
-    started_at: number;
-    finished_at?: number;
-  };
+  login_flow?: ProfileLoginFlow | null;
 };
 
-function tokenBadge(p: { token?: { expires_at: number } }, now: number): { label: string; tone: string } | null {
-  if (!p.token) return null;
-  if (p.token.expires_at <= now) return { label: "token expired", tone: "bg-sol-red/10 text-sol-red" };
-  const days = Math.max(1, Math.ceil((p.token.expires_at - now) / 86_400_000));
-  return { label: `token · ${days}d`, tone: "bg-sol-violet/10 text-sol-violet" };
+function sessionsBadge(p: { token?: { expires_at: number }; login_expired_at?: number }, now: number): { label: string; tone: string; title: string } | null {
+  if (!p.token || p.login_expired_at) return null;
+  if (p.token.expires_at <= now) {
+    return {
+      label: "grant lifetime over",
+      tone: "bg-sol-red/10 text-sol-red",
+      title: "This saved login's refresh lifetime has run out — sign into it again and sessions can use it",
+    };
+  }
+  return {
+    label: "sessions",
+    tone: "bg-sol-violet/10 text-sol-violet",
+    title: "This account has its own credential store on the machine; sessions can be pinned to it without changing the current login",
+  };
 }
 
 function planLabel(p: { tier?: string; subscription?: string }): string | null {
@@ -143,85 +151,37 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
   );
 }
 
-function SessionTokenStatus({ device }: { device: DeviceAccounts }) {
+function SessionAccountsStatus({ device }: { device: DeviceAccounts }) {
   const now = useCoarseNow(30_000);
-  const requestMint = useMutation(api.accountSwitch.requestMintToken);
-  const [minting, setMinting] = useState(false);
-  const online = device.online !== false;
-  const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
-  const activeHasToken = !!activeProfile && profileHasToken(activeProfile, now);
-  const flow = device.mint_flow;
-  const pending = flow?.status === "pending" && now - flow.started_at < MINT_FLOW_STALE_MS;
-  const rejected = flow?.status === "rejected";
-  const withTokens = device.profiles.filter((p) => profileHasToken(p, now)).length;
-
-  const mint = async (force: boolean) => {
-    setMinting(true);
-    try {
-      const res = await requestMint({ device_id: device.device_id, force });
-      toast.success(
-        res?.already_pending
-          ? "A mint is already waiting for the browser approval"
-          : `Minting a token for ${res?.email ?? "the current login"} — approve the sign-in in the browser`,
-      );
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Mint failed");
-    } finally {
-      setMinting(false);
-    }
-  };
+  const ready = device.profiles.filter((p) => profileHasToken(p, now) && !p.login_expired_at);
+  const needSignIn = device.profiles.filter((p) => !!p.login_expired_at);
+  const total = device.profiles.length;
 
   return (
     <>
       <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
         <Pin className="h-4 w-4 shrink-0 text-sol-violet" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text">Session account tokens</div>
+          <div className="text-xs font-medium text-sol-text">Sessions on saved accounts</div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
-            Claude sessions automatically use the current account&apos;s token. When a blocked
-            session switches accounts, codecast restarts only its Claude Code process with the
-            new token; the conversation stays intact and other sessions keep running. Tokens
-            live in a private file on this machine and renew a week before they expire.
+            Every saved login gets its own credential store on this machine, so a session can run on
+            any saved account while the current login stays put. When a blocked session switches
+            accounts, codecast restarts only its Claude Code process on the new account; the
+            conversation stays intact and other sessions keep running. Stores are filled and renewed
+            automatically; nothing here opens a browser on its own.
           </p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pl-[42px] text-[11px] text-sol-text-dim sm:px-5 sm:pl-[46px]">
-        {pending ? (
-          <span className="text-sol-yellow">
-            Minting for {flow?.email ?? flow?.profile ?? "the current login"}. A claude.ai tab is open in your
-            browser: it must be signed in as that account, then approve. The tab stops at the account picker when
-            it is not, and the mint times out after 5 minutes.
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 pl-[42px] text-[11px] text-sol-text-dim sm:px-5 sm:pl-[46px]">
+        <span>
+          {ready.length} of {total} saved account{total === 1 ? "" : "s"} can carry sessions.
+        </span>
+        {needSignIn.length > 0 && (
+          <span className="text-amber-500">
+            {needSignIn.length === 1
+              ? `${needSignIn[0].email ?? needSignIn[0].name} needs you to sign in again.`
+              : `${needSignIn.length} accounts need you to sign in again.`}
           </span>
-        ) : rejected && !activeHasToken ? (
-          <span className="text-sol-red">Mint failed: {flow?.reason ?? "unknown reason"}</span>
-        ) : activeHasToken ? (
-          <span>
-            {withTokens} of {device.profiles.length} saved account{device.profiles.length === 1 ? "" : "s"} have a
-            token. For another account, sign into it at claude.ai and press Mint: the token files under
-            whichever saved account approved it.
-          </span>
-        ) : (
-          <span>The current login has no token yet.</span>
-        )}
-        {online && !pending && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={minting}
-            onClick={() => mint(rejected)}
-            className="h-6 px-2 text-[11px]"
-          >
-            {minting ? "Starting…" : rejected && !activeHasToken ? "Try again" : activeHasToken ? "Re-mint" : "Mint now"}
-          </Button>
-        )}
-        {pending && online && (
-          <button
-            onClick={() => mint(true)}
-            disabled={minting}
-            className="text-sol-text-dim underline decoration-dotted underline-offset-2 hover:text-sol-text"
-          >
-            browser didn&apos;t open? relaunch
-          </button>
         )}
       </div>
     </>
@@ -377,13 +337,11 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   </span>
                 )}
                 <LoginExpiredBadge profile={p} />
+                <ProfileSignInButton device={device} profile={p} />
                 {(() => {
-                  const badge = tokenBadge(p, now);
+                  const badge = sessionsBadge(p, now);
                   return badge ? (
-                    <span
-                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${badge.tone}`}
-                      title="A one-year setup-token is stored for this account; sessions can be pinned to it"
-                    >
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${badge.tone}`} title={badge.title}>
                       {badge.label}
                     </span>
                   ) : null;
@@ -448,7 +406,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       )}
 
       {!device.is_remote && <AutoSwitchToggle device={device} />}
-      {!device.is_remote && <SessionTokenStatus device={device} />}
+      {!device.is_remote && <SessionAccountsStatus device={device} />}
 
       {!device.is_remote && online && device.active_email && !activeProfile && (
         <SaveCurrentForm device={device} suggestedName={suggested} />
@@ -468,11 +426,11 @@ export default function ClaudeAccountsSettings() {
   return (
     <SettingsPanel>
       <p className="px-1 text-sm text-sol-text-muted leading-relaxed">
-        Each Claude account you log into is saved as a profile automatically. New sessions use the
-        current account&apos;s token, while running sessions keep the account they started with. Switching
+        Each Claude account you log into is saved as a profile automatically. New sessions run on the
+        current account, while running sessions keep the account they started with. Switching
         changes the default without interrupting them. When sessions are parked on a usage limit,
-        "switch &amp; continue" restarts only those Claude Code processes with the selected account&apos;s
-        token and resumes the same conversations.
+        "switch &amp; continue" restarts only those Claude Code processes on the selected account
+        and resumes the same conversations.
       </p>
 
       {data === undefined && (
@@ -511,8 +469,9 @@ export default function ClaudeAccountsSettings() {
           </li>
         </ol>
         <p className="mt-2 text-[11px] text-sol-text-dim">
-          Profiles are stored in the machine's keychain; tokens never leave it. The outgoing account is
-          re-snapshotted automatically on every switch, so saved profiles never go stale.
+          Profiles are stored in the machine's keychain; tokens never leave it. Saved logins are renewed
+          automatically. If one stops working, its row shows &quot;sign in again&quot;: that opens the
+          browser once, for that account only, and the current login stays as it is.
         </p>
       </SettingsSection>
     </SettingsPanel>

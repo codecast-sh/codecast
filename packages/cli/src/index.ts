@@ -74,7 +74,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -4361,12 +4361,12 @@ accountsCmd
       for (const p of profiles) {
         const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
         const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
-        const tok = accountTokenInfo(p.name);
-        const tokenNote = tok
-          ? (tok.expires_at <= Date.now()
-            ? ` ${c.yellow}· token expired${c.reset}`
-            : ` ${c.dim}· token, ${Math.ceil((tok.expires_at - Date.now()) / 86400000)}d left${c.reset}`)
-          : "";
+        const launch = accountLaunchInfo(p.name);
+        const tokenNote = p.login_expired_at
+          ? ` ${c.yellow}· login expired — cast accounts signin ${p.name}${c.reset}`
+          : launch
+            ? (launch.expires_at <= Date.now() ? ` ${c.yellow}· refresh lifetime over — cast accounts signin ${p.name}${c.reset}` : ` ${c.dim}· sessions${c.reset}`)
+            : "";
         console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
       }
     } catch (err) {
@@ -4431,31 +4431,32 @@ accountsCmd
   });
 
 accountsCmd
-  .command("token <name>")
+  .command("signin <name>")
+  .alias("login")
   .description(
-    "Store a `claude setup-token` for a saved profile so sessions can run on that account\n" +
-    "without switching the machine's login: cast spawn --account <name> \"<task>\".\n" +
-    "Mint it with `claude setup-token` while the browser is signed into THAT account,\n" +
-    "then paste it here (hidden prompt) or pipe it on stdin. Tokens last one year."
+    "Sign into a saved profile again when its login expired. Opens the browser on the\n" +
+    "OAuth page for that account; the credential lands in the profile's own store, so the\n" +
+    "machine's current login is untouched. Sessions pinned to the profile work again after."
   )
-  .option("--rm", "Forget the stored token (the token itself stays valid until revoked at claude.ai → Settings → Claude Code)")
-  .action(async (name: string, options: any) => {
+  .action(async (name: string) => {
     try {
-      if (options.rm) {
-        const existed = removeAccountToken(name);
-        console.log(existed ? `${c.green}✓${c.reset} removed token for ${c.cyan}${name}${c.reset}` : `${c.dim}no token stored for ${name}${c.reset}`);
-        return;
-      }
-      const token = await promptHiddenSecret(`Paste the setup-token for ${name}: `);
-      const file = writeAccountToken(name, token);
-      const info = accountTokenInfo(name)!;
-      console.log(`${c.green}✓${c.reset} token stored for ${c.cyan}${name}${c.reset} (${file}, expires ${new Date(info.expires_at).toISOString().slice(0, 10)})`);
-      console.log(`${c.dim}  launch on it: cast spawn --account ${name} "<task>"${c.reset}`);
+      const profile = listProfiles().find((p) => p.name === name);
+      if (!profile) throw new CcAccountError(`No saved profile "${name}" on this machine`);
+      const dir = profileStoreDir(name);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      console.log(`${c.dim}Signing into ${profile.email ?? name} in the browser…${c.reset}`);
+      const run = spawnSync("claude", ["auth", "login", "--claudeai", ...(profile.email ? ["--email", profile.email] : [])], {
+        stdio: "inherit",
+        env: { ...process.env, CLAUDE_SECURESTORAGE_CONFIG_DIR: dir },
+      });
+      if (run.status !== 0) throw new CcAccountError("the sign-in did not complete");
+      const identity = await adoptProfileStoreCredential(name);
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${name}${c.reset} signed in again${identity.email ? ` (${identity.email})` : ""}`);
+      ensureProfileStore(name);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
-    // Token metadata rides the accounts inventory — show it in Settings now.
     await publishAccountsInventory();
   });
 

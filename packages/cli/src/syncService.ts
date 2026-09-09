@@ -639,30 +639,13 @@ export class SyncService {
   // Report the browser sign-in flow's outcome (start_login command). Confirmed
   // also makes the server kick off the auth-blocked revive; the returned count
   // is how many sessions it queued.
-  // Setup-token mint flow status (the web's reactive channel, mirrors
-  // completeLoginFlow). "pending" is stamped by the daemon itself for
-  // auto-mints; web-requested mints arrive already pending.
-  async reportMintFlow(
-    status: "pending" | "confirmed" | "rejected",
-    profile: string,
-    email?: string,
-    reason?: string,
-  ): Promise<void> {
-    await this.throttle();
-    await this.mutate("accountSwitch:reportMintFlow" as any, {
-      api_token: this.apiToken,
-      device_id: deviceId(),
-      status,
-      profile,
-      ...(email ? { email } : {}),
-      ...(reason ? { reason } : {}),
-    });
-  }
-
   async completeLoginFlow(
     status: "confirmed" | "rejected",
     email?: string,
     reason?: string,
+    // A sign-in that repaired one saved profile's own store (no keychain
+    // change, nothing to revive on the keychain).
+    profile?: string,
   ): Promise<number> {
     await this.throttle();
     const res = await this.mutate("accountSwitch:completeLoginFlow" as any, {
@@ -671,6 +654,7 @@ export class SyncService {
       status,
       ...(email ? { email } : {}),
       ...(reason ? { reason } : {}),
+      ...(profile ? { profile } : {}),
     });
     return res?.revived ?? 0;
   }
