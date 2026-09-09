@@ -35,7 +35,7 @@ import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, computeConversationTaskStats, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
@@ -177,6 +177,7 @@ import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
+import { SentFileBlock, type SentFileData } from "./tools/SentFileBlock";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { MessagePromptPreview } from "./MessagePromptPreview";
@@ -707,6 +708,7 @@ type Message = {
   tool_calls?: ToolCall[];
   tool_results?: ToolResult[];
   images?: ImageData[];
+  files?: SentFileData[];
   subtype?: string;
   model?: string;
   _isOptimistic?: true;
@@ -3870,8 +3872,10 @@ function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // Monitor, background Bash, Workflow, and ScheduleWakeup stay visible in
   // condensed feeds: all are standing state the reader needs to know is armed
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
-  // fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  // fire), not a transient tool step. A sent file is here for a different
+  // reason: it is addressed to the reader. Folding a delivery into a receipt
+  // chip is how the file went unseen in the first place.
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
 }
 
 interface ToolChangeRange {
@@ -8958,6 +8962,7 @@ function AssistantBlockImpl({
   onSendInlineMessage,
   isConversationActive,
   globalImageMap,
+  globalFileMap,
 }: {
   content?: string;
   timestamp: number;
@@ -8999,6 +9004,7 @@ function AssistantBlockImpl({
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData[]>;
+  globalFileMap?: Record<string, SentFileData[]>;
 }) {
   const CONTENT_MAX_HEIGHT = 800;
 
@@ -9065,6 +9071,8 @@ function AssistantBlockImpl({
       <TaskListBlock key={tc.id} tool={tc} result={result} taskRecordMap={taskRecordMap} />
     ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
       <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} taskRecordMap={taskRecordMap} />
+    ) : tc.name === "SendUserFile" ? (
+      <SentFileBlock key={tc.id} files={globalFileMap?.[tc.id] ?? []} />
     ) : tc.name === "SendMessage" ? (
       <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
     ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
@@ -9292,6 +9300,9 @@ function AssistantBlockImpl({
             tools of absorbed messages alike). Always-visible blocks stay. */}
         {hasToolCalls && toolCalls?.map((tc) => {
           if (condensed && !isAlwaysVisibleToolCall(tc)) return null;
+          // A delivered file reads as the end of what the agent just said, so
+          // its cards go under the content rather than above it.
+          if (tc.name === "SendUserFile") return null;
           return renderToolBlock(tc, toolResultMap[tc.id], { messageId, messageUuid, timestamp });
         })}
 
@@ -9353,6 +9364,10 @@ function AssistantBlockImpl({
             )}
           </>
         )}
+
+        {hasToolCalls && toolCalls?.filter(tc => tc.name === "SendUserFile").map(tc => (
+          renderToolBlock(tc, toolResultMap[tc.id], { messageId, messageUuid, timestamp })
+        ))}
 
         {condensedReceipt && (
           <CondensedToolsGroup
@@ -14519,7 +14534,26 @@ const ConversationViewInner = (
     return size;
   }, [rowDensityKey]);
 
+  const updateScrollProgress = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
+    if (!scrollProgressRef.current || jumpPendingRef.current) return;
+    const ctx = scrollCtxRef.current;
+    let progress: number;
+    if (ctx.messageCount > 150) {
+      const items = instance.getVirtualItems();
+      if (items.length === 0) return;
+      const centerIdx = items[Math.floor(items.length / 2)].index;
+      progress = Math.max(0, Math.min(1, (ctx.loadedStartIndex + (centerIdx / Math.max(ctx.timelineLen, 1)) * ctx.messagesLen) / ctx.messageCount));
+    } else {
+      const maxScroll = instance.getTotalSize() - (instance.scrollRect?.height ?? 0);
+      progress = maxScroll > 0 ? Math.max(0, Math.min(1, (instance.scrollOffset ?? 0) / maxScroll)) : 1;
+    }
+    scrollProgressRef.current.style.height = `${progress * 100}%`;
+    setNavScrollProgress(progress);
+  }, []);
+
   const virtualizer = useVirtualizer({
+    directDomUpdates: true,
+    onChange: updateScrollProgress,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -15234,29 +15268,8 @@ const ConversationViewInner = (
 
   const totalSize = virtualizer.getTotalSize();
   useWatchEffect(() => {
-    // Frozen while a jump is pending: the progress bar must not move until the
-    // single post-load scroll lands (the completion effect sets it explicitly).
-    if (!scrollProgressRef.current || jumpPendingRef.current) return;
-    const totalMessages = conversation?.message_count || messages.length;
-    const isPaginated = totalMessages > 150;
-    let progress: number;
-    if (isPaginated) {
-      const items = virtualizer.getVirtualItems();
-      if (items.length === 0) return;
-      const centerIdx = items[Math.floor(items.length / 2)].index;
-      const loadedMessages = messages.length;
-      const startOffset = conversation?.loaded_start_index ?? 0;
-      const tLen = Math.max(timeline.length, 1);
-      progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
-    } else {
-      const scrollEl = containerRef.current;
-      if (!scrollEl) return;
-      const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
-      progress = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 1;
-    }
-    scrollProgressRef.current.style.height = `${progress * 100}%`;
-    setNavScrollProgress(progress);
-  }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
+    updateScrollProgress(virtualizer);
+  }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize, virtualizer, updateScrollProgress]);
 
   // Pixel-perfect page mount, both directions. The virtualizer's own
   // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
@@ -15765,8 +15778,12 @@ const ConversationViewInner = (
   // that made the call, so the ToolBlock finds them by tool id here. A list,
   // not a single image: one command can hand back several (`cast browser
   // shot --viewports`), and keeping only the last would silently drop the rest.
-  const globalImageMap = useMemo(() => {
+  // Sent files (SendUserFile) ride the same index, for the same reason: a
+  // condensed row renders tool blocks from OTHER messages, so binding by tool
+  // id is what keeps a folded delivery attached to its own card.
+  const { globalImageMap, globalFileMap } = useMemo(() => {
     const map: Record<string, ImageData[]> = {};
+    const fileMap: Record<string, SentFileData[]> = {};
     const sources = [conversation?.messages].filter(Boolean) as Message[][];
     for (const msgs of sources) {
       for (const msg of msgs) {
@@ -15777,9 +15794,16 @@ const ConversationViewInner = (
             }
           }
         }
+        if (msg.files) {
+          for (const file of msg.files) {
+            if (file.tool_use_id) {
+              (fileMap[file.tool_use_id] ??= []).push(file);
+            }
+          }
+        }
       }
     }
-    return map;
+    return { globalImageMap: map, globalFileMap: fileMap };
   }, [conversation?.messages]);
 
   // toolCallId → page URL + tab id for every `cast browser` row, carrying the
@@ -16315,6 +16339,7 @@ const ConversationViewInner = (
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
+          globalFileMap={globalFileMap}
         />
       );
     }
@@ -17267,8 +17292,8 @@ const ConversationViewInner = (
             </div>
           ) : (
           <div
+            ref={virtualizer.containerRef}
             style={{
-              height: virtualizer.getTotalSize(),
               width: "100%",
               position: "relative",
             }}
@@ -17300,7 +17325,6 @@ const ConversationViewInner = (
                     top: 0,
                     left: 0,
                     width: "100%",
-                    transform: `translateY(${virtualItem.start}px)`,
                     ...(content ? {} : { height: 0, overflow: "hidden" }),
                   }}
                 >

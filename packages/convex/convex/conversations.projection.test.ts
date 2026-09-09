@@ -186,8 +186,13 @@ describe("overlay projection — placement rules", () => {
     expect(liveness.conversations_child_auq.awaiting_input).toBe(true);
     expect(liveness.conversations_child_auq.bucket).toBeUndefined();
     expect(liveness.conversations_child_auq.last_turn_allows_park).toBeDefined();
-    // An idle child is not probed and ships no fact row.
-    expect(Object.keys(liveness)).not.toContain("conversations_child_quiet");
+    // An idle child is not probed, but it rides the subagent window as a
+    // fact-only row: the list strips its fast fields, so the overlay is the
+    // only writer of its updated_at / message_count.
+    expect(liveness.conversations_child_quiet.bucket).toBeUndefined();
+    expect(liveness.conversations_child_quiet.awaiting_input).toBe(false);
+    expect(liveness.conversations_child_quiet.updated_at).toBe(EPOCH - 20 * MIN);
+    expect(liveness.conversations_child_quiet.message_count).toBe(4);
     // Every fact is EXPLICIT on the wire (C1, one writer): a row with no
     // managed status ships `agent_status: null`, never an absent key — Convex
     // drops undefined, and a replica that merges only the keys it receives
@@ -497,11 +502,78 @@ describe("overlay read budget", () => {
     // One newest-message read for the non-idle row, one for the un-backfilled
     // row (shared by its fallback and its probe), none for settled rows.
     expect(by("messages")).toBe(2);
-    // The scan: recent x2 ranges, pinned, dismissed x2, stashed x2, snoozed x2, owners.
-    expect(by("conversations")).toBe(9);
+    // The scan: recent x2 ranges, the subagent window, pinned, dismissed x2,
+    // stashed x2, snoozed x2, owners.
+    expect(by("conversations")).toBe(10);
     expect(by("session_owners")).toBe(1);
     expect(by("get")).toBe(0);
-    expect(ops.length).toBe(14);
+    expect(ops.length).toBe(15);
+  });
+});
+
+describe("fast-field ownership of subagent child rows", () => {
+  // An Agent-tool subagent (a transcript sidechain) has no managed session, so
+  // it never enters the live pool; before the subagent window, the list
+  // nulled its fast fields and nothing ever wrote them (the inbox showed an
+  // idle age of 20705 days and offered the row for dismissal).
+  const DAY = 24 * H;
+  const tables = () => ({
+    conversations: [
+      conv("parent", { updated_at: EPOCH - MIN }),
+      conv("idle_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 3 * H, message_count: 44 }),
+      conv("old_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 40 * DAY, message_count: 7 }),
+      conv("blank_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - MIN, message_count: 0 }),
+    ],
+  });
+
+  test("every child row the list strips is stamped by the overlay; a child outside the window keeps its fields on the list row", async () => {
+    const { sessions } = await computeInboxSessions({ db: db(tables()) }, ME as any, { includeLiveness: false, fastFieldsInOverlay: true });
+    const { liveness } = await computeSessionsLiveness({ db: db(tables()) }, ME as any);
+    const byId = new Map(sessions.map((r: any) => [r._id, r]));
+    expect([...byId.keys()].sort()).toEqual(["conversations_idle_child", "conversations_old_child", "conversations_parent"]);
+
+    // Inside the window: stripped on the list, carried by the overlay.
+    for (const f of INBOX_FAST_FIELDS) expect(byId.get("conversations_idle_child")[f]).toBeNull();
+    expect(liveness.conversations_idle_child).toMatchObject({ updated_at: EPOCH - 3 * H, message_count: 44 });
+    expect(liveness.conversations_idle_child.bucket).toBeUndefined();
+
+    // Outside the recency window: the overlay never sees it, so the list keeps them.
+    expect(byId.get("conversations_old_child")).toMatchObject({ updated_at: EPOCH - 40 * DAY, message_count: 7 });
+    expect(liveness.conversations_old_child).toBeUndefined();
+
+    // The invariant the bug broke: a stripped row always has an overlay writer.
+    for (const row of sessions) {
+      for (const f of INBOX_FAST_FIELDS) {
+        if (row[f] === null) expect(liveness[row._id]?.[f], `${row._id}.${f}`).not.toBeNull();
+      }
+    }
+  });
+
+  test("the window stamps only children of shown parents, and only with content", async () => {
+    const world = tables();
+    world.conversations.push(
+      conv("hidden_parent", { inbox_killed_at: EPOCH - H, inbox_dismissed_at: EPOCH - H }),
+      conv("orphan_child", { is_subagent: true, parent_conversation_id: "conversations_hidden_parent", updated_at: EPOCH - MIN }),
+    );
+    const { liveness } = await computeSessionsLiveness({ db: db(world) }, ME as any);
+    expect(liveness.conversations_orphan_child).toBeUndefined();
+    expect(liveness.conversations_blank_child).toBeUndefined();
+    // Fact-only: never a projection member.
+    for (const row of Object.values<any>(liveness)) if (row.bucket === undefined) expect(row).not.toHaveProperty("work_state");
+  });
+
+  test("the window is one indexed read shared by both channels", async () => {
+    const list = countingCtx(db(tables()));
+    await computeInboxSessions(list.ctx, ME as any, { includeLiveness: false, fastFieldsInOverlay: true });
+    const overlay = countingCtx(db(tables()));
+    await computeSessionsLiveness(overlay.ctx, ME as any);
+    for (const ops of [list.ops, overlay.ops]) {
+      expect(ops.filter((o) => o === "conversations.by_user_subagent_updated").length).toBe(3); // two top-level ranges + the subagent window
+    }
+    // With the fields on the list (liveness bundled), no window is read.
+    const bundled = countingCtx(db(tables()));
+    await computeInboxSessions(bundled.ctx, ME as any, {});
+    expect(bundled.ops.filter((o) => o === "conversations.by_user_subagent_updated").length).toBe(2);
   });
 });
 
