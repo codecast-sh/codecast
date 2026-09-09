@@ -8,11 +8,17 @@
 // daemon routes and the `cast vault` command group keep the vault vocabulary —
 // only the label and the canonical route changed.
 
-import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
-import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
+import {
+  Panel,
+  Group,
+  Separator,
+  usePanelRef,
+  type PanelImperativeHandle,
+} from "react-resizable-panels";
 import {
   ArrowUpDown,
   Cloud,
@@ -76,6 +82,28 @@ const VaultGraphView = lazy(() =>
 const headerButtonClass = "text-sol-text-dim hover:text-sol-text transition-colors";
 
 const SIDE_MIN_PX = 200;
+
+// A Panel mounted into an already-live Group (the tree pane, when a narrow
+// pane widens past the split threshold) gets its imperative handle in the
+// mounting commit, but the group only derives that panel's constraints one
+// commit later — collapse() throws "Panel constraints not found" until then.
+// Retry across a few frames; give up once the desired state changed or the
+// panel is gone.
+export function collapsePanelSoon(
+  panelRef: RefObject<PanelImperativeHandle | null>,
+  stillWanted: () => boolean,
+  frames = 5,
+) {
+  const ref = panelRef.current;
+  if (!ref || !stillWanted()) return;
+  try {
+    ref.collapse();
+  } catch {
+    if (frames > 0) {
+      requestAnimationFrame(() => collapsePanelSoon(panelRef, stillWanted, frames - 1));
+    }
+  }
+}
 
 const separatorClass =
   "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
@@ -311,7 +339,7 @@ function VaultContent() {
     sideAppliedRef.current = rightPanelOpen;
     if (firstSync && ref.isCollapsed() !== rightPanelOpen) return;
     if (!rightPanelOpen) {
-      ref.collapse();
+      collapsePanelSoon(sidePanelRef, () => sideAppliedRef.current === false);
       return;
     }
     ref.resize("22%");
@@ -379,7 +407,10 @@ function VaultContent() {
     const firstSync = treeAppliedRef.current === null;
     treeAppliedRef.current = treeOpen;
     if (!treeOpen) {
-      ref.collapse();
+      // The mounting-commit case is real here: widening a narrow pane flips
+      // paneNarrow to false and mounts the tree panel in the same commit this
+      // effect runs in, so a direct collapse() throws.
+      collapsePanelSoon(treePanelRef, () => treeAppliedRef.current === false);
       return;
     }
     if (firstSync) return; // the panel mounts expanded already
