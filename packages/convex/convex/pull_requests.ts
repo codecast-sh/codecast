@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, query } from "./functions";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository } from "./lib/gitRefs";
@@ -101,6 +102,15 @@ export const create = internalMutation({
   },
 });
 
+/**
+ * The quiet upsert for a pull request learned from GitHub's LIST api rather
+ * than from a webhook: the backfill that runs when the App lands on an account
+ * or gains repositories (githubApp.backfillInstallationPulls). It records no
+ * "opened" activity and fires no trigger, because the pull request was opened
+ * in the past and only became visible to this workspace now; the webhook path
+ * (githubWebhooks.matchPRToConversation) owns those moments. A merge seen here
+ * still lands in the feed, since it is the one event a list can prove.
+ */
 export const syncPRFromGitHub = internalMutation({
   args: {
     team_id: v.id("teams"),
@@ -115,77 +125,67 @@ export const syncPRFromGitHub = internalMutation({
       v.literal("merged")
     ),
     author_github_username: v.string(),
+    author_avatar_url: v.optional(v.string()),
     head_ref: v.optional(v.string()),
+    base_ref: v.optional(v.string()),
+    head_sha: v.optional(v.string()),
+    base_sha: v.optional(v.string()),
+    draft: v.optional(v.boolean()),
+    requested_reviewers: v.optional(v.array(v.string())),
     created_at: v.number(),
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
+    closed_at: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ pr_id: Id<"pull_requests">; created: boolean }> => {
     const existing = await ctx.db
       .query("pull_requests")
       .withIndex("by_github_pr_id", (q) => q.eq("github_pr_id", args.github_pr_id))
       .first();
 
-    if (existing) {
-      const previousState = existing.state;
-      await ctx.db.patch(existing._id, {
-        title: args.title,
-        body: args.body,
-        state: args.state,
-        author_github_username: args.author_github_username,
-        head_ref: args.head_ref,
-        updated_at: args.updated_at,
-        merged_at: args.merged_at,
-      });
+    const fields = {
+      title: args.title,
+      body: args.body,
+      state: args.state,
+      author_github_username: args.author_github_username,
+      author_avatar_url: args.author_avatar_url,
+      head_ref: args.head_ref,
+      base_ref: args.base_ref,
+      head_sha: args.head_sha,
+      base_sha: args.base_sha,
+      draft: args.draft,
+      requested_reviewers: args.requested_reviewers,
+      updated_at: args.updated_at,
+      merged_at: args.merged_at,
+      closed_at: args.closed_at,
+    };
 
+    if (existing) {
+      // A webhook may have moved the row past what the list says (a merge that
+      // landed between the list call and this write); never rewind it.
+      if (existing.updated_at > args.updated_at) return { pr_id: existing._id, created: false };
+      const previousState = existing.state;
+      await ctx.db.patch(existing._id, fields);
       await recordPRMergedActivity(
         ctx,
         { ...existing, ...args, _id: existing._id, team_id: existing.team_id },
         previousState,
         args.state,
       );
-      return existing._id;
+      return { pr_id: existing._id, created: false };
     }
 
     const prId = await ctx.db.insert("pull_requests", {
+      ...fields,
       team_id: args.team_id,
       github_pr_id: args.github_pr_id,
       repository: normalizeRepository(args.repository),
       number: args.number,
-      title: args.title,
-      body: args.body,
-      state: args.state,
-      author_github_username: args.author_github_username,
-      head_ref: args.head_ref,
       linked_session_ids: [],
       pr_comment_posted: false,
       created_at: args.created_at,
-      updated_at: args.updated_at,
-      merged_at: args.merged_at,
     });
-
-    const actorUserId = await resolveActorUserIdForTeam(
-      ctx,
-      args.team_id,
-      args.author_github_username
-    );
-    if (actorUserId) {
-      await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
-        team_id: args.team_id,
-        actor_user_id: actorUserId,
-        event_type: "pr_created" as const,
-        title: `Opened PR #${args.number}: ${args.title}`,
-        description: args.repository,
-        related_pr_id: prId,
-        metadata: {
-          git_branch: args.head_ref,
-        },
-      });
-    }
-
-    await recordPRMergedActivity(ctx, { ...args, _id: prId }, undefined, args.state);
-
-    return prId;
+    return { pr_id: prId, created: true };
   },
 });
 

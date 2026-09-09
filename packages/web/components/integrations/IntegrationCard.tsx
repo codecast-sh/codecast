@@ -58,7 +58,10 @@ export function IntegrationCard({
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
   const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, me, scope);
-  const [showDetail, setShowDetail] = useState(false);
+  // Which accounts and repositories the App covers is the question people
+  // bring to the GitHub card ("why is this repo not in my workspace?"), so it
+  // opens shown; the query is one read on a page opened on purpose.
+  const [showDetail, setShowDetail] = useState(descriptor.id === "github");
 
   const connected = connection?.status === "connected" ? connection : null;
   const comingSoon = descriptor.connectKind === "coming-soon" || connection?.status === "coming_soon";
@@ -148,6 +151,14 @@ export function IntegrationCard({
                 busy={busy}
                 busyLabel="Disconnecting"
               />
+            )}
+            {/* One GitHub App install covers one account. A second org or a
+                personal account is another install through the same flow, so
+                the button stays while connected. */}
+            {descriptor.id === "github" && (
+              <QuietButton onClick={connect} busy={busy}>
+                Install on another account
+              </QuietButton>
             )}
             {descriptor.id === "github" && (
               <button

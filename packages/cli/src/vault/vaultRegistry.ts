@@ -197,6 +197,68 @@ function materializeProjectVault(configDir: string, vault: VaultInfo): VaultInfo
   return persisted;
 }
 
+/** The vault that holds a local path, and the path's vault-relative form. */
+export interface VaultLocation {
+  vault: VaultInfo;
+  rel: string;
+}
+
+/**
+ * The vault for a file or directory someone linked to — a path in a
+ * conversation, a `cast vault open` argument — and never "no vault contains
+ * that". The machine that has the file is the machine answering, so refusing
+ * to show it was the wrong shape: the only honest failure is a path that does
+ * not exist.
+ *
+ * Containment first: a registered or discovered vault whose root is the
+ * longest prefix wins, and resolving a discovered one registers it exactly as
+ * addressing it by id would. A path no vault holds gets one: the git checkout
+ * it sits in when there is one (the same root discovery would have offered),
+ * otherwise the directory the path is in. Registration goes through addVault,
+ * so it is the row `cast vault add <dir>` would have written and `cast vault rm`
+ * removes it the same way.
+ */
+export function locateVault(configDir: string, localPath: string): VaultLocation | null {
+  const abs = path.resolve(localPath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    return null;
+  }
+  const relTo = (root: string): string => (abs === root ? "" : path.relative(root, abs).split(path.sep).join("/"));
+
+  let best: VaultInfo | null = null;
+  for (const v of listVaults(configDir)) {
+    const root = v.root.replace(/\/$/, "");
+    if (abs !== root && !abs.startsWith(root + path.sep)) continue;
+    if (!best || root.length > best.root.length) best = v;
+  }
+  if (best) {
+    const vault = findVault(configDir, best.id) ?? best;
+    return { vault, rel: relTo(vault.root) };
+  }
+
+  const dir = stat.isDirectory() ? abs : path.dirname(abs);
+  const root = gitRootAbove(dir) ?? dir;
+  // A vault at the filesystem root would scan the whole disk; nothing anyone
+  // links to legitimately lives directly under it.
+  if (root === path.parse(root).root) return null;
+  const vault = addVault(configDir, root);
+  return { vault, rel: relTo(vault.root) };
+}
+
+/** The nearest ancestor (inclusive) holding a `.git`, or null outside any checkout. */
+function gitRootAbove(dir: string): string | null {
+  let cur = dir;
+  for (;;) {
+    if (fs.existsSync(path.join(cur, ".git"))) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
 /** Register a directory as a vault. Re-registering an existing root is a no-op
  *  apart from an explicit rename, so `cast vault add` is safe to repeat. */
 export function addVault(configDir: string, dir: string, name?: string): VaultInfo {
