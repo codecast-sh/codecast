@@ -359,8 +359,11 @@ export function LabelChipsRow({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const pillRef = useRef<HTMLButtonElement | null>(null);
   const popRowEls = useRef<Map<string, HTMLElement>>(new Map());
   const POPOVER_WIDTH = 256; // w-64
+  const GUTTER = 8; // smallest gap the popover keeps from a window edge
+  const MIN_POPOVER_HEIGHT = 160;
   // Empty labels (not in rowBucketIds) are tucked behind a collapsed "N empty"
   // row in the popover — the list defaults to labels that hold something.
   // Expanding restores the FULL sortLabels order, so the index-based reorder
@@ -369,15 +372,31 @@ export function LabelChipsRow({
   useWatchEffect(() => {
     if (!popoverOpen) setEmptyOpen(false);
   }, [popoverOpen]);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  // `bottom` instead of `top` means the popover was flipped above the anchor.
+  // maxHeight is the room actually available on the chosen side, so a long list
+  // scrolls inside the window instead of running past its bottom edge.
+  const [popoverPos, setPopoverPos] = useState<{ top?: number; bottom?: number; left: number; maxHeight: number } | null>(null);
   useLayoutEffect(() => {
     if (!popoverOpen) { setPopoverPos(null); return; }
+    // Zooming the desktop app in shrinks the window in CSS pixels, so the room
+    // under the panel header can be far smaller than the list wants. Measure
+    // both sides, take the roomier one, and cap the height to what is there.
     const place = () => {
       const rect = anchorRef.current?.getBoundingClientRect();
       if (!rect) return;
+      const below = window.innerHeight - rect.bottom - GUTTER * 2;
+      const above = rect.top - GUTTER * 2;
+      const flip = below < MIN_POPOVER_HEIGHT && above > below;
+      const room = Math.max(MIN_POPOVER_HEIGHT, flip ? above : below);
       setPopoverPos({
-        top: rect.bottom + 6,
-        left: Math.max(8, rect.right - POPOVER_WIDTH),
+        ...(flip
+          ? { bottom: Math.max(GUTTER, window.innerHeight - rect.top + 6) }
+          : { top: Math.min(rect.bottom + 6, Math.max(GUTTER, window.innerHeight - MIN_POPOVER_HEIGHT - GUTTER)) }),
+        left: Math.min(
+          Math.max(GUTTER, rect.right - POPOVER_WIDTH),
+          Math.max(GUTTER, window.innerWidth - POPOVER_WIDTH - GUTTER),
+        ),
+        maxHeight: Math.min(room, window.innerHeight * 0.6),
       });
     };
     place();
@@ -387,6 +406,10 @@ export function LabelChipsRow({
   useWatchEffect(() => {
     if (!popoverOpen) return;
     const onDown = (e: MouseEvent) => {
+      // The pill is the popover's own toggle, and its mousedown lands before
+      // its click: closing here would let that click reopen what the user just
+      // dismissed, so the pill could never close the popover at all.
+      if (pillRef.current?.contains(e.target as Node)) return;
       if (!popoverRef.current?.contains(e.target as Node)) setPopoverOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {

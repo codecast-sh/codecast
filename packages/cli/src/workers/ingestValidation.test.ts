@@ -6,6 +6,18 @@ import { IngestAssembler, ingestTokenPages } from './ingestTransport.js';
 
 const job: IngestJob = {client:'claude',file:'/owned/source',sessionId:'full-session',generation:'generation',offset:0,identity:{dev:1,ino:2,birthtimeMs:3,ctimeMs:4,mtimeMs:5,size:100}};
 const result = () => ({messages:[{role:'assistant' as const,content:'hello',timestamp:1}],bytesConsumed:100,fileSize:100,totalCount:1,maxRowId:0,signatures:['a'.repeat(64)],receiptSignatures:['b'.repeat(64)],receiptOccurrences:[0],messageTitles:[null],handoffParents:[null],metadata:{warnings:[]}});
+test('parsed file attachments and empty attachment fields cross ingestion validation',async()=>{
+  for (const files of [undefined,[],[{name:'report.md',localPath:'/project/report.md',toolUseId:'file-tool',caption:'Report',display:'render'}]]) {
+    const value={...result(),messages:[{...result().messages[0],files}],metadata:{warnings:[],headMessages:[{...result().messages[0],files}]}};
+    await expect(validateIngestResult(value,job)).resolves.toEqual(value);
+  }
+});
+test('ingestion rejects malformed file attachments',async()=>{
+  for (const files of [{name:'report.md'},[{}],[{name:7}],[{name:'report.md',localPath:7}],[{name:'report.md',size:-1}],[{name:'report.md',unexpected:true}]]) {
+    const value={...result(),messages:[{...result().messages[0],files}]};
+    await expect(validateIngestResult(value,job)).rejects.toThrow('schema');
+  }
+});
 test('one monotonic budget shrinks with every operation and refuses late completion',()=>{
   let now = 0;
   const deadline = new IngestDeadline(10,undefined,() => now);

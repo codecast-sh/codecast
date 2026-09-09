@@ -6,7 +6,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
-import { requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
+import { activeTeamMembershipFor, requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -354,23 +354,34 @@ async function installationsCoveringRepo(
 }
 
 /**
- * The team that governs a TEAM installation. Read through the access layer so
- * an installation answers the same "which team owns this record" question as
- * every other resource. A personal installation governs no team and answers
- * undefined; callers that serve a team skip it.
+ * The team an installation's activity routes to and serves.
  *
- * For a team row the row links no conversation, so the answer is always its
- * team_id. An undefined answer there would mean the access layer had started
- * narrowing a credential by conversation visibility, which reads to the caller
- * exactly like "nobody installed this app" — the owning team would silently
- * stop resolving its own installation. Say it.
+ * A TEAM installation routes to its team, read through the access layer so it
+ * answers the same "which team owns this record" question as every other
+ * resource. The row links no conversation, so the answer is always its
+ * team_id; an undefined answer there would mean the access layer had started
+ * narrowing a credential by conversation visibility, which reads to the
+ * caller exactly like "nobody installed this app" — the owning team would
+ * silently stop resolving its own installation. Say it.
+ *
+ * A PERSONAL installation is one person's credential, and a webhook carries
+ * no "where" beyond the repository — so it routes to wherever its owner is
+ * working right now: their active team, counted only with a live membership
+ * (lib/access.activeTeamMembershipFor). PR rows, commits, PR triggers and
+ * repository browsing in that team run through the owner's grant; switching
+ * teams moves where NEW activity lands, and leaving the team ends it. An
+ * owner in no team routes nowhere: the install still serves their own
+ * imports and pushes, which name their workspace themselves.
  */
-async function installationTeam(
-  ctx: QueryCtx,
-  installation: Doc<"github_app_installations">,
+export async function routingTeamForInstallation(
+  ctx: { db: any },
+  installation: { _id?: any; installation_id: number; team_id?: Id<"teams">; scope_user_id?: Id<"users">; workspace?: string },
 ): Promise<Id<"teams"> | undefined> {
-  if (!installation.team_id) return undefined;
-  const team = await effectiveTeamForResource(ctx, installation);
+  if (!installation.team_id) {
+    if (!installation.scope_user_id) return undefined;
+    return (await activeTeamMembershipFor(ctx as any, installation.scope_user_id))?.teamId;
+  }
+  const team = await effectiveTeamForResource(ctx as any, installation);
   if (!team) {
     throw new Error(
       `GitHub installation ${installation.installation_id} (row ${installation._id}) resolved to no team. ` +
@@ -380,6 +391,8 @@ async function installationTeam(
   }
   return team;
 }
+
+const installationTeam = routingTeamForInstallation;
 
 /** The personal installation `userId` owns that covers `repository`, or null. */
 async function personalInstallationForRepo(
@@ -394,7 +407,8 @@ async function personalInstallationForRepo(
 }
 
 /**
- * The installation `team_id` owns for `repository`, or null.
+ * The installation serving `team_id` for `repository`, or null: the team's
+ * own, or a member's personal one that routes there (routingTeamForInstallation).
  *
  * For server paths that already know which team the repository work belongs to
  * and have no user to check — webhook processing is the case that exists. The
@@ -432,10 +446,11 @@ export const getPersonalInstallationForRepo = internalQuery({
  *
  * `user_id` is required because an internalQuery carries no identity of its own:
  * a caller that cannot name a principal cannot be scoped, and there is no safe
- * default. `team_id` narrows the search to that workspace — its own install,
- * else the caller's personal one — and fails loudly if the caller is not in
- * it. Omitting it answers for the person: their personal install, else the
- * install of any team they belong to.
+ * default. `team_id` narrows the search to that workspace — an install that
+ * routes there (the team's own, or a member's personal one), else the caller's
+ * personal one — and fails loudly if the caller is not in it. Omitting it
+ * answers for the person: their personal install, else an install routing to
+ * any team they belong to.
  */
 export const getInstallationForRepo = internalQuery({
   args: {
@@ -537,15 +552,53 @@ export const deleteInstallation = mutation({
   },
 });
 
+type InstallationRepository = { id: number; name: string; full_name: string };
+
 type InstallationDetails = {
   installation_id: number;
   account_login: string;
   account_type: "User" | "Organization";
   account_id: number;
   repository_selection: "all" | "selected";
-  repositories: Array<{ id: number; name: string; full_name: string }> | undefined;
+  repositories: InstallationRepository[] | undefined;
   suspended_at: number | undefined;
 };
+
+/** How many repositories one install may list or backfill in one pass. */
+const INSTALLATION_REPOS_CAP = 300;
+
+/**
+ * Every repository an installation token can see, in GitHub's paging. Serves
+ * both the install record (a "selected" install stores its list) and the
+ * backfill (an "all" install stores none, so it asks live).
+ */
+async function fetchInstallationRepositories(token: string): Promise<InstallationRepository[]> {
+  const repositories: InstallationRepository[] = [];
+  for (let page = 1; repositories.length < INSTALLATION_REPOS_CAP; page++) {
+    const response = await fetch(
+      `${GITHUB_API_BASE}/installation/repositories?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to list installation repositories: ${response.status} ${await response.text()}`);
+    }
+    const data = await response.json();
+    const batch: InstallationRepository[] = (data.repositories ?? []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      full_name: r.full_name,
+    }));
+    repositories.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return repositories.slice(0, INSTALLATION_REPOS_CAP);
+}
 
 export const fetchInstallationDetails = internalAction({
   args: {
@@ -572,31 +625,17 @@ export const fetchInstallationDetails = internalAction({
 
     const data = await response.json();
 
-    let repositories: Array<{ id: number; name: string; full_name: string }> | undefined;
+    let repositories: InstallationRepository[] | undefined;
 
     if (data.repository_selection === "selected") {
       const tokenResult = await ctx.runAction(internal.githubApp.getInstallationToken, {
         installation_id: args.installation_id,
       });
-
-      const reposResponse = await fetch(
-        `${GITHUB_API_BASE}/installation/repositories?per_page=100`,
-        {
-          headers: {
-            Authorization: `Bearer ${tokenResult.token}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          },
-        }
-      );
-
-      if (reposResponse.ok) {
-        const reposData = await reposResponse.json();
-        repositories = reposData.repositories.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          full_name: r.full_name,
-        }));
+      try {
+        repositories = await fetchInstallationRepositories(tokenResult.token);
+      } catch {
+        // The install still binds without its repository list; the next
+        // installation_repositories webhook or backfill fills it in.
       }
     }
 
@@ -642,27 +681,188 @@ export const getTokenForRepository = internalAction({
   },
 });
 
-export const updateInstallationRepositories = internalMutation({
+/**
+ * GitHub's `installation_repositories` delivery: the person changed which
+ * repositories the App may see, on GitHub's own settings page. The row follows
+ * it here, so the integrations page and every repository lookup agree with
+ * GitHub within one delivery. Answers the team the install serves and the
+ * repositories that just became visible, so the caller can backfill exactly
+ * those (a personal install routes nothing to a team and gets no backfill).
+ */
+export const applyInstallationRepositoriesEvent = internalMutation({
   args: {
     installation_id: v.number(),
-    repositories: v.array(v.object({
-      id: v.number(),
-      name: v.string(),
-      full_name: v.string(),
-    })),
+    repository_selection: v.optional(v.union(v.literal("all"), v.literal("selected"))),
+    added: v.array(v.object({ id: v.number(), name: v.string(), full_name: v.string() })),
+    removed: v.array(v.object({ id: v.number(), name: v.string(), full_name: v.string() })),
   },
+  handler: async (ctx, args): Promise<{ team_id: Id<"teams"> | null; added: string[] }> => {
+    const installation = await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first();
+    if (!installation) return { team_id: null, added: [] };
+
+    const removedIds = new Set(args.removed.map((r) => r.id));
+    const kept = (installation.repositories ?? []).filter((r) => !removedIds.has(r.id));
+    const keptIds = new Set(kept.map((r) => r.id));
+    const repositories = [...kept, ...args.added.filter((r) => !keptIds.has(r.id))];
+    const selection = args.repository_selection ?? installation.repository_selection;
+    const now = Date.now();
+    await ctx.db.patch(installation._id, {
+      repository_selection: selection,
+      // An "all" install stores no list: GitHub answers for it live.
+      repositories: selection === "all" ? undefined : repositories,
+      last_webhook_at: now,
+      updated_at: now,
+    });
+    return {
+      team_id: installation.team_id ?? null,
+      added: args.added.map((r) => normalizeRepository(r.full_name)),
+    };
+  },
+});
+
+export const getInstallation = internalQuery({
+  args: { installation_id: v.number() },
+  handler: async (ctx, args) =>
+    await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first(),
+});
+
+export const stampInstallationSync = internalMutation({
+  args: { installation_id: v.number(), error: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const installation = await ctx.db
       .query("github_app_installations")
       .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
       .first();
+    if (!installation) return;
+    await ctx.db.patch(installation._id, { last_sync_at: Date.now(), last_error: args.error });
+  },
+});
 
-    if (installation) {
-      await ctx.db.patch(installation._id, {
-        repositories: args.repositories,
-        updated_at: Date.now(),
+/** Open pull requests are paged fully up to this many pages per repository. */
+const BACKFILL_OPEN_PAGES = 4;
+/** How many open pull requests per install get their file list during a backfill. */
+const BACKFILL_FILES_CAP = 100;
+
+/**
+ * Bring a team installation's pull requests in when the App lands on an
+ * account or gains repositories. Until this ran, a pull request existed for
+ * codecast only once GitHub sent a webhook about it, so every pull request
+ * opened before the install answered "not in this workspace" for as long as
+ * nobody touched it. Every open pull request is read (paged), plus the most
+ * recently updated closed ones, so the repository's recent history is there
+ * too. Rows go through pull_requests.syncPRFromGitHub, the quiet upsert: no
+ * "opened" moments are replayed. Open rows then get their files and merge
+ * state the same way a webhook-born row does.
+ *
+ * `repositories` narrows the pass to the ones just added; without it the whole
+ * install is read (an "all" install lists its repositories live).
+ */
+export const backfillInstallationPulls = internalAction({
+  args: {
+    installation_id: v.number(),
+    repositories: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<{ repositories: number; pulls: number }> => {
+    const installation = await ctx.runQuery(internal.githubApp.getInstallation, {
+      installation_id: args.installation_id,
+    });
+    // Routing only ever comes from a team install (resolveTeamForRepository);
+    // a personal credential brings nothing into a team's workspace.
+    if (!installation?.team_id || installation.suspended_at) return { repositories: 0, pulls: 0 };
+    const teamId = installation.team_id;
+
+    let pulls = 0;
+    let repositories: string[] = [];
+    try {
+      const { token } = await ctx.runAction(internal.githubApp.getInstallationToken, {
+        installation_id: args.installation_id,
       });
+      repositories = args.repositories
+        ?? (installation.repository_selection === "selected" && installation.repositories
+          ? installation.repositories.map((r) => r.full_name)
+          : (await fetchInstallationRepositories(token)).map((r) => r.full_name));
+      repositories = repositories.slice(0, INSTALLATION_REPOS_CAP).map(normalizeRepository);
+
+      let filesLeft = BACKFILL_FILES_CAP;
+      for (const repository of repositories) {
+        // One page of recently updated closed pull requests, then every open
+        // page up to the cap; a short page ends the open scan.
+        for (let i = 0; i <= BACKFILL_OPEN_PAGES; i++) {
+          const state = i === 0 ? "closed" : "open";
+          const page = i === 0 ? 1 : i;
+          const { pulls: batch } = await ctx.runAction(internal.githubApi.listPulls, {
+            repository,
+            state,
+            page,
+            github_access_token: token,
+          });
+          for (const pull of batch) {
+            const { pr_id, created } = await ctx.runMutation(internal.pull_requests.syncPRFromGitHub, {
+              team_id: teamId,
+              github_pr_id: pull.id,
+              repository,
+              number: pull.number,
+              title: pull.title,
+              body: pull.body,
+              state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
+              author_github_username: pull.author_login ?? "unknown",
+              author_avatar_url: pull.author_avatar_url,
+              head_ref: pull.head_ref,
+              base_ref: pull.base_ref,
+              head_sha: pull.head_sha,
+              base_sha: pull.base_sha,
+              draft: pull.draft,
+              requested_reviewers: pull.requested_reviewers,
+              created_at: pull.created_at ?? Date.now(),
+              updated_at: pull.updated_at ?? Date.now(),
+              merged_at: pull.merged_at ?? undefined,
+              closed_at: pull.closed_at ?? undefined,
+            });
+            pulls++;
+            if (pull.state !== "open" || !created) continue;
+            if (filesLeft > 0) {
+              filesLeft--;
+              try {
+                const files = await ctx.runAction(internal.githubApi.getPRFiles, {
+                  repository,
+                  pr_number: pull.number,
+                  github_access_token: token,
+                });
+                await ctx.runMutation(internal.pull_requests.updatePRFiles, {
+                  pr_id,
+                  files: files.files,
+                  additions: files.additions,
+                  deletions: files.deletions,
+                  changed_files: files.changed_files,
+                  commits_count: files.commits_count,
+                  base_ref: files.base_ref,
+                });
+              } catch (error) {
+                console.error(`Backfill: files for ${repository}#${pull.number} failed:`, error);
+              }
+            }
+            // Spread the merge-state reads out so a large repository does not
+            // burst the installation's rate limit in one second.
+            await ctx.scheduler.runAfter(pulls * 500, internal.prShepherd.refreshMergeState, { pr_id, attempt: 0 });
+          }
+          if (state === "open" && batch.length < 50) break;
+        }
+      }
+      await ctx.runMutation(internal.githubApp.stampInstallationSync, { installation_id: args.installation_id });
+    } catch (error: any) {
+      await ctx.runMutation(internal.githubApp.stampInstallationSync, {
+        installation_id: args.installation_id,
+        error: `Backfill failed: ${error?.message ?? String(error)}`,
+      });
+      throw error;
     }
+    return { repositories: repositories.length, pulls };
   },
 });
 

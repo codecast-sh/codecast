@@ -7,7 +7,7 @@
 //
 // Pure on purpose: useCallSync feeds it the store and the scribe status, and
 // the tests feed it fixtures.
-import { isRecRoomKey } from "@codecast/shared/contracts";
+import { isRecRoomKey, sessionRoomConversationId } from "@codecast/shared/contracts";
 
 export type AutoScribeInput = {
   roomKey: string | null;
@@ -41,7 +41,12 @@ export function decideAutoScribe(i: AutoScribeInput): AutoScribeVerdict {
   if (i.transcribeOff) return "hold";
   // A huddle is two or more people; a seat waiting for a ring to be answered
   // has nothing to transcribe and no reason to open a recognizer.
-  if (i.rosterIds.length < 2) return "hold";
+  //
+  // A SESSION'S OWN ROOM is the exception, and it is the whole point of that
+  // room: the second party is the agent, which never takes a seat. One person
+  // in there is not waiting for anybody — they are talking to the session, and
+  // the transcript is how the words reach it.
+  if (i.rosterIds.length < 2 && !sessionRoomConversationId(i.roomKey)) return "hold";
   if (!i.live) return "start";
   if (i.live.startedBy === i.meId) return "start";
   // Somebody else's run whose scribe is no longer seated: an orphan to adopt.
