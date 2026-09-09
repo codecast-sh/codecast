@@ -44,6 +44,10 @@ export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionSco
 
   return (
     <div className="mt-2 space-y-2.5 rounded-md bg-sol-bg-highlight/30 px-3 py-2.5">
+      <p className="text-[11px] leading-relaxed text-sol-text-dim">
+        Which repositories the App sees is chosen on GitHub. Codecast follows the change as soon as
+        GitHub reports it and brings in the pull requests already open there.
+      </p>
       {installations.map((install: any) => {
         const repos = install.repositories ?? [];
         const allRepos = install.repository_selection === "all";
@@ -60,7 +64,7 @@ export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionSco
                 rel="noopener noreferrer"
                 className="shrink-0 text-[11px] text-sol-cyan hover:underline"
               >
-                Configure on GitHub
+                Add or remove repositories
               </a>
             </div>
             <LedgerLine

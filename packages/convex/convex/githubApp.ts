@@ -537,15 +537,53 @@ export const deleteInstallation = mutation({
   },
 });
 
+type InstallationRepository = { id: number; name: string; full_name: string };
+
 type InstallationDetails = {
   installation_id: number;
   account_login: string;
   account_type: "User" | "Organization";
   account_id: number;
   repository_selection: "all" | "selected";
-  repositories: Array<{ id: number; name: string; full_name: string }> | undefined;
+  repositories: InstallationRepository[] | undefined;
   suspended_at: number | undefined;
 };
+
+/** How many repositories one install may list or backfill in one pass. */
+const INSTALLATION_REPOS_CAP = 300;
+
+/**
+ * Every repository an installation token can see, in GitHub's paging. Serves
+ * both the install record (a "selected" install stores its list) and the
+ * backfill (an "all" install stores none, so it asks live).
+ */
+async function fetchInstallationRepositories(token: string): Promise<InstallationRepository[]> {
+  const repositories: InstallationRepository[] = [];
+  for (let page = 1; repositories.length < INSTALLATION_REPOS_CAP; page++) {
+    const response = await fetch(
+      `${GITHUB_API_BASE}/installation/repositories?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to list installation repositories: ${response.status} ${await response.text()}`);
+    }
+    const data = await response.json();
+    const batch: InstallationRepository[] = (data.repositories ?? []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      full_name: r.full_name,
+    }));
+    repositories.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return repositories.slice(0, INSTALLATION_REPOS_CAP);
+}
 
 export const fetchInstallationDetails = internalAction({
   args: {
@@ -572,31 +610,17 @@ export const fetchInstallationDetails = internalAction({
 
     const data = await response.json();
 
-    let repositories: Array<{ id: number; name: string; full_name: string }> | undefined;
+    let repositories: InstallationRepository[] | undefined;
 
     if (data.repository_selection === "selected") {
       const tokenResult = await ctx.runAction(internal.githubApp.getInstallationToken, {
         installation_id: args.installation_id,
       });
-
-      const reposResponse = await fetch(
-        `${GITHUB_API_BASE}/installation/repositories?per_page=100`,
-        {
-          headers: {
-            Authorization: `Bearer ${tokenResult.token}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          },
-        }
-      );
-
-      if (reposResponse.ok) {
-        const reposData = await reposResponse.json();
-        repositories = reposData.repositories.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          full_name: r.full_name,
-        }));
+      try {
+        repositories = await fetchInstallationRepositories(tokenResult.token);
+      } catch {
+        // The install still binds without its repository list; the next
+        // installation_repositories webhook or backfill fills it in.
       }
     }
 
@@ -642,27 +666,188 @@ export const getTokenForRepository = internalAction({
   },
 });
 
-export const updateInstallationRepositories = internalMutation({
+/**
+ * GitHub's `installation_repositories` delivery: the person changed which
+ * repositories the App may see, on GitHub's own settings page. The row follows
+ * it here, so the integrations page and every repository lookup agree with
+ * GitHub within one delivery. Answers the team the install serves and the
+ * repositories that just became visible, so the caller can backfill exactly
+ * those (a personal install routes nothing to a team and gets no backfill).
+ */
+export const applyInstallationRepositoriesEvent = internalMutation({
   args: {
     installation_id: v.number(),
-    repositories: v.array(v.object({
-      id: v.number(),
-      name: v.string(),
-      full_name: v.string(),
-    })),
+    repository_selection: v.optional(v.union(v.literal("all"), v.literal("selected"))),
+    added: v.array(v.object({ id: v.number(), name: v.string(), full_name: v.string() })),
+    removed: v.array(v.object({ id: v.number(), name: v.string(), full_name: v.string() })),
   },
+  handler: async (ctx, args): Promise<{ team_id: Id<"teams"> | null; added: string[] }> => {
+    const installation = await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first();
+    if (!installation) return { team_id: null, added: [] };
+
+    const removedIds = new Set(args.removed.map((r) => r.id));
+    const kept = (installation.repositories ?? []).filter((r) => !removedIds.has(r.id));
+    const keptIds = new Set(kept.map((r) => r.id));
+    const repositories = [...kept, ...args.added.filter((r) => !keptIds.has(r.id))];
+    const selection = args.repository_selection ?? installation.repository_selection;
+    const now = Date.now();
+    await ctx.db.patch(installation._id, {
+      repository_selection: selection,
+      // An "all" install stores no list: GitHub answers for it live.
+      repositories: selection === "all" ? undefined : repositories,
+      last_webhook_at: now,
+      updated_at: now,
+    });
+    return {
+      team_id: installation.team_id ?? null,
+      added: args.added.map((r) => normalizeRepository(r.full_name)),
+    };
+  },
+});
+
+export const getInstallation = internalQuery({
+  args: { installation_id: v.number() },
+  handler: async (ctx, args) =>
+    await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first(),
+});
+
+export const stampInstallationSync = internalMutation({
+  args: { installation_id: v.number(), error: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const installation = await ctx.db
       .query("github_app_installations")
       .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
       .first();
+    if (!installation) return;
+    await ctx.db.patch(installation._id, { last_sync_at: Date.now(), last_error: args.error });
+  },
+});
 
-    if (installation) {
-      await ctx.db.patch(installation._id, {
-        repositories: args.repositories,
-        updated_at: Date.now(),
+/** Open pull requests are paged fully up to this many pages per repository. */
+const BACKFILL_OPEN_PAGES = 4;
+/** How many open pull requests per install get their file list during a backfill. */
+const BACKFILL_FILES_CAP = 100;
+
+/**
+ * Bring a team installation's pull requests in when the App lands on an
+ * account or gains repositories. Until this ran, a pull request existed for
+ * codecast only once GitHub sent a webhook about it, so every pull request
+ * opened before the install answered "not in this workspace" for as long as
+ * nobody touched it. Every open pull request is read (paged), plus the most
+ * recently updated closed ones, so the repository's recent history is there
+ * too. Rows go through pull_requests.syncPRFromGitHub, the quiet upsert: no
+ * "opened" moments are replayed. Open rows then get their files and merge
+ * state the same way a webhook-born row does.
+ *
+ * `repositories` narrows the pass to the ones just added; without it the whole
+ * install is read (an "all" install lists its repositories live).
+ */
+export const backfillInstallationPulls = internalAction({
+  args: {
+    installation_id: v.number(),
+    repositories: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<{ repositories: number; pulls: number }> => {
+    const installation = await ctx.runQuery(internal.githubApp.getInstallation, {
+      installation_id: args.installation_id,
+    });
+    // Routing only ever comes from a team install (resolveTeamForRepository);
+    // a personal credential brings nothing into a team's workspace.
+    if (!installation?.team_id || installation.suspended_at) return { repositories: 0, pulls: 0 };
+    const teamId = installation.team_id;
+
+    let pulls = 0;
+    let repositories: string[] = [];
+    try {
+      const { token } = await ctx.runAction(internal.githubApp.getInstallationToken, {
+        installation_id: args.installation_id,
       });
+      repositories = args.repositories
+        ?? (installation.repository_selection === "selected" && installation.repositories
+          ? installation.repositories.map((r) => r.full_name)
+          : (await fetchInstallationRepositories(token)).map((r) => r.full_name));
+      repositories = repositories.slice(0, INSTALLATION_REPOS_CAP).map(normalizeRepository);
+
+      let filesLeft = BACKFILL_FILES_CAP;
+      for (const repository of repositories) {
+        // One page of recently updated closed pull requests, then every open
+        // page up to the cap; a short page ends the open scan.
+        for (let i = 0; i <= BACKFILL_OPEN_PAGES; i++) {
+          const state = i === 0 ? "closed" : "open";
+          const page = i === 0 ? 1 : i;
+          const { pulls: batch } = await ctx.runAction(internal.githubApi.listPulls, {
+            repository,
+            state,
+            page,
+            github_access_token: token,
+          });
+          for (const pull of batch) {
+            const { pr_id, created } = await ctx.runMutation(internal.pull_requests.syncPRFromGitHub, {
+              team_id: teamId,
+              github_pr_id: pull.id,
+              repository,
+              number: pull.number,
+              title: pull.title,
+              body: pull.body,
+              state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
+              author_github_username: pull.author_login ?? "unknown",
+              author_avatar_url: pull.author_avatar_url,
+              head_ref: pull.head_ref,
+              base_ref: pull.base_ref,
+              head_sha: pull.head_sha,
+              base_sha: pull.base_sha,
+              draft: pull.draft,
+              requested_reviewers: pull.requested_reviewers,
+              created_at: pull.created_at ?? Date.now(),
+              updated_at: pull.updated_at ?? Date.now(),
+              merged_at: pull.merged_at ?? undefined,
+              closed_at: pull.closed_at ?? undefined,
+            });
+            pulls++;
+            if (pull.state !== "open" || !created) continue;
+            if (filesLeft > 0) {
+              filesLeft--;
+              try {
+                const files = await ctx.runAction(internal.githubApi.getPRFiles, {
+                  repository,
+                  pr_number: pull.number,
+                  github_access_token: token,
+                });
+                await ctx.runMutation(internal.pull_requests.updatePRFiles, {
+                  pr_id,
+                  files: files.files,
+                  additions: files.additions,
+                  deletions: files.deletions,
+                  changed_files: files.changed_files,
+                  commits_count: files.commits_count,
+                  base_ref: files.base_ref,
+                });
+              } catch (error) {
+                console.error(`Backfill: files for ${repository}#${pull.number} failed:`, error);
+              }
+            }
+            // Spread the merge-state reads out so a large repository does not
+            // burst the installation's rate limit in one second.
+            await ctx.scheduler.runAfter(pulls * 500, internal.prShepherd.refreshMergeState, { pr_id, attempt: 0 });
+          }
+          if (state === "open" && batch.length < 50) break;
+        }
+      }
+      await ctx.runMutation(internal.githubApp.stampInstallationSync, { installation_id: args.installation_id });
+    } catch (error: any) {
+      await ctx.runMutation(internal.githubApp.stampInstallationSync, {
+        installation_id: args.installation_id,
+        error: `Backfill failed: ${error?.message ?? String(error)}`,
+      });
+      throw error;
     }
+    return { repositories: repositories.length, pulls };
   },
 });
 
