@@ -5267,7 +5267,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
-  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string }) => Promise<any>;
+  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; status_id?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string }) => Promise<any>;
   clearSavedViewTombstones: () => void;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
@@ -10366,6 +10366,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       description: opts.description,
       task_type: opts.task_type || "task",
       status: opts.status || "open",
+      status_id: opts.status_id || undefined,
       priority: opts.priority || "medium",
       source: "human",
       labels: opts.labels,

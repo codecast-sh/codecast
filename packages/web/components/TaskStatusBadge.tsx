@@ -41,7 +41,10 @@ export const TASK_STATUS: Record<TaskStatus, { icon: StatusIcon; label: string; 
 export const taskVisual = (status?: string | null) =>
   TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
 
-export const TASK_STATUS_ORDER: TaskStatus[] = ["done", "in_review", "in_progress", "open", "backlog", "dropped"];
+/** Status group order and the sort tie-breaker: recently finished on top,
+ *  then active work (a team's own statuses order within each category, e.g.
+ *  a "Today" status ahead of In Progress), then what you could pick up. */
+export const TASK_STATUS_ORDER: TaskStatus[] = ["done", "in_progress", "in_review", "open", "backlog", "dropped"];
 
 const EXEC_STATUS: Record<ExecutionStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
   done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },

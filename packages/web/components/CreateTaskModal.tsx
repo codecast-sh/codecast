@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
@@ -12,11 +12,9 @@ import { DocEditor } from "./editor/DocEditor";
 import type { MentionItem } from "./editor/MentionList";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
+import { statusByKey, statusEntityOptions, statusWriteFields, useTeamTaskStatusList } from "../lib/taskStatuses";
 import {
   Plus,
-  Circle,
-  CircleDot,
-  CircleDotDashed,
   AlertTriangle,
   ArrowUp,
   ArrowDown,
@@ -28,12 +26,6 @@ import {
 } from "lucide-react";
 
 const api = _api as any;
-
-const CREATE_STATUS_OPTIONS = [
-  { key: "open", label: "Open", icon: Circle, color: "text-sol-blue" },
-  { key: "backlog", label: "Backlog", icon: CircleDotDashed, color: "text-sol-text-dim" },
-  { key: "in_progress", label: "In Progress", icon: CircleDot, color: "text-sol-yellow" },
-];
 
 const CREATE_PRIORITY_OPTIONS = [
   { key: "urgent", label: "Urgent", icon: AlertTriangle, color: "text-sol-red" },
@@ -205,10 +197,18 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
   const createTask = useInboxStore((s) => s.createTask);
   const workspaceArgs = useWorkspaceArgs();
 
+  // The team's full status list (per-team custom statuses; personal = the six
+  // defaults), same options every other picker offers. Value is a status id.
+  const teamId = workspaceArgs !== "skip" && workspaceArgs.workspace === "team" ? workspaceArgs.team_id : null;
+  const taskStatuses = useTeamTaskStatusList(teamId);
+  const statusOptions = useMemo(() => statusEntityOptions(taskStatuses), [taskStatuses]);
+
   const [title, setTitle] = useState("");
   const descriptionRef = useRef("");
   const [priority, setPriority] = useState<string>("medium");
-  const [status, setStatus] = useState<string>("open");
+  const [status, setStatus] = useState<string>(
+    () => statusOptions.find((o) => o.category === "open")?.key ?? statusOptions[0]?.key ?? "open",
+  );
   const [assignee, setAssignee] = useState<string | null>(null);
   const [assigneeInfo, setAssigneeInfo] = useState<{ name: string; image?: string } | null>(null);
   const [labels, setLabels] = useState<string[]>([]);
@@ -243,12 +243,17 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
     if (!title.trim()) return;
     const desc = descriptionRef.current.trim();
     const wsArgs = workspaceArgs === "skip" ? {} : workspaceArgs;
+    // status holds a team status id; the write carries the category, plus the
+    // id only when it refines the category default (statusWriteFields).
+    const picked = statusByKey(taskStatuses, status);
+    const statusFields = picked ? statusWriteFields(picked) : { status: "open" as const, status_id: "" };
     const opts: any = {
       title: title.trim(),
       description: desc || undefined,
       task_type: "task",
       priority,
-      status,
+      status: statusFields.status,
+      ...(statusFields.status_id ? { status_id: statusFields.status_id } : {}),
       assignee: assignee || undefined,
       labels: labels.length > 0 ? labels : undefined,
       ...wsArgs,
@@ -269,7 +274,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
     } else {
       onClose();
     }
-  }, [title, priority, status, assignee, labels, createMore, createTask, onClose, workspaceArgs, defaults]);
+  }, [title, priority, status, taskStatuses, assignee, labels, createMore, createTask, onClose, workspaceArgs, defaults]);
 
   return (
     <div
@@ -311,7 +316,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
         </div>
 
         <div className="flex items-center gap-2 px-6 py-3 border-t border-sol-border/40 flex-wrap">
-          <PropertyChip value={status as any} options={CREATE_STATUS_OPTIONS as any} onChange={(v) => setStatus(v)} />
+          <PropertyChip value={status as any} options={statusOptions as any} onChange={(v) => setStatus(v)} />
           <PropertyChip value={priority as any} options={CREATE_PRIORITY_OPTIONS as any} onChange={(v) => setPriority(v)} />
           <LabelsChip value={labels} onChange={setLabels} />
           <AssigneeSelect
