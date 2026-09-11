@@ -22,7 +22,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
-import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP } from '@/constants/Theme';
+import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { recordingState } from '@/lib/recordingStatus';
 
 // Same lazy probe as lib/calls/ringtone.ts and lib/recorder.ts: a JS bundle
@@ -63,6 +63,7 @@ const WAITING_COPY: Record<string, { title: string; detail: string }> = {
 };
 
 export default function RecordingDetailScreen() {
+  const Theme = useTheme();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const call = useQuery(
@@ -227,7 +228,7 @@ export default function RecordingDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: 'row',
@@ -297,4 +298,4 @@ const styles = StyleSheet.create({
     width: 48,
   },
   lineText: { flex: 1, fontSize: FontSize.md, color: Theme.text, lineHeight: 22 },
-});
+}));

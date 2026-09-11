@@ -75,7 +75,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
   if (type === "doc") return [
     row("type", "Change type…", FileText, "t", "doc.type"),
     row("labels", "Edit labels…", Tag, "l", "doc.labels"),
-    ...(single ? [row("rename", "Rename document…", Pencil, "r"), row("pin", target.pinned ? "Unpin document" : "Pin document", Pin, "p")] : []),
+    ...(single ? [row("rename", "Rename document…", Pencil, "r"), row("pin", target.pinned ? "Unstar document" : "Star document", Star, "p")] : []),
     ...common,
     row("archive", "Archive document", Archive, "x"),
   ];

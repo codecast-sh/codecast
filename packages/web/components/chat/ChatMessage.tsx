@@ -2,9 +2,11 @@ import { memo, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall } from "lucide-react";
 import { parseHuddleDigestContent } from "@codecast/shared/contracts";
+import { mentionRoles, mentionSessions, type ChatRoleMention } from "@codecast/shared/chat";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { remarkSanitizeInvisibleUnicode } from "../../lib/markdownPlugins";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
+import { RevealHost } from "../ObjectReveal";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
@@ -208,17 +210,30 @@ export const ChatMessage = memo(function ChatMessage({
   // SHARING those objects, and each renders as a browsable preview card
   // instead of an inline pill. Registered last so it sees the entity links
   // remarkEntityIds already produced.
+  //
+  // The mention plugin runs FIRST, before the entity id plugin: a session
+  // mention is "@jx7abcd", and the id plugin would otherwise split it into a
+  // stray "@" beside the pill. The role and session vocabularies are this
+  // row's own resolved refs, so the plugin only ever pills what the server
+  // actually named; the options object is keyed on that array's identity.
+  const roleRefs = message.mentionRefs;
+  const mentionVocab = useMemo(() => {
+    const roles = new Map<string, ChatRoleMention>();
+    for (const r of mentionRoles(roleRefs)) roles.set(r.handle.toLowerCase(), r);
+    const sessions = new Set(mentionSessions(roleRefs).map((s) => s.short_id.toLowerCase()));
+    return { roles: roles.size ? roles : undefined, sessions: sessions.size ? sessions : undefined };
+  }, [roleRefs]);
   const remarkPlugins = useMemo(
     () => [
+      [
+        remarkChatMentions,
+        { known: knownHandles, self: selfHandles, names: handleNames, roles: mentionVocab.roles, sessions: mentionVocab.sessions },
+      ] as [typeof remarkChatMentions, Parameters<typeof remarkChatMentions>[0]],
       ...USER_MD_REMARK,
       remarkSanitizeInvisibleUnicode,
-      [remarkChatMentions, { known: knownHandles, self: selfHandles, names: handleNames }] as [
-        typeof remarkChatMentions,
-        { known?: Set<string>; self?: Set<string>; names?: Map<string, string> },
-      ],
       remarkEntityCards,
     ],
-    [knownHandles, selfHandles, handleNames],
+    [knownHandles, selfHandles, handleNames, mentionVocab],
   );
 
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -444,14 +459,16 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         ) : (
           <div className="ch-msg-body">
-            <ReactMarkdown
-              remarkPlugins={remarkPlugins}
-              rehypePlugins={MESSAGE_MD_REHYPE}
-              components={MESSAGE_MD_COMPONENTS}
-            >
-              {/* The digest's lead line moved into the header above. */}
-              {callHead ? callHead.body : message.content}
-            </ReactMarkdown>
+            <RevealHost>
+              <ReactMarkdown
+                remarkPlugins={remarkPlugins}
+                rehypePlugins={MESSAGE_MD_REHYPE}
+                components={MESSAGE_MD_COMPONENTS}
+              >
+                {/* The digest's lead line moved into the header above. */}
+                {callHead ? callHead.body : message.content}
+              </ReactMarkdown>
+            </RevealHost>
             {message.attachments && message.attachments.length > 0 && (
               <ChatAttachments messageId={message.id} attachments={message.attachments} />
             )}
@@ -462,6 +479,20 @@ export const ChatMessage = memo(function ChatMessage({
               <span className="ch-msg-edited" title={FULL_TIME.format(new Date(message.editedAt))}>
                 (edited)
               </span>
+            )}
+            {/* A role or session this line named was over its hourly mention
+                cap: the party was not woken and reads the line on its next
+                ordinary wake. Small and beside the text, because the line
+                itself is fine — only the wake did not happen. */}
+            {message.mentionFolded && (
+              <TooltipProvider delayDuration={250}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="ch-msg-folded" tabIndex={0}>folded</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Over the hourly mention cap — not woken</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
         )}

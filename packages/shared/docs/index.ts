@@ -61,9 +61,9 @@ export function isHumanDocOrigin(doc: { source?: string | null }): boolean {
 /**
  * The human's shelf: what a person expects to see in the docs list without
  * asking for agent output. A doc is on it when a person wrote it (human
- * origin) or when someone pinned it — pinning a machine-made doc is the
- * deliberate "this one matters" gesture, the docs analog of promoting a task
- * onto the board.
+ * origin) or when someone starred it — the star (stored as `pinned`) on a
+ * machine-made doc is the deliberate "this one matters" gesture, the docs
+ * analog of promoting a task onto the board.
  */
 export function isOnHumanShelf(doc: {
   source?: string | null;
@@ -98,7 +98,7 @@ export function docSourceForPlanSource(planSource: string | null | undefined): "
 // blank line, prose) must not have everything up to the next --- swallowed.
 const FRONTMATTER_RE = /^---[ \t]*\n(?=[A-Za-z0-9_-]+[ \t]*:)[\s\S]*?\n---[ \t]*(?:\n|$)/;
 
-function splitFrontmatter(content: string): { front: string; body: string } {
+export function splitFrontmatter(content: string): { front: string; body: string } {
   const fm = content.match(FRONTMATTER_RE);
   return fm ? { front: fm[0], body: content.slice(fm[0].length) } : { front: "", body: content };
 }

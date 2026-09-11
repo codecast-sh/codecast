@@ -1,3 +1,5 @@
+import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
+import { clearPendingMessageJournal, readPendingMessageJournal, writePendingMessageJournal } from "./pendingMessageJournal";
 import Dexie from "dexie";
 import { captureException } from "@sentry/react";
 import type { Patch } from "mutative";
@@ -42,9 +44,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 31;
+export const CACHE_SCHEMA_VERSION = 34;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -159,6 +161,75 @@ export function isPersistedStoreKey(key: string): boolean {
   return isPersistedClientStoreKey(key);
 }
 
+const PENDING_INPUT_PREFIX = "pendingInput:v1:";
+let pendingJournalFlush: Promise<void> | null = null;
+let pendingJournalEpoch = 0;
+
+function pendingInputKey(ownerId: string, id: string): string {
+  return `${PENDING_INPUT_PREFIX}${ownerId}:${id}`;
+}
+
+export function persistPendingMessageChanges(before: PendingMessages, after: PendingMessages, ownerId?: string): void {
+  if (!PERSISTENCE_AVAILABLE || before === after) return;
+  const writes = pendingMessageWrites(before, after);
+  if (!writes.length) return;
+  if (!ownerId) throw new Error("Sign in before sending a message so it can be saved safely.");
+  writePendingMessageJournal(localStorage, ownerId, writes);
+  void flushPendingMessageJournal().catch(error => captureException(error, { tags: { source: "pending-input-journal" } }));
+}
+
+export function flushPendingMessageJournal(): Promise<void> {
+  if (pendingJournalFlush) return pendingJournalFlush;
+  const epoch = pendingJournalEpoch;
+  const run = async () => {
+    for (;;) {
+      if (epoch !== pendingJournalEpoch) return;
+      const batches = readPendingMessageJournal(localStorage);
+      if (!batches.length) return;
+      await db.transaction("rw", db.meta, async () => {
+        for (const batch of batches) {
+          for (const write of batch.writes) {
+            const key = pendingInputKey(batch.ownerId, write.id);
+            const previous = await db.meta.get(key);
+            const value = applyPendingMessageWrite(previous?.value, write);
+            await db.meta.put({ key, value });
+          }
+        }
+      });
+      if (epoch !== pendingJournalEpoch) return;
+      for (const { key } of batches) localStorage.removeItem(key);
+    }
+  };
+  pendingJournalFlush = run().finally(() => { pendingJournalFlush = null; });
+  return pendingJournalFlush;
+}
+
+async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
+  if (!ownerId) return {};
+  await flushPendingMessageJournal();
+  return db.transaction("rw", db.meta, async () => {
+    const legacy = await db.meta.get("pendingMessages");
+    const cachedUser = await db.meta.get("currentUser");
+    if (legacy?.value && cachedUser?.value?._id === ownerId) {
+      for (const write of pendingMessageWrites({}, legacy.value)) {
+        const key = pendingInputKey(ownerId, write.id);
+        if (await db.meta.get(key)) continue;
+        await db.meta.put({ key, value: applyPendingMessageWrite(undefined, write) });
+      }
+      await db.meta.delete("pendingMessages");
+    }
+    const queued = await db.meta.get("queuedMessages");
+    if (queued?.value && cachedUser?.value?._id === ownerId) {
+      for (const write of pendingMessageWrites({}, importLegacyQueuedMessages(queued.value))) {
+        await db.meta.put({ key: pendingInputKey(ownerId, write.id), value: applyPendingMessageWrite(undefined, write) });
+      }
+      await db.meta.delete("queuedMessages");
+    }
+    const rows = await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${ownerId}:`).toArray();
+    return pendingMessagesFromRecords(rows.map(row => row.value));
+  });
+}
+
 export function writePatchesToIDB(patches: Patch[], state: any) {
   if (_hydrating) return;
 
@@ -169,6 +240,7 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 
   for (const key of affectedKeys) {
+    if (key === "pendingMessages" || key === "queuedMessages") continue;
     const table = COLLECTION_TABLES[key];
     if (table) {
       const data = state[key];
@@ -298,6 +370,15 @@ export async function loadCache(
       if (!row) continue;
       result[row.key] = row.value;
       hasData = true;
+    }
+
+    if (!wanted || wanted.has("pendingMessages") || wanted.has("queuedMessages")) {
+      const ownerId = context.currentUser?._id ?? result.currentUser?._id ?? (await db.meta.get("currentUser"))?.value?._id;
+      if (ownerId) {
+        result.pendingMessages = await loadPendingInput(ownerId);
+        result.queuedMessages = queuedMessagesFromPending(result.pendingMessages);
+        hasData = true;
+      }
     }
 
     // The conversations map is the sessions cache's twin (same ids, richer
@@ -622,6 +703,9 @@ function deleteDatabaseWithTimeout(name: string): Promise<void> {
 export async function flushPersistence(): Promise<void> {}
 
 export async function purgeLocalCache(): Promise<void> {
+  pendingJournalEpoch++;
+  clearPendingMessageJournal(localStorage);
+  await pendingJournalFlush;
   _pendingMsgWrites.clear();
   lastPersisted.clear();
   try {

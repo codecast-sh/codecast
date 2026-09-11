@@ -14,6 +14,7 @@ import type {
   ServiceSpec,
   SetupSpec,
   TeardownSpec,
+  VerifySpec,
   WorkspaceManifest,
 } from "./types.js";
 export type { BrowserSpec };
@@ -73,11 +74,12 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   const services = validateServices(raw["services"], file);
   const env = validateEnv(raw["env"], file);
   const teardown = validateTeardown(raw["teardown"], file);
+  const verify = validateVerify(raw["verify"], file);
   const browser = validateBrowser(raw["browser"], file);
 
   // Reject unknown top-level keys so typos in manifest are surfaced loudly.
   const known = new Set([
-    "setup", "ports", "services", "env", "teardown", "browser",
+    "setup", "ports", "services", "env", "teardown", "verify", "browser",
     "backend", "detected",
   ]);
   for (const key of Object.keys(raw)) {
@@ -97,7 +99,24 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   }
   const backend = backendRaw ?? "local";
 
-  return { setup, ports, services, env, teardown, browser, backend, detected };
+  return { setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
+}
+
+function validateVerify(raw: unknown, file?: string): VerifySpec | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) {
+    throw new ManifestError("'verify' must be a table", file, "verify");
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "command") {
+      throw new ManifestError(`unknown key in [verify]: '${key}'`, file, `verify.${key}`);
+    }
+  }
+  const command = raw["command"];
+  if (command !== undefined && (typeof command !== "string" || !command.trim())) {
+    throw new ManifestError("'verify.command' must be a non-empty string", file, "verify.command");
+  }
+  return command ? { command } : {};
 }
 
 function validateBrowser(raw: unknown, file?: string): BrowserSpec {

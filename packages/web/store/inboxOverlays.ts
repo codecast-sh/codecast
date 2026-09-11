@@ -67,8 +67,8 @@ export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIEL
 // echoes it back (which prunes it) or it fails. This is the durable,
 // persisted, local-first signal that we've sent something and are waiting to
 // confirm delivery — independent of whether ConversationView is mounted.
-export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean; content?: string }>): boolean {
-  return !!pending?.some((m) => !m._isFailed && !isInterruptControlMessage(m.content));
+export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean; _isSettledControl?: boolean; _isLocalQueue?: boolean; content?: string }>): boolean {
+  return !!pending?.some((m) => !m._isFailed && !m._isSettledControl && !m._isLocalQueue && !isInterruptControlMessage(m.content));
 }
 
 // Conversation ids that currently have an unconfirmed outbound message.

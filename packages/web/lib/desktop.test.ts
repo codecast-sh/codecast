@@ -82,6 +82,8 @@ describe("isHandoffEligiblePath", () => {
   test("allows content routes", () => {
     expect(isHandoffEligiblePath("/conversation/jx7c89")).toBe(true);
     expect(isHandoffEligiblePath("/tasks/ct-1")).toBe(true);
+    expect(isHandoffEligiblePath("/repo/acme/demo")).toBe(true);
+    expect(isHandoffEligiblePath("/routines")).toBe(true);
     expect(isHandoffEligiblePath("/")).toBe(true);
   });
 
@@ -91,6 +93,9 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/oauth/github")).toBe(false);
     expect(isHandoffEligiblePath("/share/abc")).toBe(false);
     expect(isHandoffEligiblePath("/a/wbYnhK4Qv9zw")).toBe(false);
+    expect(isHandoffEligiblePath("/r")).toBe(false);
+    expect(isHandoffEligiblePath("/r/union-ai/union-mobile/commits/HEAD")).toBe(false);
+    expect(isHandoffEligiblePath("/r/acme/demo/commit/abc123")).toBe(false);
     expect(isHandoffEligiblePath("/palette")).toBe(false);
     expect(isHandoffEligiblePath("/download/mac")).toBe(false);
     expect(isHandoffEligiblePath("/api/x")).toBe(false);

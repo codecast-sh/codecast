@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "incremental": false, "composite": false },
+  "include": [],
+  "files": [
+    "/Users/ashot/src/codecast/packages/web/app/org/page.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/OrgPage.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/OrgGraph.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/OrgNodeCards.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/OrgScopePanel.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/orgLayout.ts",
+    "/Users/ashot/src/codecast/packages/web/components/org/orgLayout.test.ts",
+    "/Users/ashot/src/codecast/packages/web/components/org/orgFixture.ts",
+    "/Users/ashot/src/codecast/packages/web/components/org/orgTypes.ts",
+    "/Users/ashot/src/codecast/packages/web/hooks/useSyncOrgTree.ts",
+    "/Users/ashot/src/codecast/packages/web/hooks/useOrgSessionsUnder.ts",
+    "/Users/ashot/src/codecast/packages/web/store/orgSlice.ts",
+    "/Users/ashot/src/codecast/packages/web/store/clientSyncRegistry.ts",
+    "/Users/ashot/src/codecast/packages/web/components/Sidebar.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/CommandPalette.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/RoutePane.tsx",
+    "/Users/ashot/src/codecast/packages/web/src/routes.manifest.ts",
+    "/Users/ashot/src/codecast/packages/web/src/App.tsx"
+  ]
+}

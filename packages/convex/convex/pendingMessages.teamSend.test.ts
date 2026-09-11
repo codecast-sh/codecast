@@ -354,6 +354,42 @@ describe("delivery routing — backfill independence", () => {
 });
 
 describe("remote not responding — feedback to the sending session", () => {
+  test("a deleted target with a live managed row cannot abort recovery for other sessions", async () => {
+    const now = 1_000_000_000_000;
+    const { ctx, tables } = world({ now });
+    const orphan = {
+      _id: "orphan", conversation_id: "convBob", from_user_id: "uBob", owner_user_id: "uBob",
+      status: "failed", retry_count: 3, content: "Keep this message", created_at: now - 600_000,
+    };
+    const healthy = {
+      ...orphan, _id: "healthy", conversation_id: "convAlice", from_user_id: "uAlice", owner_user_id: "uAlice",
+    };
+    tables.pending_messages.push(orphan, healthy);
+    tables.conversations = tables.conversations.filter((row) => row._id !== "convBob");
+    tables.managed_sessions.push({
+      _id: "msAlice", conversation_id: "convAlice", agent_status: "idle", last_heartbeat: now,
+    });
+
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 1, waiting: 1 });
+    expect(orphan).toMatchObject({ status: "failed", retry_count: 3, content: "Keep this message" });
+    expect(healthy.status).toBe("pending");
+    expect(await ctx.db.get("convAlice")).toMatchObject({ has_pending_messages: true });
+  });
+
+  test("a deleted cross-user target is reported offline despite a fresh managed heartbeat", async () => {
+    const now = 1_000_000_000_000;
+    const { ctx, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "urgent" });
+    const msg = tables.pending_messages[0];
+    msg.created_at = now - CROSS_USER_NOTIFY_DEADLINE_MS - 60_000;
+    tables.conversations = tables.conversations.filter((row) => row._id !== "convBob");
+
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, notified: 1 });
+    expect(msg.status).toBe("cancelled");
+    expect(tables.pending_messages.find((row) => row.conversation_id === "convAlice")?.content)
+      .toContain("could not be delivered");
+  });
+
   test("target OFFLINE past the deadline: Alice's session gets a failure receipt and the message is cancelled", async () => {
     const now = 1_000_000_000_000;
     const { ctx, db, tables } = world({ bobLive: false, now });

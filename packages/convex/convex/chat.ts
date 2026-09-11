@@ -29,16 +29,27 @@ import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId } 
 import { isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } from "./chatAccess";
-import { dmKeyFor, isAgentTurnInFlight, isLiveVoiceRow, isSilentAgentRow, isVisibleAgentPending } from "@codecast/shared/chat";
+import {
+  dmKeyFor,
+  isAgentTurnInFlight,
+  isLiveVoiceRow,
+  isSilentAgentRow,
+  isVisibleAgentPending,
+  mentionSessions,
+  mentionUserIds,
+} from "@codecast/shared/chat";
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
-import { matchHandle, resolveMentions, teamRoster } from "./lib/mentionResolve";
+import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
+import { dayBucket, hourBucket, takeQuota } from "./lib/chatQuota";
 import { purgeUserTeam, touchThread } from "./threadReads";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
 // team may spend a turn on it). It is used on the wake path and NOT on
 // `replyAsAnchor`, which gates on the host — see the comment there.
 import { deliverToAnchor, userCanAccessAnchor } from "./anchors";
+import { actorIsExcluded, enqueueRoleEvent } from "./orgEvents";
+import { resolveActor } from "./lib/actor";
 import { isDesktopActivePresence } from "./pushRouter";
 import {
   HERE_PRESENCE_MS,
@@ -124,6 +135,16 @@ const ANCHOR_WAKE_LIMIT = 6;
 // collectively hammer one host.
 const ANCHOR_HOST_WAKE_LIMIT = 30;
 const ANCHOR_REPLY_LIMIT = 60;
+
+// The agent noise rules (docs/architecture/agent-channels.md C2/C3), counted
+// in chat_agent_quota. A role or session posts at most this many lines per
+// channel per UTC day, starts at most this many thread roots, and a mention
+// wakes at most this often per sender and per target per hour — over the cap
+// the send is refused (posts) or the mention folds (wakes).
+const AGENT_POSTS_PER_CHANNEL_DAY = 30;
+const AGENT_ROOTS_PER_CHANNEL_DAY = 5;
+const MENTION_WAKES_PER_SENDER_HOUR = 10;
+const MENTION_WAKES_PER_TARGET_HOUR = 30;
 
 // A push-to-talk burst costs what a send costs, so it is capped like one — the
 // start is the send. The transcript patch that follows fires every few seconds
@@ -300,6 +321,9 @@ async function notifyChat(
     // router, subtitle says where, body is the words alone.
     pushSubtitle?: string;
     pushBody?: string;
+    /** A line a machine wrote (a bot author, or origin "agent"): the bell rings,
+     *  the phone stays quiet (agent-channels.md C3). */
+    agentLine?: boolean;
   },
 ): Promise<void> {
   if (opts.recipientId.toString() === opts.actorUserId.toString()) return;
@@ -332,6 +356,7 @@ async function notifyChat(
     direct_recipient_id: opts.recipientId,
     push_subtitle: opts.pushSubtitle,
     push_body: opts.pushBody,
+    push: opts.agentLine ? false : undefined,
   });
 }
 
@@ -514,7 +539,7 @@ export const listChannels = query({
         !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && (
           channel.kind === "dm"
           || row.mention_scope === "here"
-          || (row.mentions ?? []).some((id) => id.toString() === userId.toString())
+          || mentionUserIds(row.mentions as any).includes(userId.toString())
         ),
       ).length;
 
@@ -919,8 +944,9 @@ export const createChannel = mutation({
     topic: v.optional(v.string()),
     is_default: v.optional(v.boolean()),
     // "private" gates the room on member rows. DMs are never created here —
-    // openDm owns that shape (no name, identity = member set).
-    kind: v.optional(v.literal("private")),
+    // openDm owns that shape (no name, identity = member set). "agents" is a
+    // public room for roles and sessions (agent-channels.md C1).
+    kind: v.optional(v.union(v.literal("private"), v.literal("agents"))),
     // Initial roster for a private room, besides the creator. Ignored for
     // public: a public channel's audience is the team.
     member_ids: v.optional(v.array(v.id("users"))),
@@ -1908,7 +1934,20 @@ export const sendMessage = mutation({
         if (!matches) {
           chatFail("CONFLICT", "This client id is already bound to a different message");
         }
-        return { message_id: duplicate._id, client_id: args.client_id, created: false };
+        // The same shape as a fresh send, zeroed: a retry woke nobody and
+        // relayed nothing, and a caller must not have to branch on `created`.
+        return {
+          message_id: duplicate._id,
+          client_id: args.client_id,
+          created: false,
+          mentioned: 0,
+          here_notified: 0,
+          mention_wakes: { roles: 0, sessions: 0, folded: 0, skipped: [] } as MentionWakeResult,
+          session_relay: { delivered: false, skipped: null, session_short_id: null, conversation_id: null } as RelayResult,
+          anchor_thinking_message_id: null,
+          anchor_listening: false,
+          anchor_wake_skipped: null,
+        };
       }
     }
 
@@ -1922,7 +1961,13 @@ export const sendMessage = mutation({
     }
 
     await chatRateLimit(ctx, userId, "chat.send", SEND_LIMIT);
-    const { messageId, mentions, hereCount, actorName } = await postChatMessage(ctx, {
+    // The daily caps for a machine's lines (C3). A refusal is a real error, not
+    // a degraded send: the line is the noise the rule exists to stop.
+    const sender = await ctx.db.get(userId);
+    if (sender?.is_bot || args.origin === "agent") {
+      await enforceAgentPostQuota(ctx, channel, agentPosterKey(userId, args.origin_session_id), !root);
+    }
+    const { messageId, mentions, roles, sessions, hereCount, actorName } = await postChatMessage(ctx, {
       channel,
       root,
       authorId: userId,
@@ -1968,8 +2013,7 @@ export const sendMessage = mutation({
 
     // Same isolation as the wake: a reply on a thread a session started goes
     // back into that session, and a failure there never costs the message.
-    let relay: { delivered: boolean; skipped: string | null; session_short_id: string | null } =
-      { delivered: false, skipped: null, session_short_id: null };
+    let relay: RelayResult = { delivered: false, skipped: null, session_short_id: null, conversation_id: null };
     if (message) {
       try {
         relay = await maybeRelayToOriginSession(ctx, {
@@ -1980,7 +2024,26 @@ export const sendMessage = mutation({
           delivered: false,
           skipped: error instanceof ConvexError ? String((error.data as any)?.code ?? "error") : "error",
           session_short_id: null,
+          conversation_id: null,
         };
+      }
+    }
+
+    // A role or session this line named, woken now — the one exception to "an
+    // agent line wakes nobody", and it degrades like the wake above.
+    let mentionWakes: MentionWakeResult = { roles: 0, sessions: 0, folded: 0, skipped: [] };
+    if (message && (roles.length > 0 || sessions.length > 0)) {
+      try {
+        mentionWakes = await wakeMentionedParties(ctx, {
+          channel, message, root, senderId: userId, senderName: actorName, roles, sessions,
+          // The thread relay above already handed this line to that session:
+          // naming the thread's own session must not cost it a second turn.
+          alreadyDelivered: relay.delivered ? relay.conversation_id : null,
+        });
+      } catch (error) {
+        mentionWakes.skipped.push(
+          error instanceof ConvexError ? String((error.data as any)?.code ?? "error") : "error",
+        );
       }
     }
 
@@ -1988,8 +2051,10 @@ export const sendMessage = mutation({
       message_id: messageId,
       client_id: args.client_id,
       created: true,
-      mentioned: mentions.length,
+      mentioned: mentions.length + roles.length + sessions.length,
       here_notified: hereCount,
+      // Roles and sessions this line named and woke (or folded past their cap).
+      mention_wakes: mentionWakes,
       // A reply on a thread a session started: whether it was injected into
       // that session, and why not when it was not.
       session_relay: relay,
@@ -2050,13 +2115,16 @@ async function postChatMessage(
 ): Promise<{
   messageId: Id<"chat_messages">;
   mentions: Id<"users">[];
+  roles: Doc<"org_roles">[];
+  sessions: Doc<"conversations">[];
   hereCount: number;
   actorName: string;
   createdAt: number;
 }> {
   const { channel, root, authorId, content, attachments } = opts;
   const now = await nextChatStamp(ctx, channel._id);
-  const mentions = await resolveMentions(ctx, channel.team_id, content, authorId);
+  const resolved = await resolveChatMentions(ctx, channel.team_id, content, authorId);
+  const mentions = resolved.users;
   const here = mentionsHere(content);
   if (here) await chatRateLimit(ctx, authorId, "chat.here", HERE_LIMIT);
 
@@ -2081,16 +2149,28 @@ async function postChatMessage(
     }
   }
 
+  // A role's standing session speaks as the role (lib/actor): the line wears
+  // the bot's name and the anchor pointer, the way sendAsAnchor's lines do.
+  let authorUserId: Id<"users"> = authorId;
+  let agent = opts.agent;
+  if (originSession && !agent) {
+    const actor = await resolveActor(ctx, authorId, await ctx.db.get(originSession.id as Id<"conversations">));
+    if (actor.kind === "role" && actor.anchor) {
+      authorUserId = actor.user_id;
+      agent = { anchorId: actor.anchor._id };
+    }
+  }
+
   const messageId = await ctx.db.insert("chat_messages", {
     team_id: channel.team_id,
     channel_id: channel._id,
     thread_root_id: root?._id,
     broadcast: root && opts.broadcast ? true : undefined,
-    user_id: authorId,
-    author_kind: opts.agent ? "agent" : "user",
-    ...(opts.agent ? { agent_status: "done" as const, agent_anchor_id: opts.agent.anchorId } : {}),
+    user_id: authorUserId,
+    author_kind: agent ? "agent" : "user",
+    ...(agent ? { agent_status: "done" as const, agent_anchor_id: agent.anchorId } : {}),
     content,
-    mentions: mentions.length > 0 ? mentions : undefined,
+    mentions: resolved.refs.length > 0 ? (resolved.refs as any) : undefined,
     mention_scope: here ? "here" : undefined,
     attachments: attachments.length > 0 ? attachments : undefined,
     call: opts.call,
@@ -2114,10 +2194,11 @@ async function postChatMessage(
     here,
     createdAt: now,
     agent: !!opts.agent,
+    agentLine: !!opts.agent || opts.origin === "agent",
     actorLabel: originSession?.title,
   });
 
-  return { messageId, mentions, hereCount, actorName, createdAt: now };
+  return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
 }
 
 export const repairMissingOriginSession = internalMutation({
@@ -2173,6 +2254,8 @@ async function announceChatMessage(
     createdAt: number;
     /** An anchor's post: no read mark and no bell of its own. */
     agent?: boolean;
+    /** A machine wrote it (anchor or origin "agent"): no phone push. */
+    agentLine?: boolean;
     /** Overrides the actor in bells and banners: a session-typed line notifies
      *  as the SESSION, not as the human it ran as — the same personification
      *  the transcript renders. Already ownership-checked by the caller. */
@@ -2218,6 +2301,7 @@ async function announceChatMessage(
     await notifyChat(ctx, {
       eventType: "chat_mention",
       actorUserId: authorId,
+      agentLine: opts.agentLine,
       actorName,
       channel,
       messageId,
@@ -2236,6 +2320,7 @@ async function announceChatMessage(
       await notifyChat(ctx, {
         eventType: "chat_reply",
         actorUserId: authorId,
+        agentLine: opts.agentLine,
         actorName,
         channel,
         messageId,
@@ -2271,6 +2356,7 @@ async function announceChatMessage(
       await notifyChat(ctx, {
         eventType: "chat_here",
         actorUserId: authorId,
+        agentLine: opts.agentLine,
         actorName,
         channel,
         messageId,
@@ -2294,6 +2380,7 @@ async function announceChatMessage(
       await notifyChat(ctx, {
         eventType: "chat_post",
         actorUserId: authorId,
+        agentLine: opts.agentLine,
         actorName,
         channel,
         messageId,
@@ -2319,6 +2406,7 @@ async function announceChatMessage(
       await notifyChat(ctx, {
         eventType: "chat_dm",
         actorUserId: authorId,
+        agentLine: opts.agentLine,
         actorName,
         channel,
         messageId,
@@ -2393,7 +2481,7 @@ async function landVoiceBurst(
   },
 ): Promise<Id<"users">[]> {
   const { channel, message, content, attachments } = opts;
-  const mentions = await resolveMentions(ctx, channel.team_id, content, message.user_id);
+  const { users: mentions } = await resolveChatMentions(ctx, channel.team_id, content, message.user_id);
   // A burst that landed with a recording and no words. Something in the live
   // path came back empty — the recognizer was refused, the socket never opened,
   // the room was too quiet for the server's VAD — and the person still spoke.
@@ -2924,7 +3012,8 @@ export const sendAsAnchor = mutation({
       if (root.thread_root_id) chatFail("INVALID", "Threads are flat: reply to the root message");
     }
     await chatRateLimit(ctx, userId, "chat.anchor_reply", ANCHOR_REPLY_LIMIT);
-    const { messageId } = await postChatMessage(ctx, {
+    await enforceAgentPostQuota(ctx, channel, agentPosterKey(anchor.bot_user_id), !root);
+    const { messageId, roles, sessions, actorName } = await postChatMessage(ctx, {
       channel,
       root,
       authorId: anchor.bot_user_id,
@@ -2933,7 +3022,8 @@ export const sendAsAnchor = mutation({
       clientId: args.client_id,
       agent: { anchorId: anchor._id },
     });
-    return { message_id: messageId, channel_id: channel._id, created: true };
+    const mentionWakes = await wakeAnchorMentions(ctx, { channel, messageId, root, anchor, roles, sessions, actorName });
+    return { message_id: messageId, channel_id: channel._id, created: true, mention_wakes: mentionWakes };
   },
 });
 
@@ -2964,13 +3054,13 @@ export const editMessage = mutation({
     // read, and a re-index of the search field — so it is capped like one.
     await chatRateLimit(ctx, userId, "chat.edit", SEND_LIMIT);
 
-    const mentions = await resolveMentions(ctx, channel.team_id, args.content, userId);
+    const { refs } = await resolveChatMentions(ctx, channel.team_id, args.content, userId);
     // An edit never notifies and never wakes the anchor. Adding a mention by
     // editing would otherwise be a way to page someone repeatedly, or to run
     // another billed agent turn on a teammate's laptop per keystroke saved.
     await patchChat(ctx, message._id, {
       content: args.content,
-      mentions: mentions.length > 0 ? mentions : undefined,
+      mentions: refs.length > 0 ? (refs as any) : undefined,
       mention_scope: mentionsHere(args.content) ? "here" : undefined,
       edited_at: Date.now(),
     });
@@ -3325,13 +3415,17 @@ function buildSessionRelay(opts: {
   entries: Array<{ name: string; content: string }>;
   channelEntries: Array<{ name: string; content: string }>;
   nonce: string;
+  /** The reply answers a mention THIS session made of the replying session. */
+  mentionReply?: boolean;
 }): string {
   return buildChatWake({
     ...opts,
     // The phrasing the client parser keys on (parseChatWakePrompt).
     lead: `${opts.askerName} replied in a thread you are part of.`,
     tail: [
-      "The thread was started by a message this session posted. Reply in it with:",
+      opts.mentionReply
+        ? "The reply answers a session this session mentioned in the thread. Reply in it with:"
+        : "The thread was started by a message this session posted. Reply in it with:",
       `  cast chat send --channel ${opts.channelId} --thread ${opts.threadRootId} "<your reply>"`,
       "",
       "To read more of the thread or the room than the excerpt above:",
@@ -3439,21 +3533,43 @@ async function maybeRelayToOriginSession(
     senderId: Id<"users">;
     senderName: string;
   },
-): Promise<{ delivered: boolean; skipped: string | null; session_short_id: string | null }> {
-  const no = (skipped: string | null) => ({ delivered: false, skipped, session_short_id: null });
+): Promise<RelayResult> {
+  const no = (skipped: string | null) => ({ delivered: false, skipped, session_short_id: null, conversation_id: null });
   const root = opts.root;
-  if (!root?.origin_session_id) return no(null);
-  if (opts.message.origin === "agent" || opts.message.author_kind === "agent") return no("agent_authored");
-  // The session's own line under its own root is not a reply to itself.
-  if (opts.message.origin_session_id === root.origin_session_id) return no(null);
+  if (!root) return no(null);
+  // Who hears this reply. A person's reply goes to the session that started
+  // the thread. A SESSION's reply goes to the session that @mentioned it in
+  // this thread from another session (agent-channels.md C2): the mention asked
+  // for its action, so its answer must reach the asker — the one case two
+  // machines exchange turns, and it needs an explicit mention to start.
+  let targetRef: string | null = null;
+  let mentionReply = false;
+  if (opts.message.origin === "agent" && opts.message.origin_session_id) {
+    targetRef = await mentioningSessionIn(ctx, root, opts.message);
+    mentionReply = true;
+    if (!targetRef) return no("agent_authored");
+  } else if (opts.message.origin === "agent" || opts.message.author_kind === "agent") {
+    return no("agent_authored");
+  } else {
+    targetRef = root.origin_session_id ?? null;
+    if (!targetRef) return no(null);
+    // The session's own line under its own root is not a reply to itself.
+    if (opts.message.origin_session_id === targetRef) return no(null);
+  }
 
   // The root carries the canonical conversation id (sendMessage resolves the
   // caller's ref before storing it); historical rows may still hold a native
   // session id, and the shared resolver accepts either. Access is decided
   // below, so any conversation is accepted here.
-  const conversation = await findConversationByAnyRefWhere(ctx, root.origin_session_id, () => true);
+  const conversation = await findConversationByAnyRefWhere(ctx, targetRef, () => true);
   if (!conversation) return no("session_not_found");
-  if (!(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
+  // A person needs the right to inject a turn into the session (the own-or-team
+  // rule `cast send` uses). A mention reply needs no such grant: the asking
+  // session solicited exactly this answer, and the mention only resolved
+  // because the asker could send into the replying session — the trust runs
+  // the other way, and the replier is proven to BE the mentioned session
+  // (origin_session_id is ownership-checked at post time).
+  if (!mentionReply && !(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
 
   const key = `chat-relay:${opts.message._id}`;
   try {
@@ -3471,7 +3587,7 @@ async function maybeRelayToOriginSession(
     senderName: opts.senderName,
     threadRootId: root._id,
     // The session's own earlier lines read as its own words.
-    isSelf: (row) => !!row.origin_session_id && row.origin_session_id === root.origin_session_id,
+    isSelf: (row) => !!row.origin_session_id && row.origin_session_id === String(conversation._id),
   });
   const team = await ctx.db.get(opts.channel.team_id);
   await enqueuePendingMessage(ctx, conversation, opts.senderId, {
@@ -3486,6 +3602,7 @@ async function maybeRelayToOriginSession(
       entries,
       channelEntries,
       nonce,
+      mentionReply,
     }),
     client_id: key,
   });
@@ -3493,8 +3610,17 @@ async function maybeRelayToOriginSession(
     delivered: true,
     skipped: null,
     session_short_id: (conversation as any).short_id ?? conversation._id.toString().slice(0, 7),
+    conversation_id: conversation._id.toString(),
   };
 }
+
+type RelayResult = {
+  delivered: boolean;
+  skipped: string | null;
+  session_short_id: string | null;
+  /** The canonical conversation the line was injected into, when delivered. */
+  conversation_id: string | null;
+};
 
 async function maybeWakeAnchor(
   ctx: MutationCtx,
@@ -3728,6 +3854,314 @@ async function maybeWakeAnchor(
   return { placeholder_id: placeholderId, skipped: null, listening: !addressed };
 }
 
+// ── Agent noise rules (docs/architecture/agent-channels.md C2/C3) ────────────
+
+// Who a machine's line is counted against: a bot by its user id, a session-typed
+// line by the session behind it. The session id is the caller's own stamp (an
+// honest downgrade, like `origin`): narrowing the count to a session is a
+// convenience for a fleet of sessions under one human, not a boundary.
+function agentPosterKey(userId: Id<"users">, originSessionId?: string): string {
+  return originSessionId ? `${userId}:${originSessionId}` : String(userId);
+}
+
+// Refuse the line when this poster is over its daily cap in this channel.
+// Counted before the insert; the mutation rolls back as a whole on a throw, so
+// a refused line does not spend the count it was refused for.
+async function enforceAgentPostQuota(
+  ctx: MutationCtx,
+  channel: Doc<"chat_channels">,
+  posterKey: string,
+  isRoot: boolean,
+): Promise<void> {
+  const day = dayBucket();
+  const where = channel.kind === "dm" ? "this conversation" : `#${channel.name}`;
+  if (isRoot) {
+    const roots = await takeQuota(ctx, `root:${channel._id}:${posterKey}`, day, AGENT_ROOTS_PER_CHANNEL_DAY);
+    if (!roots.ok) {
+      chatFail(
+        "RATE_LIMITED",
+        `An agent may start at most ${AGENT_ROOTS_PER_CHANNEL_DAY} threads per day in ${where}; reply in an existing thread instead (--thread <root>)`,
+      );
+    }
+  }
+  const posts = await takeQuota(ctx, `post:${channel._id}:${posterKey}`, day, AGENT_POSTS_PER_CHANNEL_DAY);
+  if (!posts.ok) {
+    chatFail(
+      "RATE_LIMITED",
+      `An agent may post at most ${AGENT_POSTS_PER_CHANNEL_DAY} lines per day in ${where}; the cap resets at midnight UTC`,
+    );
+  }
+}
+
+type MentionWakeResult = { roles: number; sessions: number; folded: number; skipped: string[] };
+
+// Wake the roles and sessions a line named. This is the ONE exception to "an
+// agent line wakes nobody": an explicit mention is a request for that party's
+// action, whoever typed it. Every wake is an idempotent pending message keyed on
+// the chat message, capped per sender and per target per hour; over a cap the
+// mention FOLDS — the row is stamped mention_folded and the party reads the line
+// on its next wake instead of being woken for it.
+async function wakeMentionedParties(
+  ctx: MutationCtx,
+  opts: {
+    channel: Doc<"chat_channels">;
+    message: Doc<"chat_messages">;
+    root: Doc<"chat_messages"> | null;
+    senderId: Id<"users">;
+    senderName: string;
+    roles: Doc<"org_roles">[];
+    sessions: Doc<"conversations">[];
+    /** A conversation this same line already reached by another rail (the
+     *  thread relay); a mention of it wakes nothing more. */
+    alreadyDelivered?: string | null;
+    /** The session that wrote the line when it is not stamped on the row: an
+     *  anchor's post or reply names its own standing session here. */
+    selfConversationId?: string | null;
+  },
+): Promise<MentionWakeResult> {
+  const out: MentionWakeResult = { roles: 0, sessions: 0, folded: 0, skipped: [] };
+  const delivered = (conversationId: unknown) =>
+    !!opts.alreadyDelivered && String(conversationId) === opts.alreadyDelivered;
+  const hour = hourBucket();
+  // A mention in a thread answers in that thread; a mention at channel level
+  // starts a thread on the mentioning line — the same rule the anchor uses.
+  const threadRootId = opts.root?._id ?? opts.message._id;
+  const team = await ctx.db.get(opts.channel.team_id);
+  const teamName = oneLine((team as any)?.name ?? "team", 60);
+  const selfSession = opts.selfConversationId ?? opts.message.origin_session_id;
+  const selfConversation = selfSession
+    ? await ctx.db.get(ctx.db.normalizeId("conversations", selfSession) ?? (selfSession as Id<"conversations">))
+    : null;
+
+  // Both caps, checked per target so one folded target does not fold the rest.
+  // Taken LAST, after every check that can skip the target for free: a mention
+  // that cannot wake anyone must not spend the sender's hourly credit.
+  const underCaps = async (targetKey: string): Promise<boolean> => {
+    const sender = await takeQuota(ctx, `mention_from:${opts.senderId}`, hour, MENTION_WAKES_PER_SENDER_HOUR);
+    if (!sender.ok) return false;
+    const target = await takeQuota(ctx, `mention_to:${targetKey}`, hour, MENTION_WAKES_PER_TARGET_HOUR);
+    return target.ok;
+  };
+  const quoted = (lead: string, tail: string[]) => buildChatWake({
+    channelName: opts.channel.name,
+    channelKind: opts.channel.kind,
+    channelTopic: opts.channel.topic,
+    teamName,
+    threadRootId,
+    lead,
+    entries: [{ name: opts.senderName, content: opts.message.content }],
+    channelEntries: [],
+    nonce: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+    tail,
+  });
+  const replyTail = [
+    "Reply in the thread with:",
+    `  cast chat send --channel ${opts.channel._id} --thread ${threadRootId} "<your reply>"`,
+    `Read more: cast chat thread ${threadRootId} · cast chat read --channel ${opts.channel._id}`,
+    "Answer once, concisely, and only if the line wants something from you.",
+  ];
+
+  for (const role of opts.roles) {
+    // A role's own standing session naming its own role is not a request.
+    const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+    if (anchor?.conversation_id && selfSession && String(anchor.conversation_id) === selfSession) continue;
+    if (!anchor) { out.skipped.push(`role_has_no_session:${role.handle}`); continue; }
+    if (anchor.conversation_id && delivered(anchor.conversation_id)) { out.skipped.push(`relayed:${role.handle}`); continue; }
+    // The loop rules (T3): a role's own hands and its subordinate roles never
+    // wake it. Reported as an exclusion, not as a failed delivery.
+    if (selfConversation && (await actorIsExcluded(ctx, String(role._id), selfConversation))) {
+      out.skipped.push(`excluded_actor:${role.handle}`);
+      continue;
+    }
+    if (!(await underCaps(String(role._id)))) { out.folded++; continue; }
+    const text = quoted(
+      `${opts.senderName} mentioned @${role.handle} in ${opts.channel.kind === "dm" ? "a direct message" : `#${opts.channel.name}`}.`,
+      replyTail,
+    );
+    // Through the wake rail (org-roles-standing.md T3): an immediate outbox
+    // row whose cause carries the quoted line and the reply instructions; the
+    // flush folds it into one frame with everything else the role owes a
+    // look. A human mention is immediate; the loop rules drop a line the
+    // role's own session or one of its hands wrote.
+    const rowId = await enqueueRoleEvent(ctx, role._id, {
+      kind: "immediate",
+      cause: `chat mention: ${text}`,
+      ref: { table: "chat_messages", id: String(opts.message._id) },
+      actorConversationId: selfConversation?._id ?? null,
+    });
+    if (rowId) out.roles++;
+    else out.skipped.push(`delivery_failed:${role.handle}`);
+  }
+
+  for (const conversation of opts.sessions) {
+    if (selfSession && String(conversation._id) === selfSession) continue;
+    const shortId = (conversation as any).short_id ?? String(conversation._id).slice(0, 7);
+    if (delivered(conversation._id)) { out.skipped.push(`relayed:${shortId}`); continue; }
+    if (!(await underCaps(String(conversation._id)))) { out.folded++; continue; }
+    const body = quoted(`${opts.senderName} mentioned @${shortId} in #${opts.channel.name}.`, replyTail);
+    const where = opts.channel.kind === "dm" ? "dm" : `#${opts.channel.name}`;
+    await enqueuePendingMessage(ctx, conversation, opts.senderId, {
+      content: `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${threadRootId}" from="${opts.senderName.replace(/"/g, "'")}">\n${body}\n</chat-mention>`,
+      client_id: `chat-mention:${opts.message._id}:${conversation._id}`,
+    });
+    out.sessions++;
+  }
+
+  if (out.folded > 0 && !opts.message.mention_folded) {
+    await patchChat(ctx, opts.message._id, { mention_folded: true });
+  }
+  return out;
+}
+
+// An anchor's own post or landed reply names roles and sessions like any
+// other line (C2: a mention wakes its target whoever typed it). The anchor's
+// standing session is the self identity, so a role naming itself wakes
+// nothing, and a failure here never costs the line — same isolation as the
+// send path. Shared by sendAsAnchor and replyAsAnchor.
+async function wakeAnchorMentions(
+  ctx: MutationCtx,
+  opts: {
+    channel: Doc<"chat_channels">;
+    messageId: Id<"chat_messages">;
+    root: Doc<"chat_messages"> | null;
+    anchor: Doc<"anchors">;
+    roles: Doc<"org_roles">[];
+    sessions: Doc<"conversations">[];
+    actorName: string;
+  },
+): Promise<MentionWakeResult> {
+  const none: MentionWakeResult = { roles: 0, sessions: 0, folded: 0, skipped: [] };
+  if (opts.roles.length === 0 && opts.sessions.length === 0) return none;
+  const message = await ctx.db.get(opts.messageId);
+  if (!message) return none;
+  try {
+    return await wakeMentionedParties(ctx, {
+      channel: opts.channel,
+      message,
+      root: opts.root,
+      senderId: opts.anchor.bot_user_id,
+      senderName: opts.actorName,
+      roles: opts.roles,
+      sessions: opts.sessions,
+      selfConversationId: opts.anchor.conversation_id ? String(opts.anchor.conversation_id) : null,
+    });
+  } catch (error) {
+    return {
+      ...none,
+      skipped: [error instanceof ConvexError ? String((error.data as any)?.code ?? "error") : "error"],
+    };
+  }
+}
+
+// The session that @mentioned `message`'s session in this thread from ANOTHER
+// session — the party a session's reply is relayed to. Newest mention wins.
+// Returns the canonical conversation id the mention stored, or null.
+async function mentioningSessionIn(
+  ctx: ReadCtx,
+  root: Doc<"chat_messages">,
+  message: Doc<"chat_messages">,
+): Promise<string | null> {
+  const self = message.origin_session_id;
+  if (!self) return null;
+  const replies = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", root._id))
+    .order("desc")
+    .take(200);
+  for (const row of [...replies, root]) {
+    if (row._id.toString() === message._id.toString() || row.deleted_at) continue;
+    if (!row.origin_session_id || row.origin_session_id === self) continue;
+    if (mentionSessions(row.mentions as any).some((m) => m.conversation_id === self)) {
+      return row.origin_session_id;
+    }
+  }
+  return null;
+}
+
+// The compact view a role's wake frame embeds (agent-channels.md C2 pull mode)
+// and `cast chat read --since` prints: what landed in these channels after
+// `since`, oldest first, one short line each. Channels the caller cannot read
+// are silently absent — a frame must never leak a room to a role outside it.
+// The lines the channels carried since `since`, oldest first, channels the
+// caller cannot read omitted. Shared by the query below and the role wake
+// frame (orgWakes.frameInputsFor), which reads the channels a role follows.
+export async function collectLinesSince(
+  ctx: { db: any },
+  userId: Id<"users">,
+  channelIds: Id<"chat_channels">[],
+  since: number,
+  limitArg: number | undefined,
+): Promise<{ lines: ChatLineSince[]; truncated: boolean }> {
+  const limit = Math.min(Math.max(limitArg ?? 20, 1), 100);
+  // Read past the cap so a silent placeholder or a tombstone in the window
+  // cannot hide a real line behind it; the merge below re-applies the cap.
+  const scan = limit + 20;
+  // At most 20 channels per read; past that the answer is incomplete and says so.
+  let truncated = channelIds.length > 20;
+  const authors = new Map<string, Doc<"users"> | null>();
+  const lines: ChatLineSince[] = [];
+  for (const channelId of channelIds.slice(0, 20)) {
+    const channel = await readChannel(ctx as any, userId, channelId);
+    if (!channel || channel.archived_at) continue;
+    const rows = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) =>
+        q.eq("channel_id", channelId).gt("created_at", since))
+      .order("desc")
+      .take(scan);
+    if (rows.length === scan) truncated = true;
+    for (const row of rows) {
+      if (row.deleted_at || isSilentAgentRow(row) || isLiveVoiceRow(row)) continue;
+      const key = row.user_id.toString();
+      if (!authors.has(key)) authors.set(key, await ctx.db.get(row.user_id));
+      const author = authors.get(key) ?? null;
+      lines.push({
+        message_id: row._id,
+        channel_id: channel._id,
+        channel_name: channel.name,
+        author_name: row.origin_session_title ?? oneLine(displayName(author), 60),
+        is_bot: !!author?.is_bot,
+        is_agent: !!author?.is_bot || row.origin === "agent",
+        origin_session_id: row.origin_session_id,
+        thread_root_id: row.thread_root_id,
+        is_root: !row.thread_root_id,
+        created_at: row.created_at,
+        text: oneLine(plainPreview(row.content) || row.content, 200),
+      });
+    }
+  }
+  lines.sort((a, b) => a.created_at - b.created_at);
+  if (lines.length > limit) truncated = true;
+  return { lines: lines.length > limit ? lines.slice(lines.length - limit) : lines, truncated };
+}
+
+export type ChatLineSince = {
+  message_id: Id<"chat_messages">;
+  channel_id: Id<"chat_channels">;
+  channel_name: string;
+  author_name: string;
+  is_bot: boolean;
+  is_agent: boolean;
+  origin_session_id?: string;
+  thread_root_id?: Id<"chat_messages">;
+  is_root: boolean;
+  created_at: number;
+  text: string;
+};
+
+export const linesSince = query({
+  args: {
+    api_token: v.optional(v.string()),
+    channel_ids: v.array(v.id("chat_channels")),
+    since: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    return collectLinesSince(ctx, userId, args.channel_ids, args.since, args.limit);
+  },
+});
+
 // The pending-message key a wake is queued under: derived from the placeholder,
 // so the deadline can find and drop an undelivered one.
 function anchorWakeKey(placeholderId: Id<"chat_messages">): string {
@@ -3943,18 +4377,26 @@ export const replyAsAnchor = mutation({
         .first();
       patch.created_at = Math.max(Date.now(), (newest?.created_at ?? 0) + 1);
     }
+    // A landed answer names people, roles and sessions like any other line:
+    // the placeholder was inserted empty, so its mentions are resolved now.
+    const resolved = status === "done"
+      ? await resolveChatMentions(ctx, channel.team_id, args.content, anchor.bot_user_id)
+      : { users: [], roles: [], sessions: [], refs: [] };
+    if (resolved.refs.length > 0) patch.mentions = resolved.refs;
     await patchChat(ctx, message._id, patch);
 
     // The answer landing is a thread reply like any other, so the people in that
     // thread hear about it — including the person who asked. An inline DM
-    // answer reaches the room's members the way any DM line does.
+    // answer reaches the room's members the way any DM line does. Both are
+    // agent lines: a bell, never a phone push (C3).
     const root = message.thread_root_id ? await ctx.db.get(message.thread_root_id) : null;
+    const anchorName = oneLine(displayName(await ctx.db.get(anchor.bot_user_id)), 60);
     if (!root && status === "done" && channel.kind === "dm") {
       const preview = plainPreview(args.content);
-      const anchorName = oneLine(displayName(await ctx.db.get(anchor.bot_user_id)), 60);
       for (const recipientId of await channelMemberIds(ctx, channel._id)) {
         await notifyChat(ctx, {
           eventType: "chat_dm",
+          agentLine: true,
           actorUserId: anchor.bot_user_id,
           actorName: anchorName,
           channel,
@@ -3975,10 +4417,10 @@ export const replyAsAnchor = mutation({
         activityAt: (patch.created_at as number | undefined) ?? message.created_at,
       });
       const preview = plainPreview(args.content);
-      const anchorName = oneLine(displayName(await ctx.db.get(anchor.bot_user_id)), 60);
       for (const recipientId of await threadParticipants(ctx, root)) {
         await notifyChat(ctx, {
           eventType: "chat_reply",
+          agentLine: true,
           actorUserId: anchor.bot_user_id,
           actorName: anchorName,
           channel,
@@ -3990,6 +4432,11 @@ export const replyAsAnchor = mutation({
         });
       }
     }
-    return { message_id: message._id, agent_status: status };
+    const mentionWakes = status === "done"
+      ? await wakeAnchorMentions(ctx, {
+        channel, messageId: message._id, root, anchor, roles: resolved.roles, sessions: resolved.sessions, actorName: anchorName,
+      })
+      : { roles: 0, sessions: 0, folded: 0, skipped: [] };
+    return { message_id: message._id, agent_status: status, mention_wakes: mentionWakes };
   },
 });

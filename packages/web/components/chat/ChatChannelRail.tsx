@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
-import { Hash, Lock, Plus, BellOff, Users, SquarePen } from "lucide-react";
+import { Hash, Lock, Plus, BellOff, Users, SquarePen, Bot } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
 import { OccupancyChip } from "../calls/OccupancyChip";
 import { CommentAvatar } from "../comments/CommentAvatar";
@@ -129,6 +129,9 @@ function RailRow({
           )
         ) : c.isPrivate ? (
           <Lock className="w-3 h-3" />
+        ) : c.kind === "agents" ? (
+          // A room roles and sessions post in: the icon says who talks here.
+          <Bot className="w-3 h-3" />
         ) : (
           <Hash className="w-3 h-3" />
         )}

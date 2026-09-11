@@ -3,6 +3,7 @@ import { memo } from "react";
 import { tryRenderHtmlMessage } from "../HtmlSnippet";
 import { MD_COMPONENTS } from "../../lib/markdownComponents";
 import { MD_REHYPE_PLUGINS, MD_REMARK_PLUGINS } from "../../lib/markdownPlugins";
+import { RevealHost } from "../ObjectReveal";
 
 export { CollapsibleImage, ImageRowParagraph } from "./MarkdownImages";
 
@@ -48,7 +49,9 @@ export const MarkdownBlocks = memo(function MarkdownBlocks({
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content, filePath = '', className = '' }: MarkdownRendererProps) {
   return (
     <div className={`prose prose-invert prose-sm max-w-none ${className}`}>
-      <MarkdownBlocks content={content} />
+      <RevealHost>
+        <MarkdownBlocks content={content} />
+      </RevealHost>
     </div>
   );
 });

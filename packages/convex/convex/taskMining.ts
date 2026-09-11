@@ -231,8 +231,7 @@ export const mineTasksFromInsights = internalMutation({
 
       const alreadyMined = await ctx.db
         .query("tasks")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-        .filter((q) => q.eq(q.field("created_from_insight"), insight._id))
+        .withIndex("by_user_insight", (q) => q.eq("user_id", args.user_id).eq("created_from_insight", insight._id))
         .first();
       if (alreadyMined) {
         const ts = insight.generated_at || Date.now();

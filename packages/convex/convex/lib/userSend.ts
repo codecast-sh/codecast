@@ -1,4 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 
 // Human-send detection + the per-day send counters behind the "Sends" chart
@@ -86,23 +87,40 @@ async function resolveSendTeam(
   return owner?.active_team_id ?? owner?.team_id ?? undefined;
 }
 
-// The single entry point: classify the message, resolve team attribution, bump
-// the counter. Both insert paths in messages.ts and the backfill call this.
+async function resolveUserSend(
+  ctx: { db: any },
+  conversation: Doc<"conversations">,
+  msg: Parameters<typeof classifyUserSend>[1],
+) {
+  const send = classifyUserSend(conversation, msg);
+  return send ? { ...send, team_id: await resolveSendTeam(ctx, conversation) } : null;
+}
+
+export async function scheduleUserSend(
+  ctx: { db: any; scheduler: any },
+  conversation: Doc<"conversations">,
+  msg: Parameters<typeof classifyUserSend>[1],
+  timestamp: number,
+): Promise<boolean> {
+  const send = await resolveUserSend(ctx, conversation, msg);
+  if (!send) return false;
+  await ctx.scheduler.runAfter(0, internal.userSends.record, { ...send, timestamp });
+  return true;
+}
+
 export async function maybeRecordUserSend(
   ctx: { db: any },
   conversation: Doc<"conversations">,
   msg: { role: string; content?: string; tool_results?: unknown[] | undefined; from_user_id?: Id<"users"> },
   timestamp: number,
 ): Promise<boolean> {
-  const send = classifyUserSend(conversation, msg);
+  const send = await resolveUserSend(ctx, conversation, msg);
   if (!send) return false;
-  const team_id = await resolveSendTeam(ctx, conversation);
-  await recordUserSend(ctx, { user_id: send.user_id, team_id }, timestamp);
+  await recordUserSend(ctx, send, timestamp);
   return true;
 }
 
-// Bump the (user, team, UTC day) counter row. One tiny doc per user-day-team;
-// human typing rates make write contention a non-issue.
+// Bump the (user, team, UTC day) counter row.
 export async function recordUserSend(
   ctx: { db: any },
   send: { user_id: Id<"users">; team_id: Id<"teams"> | undefined },

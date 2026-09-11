@@ -780,6 +780,50 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
   const tabs = await cli(["browser", "tabs"]);
   check("cli: tabs lists the tab and says it is the real Chrome", tabs.code === 0 && tabs.all.includes(url) && /real Chrome/.test(tabs.all), tabs.all.slice(0, 300));
 
+  // The engine daemon outlives both ends of the bridge and keeps the CDP
+  // session id it attached with. An extension that reconnects (a reload, a
+  // sleep, Chrome restarting it) and a host that restarts must both leave
+  // that id working, or every later verb of the session fails with
+  // "Session with given id not found" until the daemon dies.
+  const daemonPid = () => {
+    try {
+      const f = fs.readdirSync(engineHome).find((n) => n.endsWith("-real.pid"));
+      return f ? parseInt(fs.readFileSync(path.join(engineHome, f), "utf-8").trim(), 10) : null;
+    } catch {
+      return null;
+    }
+  };
+  const pidBefore = daemonPid();
+  const seenBefore = JSON.parse(fs.readFileSync(bridgeFile, "utf-8")).extensionSeenAt;
+  await ext.eval(`chrome.runtime.sendMessage({ op: "reconnect" })`);
+  const reconnectDeadline = Date.now() + 15_000;
+  while (Date.now() < reconnectDeadline) {
+    const s = JSON.parse(fs.readFileSync(bridgeFile, "utf-8"));
+    if (s.extensionConnected && s.extensionSeenAt > seenBefore) break;
+    await sleep(100);
+  }
+  const afterFlap = await cli(["browser", "open", url + "?flap"]);
+  const snapFlap = await cli(["browser", "snapshot", "-i"]);
+  check(
+    "cli: the session keeps driving its tab after the extension reconnects (same daemon)",
+    afterFlap.code === 0 && /Cast Bridge Smoke/.test(afterFlap.all) && snapFlap.code === 0 && /Sign in/.test(snapFlap.all) && daemonPid() === pidBefore,
+    `open: ${afterFlap.all.slice(0, 200)} / snapshot: ${snapFlap.all.slice(0, 200)} / daemon ${pidBefore} -> ${daemonPid()}`,
+  );
+
+  const hostBefore = JSON.parse(fs.readFileSync(bridgeFile, "utf-8")).hostPid;
+  process.kill(hostBefore, "SIGTERM");
+  const down = Date.now() + 5000;
+  while (Date.now() < down && (await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(() => true, () => false))) await sleep(100);
+  const afterRestart = await cli(["browser", "open", url]);
+  const snapRestart = await cli(["browser", "snapshot", "-i"]);
+  check(
+    "cli: the session keeps driving its tab after the bridge host restarts (same daemon)",
+    afterRestart.code === 0 && /Cast Bridge Smoke/.test(afterRestart.all) && snapRestart.code === 0 && /Sign in/.test(snapRestart.all) && daemonPid() === pidBefore,
+    `open: ${afterRestart.all.slice(0, 200)} / snapshot: ${snapRestart.all.slice(0, 200)} / daemon ${pidBefore} -> ${daemonPid()}`,
+  );
+  const flapTabs = await groupTitleOf();
+  check("cli: no second tab was opened to recover", flapTabs.tabs === 1 && flapTabs.members === 1, JSON.stringify(flapTabs));
+
   // A session that ended: its tab still open in the real Chrome, its tab
   // binding on disk, no daemon (no .pid file), and nothing to prove its agent
   // alive, so it falls to the idle rule; the binding is backdated past it.

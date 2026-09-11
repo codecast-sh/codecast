@@ -13,6 +13,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { RELEASES, type Accent, type SectionIcon } from "./changelogData";
 import { useRouteMeta } from "../pageMeta";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 const SOL = {
   base03: "#002b36",
@@ -205,43 +206,7 @@ export default function ChangelogPage() {
       `}</style>
 
       {/* Nav — matches the documentation page */}
-      <nav
-        className="backdrop-blur-sm sticky top-0 z-50"
-        style={{ borderBottom: `1px solid ${SOL.base2}`, backgroundColor: "rgba(253,246,227,0.85)" }}
-      >
-        <div className="max-w-[90rem] mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link href="/">
-              <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
-            </Link>
-            <div className="hidden md:flex items-center gap-1">
-              <span style={{ color: SOL.base01 }}>/</span>
-              <span className="font-mono text-sm font-medium" style={{ color: SOL.base03 }}>
-                changelog
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href="/documentation" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
-              Docs
-            </Link>
-            <Link href="/features" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
-              CLI
-            </Link>
-            <Link href="/pricing" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
-              Pricing
-            </Link>
-            <Link href="/blog" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
-              Blog
-            </Link>
-            <Link href="/signup">
-              <Button className="font-medium text-white text-sm" style={{ backgroundColor: SOL.base03 }}>
-                Get started
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingNav active="/changelog" crumb="changelog" containerClassName="max-w-[90rem]" />
 
       <div className="max-w-[90rem] mx-auto flex">
         {/* Month rail */}

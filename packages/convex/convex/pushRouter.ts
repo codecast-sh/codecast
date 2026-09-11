@@ -467,7 +467,11 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
   // level — a message TO you should raise a Focus-respecting banner, not sit
   // in the summary tray.
   const CHAT_TYPES = new Set(["chat_mention", "chat_reply", "chat_here", "chat_dm", "chat_added", "chat_post"]);
-  const ADDRESSED = new Set(["chat_mention", "chat_dm", "chat_here"]);
+  // Addressed to this person by construction — a direct mention, or a session
+  // of theirs that stopped and is waiting on them. Those ride the
+  // time-sensitive interruption level so they break through a Focus mode; an
+  // agent that has stopped is the one thing the human cannot afford to miss.
+  const ADDRESSED = new Set(["chat_mention", "chat_dm", "chat_here", "session_idle", "permission_request"]);
   const isChat = sendable.some((r: any) => CHAT_TYPES.has(r.type));
   const addressed = sendable.some((r: any) => ADDRESSED.has(r.type));
   // The icon badge is the bell's own number, so the phone and the app agree.

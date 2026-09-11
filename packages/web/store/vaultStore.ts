@@ -135,6 +135,10 @@ interface VaultState {
   /** Last failed file operation, for a dismissible strip in the UI. */
   opError: string | null;
   clearOpError: () => void;
+  /** A vault the daemon registered on request (client.locateVault) joins the
+   *  list at once, so the ?path= flow resolves against it without a second
+   *  roots round-trip. */
+  adoptVault: (vault: VaultInfo) => void;
   /** What the last rename did to the vault's links, for a dismissible strip.
    *  Transient: never persisted, cleared when the next rename starts. */
   lastRenameReport: RenameReport | null;
@@ -767,6 +771,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   lastRenameReport: null,
 
   clearOpError: () => set({ opError: null }),
+  adoptVault: (vault) =>
+    set((s) => {
+      if (s.vaults.some((v) => v.id === vault.id)) return {};
+      const vaults = [...s.vaults, vault];
+      writeCachedVaults(vaults);
+      return { vaults };
+    }),
   clearRenameReport: () => set({ lastRenameReport: null }),
 
   setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open, ...(open ? {} : { quickSwitchSeed: null }) }),

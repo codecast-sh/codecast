@@ -84,6 +84,7 @@ export type Message = {
   _isQueued?: true;
   _clientId?: string;
   _isFailed?: true;
+  _isLocalQueue?: true;
   client_id?: string;
 };
 
@@ -546,7 +547,7 @@ export function useConversationMessages(
       storeMessages.filter((m: Message) => m.client_id).map((m: Message) => m.client_id)
     );
     const unconfirmed = storePending.filter((m: Message) =>
-      !storeIds.has(m._id) && (!m._clientId || !serverClientIds.has(m._clientId))
+      !m._isLocalQueue && !storeIds.has(m._id) && (!m._clientId || !serverClientIds.has(m._clientId))
     );
     if (unconfirmed.length === 0) return storeMessages;
     return [...storeMessages, ...unconfirmed].sort((a: Message, b: Message) => a.timestamp - b.timestamp);

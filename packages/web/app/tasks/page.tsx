@@ -980,7 +980,12 @@ function useTaskUrlState() {
  * views. `/tasks` renders it whole; a project renders the same surface scoped to
  * its own tasks, so working out of a project is the same list, not a second one.
  */
-export function TaskListContent({ projectId }: { projectId?: string } = {}) {
+/** A set of projects and plans to narrow the list to (an org role's scope,
+ *  docs/architecture/scopes-and-feed.md F1): a task is in when its project or
+ *  its plan is listed. The caller expands a plan's project into planIds. */
+export type TaskListScope = { projectIds: string[]; planIds: string[] };
+
+export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
   const router = useRouter();
   const params = useParams();
   const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
@@ -1131,7 +1136,9 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     // count, filter and group below reports on the project alone.
     const scoped = projectId
       ? inWorkspace.filter((t) => String((t as any).project_id || "") === projectId)
-      : inWorkspace;
+      : scope
+        ? inWorkspace.filter((t) => scope.projectIds.includes(String((t as any).project_id || "")) || scope.planIds.includes(String((t as any).plan_id || "")))
+        : inWorkspace;
     // Derive the dormant session badge fields here — the single entry point of
     // the page's task pipeline — so every downstream filter/group/badge keeps
     // reading t.origin_session / t.source_agent_type unchanged. Server rows no
@@ -1152,7 +1159,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
         source_agent_type: sourceAgent,
       };
     });
-  }, [wsTasks, taskOriginBadges, projectId]);
+  }, [wsTasks, taskOriginBadges, projectId, scope]);
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
@@ -1530,7 +1537,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           getComposeRef={(t) => t.short_id}
-          title={projectId ? "Project tasks" : "Tasks"}
+          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
           tabs={[
             // Two presets, then the statuses they are made of. Each preset
             // declares its members so the pills/checkboxes show what it means.

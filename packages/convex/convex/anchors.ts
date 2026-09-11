@@ -3,8 +3,10 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
+import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { enqueueKillSessionCommand } from "./cleanup";
 import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
+import { roleGrants } from "./lib/orgAccess";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -20,34 +22,15 @@ import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages
 // Authorization for an anchor: the human host that runs it, the user a personal
 // anchor belongs to, or any member of a team anchor's team. Every ACT path (wake,
 // decommission) and the channel/post paths gate on this — authentication alone is
-// not enough (injecting a turn runs and bills code on the host's daemon).
-async function anchorGrants(
-  ctx: { db: any },
-  userId: Id<"users">,
-  anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
-  teamRoleAllows: (m: any) => boolean,
-): Promise<boolean> {
-  if (!anchor) return false;
-  if (anchor.host_user_id === userId) return true;
-  if (anchor.scope_user_id && anchor.scope_user_id === userId) return true;
-  if (anchor.team_id) {
-    const m = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) =>
-        q.eq("user_id", userId).eq("team_id", anchor.team_id),
-      )
-      .first();
-    if (m && teamRoleAllows(m)) return true;
-  }
-  return false;
-}
-
+// not enough (injecting a turn runs and bills code on the host's daemon). The
+// rule itself lives in lib/orgAccess (roleGrants): an anchor and an org role
+// carry the same boundary shape, so the two tables share one grant.
 export async function userCanAccessAnchor(
   ctx: { db: any },
   userId: Id<"users">,
   anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
 ): Promise<boolean> {
-  return anchorGrants(ctx, userId, anchor, () => true);
+  return roleGrants(ctx, userId, anchor, () => true);
 }
 
 // Stricter gate for DESTRUCTIVE / config changes (retire, rename, persona): the
@@ -58,7 +41,7 @@ export async function userCanAdminAnchor(
   userId: Id<"users">,
   anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
 ): Promise<boolean> {
-  return anchorGrants(ctx, userId, anchor, (m) => m.role === "admin");
+  return roleGrants(ctx, userId, anchor, (m) => m.role === "admin");
 }
 
 // The anchors a caller may see/act on: their personal anchor plus the team anchor
@@ -100,6 +83,13 @@ export async function visibleAnchorsForUser(
 // asks for a one-line hello so the human can see it is live. Deliberately
 // principle-level: the persona and the standing rules grow in its own memory
 // and the project's CLAUDE.md; this only sets the frame.
+export type RoleBootstrap = {
+  handle: string;
+  scopeNames: string[];
+  parentName: string;
+  trust: "understand" | "decide" | "direct";
+};
+
 export function bootstrapMessage(opts: {
   name: string;
   scopeType: "team" | "user";
@@ -107,31 +97,71 @@ export function bootstrapMessage(opts: {
   ownerName?: string;
   teamName?: string;
   persona?: string;
+  // Set when the standing agent is an org ROLE (org-roles-standing.md T1)
+  // rather than the workspace anchor: the frame names its seat, its scope,
+  // its parent and its trust stage, and the four rules of a role replace the
+  // anchor's memory-and-delegation bullets.
+  role?: RoleBootstrap;
 }): string {
-  const { name, scopeType, scopeLabel, persona } = opts;
-  const who = scopeType === "team"
-    ? `the **team** anchor for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
-    : `the **personal** anchor for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
+  const { name, scopeType, scopeLabel, persona, role } = opts;
+  const who = role
+    ? `the standing agent for the **${name}** role (@${role.handle}) in ${scopeType === "team" ? `the ${opts.teamName ?? "team"} workspace` : `${opts.ownerName ?? "one person"}'s personal workspace`}. You report to ${role.parentName}. Your scope: ${role.scopeNames.length ? role.scopeNames.join(", ") : "the whole workspace"}. Your trust stage is **${role.trust}**`
+    : scopeType === "team"
+      ? `the **team** anchor for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
+      : `the **personal** anchor for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
+  const memoryBullet = role
+    ? [
+      `- **Your brief is your memory.** Your transcript gets compacted; the brief (\`cast brief\`) is`,
+      `  what survives. Update it with \`cast brief edit -\` at the end of any turn that changed your`,
+      `  understanding: first line the state of your scope, then Status:/Next:/Blocked: lines, then a`,
+      `  few paragraphs with evidence as short ids.`,
+      `- **Delegate real work.** A hand is a session you start with \`cast spawn\`; it reports to you`,
+      `  and shows under you on the org page. Start hands only when your trust stage allows it, and`,
+      `  stay responsive yourself.`,
+    ]
+    : [
+      `- **Keep durable memory.** Your transcript gets compacted, so persist anything worth`,
+      `  remembering to this project's memory dir and CLAUDE.md — starting now with a short note`,
+      `  that you are ${name}, ${scopeType === "team" ? "the team anchor" : "the personal anchor"} for ${scopeLabel}, and how you operate.`,
+      `- **Delegate real work.** For code changes or anything long, start background subagents`,
+      `  (the Agent tool) and stay responsive yourself; call them subagents. Reserve \`cast spawn\``,
+      `  for when a person explicitly wants a session they will steer themselves.`,
+    ];
+  const roleRules = role
+    ? [
+      ``,
+      `## The four rules of a role`,
+      `- **Wake, read, act, brief.** Every turn starts with a frame: why you are awake, your scope`,
+      `  now, what your hands say. Read your charter and brief before acting, and end by updating`,
+      `  the brief. Understand first; a role at the understand stage reports and recommends, it`,
+      `  does not start hands or answer decisions.`,
+      `- **Stay inside your scope.** You own the projects and plans named above and nothing else;`,
+      `  what falls outside goes up to ${role.parentName}.`,
+      `- **Escalate with a recommendation.** A decision you cannot take yourself goes to a person`,
+      `  with your recommendation attached (\`cast decide recommend\`), never as a bare question.`,
+      `- **Caps are real.** Wakes, hands and tokens per day are bounded; when a cap holds you, say so`,
+      `  in the brief and wait.`,
+    ]
+    : [];
   return [
     `You are **${name}**, ${who}. You are codecast's standing agent for ${scopeLabel}: a`,
     `general agent and a persistent member, not a one-shot task. People will ask you`,
     `anything about the work — questions, coordination, monitoring, reminders, small tasks,`,
     `judgment calls — and you act with a peer's judgment.`,
     ``,
-    `A person may have several anchors (a personal one, and one per team). When there is any`,
-    `chance of confusion, say which one you are.`,
+    role
+      ? `Your charter (the humans' statement of your job) and your brief (your own running account) are`
+      + ` documents; \`cast brief\` prints the brief with live facts about your scope.`
+      : `A person may have several anchors (a personal one, and one per team). When there is any`,
+    role ? `` : `chance of confusion, say which one you are.`,
     ``,
     `## How you work`,
     `- **Stay resident.** This conversation is long-lived and never "completes". When you finish`,
     `  a turn you go dormant and are woken by the next event: a message here, a mention or`,
     `  reply in team chat, a direct message, a Slack mention, a routine firing, a finished`,
     `  delegated job. Don't wrap up or sign off for good.`,
-    `- **Keep durable memory.** Your transcript gets compacted, so persist anything worth`,
-    `  remembering to this project's memory dir and CLAUDE.md — starting now with a short note`,
-    `  that you are ${name}, ${scopeType === "team" ? "the team anchor" : "the personal anchor"} for ${scopeLabel}, and how you operate.`,
-    `- **Delegate real work.** For code changes or anything long, start background subagents`,
-    `  (the Agent tool) and stay responsive yourself; call them subagents. Reserve \`cast spawn\``,
-    `  for when a person explicitly wants a session they will steer themselves.`,
+    ...memoryBullet,
+    ...roleRules,
     ``,
     `## Your routines are yours to run`,
     `People will talk to you about your own recurring behavior — "check the deploy every`,
@@ -158,34 +188,240 @@ export function bootstrapMessage(opts: {
     `- Be concise and additive. Don't repeat yourself across channels.`,
     persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
-    `Save your role to memory now, post a one-line hello confirming you are online and which`,
-    `anchor you are, then stand by.`,
-  ].filter(Boolean).join("\n");
+    role
+      ? `Read \`cast brief\` now, post a one-line hello confirming you are online as @${role.handle}, then stand by.`
+      : `Save your role to memory now, post a one-line hello confirming you are online and which`,
+    role ? `` : `anchor you are, then stand by.`,
+  ].filter((line) => line !== ``).join("\n");
 }
 
 async function findExistingAnchor(
   ctx: { db: any },
-  scope: { scope_type: "team" | "user"; team_id?: Id<"teams">; scope_user_id?: Id<"users"> },
+  scope: { scope_type: "team" | "user"; team_id?: Id<"teams">; scope_user_id?: Id<"users">; org_role_id?: Id<"org_roles"> },
 ) {
+  // A role's standing agent is one per role, whatever the boundary holds;
+  // the workspace anchor stays one per scope (and never matches a role's).
+  if (scope.org_role_id) {
+    const rows = scope.team_id
+      ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", scope.team_id)).collect()
+      : await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scope.scope_user_id)).collect();
+    return rows.find((a: any) => a.status !== "decommissioned" && String(a.org_role_id ?? "") === String(scope.org_role_id)) ?? null;
+  }
   if (scope.scope_type === "team" && scope.team_id) {
     const rows = await ctx.db
       .query("anchors")
       .withIndex("by_team", (q: any) => q.eq("team_id", scope.team_id))
       .collect();
-    return rows.find((a: any) => a.status !== "decommissioned") ?? null;
+    return rows.find((a: any) => a.status !== "decommissioned" && !a.org_role_id) ?? null;
   }
   if (scope.scope_type === "user" && scope.scope_user_id) {
     const rows = await ctx.db
       .query("anchors")
       .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scope.scope_user_id))
       .collect();
-    return rows.find((a: any) => a.status !== "decommissioned") ?? null;
+    return rows.find((a: any) => a.status !== "decommissioned" && !a.org_role_id) ?? null;
   }
   return null;
 }
 
-// provisionAnchor — idempotently create (or return) the anchor for a scope, mint
-// its bot identity, and start its persistent session. Backs `cast anchor create`.
+// provisionStandingAgent — idempotently create (or return) a standing agent:
+// mint its bot identity, its anchors row, and its persistent session, and
+// queue the bootstrap turn. Shared by the workspace anchor (`cast anchor
+// create`) and an org role's standing session (orgRoles.provision,
+// org-roles-standing.md T1): a role IS an anchor row with `org_role_id` set,
+// a `users.bot_kind` of "role", and a conversation that carries
+// `standing_role_id`.
+export type ProvisionStandingAgentOpts = {
+  scope_type: "team" | "user";
+  team_id?: Id<"teams">;
+  name?: string;
+  avatar_url?: string;
+  persona?: string;
+  project_path?: string;
+  model?: string;
+  agent_type?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok";
+  bootstrap?: boolean;
+  // Role provisioning: the role row and the extra bootstrap frame.
+  role?: { _id: Id<"org_roles">; bootstrap: RoleBootstrap };
+};
+
+export async function provisionStandingAgent(
+  ctx: any,
+  hostUserId: Id<"users">,
+  args: ProvisionStandingAgentOpts,
+): Promise<{
+  anchor_id: Id<"anchors">;
+  bot_user_id: Id<"users">;
+  conversation_id: Id<"conversations"> | null;
+  short_id?: string;
+  already_existed: boolean;
+}> {
+  const now = Date.now();
+  const name = (args.name ?? "Anchor").trim() || "Anchor";
+
+  // Resolve + authorize scope.
+  let teamId: Id<"teams"> | undefined;
+  let scopeUserId: Id<"users"> | undefined;
+  let scopeLabel: string;
+  let teamName: string | undefined;
+  if (args.scope_type === "team") {
+    // Resolve the team: explicit team_id, else the host's active team.
+    let resolved = args.team_id;
+    if (!resolved) {
+      const host = await ctx.db.get(hostUserId);
+      resolved = host?.active_team_id ?? host?.team_id ?? undefined;
+    }
+    if (!resolved) {
+      throw new Error("No team to anchor: pass --team <id> or set an active team");
+    }
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) =>
+        q.eq("user_id", hostUserId).eq("team_id", resolved),
+      )
+      .first();
+    if (!membership) throw new Error("Not a member of that team");
+    teamId = resolved;
+    const team = await ctx.db.get(resolved);
+    teamName = team?.name ?? undefined;
+    scopeLabel = `the ${team?.name ?? "team"} workspace`;
+  } else {
+    scopeUserId = hostUserId;
+    scopeLabel = "your personal workspace";
+  }
+  const host = await ctx.db.get(hostUserId);
+  const ownerName = host?.name || host?.github_username || host?.email?.split("@")[0] || undefined;
+
+  // Idempotent: one anchor per scope, one standing agent per role.
+  const existing = await findExistingAnchor(ctx, {
+    scope_type: args.scope_type,
+    team_id: teamId,
+    scope_user_id: scopeUserId,
+    org_role_id: args.role?._id,
+  });
+  if (existing) {
+    return {
+      anchor_id: existing._id,
+      bot_user_id: existing.bot_user_id,
+      conversation_id: existing.conversation_id ?? null,
+      already_existed: true,
+    };
+  }
+
+  // Mint the synthetic bot identity (no login; identity only).
+  const botUserId = await ctx.db.insert("users", {
+    name,
+    image: args.avatar_url,
+    is_bot: true,
+    bot_kind: args.role ? "role" : "anchor",
+    created_at: now,
+    team_id: teamId,
+    active_team_id: teamId,
+  });
+  if (teamId) {
+    await ctx.db.insert("team_memberships", {
+      user_id: botUserId,
+      team_id: teamId,
+      role: "member",
+      joined_at: now,
+      visibility: "full",
+    });
+  }
+
+  // Create the anchor row first so the conversation can back-link to it.
+  const anchorId = await ctx.db.insert("anchors", {
+    scope_type: args.scope_type,
+    team_id: teamId,
+    scope_user_id: scopeUserId,
+    bot_user_id: botUserId,
+    host_user_id: hostUserId,
+    name,
+    persona: args.persona,
+    project_path: args.project_path,
+    model: args.model,
+    status: "provisioning",
+    org_role_id: args.role?._id,
+    created_at: now,
+    updated_at: now,
+  });
+
+  // The persistent session: owned (run + billed) by the human host, rendered as
+  // the bot, pinned, and exempt from auto-completion.
+  const sessionId = crypto.randomUUID();
+  // A team anchor always belongs to its team and is shared; a personal anchor
+  // resolves team/privacy from its project path like any session.
+  const privacy = args.scope_type === "user"
+    ? await resolveCreationPrivacy(ctx, hostUserId, args.project_path)
+    : { team_id: teamId, is_private: false, auto_shared: undefined };
+
+  const agentType = args.agent_type ?? "claude_code";
+  const conversationId = await ctx.db.insert("conversations", {
+    user_id: hostUserId,
+    acting_user_id: botUserId,
+    anchor_id: anchorId,
+    // The row IS the role's session (T1); inbox placement treats it as an
+    // anchor's. org_role_id stays unset: a standing session reports to no seat.
+    standing_role_id: args.role?._id,
+    agent_type: agentType,
+    session_id: sessionId,
+    title: name,
+    title_is_custom: true,
+    project_path: args.project_path,
+    git_root: args.project_path,
+    model: args.model,
+    started_at: now,
+    updated_at: now,
+    message_count: 0,
+    ...privacy,
+    status: "active",
+    persistent: true,
+    // Not pinned in the inbox — the anchor lives in its dedicated /anchor space
+    // and only surfaces in the inbox when it's waiting on the user.
+  });
+  await ctx.db.patch(conversationId, {
+    short_id: conversationId.toString().slice(0, 7),
+  });
+
+  await ctx.db.patch(anchorId, {
+    conversation_id: conversationId,
+    status: "active",
+    updated_at: now,
+  });
+
+  await enqueueStartSession(ctx, hostUserId, {
+    conversationId,
+    agentType: fromConvexAgentType(agentType),
+    projectPath: args.project_path,
+    sessionId,
+    model: args.model,
+    createdAt: now,
+  });
+
+  if (args.bootstrap !== false) {
+    const conversation = await ctx.db.get(conversationId);
+    await enqueuePendingMessage(ctx, conversation, hostUserId, {
+      content: bootstrapMessage({
+        name,
+        scopeType: args.scope_type,
+        scopeLabel,
+        ownerName,
+        teamName,
+        persona: args.persona,
+        role: args.role?.bootstrap,
+      }),
+    });
+  }
+
+  return {
+    anchor_id: anchorId,
+    bot_user_id: botUserId,
+    conversation_id: conversationId,
+    short_id: conversationId.toString().slice(0, 7),
+    already_existed: false,
+  };
+}
+
+// provisionAnchor — the workspace anchor. Backs `cast anchor create`.
 export const provisionAnchor = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -201,163 +437,7 @@ export const provisionAnchor = mutation({
   handler: async (ctx, args) => {
     const hostUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!hostUserId) throw new Error("Authentication failed: invalid token or session");
-
-    const now = Date.now();
-    const name = (args.name ?? "Anchor").trim() || "Anchor";
-
-    // Resolve + authorize scope.
-    let teamId: Id<"teams"> | undefined;
-    let scopeUserId: Id<"users"> | undefined;
-    let scopeLabel: string;
-    let teamName: string | undefined;
-    if (args.scope_type === "team") {
-      // Resolve the team: explicit team_id, else the host's active team.
-      let resolved = args.team_id;
-      if (!resolved) {
-        const host = await ctx.db.get(hostUserId);
-        resolved = host?.active_team_id ?? host?.team_id ?? undefined;
-      }
-      if (!resolved) {
-        throw new Error("No team to anchor: pass --team <id> or set an active team");
-      }
-      const membership = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q: any) =>
-          q.eq("user_id", hostUserId).eq("team_id", resolved),
-        )
-        .first();
-      if (!membership) throw new Error("Not a member of that team");
-      teamId = resolved;
-      const team = await ctx.db.get(resolved);
-      teamName = team?.name ?? undefined;
-      scopeLabel = `the ${team?.name ?? "team"} workspace`;
-    } else {
-      scopeUserId = hostUserId;
-      scopeLabel = "your personal workspace";
-    }
-    const host = await ctx.db.get(hostUserId);
-    const ownerName = host?.name || host?.github_username || host?.email?.split("@")[0] || undefined;
-
-    // Idempotent: one anchor per scope.
-    const existing = await findExistingAnchor(ctx, {
-      scope_type: args.scope_type,
-      team_id: teamId,
-      scope_user_id: scopeUserId,
-    });
-    if (existing) {
-      return {
-        anchor_id: existing._id,
-        bot_user_id: existing.bot_user_id,
-        conversation_id: existing.conversation_id ?? null,
-        already_existed: true,
-      };
-    }
-
-    // Mint the synthetic bot identity (no login; identity only).
-    const botUserId = await ctx.db.insert("users", {
-      name,
-      image: args.avatar_url,
-      is_bot: true,
-      bot_kind: "anchor",
-      created_at: now,
-      team_id: teamId,
-      active_team_id: teamId,
-    });
-    if (teamId) {
-      await ctx.db.insert("team_memberships", {
-        user_id: botUserId,
-        team_id: teamId,
-        role: "member",
-        joined_at: now,
-        visibility: "full",
-      });
-    }
-
-    // Create the anchor row first so the conversation can back-link to it.
-    const anchorId = await ctx.db.insert("anchors", {
-      scope_type: args.scope_type,
-      team_id: teamId,
-      scope_user_id: scopeUserId,
-      bot_user_id: botUserId,
-      host_user_id: hostUserId,
-      name,
-      persona: args.persona,
-      project_path: args.project_path,
-      model: args.model,
-      status: "provisioning",
-      created_at: now,
-      updated_at: now,
-    });
-
-    // The persistent session: owned (run + billed) by the human host, rendered as
-    // the bot, pinned, and exempt from auto-completion.
-    const sessionId = crypto.randomUUID();
-    // A team anchor always belongs to its team and is shared; a personal anchor
-    // resolves team/privacy from its project path like any session.
-    const privacy = args.scope_type === "user"
-      ? await resolveCreationPrivacy(ctx, hostUserId, args.project_path)
-      : { team_id: teamId, is_private: false, auto_shared: undefined };
-
-    const conversationId = await ctx.db.insert("conversations", {
-      user_id: hostUserId,
-      acting_user_id: botUserId,
-      anchor_id: anchorId,
-      agent_type: "claude_code",
-      session_id: sessionId,
-      title: name,
-      title_is_custom: true,
-      project_path: args.project_path,
-      git_root: args.project_path,
-      model: args.model,
-      started_at: now,
-      updated_at: now,
-      message_count: 0,
-      ...privacy,
-      status: "active",
-      persistent: true,
-      // Not pinned in the inbox — the anchor lives in its dedicated /anchor space
-      // and only surfaces in the inbox when it's waiting on the user.
-    });
-    await ctx.db.patch(conversationId, {
-      short_id: conversationId.toString().slice(0, 7),
-    });
-
-    await ctx.db.patch(anchorId, {
-      conversation_id: conversationId,
-      status: "active",
-      updated_at: now,
-    });
-
-    await enqueueStartSession(ctx, hostUserId, {
-      conversationId,
-      agentType: "claude",
-      projectPath: args.project_path,
-      sessionId,
-      model: args.model,
-      createdAt: now,
-    });
-
-    if (args.bootstrap !== false) {
-      const conversation = await ctx.db.get(conversationId);
-      await enqueuePendingMessage(ctx, conversation, hostUserId, {
-        content: bootstrapMessage({
-          name,
-          scopeType: args.scope_type,
-          scopeLabel,
-          ownerName,
-          teamName,
-          persona: args.persona,
-        }),
-      });
-    }
-
-    return {
-      anchor_id: anchorId,
-      bot_user_id: botUserId,
-      conversation_id: conversationId,
-      short_id: conversationId.toString().slice(0, 7),
-      already_existed: false,
-    };
+    return await provisionStandingAgent(ctx, hostUserId, args);
   },
 });
 
@@ -536,51 +616,58 @@ export const decommissionAnchor = mutation({
     if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
       throw new Error("Only an admin (or the host) can retire this anchor");
     }
-    if (anchor.conversation_id) {
-      const conv = await ctx.db.get(anchor.conversation_id);
-      if (conv) {
-        // Tear down the running host agent (status alone doesn't stop the daemon's
-        // tmux/process — kill_session does), clear persistence so the row can
-        // complete, unpin it, and mark it completed. (All writes here commit
-        // atomically, so the relative order is for readability, not correctness.)
-        await enqueueKillSessionCommand(ctx, conv as any);
-        await ctx.db.patch(anchor.conversation_id, {
-          persistent: false,
-          inbox_pinned_at: undefined,
-          status: "completed",
-        });
-        // Drop any already-queued turns so the daemon can't auto-resume the
-        // just-killed session for one more billed turn (the pending-message rail
-        // ignores conversation.status).
-        const pending = await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_status", (q: any) =>
-            q.eq("conversation_id", anchor.conversation_id).eq("status", "pending"),
-          )
-          .collect();
-        for (const p of pending) await ctx.db.delete(p._id);
-      }
-    }
-    const chans = await ctx.db
-      .query("anchor_channels")
-      .withIndex("by_anchor", (q: any) => q.eq("anchor_id", args.anchor_id))
-      .collect();
-    for (const ch of chans) await ctx.db.delete(ch._id);
-    // Remove the bot from team rosters so retired anchors don't pile up as dead
-    // members. Keep the bot user row itself so its past messages still resolve an
-    // author.
-    const botMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", anchor.bot_user_id))
-      .collect();
-    for (const m of botMemberships) await ctx.db.delete(m._id);
-    await ctx.db.patch(args.anchor_id, {
-      status: "decommissioned",
-      updated_at: Date.now(),
-    });
+    await decommissionAnchorRow(ctx, anchor);
     return { decommissioned: true };
   },
 });
+
+// Retire one anchor: kill its host session, drop its channel bindings and
+// roster seats, and mark the row. Shared by the admin verb above and by team
+// deletion, which retires every anchor the team owned.
+export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void> {
+  if (anchor.conversation_id) {
+    const conv = await ctx.db.get(anchor.conversation_id);
+    if (conv) {
+      // Tear down the running host agent (status alone doesn't stop the daemon's
+      // tmux/process — kill_session does), clear persistence so the row can
+      // complete, unpin it, and mark it completed. (All writes here commit
+      // atomically, so the relative order is for readability, not correctness.)
+      await enqueueKillSessionCommand(ctx, conv as any);
+      await ctx.db.patch(anchor.conversation_id, {
+        persistent: false,
+        inbox_pinned_at: undefined,
+        status: "completed",
+      });
+      // Drop any already-queued turns so the daemon can't auto-resume the
+      // just-killed session for one more billed turn (the pending-message rail
+      // ignores conversation.status).
+      const pending = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", anchor.conversation_id).eq("status", "pending"),
+        )
+        .collect();
+      for (const p of pending) await ctx.db.delete(p._id);
+    }
+  }
+  const chans = await ctx.db
+    .query("anchor_channels")
+    .withIndex("by_anchor", (q: any) => q.eq("anchor_id", anchor._id))
+    .collect();
+  for (const ch of chans) await ctx.db.delete(ch._id);
+  // Remove the bot from team rosters so retired anchors don't pile up as dead
+  // members. Keep the bot user row itself so its past messages still resolve an
+  // author.
+  const botMemberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", anchor.bot_user_id))
+    .collect();
+  for (const m of botMemberships) await ctx.db.delete(m._id);
+  await ctx.db.patch(anchor._id, {
+    status: "decommissioned",
+    updated_at: Date.now(),
+  });
+}
 
 // The Slack workspace installation bound to an anchor's scope (inline lookup to
 // avoid importing slack.ts, which imports this module).

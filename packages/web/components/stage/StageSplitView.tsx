@@ -15,9 +15,9 @@
 // and stacking a second bar over it is the exact pattern the companion work
 // rejected.
 
-import { lazy, memo, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { PaneControls } from "./PaneControls";
-import { useInboxStore, useTrackedStore, getSessionRenderKey, type AppTab } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, type AppTab } from "../../store/inboxStore";
 import {
   findBranch,
   stageGeometry,
@@ -26,58 +26,12 @@ import {
   type StageNode,
 } from "../../store/stageSplit";
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
-import { animatedHideSession } from "../../store/undoActions";
 import { pathLabel } from "../../lib/pathLabel";
 import { chatTabTitle } from "../../lib/tabTitle";
 import { RoutePane } from "../RoutePane";
+import { SessionPane } from "./SessionPane";
 import { PageIcon } from "../RecentVisitRow";
 import { ErrorBoundary } from "../ErrorBoundary";
-
-// Loaded on first use: the conversation renderer lives in the session-panel
-// module, and pulling it in at import time would hang the whole panel (and
-// its analytics) off TabContent's import graph for every tab, split or not.
-const InboxConversation = lazy(() =>
-  import("../GlobalSessionPanel").then((m) => ({ default: m.InboxConversation })),
-);
-
-const noop = () => {};
-
-// One conversation, as a pane. The row subscription mirrors StageCompanion's
-// (this pane replaced it): only this session's row, never the whole map.
-const SessionPane = memo(function SessionPane({ sessionId, leafId }: { sessionId: string; leafId: string }) {
-  const s = useTrackedStore([(st) => st.sessions[sessionId]]);
-  const session = s.sessions[sessionId] ?? null;
-  const handleClose = useCallback(() => stageClose(leafId), [leafId]);
-  const handleExpand = useCallback(() => stageExpand(leafId), [leafId]);
-  const handleSendAndDismiss = useCallback(() => animatedHideSession(sessionId, "stash"), [sessionId]);
-  if (!session) {
-    // A pane for a row the store no longer holds (killed, pruned): say so
-    // honestly instead of painting an empty column.
-    return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 text-xs text-sol-text-dim">
-        <span>This session is no longer available</span>
-        <button onClick={handleClose} className="text-sol-cyan hover:underline">Close pane</button>
-      </div>
-    );
-  }
-  return (
-    <ErrorBoundary name="StageSessionPane" level="panel">
-      <Suspense fallback={null}>
-        <InboxConversation
-          key={getSessionRenderKey(session) || sessionId}
-          sessionId={sessionId}
-          isIdle={session.is_idle}
-          onSendAndAdvance={noop}
-          onSendAndDismiss={handleSendAndDismiss}
-          lastUserMessage={session.last_user_message}
-          sessionError={session.session_error}
-          onExpandToMain={handleExpand}
-          onClose={handleClose}
-        />
-      </Suspense>
-    </ErrorBoundary>
-  );
-});
 
 // What a pane's strip should CALL itself. A section pane is its section
 // ("Tasks"); an entity pane is the entity — the doc's title, the task's
@@ -157,6 +111,8 @@ const StageCell = memo(function StageCell({
   const handleFocus = useCallback(() => {
     if (!focused) stageFocus(leafId);
   }, [focused, leafId]);
+  const handleClose = useCallback(() => stageClose(leafId), [leafId]);
+  const handleExpand = useCallback(() => stageExpand(leafId), [leafId]);
   return (
     <div
       data-stage-leaf={leafId}
@@ -177,7 +133,7 @@ const StageCell = memo(function StageCell({
           >
             <span />
           </div>
-          <SessionPane sessionId={sessionId} leafId={leafId} />
+          <SessionPane sessionId={sessionId} onClose={handleClose} onExpand={handleExpand} />
         </>
       ) : (
         <div className="h-full flex flex-col min-h-0">

@@ -21,7 +21,7 @@
  * session except for which machine runs it.
  */
 
-import { execFileSync } from "../proc.js";
+import { execFileAsync, execFileSync } from "../proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -35,6 +35,10 @@ const CONFIG_FILE = path.join(defaultConfigDir(), "config.json");
 let cachedDeviceId: string | null = null;
 let cachedHostname: string | null = null;
 let cachedLabel: string | null = null;
+
+export function resetHostnameForTests(): void {
+  cachedHostname = null;
+}
 
 /** Which hardware a device identity belongs to. Persisted as .device_binding.json. */
 export interface DeviceBinding {
@@ -159,6 +163,18 @@ export function stableHostname(): string {
     scutil: scutilGet,
   });
   return cachedHostname;
+}
+
+export async function stableHostnameAsync(): Promise<string> {
+  if (cachedHostname) return cachedHostname;
+  if (process.platform === "darwin") {
+    for (const key of ["HostName", "LocalHostName"]) {
+      const name = await execFileAsync("/usr/sbin/scutil", ["--get", key], { timeout: 2000 })
+        .then(({ stdout }) => stdout.trim(), () => "");
+      if (name) return cachedHostname = name;
+    }
+  }
+  return cachedHostname = os.hostname();
 }
 
 /**

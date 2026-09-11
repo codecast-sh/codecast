@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import schema from "./schema";
 import {
   enqueuePush,
   performPushFlush,
@@ -20,8 +21,8 @@ import {
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
 // Same pattern as notifications.needsInput.test.ts: a fake ctx.db faithful
-// enough to run the REAL enqueue/flush logic. withIndex ignores the index name
-// and matches on eq constraints; scheduler.runAfter records calls.
+// enough to run the REAL enqueue/flush logic. withIndex checks the deployed
+// schema and matches on eq constraints; scheduler.runAfter records calls.
 
 type Rec = Record<string, any>;
 
@@ -72,7 +73,12 @@ function createCtx(seed: Record<string, Rec[]> = {}) {
           constraints.every((c) => String(r[c.field]) === String(c.val))
         );
       const chain: any = {
-        withIndex(_name: string, builder?: (qq: any) => unknown) {
+        withIndex(name: string, builder?: (qq: any) => unknown) {
+          const definition = schema.tables[table as keyof typeof schema.tables];
+          const indexes = (definition as any)?.export().indexes ?? [];
+          if (!indexes.some((index: any) => index.indexDescriptor === name)) {
+            throw new Error(`Index ${table}.${name} not found`);
+          }
           if (builder) builder(q);
           return chain;
         },

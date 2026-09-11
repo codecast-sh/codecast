@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  pinnedTabBrowser, readBoundTarget, sessionDaemonPid, writeBoundTarget,
+  pinnedTabBrowser, readBoundTarget, sessionDaemonPid, targetLiveness, writeBoundTarget,
 } from "./pinnedTab.js";
 import { writeBridgeState } from "./bridge/host.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
@@ -99,5 +100,37 @@ describe("pinnedTabBrowser", () => {
     // No managed browser runs under this CODECAST_DIR, so there is nothing to
     // pin into; the point is that the bridge is not offered instead.
     expect(await pinnedTabBrowser("env-abc")).toBeNull();
+  });
+});
+
+describe("targetLiveness", () => {
+  /** A /json/list that answers after `delayMs` with the given tab ids. */
+  async function listServer(ids: string[], delayMs = 0): Promise<{ port: number; close: () => void }> {
+    const srv = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(ids.map((id) => ({ id, type: "page", url: "about:blank" }))));
+      }, delayMs);
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    return { port: (srv.address() as { port: number }).port, close: () => srv.closeAllConnections?.() ?? srv.close() };
+  }
+
+  test("alive when the browser lists the tab, gone when it lists others", async () => {
+    const s = await listServer(["AAAA0001"]);
+    expect(await targetLiveness(s.port, "AAAA0001")).toBe("alive");
+    expect(await targetLiveness(s.port, "AAAA0002")).toBe("gone");
+    s.close();
+  });
+
+  // A slow list read as "gone" made ensurePinnedTab open a blank tab beside
+  // the live one on every slow check, orphaning the old tab.
+  test("unknown, never gone, when the list is slower than the deadline or nothing answers", async () => {
+    const slow = await listServer(["AAAA0001"], 300);
+    expect(await targetLiveness(slow.port, "AAAA0002", 50)).toBe("unknown");
+    slow.close();
+    const dead = await listServer([]);
+    dead.close();
+    expect(await targetLiveness(dead.port, "AAAA0001", 200)).toBe("unknown");
   });
 });

@@ -2116,7 +2116,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
     } as any);
   });
 
-  it("prunes a never-echoed optimistic send (e.g. /model) once the agent goes active", () => {
+  it("retains a settled control command without pinning the session working", () => {
     const store = useInboxStore.getState();
     useInboxStore.setState({ pendingMessages: { "conv-model": [optimistic("/model")] } } as any);
     // The agent picked up the command → status active. /model never echoes back as
@@ -2125,18 +2125,18 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       ...baseSession, _id: "conv-model", session_id: "sess-model",
       message_count: 3, agent_status: "working" as const, is_idle: false, updated_at: 10,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-model"]).toBeUndefined();
+    expect(useInboxStore.getState().pendingMessages["conv-model"]).toMatchObject([{ content: "/model", _isSettledControl: true }]);
     expect(sessionsWithPendingSend(useInboxStore.getState().pendingMessages).has("conv-model")).toBe(false);
   });
 
-  it("prunes an optimistic send once the session is stopped (dead, won't deliver)", () => {
+  it("retains unconfirmed input when the session stops", () => {
     const store = useInboxStore.getState();
     useInboxStore.setState({ pendingMessages: { "conv-dead": [optimistic("hello")] } } as any);
     store.syncTable("sessions", [{
       ...baseSession, _id: "conv-dead", session_id: "sess-dead",
       message_count: 3, agent_status: "stopped" as const, is_idle: true, updated_at: 10,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-dead"]).toBeUndefined();
+    expect(useInboxStore.getState().pendingMessages["conv-dead"]).toMatchObject([{ content: "hello" }]);
   });
 
   it("does NOT prune the focused conversation (setMessages owns it via echo)", () => {
@@ -2176,7 +2176,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       ...baseSession, _id: "conv-leftover", session_id: "sess-leftover",
       message_count: 50, is_idle: true, has_pending: false, updated_at: 10,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-leftover"]).toBeUndefined();
+    expect(useInboxStore.getState().pendingMessages["conv-leftover"]).toMatchObject([{ content: "/model", _isSettledControl: true }]);
   });
 
   it("keeps a FAILED send so the user can retry, even after the agent goes active", () => {
@@ -2221,7 +2221,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       ...baseSession, _id: "conv-advanced", session_id: "sess-advanced",
       message_count: 5, is_idle: true, has_pending: false, updated_at: 200,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-advanced"]).toBeUndefined();
+    expect(useInboxStore.getState().pendingMessages["conv-advanced"]).toMatchObject([{ content: "/model", _isSettledControl: true }]);
   });
 });
 
@@ -2239,11 +2239,11 @@ describe("pendingSendConsumed — server-advanced gate", () => {
     expect(pendingSendConsumed({ ...idleNoPending, updated_at: 101 }, 100)).toBe(true);
   });
 
-  it("an ACTIVE status consumes immediately, regardless of the baseline gate", () => {
+  it("an ACTIVE status must advance past the send baseline", () => {
     // The daemon is provably acting — a positive signal, not absence.
     expect(pendingSendConsumed(
       { agent_status: "working", is_idle: false, has_pending: false, updated_at: 1 }, 100,
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it("a fresh has_pending send is never consumed even after the server advances", () => {
@@ -2268,10 +2268,10 @@ describe("reconcilePendingSendForSession — prune grace window", () => {
     expect(pm.c1.length).toBe(1);
   });
 
-  it("prunes a consumed send once it is older than the grace window", () => {
+  it("retains an unconfirmed send past the grace window", () => {
     const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1 })] };
-    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(true);
-    expect(pm.c1).toBeUndefined();
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1).toHaveLength(1);
   });
 
   it("keeps failed sends forever (the user may retry them)", () => {
@@ -3631,13 +3631,13 @@ describe("hiding a local-only stub — stash/dismiss mean delete", () => {
     } as any);
   });
 
-  it("deletes the stub's rows instead of flagging them dismissed", () => {
+  it("deletes the stub's display rows while preserving pending input", () => {
     useInboxStore.getState().stashSession(stub);
     const s = useInboxStore.getState();
     expect(s.sessions[stub]).toBeUndefined();
     expect(s.conversations[stub]).toBeUndefined();
     expect(s.messages[stub]).toBeUndefined();
-    expect(s.pendingMessages[stub]).toBeUndefined();
+    expect(s.pendingMessages[stub]).toEqual([]);
     // Exclude pending = the durable "row was removed on purpose" marker that
     // lets the IDB diff actually delete it (and blocks any resurrection).
     expect(s.pending[`sessions:${stub}`]?.type).toBe("exclude");

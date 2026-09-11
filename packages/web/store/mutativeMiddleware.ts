@@ -1,3 +1,5 @@
+import { captureException } from "./pendingInputError";
+import { persistPendingMessageChanges } from "./idbCache";
 // Codecast's binding of the @platform/engine middleware. The engine owns the
 // mechanics (mutative drafts, auto-pending, the durable dispatch outbox, the
 // storage watchdog, receipt envelopes); everything codecast-shaped — the sync
@@ -151,6 +153,13 @@ export const OUTBOX_COALESCE_KEYS: Record<string, (args: any[]) => string | null
     typeof args[0] === "string" ? `updateClientLayout:${args[0]}` : null,
   updateClientDismissed: (args) =>
     typeof args[0] === "string" ? `updateClientDismissed:${args[0]}` : null,
+  // A permission-mode press is a keystroke into a live pane, not a value: a
+  // burst parked during a rewire window (boot, HMR) and drained later must
+  // land as ONE press, not walk the session several modes past where the
+  // user last saw it (five presses drained at once on 2026-09-12). A press
+  // already in flight is unaffected; only queued rows collapse.
+  convCommand: (args) =>
+    typeof args[0] === "string" && args[1] === "setPermissionMode" ? `setPermissionMode:${args[0]}` : null,
 };
 
 export function outboxCoalesceKeyFor(action: string, args: any[]): string | null {
@@ -363,8 +372,21 @@ export function mutativeMiddleware(
   config: any,
   opts?: Omit<MiddlewareOptions, "registryMaps">,
 ): any {
-  return engineMutativeMiddleware(config, CODECAST_PLATFORM_CONFIG, {
+  const middleware = engineMutativeMiddleware(config, CODECAST_PLATFORM_CONFIG, {
     ...opts,
     registryMaps: REGISTRY_MAPS,
   });
+  return (set: any, get: any, api: any) => middleware((next: any, replace?: boolean) => {
+    const previous = get();
+    const value = typeof next === "function" ? next(previous) : next;
+    if (previous?.pendingMessages && value?.pendingMessages && previous.pendingMessages !== value.pendingMessages) {
+      try {
+        persistPendingMessageChanges(previous.pendingMessages, value.pendingMessages, previous.currentUser?._id);
+      } catch (error) {
+        captureException(error, { tags: { source: "pending-input-save" } });
+        throw new Error("Your message could not be saved on this device. Keep this window open and try again.", { cause: error });
+      }
+    }
+    set(value, replace);
+  }, get, api);
 }

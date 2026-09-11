@@ -37,6 +37,11 @@ function closeCode(ws: WebSocket, timeoutMs = 3000): Promise<number> {
 
 const cdpEndpoint = (port: number) => ({ port, token: TOKEN });
 
+async function waitUntil(cond: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 15));
+}
+
 describe("bridge host auth", () => {
   test("rejects a missing or wrong token on every CDP socket path", async () => {
     const h = await freshHost();
@@ -453,9 +458,48 @@ describe("bridge host as a CDP endpoint", () => {
     ext.ws.close();
     await expect(inflight).rejects.toThrow(/disconnected/);
     expect((await detached).params.sessionId).toBe(sessionId);
-    // And with no extension, new calls fail fast with the setup hint.
-    await expect(conn.send("Target.getTargets")).rejects.toThrow(/extension is not connected/);
     conn.close();
+  });
+
+  // An engine daemon (agent-browser) keeps the session id it attached with for
+  // as long as its socket lives, and a detachedFromTarget does not make it
+  // attach again: every later command it sends carries the dead id and fails
+  // with "Session with given id not found". A closed socket it does recover
+  // from (it reconnects and re-attaches), so a client whose sessions the host
+  // has to drop is disconnected rather than left holding ids that no longer
+  // mean anything.
+  test("the extension vanishing disconnects every client that held a session, and only those", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
+    const holder = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    await holder.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    const watcher = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    await watcher.send("Target.setDiscoverTargets", { discover: true });
+    ext.ws.close();
+    await waitUntil(() => !holder.isOpen());
+    expect(holder.isOpen()).toBe(false);
+    // A socket that held nothing has no dead id to carry; it stays, and hears
+    // the setup hint on its next call.
+    expect(watcher.isOpen()).toBe(true);
+    await expect(watcher.send("Target.getTargets")).rejects.toThrow(/extension is not connected/);
+    watcher.close();
+  });
+
+  test("Chrome detaching the debugger from a tab disconnects the clients bound to that tab, not the others", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(h.port);
+    const onSeven = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    await onSeven.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    const onEight = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const eight = await onEight.send("Target.attachToTarget", { targetId: targetIdOfTab(8), flatten: true });
+    ext.ws.send(JSON.stringify({ op: "detached", tabId: 7 }));
+    await waitUntil(() => !onSeven.isOpen());
+    expect(onSeven.isOpen()).toBe(false);
+    expect(onEight.isOpen()).toBe(true);
+    // The other client's session still reaches its tab.
+    const r = await onEight.send("Runtime.evaluate", { expression: "1" }, eight.sessionId);
+    expect(r.echo.tabId).toBe(8);
+    onEight.close();
   });
 
   test("a newer PROVEN extension connection replaces the old one; an unproven one cannot", async () => {

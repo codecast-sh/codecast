@@ -10,3 +10,4 @@ export * from "./handles";
 export * from "./dm";
 export * from "./agent";
 export * from "./voice";
+export * from "./mentions";
