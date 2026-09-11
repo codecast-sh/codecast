@@ -247,7 +247,7 @@ export type { ThreadCardOpenEntry } from "./threadTypes";
 // is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
 // synchronously, a pinned split renders as a split immediately instead of
 // flashing a peek overlay until the server clientState arrives.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace", "nav_sections"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -1381,6 +1381,12 @@ export type ClientUI = {
   theme?: "light" | "dark";
   visual_style?: "classic" | "minimal";
   sidebar_collapsed?: boolean;
+  // The sidebar sections the chevrons pin open (true) or closed (false), by
+  // section key. A section the user never touched is absent and follows the
+  // route ("you are on /tasks, so Tasks is open"); a pin is the user saying
+  // otherwise, so it outlives the route — and the reload. Unstamped: the
+  // sidebar's shape is a per-device layout preference like the rest.
+  nav_sections?: Record<string, boolean>;
   zen_mode?: boolean;
   sticky_headers_disabled?: boolean;
   diff_panel_open?: boolean;
@@ -2698,6 +2704,26 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
   counts: Record<InboxSectionKey, number>;
+}
+
+// The number a section header claims, for every surface that renders those
+// sections (the web panel and the mobile inbox both call this).
+//
+// `counts` is every row PLACED in the bucket — the flat cards plus the members
+// nested under a same-bucket lead. That is the honest number only while those
+// nested rows are on screen. With the subagent toggle off they render nowhere,
+// so the header claimed rows the reader could neither see nor reach: prod on
+// 2026-09-10 showed NEEDS INPUT (121) above 33 cards, while the sidebar badge
+// (flat cards only) said 34. A chip filter narrows a section the same way, so a
+// filtered section always reports the cards it shows.
+export function sectionHeaderCount(
+  shown: readonly InboxSession[],
+  full: readonly InboxSession[],
+  placedCount: number,
+  showSubagents: boolean,
+): number | undefined {
+  if (shown.length !== full.length) return undefined;
+  return showSubagents ? placedCount : shown.length;
 }
 
 // The store-state subset the chokepoint reads. Structural (never the store
@@ -4539,12 +4565,16 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
 
   // -- Inline review (quote / comment on assistant message blocks) --
   // Ephemeral UI state: which message is in keyboard/inline-review mode, the
-  // highlighted block within it, and the batch of pending comments per
-  // conversation. Never synced or persisted — survives session switches in
-  // memory, resets on reload (the right lifetime for an in-progress batch).
+  // highlighted block within it, and which note editor is open. Never synced
+  // or persisted.
   reviewMessageId: string | null;
   reviewActiveBlock: number;
   reviewEditingId: string | null;
+  // The batch of pending quotes + notes per conversation (or `doc:<id>`). A
+  // note is a draft of the user's next message, so it persists exactly like
+  // `drafts` (registered as a local IDB meta key, written through sync()):
+  // navigation and reload never lose it. Cleared only when the batch is taken
+  // into a message or the user removes the quote.
   reviewComments: Record<string, PendingComment[]>;
   setReviewTarget: (messageId: string | null, blockIndex?: number) => void;
   setReviewActiveBlock: (blockIndex: number) => void;
@@ -5109,6 +5139,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
   resolveTeamStub: (stubId: string, teamId: string) => void;
   discardTeamStub: (stubId: string, previousActiveTeamId: string | undefined) => void;
+  deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
+  dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined) => Promise<unknown>;
+  restoreTeamRow: (team: any, previousActiveTeamId: string | undefined) => void;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
@@ -6349,6 +6382,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     draft.clientState.drafts[newId] = draft.clientState.drafts[oldId];
     draft.clientState.drafts[oldId] = null;
   }
+  if (draft.reviewComments[oldId]) {
+    draft.reviewComments[newId] = draft.reviewComments[oldId];
+    delete draft.reviewComments[oldId];
+  }
   if (draft.conversations[oldId]) {
     draft.conversations[newId] = { ...draft.conversations[oldId], _id: newId };
     delete draft.conversations[oldId];
@@ -7312,53 +7349,42 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ reviewMessageId: messageId, reviewActiveBlock: messageId ? blockIndex : 0 }),
   setReviewActiveBlock: (blockIndex: number) => set({ reviewActiveBlock: blockIndex }),
   setReviewEditingId: (id: string | null) => set({ reviewEditingId: id }),
-  addReviewComment: (conversationId: string, comment: PendingComment) =>
-    set((s: any) => ({
-      reviewComments: {
-        ...s.reviewComments,
-        [conversationId]: [...(s.reviewComments[conversationId] ?? []), comment],
-      },
-    })),
+  // The writers below are sync(): a mutative draft + IDB write-through, no
+  // server dispatch — the same path the composer's drafts take. A raw set()
+  // here would keep the batch in memory only and lose every note on reload.
+  addReviewComment: sync(function (this: Draft, conversationId: string, comment: PendingComment) {
+    (this.reviewComments[conversationId] ??= []).push(comment);
+  }),
   // Set a comment's note (may be empty → stays a bare quote). This is what the
-  // note editor's "Save" does.
-  commitReviewComment: (conversationId: string, id: string, body: string) =>
-    set((s: any) => ({
-      reviewComments: {
-        ...s.reviewComments,
-        [conversationId]: (s.reviewComments[conversationId] ?? []).map((c: PendingComment) =>
-          c.id === id ? { ...c, body } : c,
-        ),
-      },
-    })),
-  removeReviewComment: (conversationId: string, id: string) =>
-    set((s: any) => {
-      const list: PendingComment[] = s.reviewComments[conversationId] ?? [];
-      const removed = list.find((c) => c.id === id);
-      const next = list.filter((c: PendingComment) => c.id !== id);
-      const map = { ...s.reviewComments };
-      if (next.length) map[conversationId] = next;
-      else delete map[conversationId];
-      const patch: any = { reviewComments: map };
-      // If the removed comment's editor was open, close it.
-      if (s.reviewEditingId === id) patch.reviewEditingId = null;
-      // When the review-target message has no quotes left, drop the target so its
-      // active-block highlight overlay stops painting (handles both the last quote
-      // overall and the last quote on the target message of a multi-message batch).
-      const targetMsg = s.reviewMessageId;
-      if (targetMsg && removed?.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
-        patch.reviewMessageId = null;
-        patch.reviewActiveBlock = 0;
-        patch.reviewEditingId = null;
-      }
-      return patch;
-    }),
-  clearReviewComments: (conversationId: string) =>
-    set((s: any) => {
-      if (!s.reviewComments[conversationId]) return {};
-      const map = { ...s.reviewComments };
-      delete map[conversationId];
-      return { reviewComments: map };
-    }),
+  // note editor's "Save" does, and what it does while you type.
+  commitReviewComment: sync(function (this: Draft, conversationId: string, id: string, body: string) {
+    const c = this.reviewComments[conversationId]?.find((c) => c.id === id);
+    if (!c || c.body === body) return;
+    c.body = body;
+  }),
+  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string) {
+    const list = this.reviewComments[conversationId] ?? [];
+    const removed = list.find((c) => c.id === id);
+    if (!removed) return;
+    const next = list.filter((c) => c.id !== id);
+    if (next.length) this.reviewComments[conversationId] = next;
+    else delete this.reviewComments[conversationId];
+    // If the removed comment's editor was open, close it.
+    if (this.reviewEditingId === id) this.reviewEditingId = null;
+    // When the review-target message has no quotes left, drop the target so its
+    // active-block highlight overlay stops painting (handles both the last quote
+    // overall and the last quote on the target message of a multi-message batch).
+    const targetMsg = this.reviewMessageId;
+    if (targetMsg && removed.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
+      this.reviewMessageId = null;
+      this.reviewActiveBlock = 0;
+      this.reviewEditingId = null;
+    }
+  }),
+  clearReviewComments: sync(function (this: Draft, conversationId: string) {
+    if (!this.reviewComments[conversationId]) return;
+    delete this.reviewComments[conversationId];
+  }),
   getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
@@ -10549,6 +10575,40 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = previousActiveTeamId;
   }),
 
+  // Local-first delete, the mirror of createTeam: the row leaves the list and
+  // the workspace pointer moves in one draft, so the switcher, the sidebar and
+  // the settings panel re-scope in the same tick. The fallback is the caller's
+  // oldest remaining team, the same rule the server applies when it repoints
+  // users.active_team_id (teams.endMembership), so the mirror and the canonical
+  // pointer agree once the echo lands. A refused delete (not an admin, name
+  // mismatch) puts the row and the pointer back.
+  deleteTeam: async (teamId: string, confirmName: string) => {
+    const team = (get().teams ?? []).find((t: any) => t?._id === teamId);
+    if (!team) throw new Error("Team not found");
+    const previousActiveTeamId = get().clientState.ui?.active_team_id;
+    const fallback = (get().teams ?? [])
+      .filter((t: any) => t?._id !== teamId && isConvexId(String(t?._id)))
+      .sort((a: any, b: any) => (a?.joined_at ?? 0) - (b?.joined_at ?? 0))[0];
+    try {
+      await get().dispatchDeleteTeam(teamId, confirmName, fallback?._id);
+    } catch (error) {
+      if (!isParkedDispatchError(error)) get().restoreTeamRow(team, previousActiveTeamId);
+      throw error;
+    }
+  },
+
+  dispatchDeleteTeam: asyncAction(function (this: Draft, teamId: string, _confirmName: string, fallbackTeamId: string | undefined) {
+    this.teams = (this.teams ?? []).filter((t: any) => t?._id !== teamId);
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    if (this.clientState.ui.active_team_id === teamId) this.clientState.ui.active_team_id = fallbackTeamId;
+  }),
+
+  restoreTeamRow: sync(function (this: Draft, team: any, previousActiveTeamId: string | undefined) {
+    if (!(this.teams ?? []).some((t: any) => t?._id === team?._id)) this.teams = [...(this.teams ?? []), team];
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.active_team_id = previousActiveTeamId;
+  }),
+
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
   // is in dispatch TABLE_CONFIG); fields are auto-protected until server echo.
   updateBucket: action(function (this: Draft, id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) {
@@ -11125,6 +11185,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.clientState.ui.zen_mode = zen;
       writeCriticalUiPrefs({ zen_mode: zen });
     }
+    // The sidebar's pinned sections ride along with the panes. Assigned whole,
+    // including with nothing: a layout saved with no pins (or an older save,
+    // from before this field) hands every section back to its route default.
+    const sections = snap.navSections ?? {};
+    if (JSON.stringify(this.clientState.ui.nav_sections ?? {}) !== JSON.stringify(sections)) {
+      this.clientState.ui.nav_sections = { ...sections };
+      writeCriticalUiPrefs({ nav_sections: this.clientState.ui.nav_sections });
+    }
     // The chip rides along with the panes. Both axes are assigned together
     // rather than through the single-axis setters, whose "don't clobber the
     // other axis's exclude" guards exist for one-chip clicks; here the whole
@@ -11157,6 +11225,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       zen: st.clientState.ui?.zen_mode ?? false,
       path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
   },
@@ -11170,6 +11239,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // update from a different page shouldn't silently retarget the switch.
       path: path ?? prev?.path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     st.updateSavedView(id, { prefs: snap });
   },

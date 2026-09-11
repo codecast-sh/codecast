@@ -1,219 +1,431 @@
+"use client";
+
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Logo } from "@/components/Logo";
+import { useState, type ReactNode } from "react";
+import { copyToClipboard } from "@/lib/utils";
 import { useRouteMeta } from "../pageMeta";
+import { SOL, BlogNav, BlogFooter, Terminal, Cmd, Code } from "../blog/blogChrome";
 
-function MailIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-    </svg>
-  );
-}
+const SUPPORT_EMAIL = "support@codecast.sh";
+const DISCORD_URL = "https://discord.gg/S7V5Wnfq";
+const ISSUES_URL = "https://github.com/codecast-sh/codecast/issues";
 
-function BookIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-    </svg>
-  );
-}
+/** One shell line that collects everything a bug report needs. */
+const REPORT_COMMAND = "cast --version; cast status; cast doctor --no-e2e; cast logs -n 200";
 
-function GithubIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-      <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
-    </svg>
-  );
-}
-
-const SUPPORT_OPTIONS = [
+const CHANNELS = [
   {
-    icon: MailIcon,
-    title: "Email Support",
-    description: "Get help from our team via email. We typically respond within 24 hours.",
-    action: "support@codecast.sh",
-    href: "mailto:support@codecast.sh",
-    color: "amber",
+    label: "Email",
+    value: SUPPORT_EMAIL,
+    note: "A person reads every message.",
+    href: `mailto:${SUPPORT_EMAIL}`,
+    accent: SOL.orange,
   },
   {
-    icon: GithubIcon,
-    title: "GitHub Issues",
-    description: "Report bugs, request features, or browse existing issues on GitHub.",
-    action: "Open an issue",
-    href: "https://github.com/ashot/codecast/issues",
-    color: "stone",
+    label: "Discord",
+    value: "Community server",
+    note: "Fastest for quick questions.",
+    href: DISCORD_URL,
+    accent: SOL.violet,
   },
   {
-    icon: BookIcon,
-    title: "Documentation",
-    description: "Browse our guides, tutorials, and API documentation.",
-    action: "View docs",
-    href: "https://github.com/ashot/codecast#readme",
-    color: "blue",
+    label: "GitHub",
+    value: "codecast-sh/codecast",
+    note: "Bugs and feature requests.",
+    href: ISSUES_URL,
+    accent: SOL.blue,
   },
 ];
 
-const FAQ = [
+const LADDER = [
   {
-    q: "How do I install the CLI?",
-    a: "Run `curl -fsSL codecast.sh/install | sh`. Homebrew (`brew install codecast-sh/tap/codecast`) and npm (`npm install -g @codecast-sh/cli`) install the same binary. It keeps itself up to date after that.",
+    cmd: "cast status",
+    what: "Is the daemon running, and is this machine signed in? The answer is on the first two lines.",
   },
   {
-    q: "How do I sync my conversations?",
-    a: "After installing, run `codecast login` to authenticate, then `codecast sync` to start syncing your AI conversations.",
+    cmd: "cast doctor",
+    what: "Proves the whole loop: daemon, server, and a live message round trip through a throwaway agent. It names the first thing that fails.",
   },
   {
-    q: "Can I use Codecast offline?",
-    a: "Yes! Conversations are stored locally and synced when you're online. The CLI works fully offline.",
+    cmd: "cast logs -n 100",
+    what: "The daemon writes down why it did what it did. Read the last hundred lines before you guess.",
   },
   {
-    q: "How do I share a conversation with my team?",
-    a: "Open the conversation in the web dashboard and click 'Share'. You can share with specific team members or generate a public link.",
+    cmd: "cast restart",
+    what: "Restarts the daemon and installs a pending update first. Fixes most of what the first three commands find.",
+  },
+];
+
+const PROBLEMS: { symptom: string; fix: ReactNode }[] = [
+  {
+    symptom: "New sessions never show up in the inbox",
+    fix: (
+      <>
+        The daemon is not running. Start it with <Code>cast start</Code>, then run <Code>cast setup</Code> once so it
+        starts at login and you never think about it again.
+      </>
+    ),
+  },
+  {
+    symptom: "The CLI says this machine is not authenticated",
+    fix: (
+      <>
+        Run <Code>cast auth</Code> to sign in through the browser. On a machine with no browser, create a setup token
+        under Settings, then CLI, and run <Code>cast login &lt;token&gt;</Code>.
+      </>
+    ),
+  },
+  {
+    symptom: "A message sent from the web never reaches the agent",
+    fix: (
+      <>
+        The agent&apos;s terminal pane is gone. Use Restart session in the conversation header, or run{" "}
+        <Code>cast restart &lt;session&gt;</Code>. The daemon resumes the transcript in a fresh pane.
+      </>
+    ),
+  },
+  {
+    symptom: "The CLI is behind the dashboard",
+    fix: (
+      <>
+        Run <Code>cast update</Code>, then <Code>cast restart</Code>. The CLI updates itself on a schedule, and this
+        forces the update now.
+      </>
+    ),
+  },
+  {
+    symptom: "The desktop app is stuck on an old version",
+    fix: (
+      <>
+        Run <Code>cast desktop-update</Code> from any terminal. It replaces the app outside the macOS updater. You can
+        also get the current build from the <Link href="/download" className="underline underline-offset-4">download page</Link>.
+      </>
+    ),
+  },
+  {
+    symptom: "Remove Codecast from a machine",
+    fix: (
+      <>
+        Run <Code>cast uninstall</Code>. It removes the CLI, the daemon, and its login item. Add{" "}
+        <Code>--keep-config</Code> to keep <Code>~/.codecast</Code> for a later reinstall.
+      </>
+    ),
+  },
+];
+
+const REPORT_ITEMS = [
+  "Which agent: Claude Code, Codex, Cursor, Gemini, OpenCode, Pi, or Grok.",
+  "Your OS, and whether the daemon runs on a laptop or a remote box.",
+  "A link to the session, if the problem is about one session.",
+  "What you expected, what happened instead, and when it started.",
+  "The output of the diagnostics command.",
+];
+
+const FAQ: { q: string; a: ReactNode }[] = [
+  {
+    q: "Which agents does Codecast capture?",
+    a: "Claude Code, Codex, Cursor, Gemini, OpenCode, Pi, and Grok. The daemon watches each agent's own session files, so there is nothing to change in how you run them.",
+  },
+  {
+    q: "Does it work offline?",
+    a: "Yes. The daemon keeps watching and queues what it cannot send. The web and desktop apps paint from a local cache, so your inbox opens before the network answers. Everything catches up when you are back online.",
+  },
+  {
+    q: "Who can see my sessions?",
+    a: (
+      <>
+        Only you, until you share. Every session starts private. You share one conversation at a time, with a
+        teammate or with a link. Secrets are redacted before anything leaves your machine, and you can self host the
+        backend. The <Link href="/security" className="underline underline-offset-4">security page</Link> has the full
+        answer.
+      </>
+    ),
+  },
+  {
+    q: "Where are the desktop and mobile apps?",
+    a: (
+      <>
+        The Mac app is on the <Link href="/download" className="underline underline-offset-4">download page</Link>, and
+        the iOS app is on the{" "}
+        <a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+          App Store
+        </a>
+        . Both sign in with the same account as the web.
+      </>
+    ),
   },
   {
     q: "How do I delete my data?",
-    a: "You can delete individual conversations from the dashboard, or delete your entire account from Settings > Account > Delete Account.",
+    a: (
+      <>
+        Open Settings, then Accounts, and choose Delete account. That removes your account and everything under it, and
+        it cannot be undone. To clear one machine, run <Code>cast uninstall</Code>.
+      </>
+    ),
   },
   {
-    q: "Is my code visible to Codecast?",
-    a: "By default, only metadata is synced. Code content sync is opt-in. You can also enable end-to-end encryption for additional privacy.",
+    q: "I found a security issue. Where do I send it?",
+    a: (
+      <>
+        Email{" "}
+        <a href="mailto:security@codecast.sh" className="underline underline-offset-4">security@codecast.sh</a>.
+        Please do not open a public issue for it.
+      </>
+    ),
+  },
+  {
+    q: "Billing, invoices, or an enterprise plan?",
+    a: (
+      <>
+        Email{" "}
+        <a href="mailto:enterprise@codecast.sh" className="underline underline-offset-4">enterprise@codecast.sh</a>.
+        Plans and prices are on the <Link href="/pricing" className="underline underline-offset-4">pricing page</Link>.
+      </>
+    ),
   },
 ];
 
+/** Staggered entrance: reuses the fadeSlideIn keyframe from tailwind.config. */
+function Reveal({ delay, className = "", children }: { delay: number; className?: string; children: ReactNode }) {
+  return (
+    <div className={`animate-fadeSlideIn ${className}`} style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}>
+      {children}
+    </div>
+  );
+}
+
+function SectionTitle({ children, lede }: { children: ReactNode; lede?: ReactNode }) {
+  return (
+    <div className="mb-8">
+      <h2 className="text-2xl md:text-3xl font-bold font-mono tracking-tight" style={{ color: SOL.base03 }}>
+        {children}
+      </h2>
+      {lede && <p className="mt-3 text-[17px] leading-8 max-w-2xl" style={{ color: SOL.base01 }}>{lede}</p>}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        await copyToClipboard(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="text-xs font-mono px-2.5 py-1 rounded transition-colors"
+      style={{
+        color: copied ? SOL.base03 : SOL.base1,
+        backgroundColor: copied ? SOL.green : "transparent",
+        border: `1px solid ${copied ? SOL.green : SOL.base01}`,
+      }}
+    >
+      {copied ? "copied" : "copy"}
+    </button>
+  );
+}
+
 export default function SupportPage() {
   useRouteMeta("/support");
-  return (
-    <main className="min-h-screen bg-stone-50 w-full">
-      {/* Nav */}
-      <nav className="border-b border-stone-200 bg-stone-50/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/">
-            <Logo size="md" className="[--logo-c:#444444] text-stone-900" />
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link href="/pricing" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Pricing
-            </Link>
-            <Link href="/blog" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Blog
-            </Link>
-            <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5">
-              Security
-            </Link>
-            <Link href="/login">
-              <Button variant="ghost" className="text-stone-600 hover:text-stone-900 hover:bg-stone-100 font-medium">
-                Sign in
-              </Button>
-            </Link>
-            <Link href="/signup">
-              <Button className="bg-stone-900 text-white hover:bg-stone-800 font-medium">
-                Get started
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
 
-      {/* Hero */}
-      <section className="max-w-6xl mx-auto px-6 pt-20 pb-16">
-        <div className="text-center max-w-3xl mx-auto">
-          <h1 className="text-5xl font-bold text-stone-900 leading-[1.1] tracking-tight mb-6">
-            How can we help?
-          </h1>
-          <p className="text-xl text-stone-600 leading-relaxed">
-            Get support, browse documentation, or reach out to our team.
-          </p>
+  return (
+    <main className="min-h-screen w-full" style={{ backgroundColor: SOL.base3 }}>
+      <BlogNav active="/support" />
+
+      {/* Hero: the promise on the left, proof it is checkable on the right */}
+      <section className="max-w-5xl mx-auto px-6 pt-16 pb-12 md:pt-24 md:pb-20">
+        <div className="grid lg:grid-cols-[1.05fr_1fr] gap-10 lg:gap-14 items-start">
+          <div>
+            <Reveal delay={0}>
+              <h1 className="text-4xl md:text-5xl font-bold font-mono tracking-tight leading-[1.1]" style={{ color: SOL.base03 }}>
+                Stuck?
+                <br />
+                Start here.
+              </h1>
+            </Reveal>
+            <Reveal delay={80}>
+              <p className="mt-6 text-lg md:text-xl leading-8" style={{ color: SOL.base01 }}>
+                Most problems are a daemon that stopped or a login that expired. Two commands tell you which one.
+                When they do not, a person answers.
+              </p>
+            </Reveal>
+            <Reveal delay={160} className="mt-8">
+              <ul className="space-y-3">
+                {CHANNELS.map((c) => (
+                  <li key={c.label}>
+                    <a
+                      href={c.href}
+                      target={c.href.startsWith("http") ? "_blank" : undefined}
+                      rel={c.href.startsWith("http") ? "noopener noreferrer" : undefined}
+                      className="group flex items-center gap-4 rounded-xl px-4 py-3 transition-colors"
+                      style={{ border: `1px solid ${SOL.base2}`, backgroundColor: "rgba(255,255,255,0.35)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.borderColor = c.accent)}
+                      onMouseLeave={(e) => (e.currentTarget.style.borderColor = SOL.base2)}
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: c.accent }} />
+                      <span className="font-mono text-sm w-16 shrink-0" style={{ color: SOL.base00 }}>{c.label}</span>
+                      <span className="flex flex-col min-w-0">
+                        <span className="font-medium text-sm truncate" style={{ color: SOL.base03 }}>{c.value}</span>
+                        <span className="text-xs" style={{ color: SOL.base0 }}>{c.note}</span>
+                      </span>
+                      <span className="ml-auto text-sm transition-transform group-hover:translate-x-0.5" style={{ color: c.accent }}>
+                        &rarr;
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Reveal>
+          </div>
+
+          <Reveal delay={240}>
+            <Terminal label="first aid">
+              <Cmd>cast status</Cmd>
+              {"\n"}
+              <span style={{ color: SOL.base01 }}>  Version   </span>v1.1.132{"\n"}
+              <span style={{ color: SOL.base01 }}>  Auth      </span><span style={{ color: SOL.green }}>*</span> authenticated{"\n"}
+              <span style={{ color: SOL.base01 }}>  Daemon    </span><span style={{ color: SOL.green }}>*</span> running (PID 23887){"\n"}
+              <span style={{ color: SOL.base01 }}>  Last sync </span>0 seconds ago{"\n"}
+              <span style={{ color: SOL.base01 }}>  Queue     </span>empty{"\n"}
+              <span style={{ color: SOL.base01 }}>  Convex    </span><span style={{ color: SOL.green }}>*</span> connected{"\n"}
+              {"\n"}
+              <Cmd>cast doctor</Cmd>
+              {"\n"}
+              <span style={{ color: SOL.base01 }}>  Codecast Doctor  (v1.1.132)</span>{"\n"}
+              {"\n"}
+              <span style={{ color: SOL.green }}>  ✓</span> auth          authenticated{"\n"}
+              <span style={{ color: SOL.green }}>  ✓</span> daemon        running, heartbeat 2s ago{"\n"}
+              <span style={{ color: SOL.green }}>  ✓</span> convex        connected (last sync 2s ago){"\n"}
+              <span style={{ color: SOL.green }}>  ✓</span> sync backlog  clear{"\n"}
+              <span style={{ color: SOL.yellow }}>  !</span> guidance      run `cast install --all`{"\n"}
+              <span style={{ color: SOL.green }}>  ✓</span> end-to-end    round trip 1.4s{"\n"}
+              {"\n"}
+              <span style={{ color: SOL.green }}>  ✓ codecast is healthy</span>
+            </Terminal>
+          </Reveal>
         </div>
       </section>
 
-      {/* Support Options */}
-      <section className="max-w-4xl mx-auto px-6 pb-20">
-        <div className="grid md:grid-cols-3 gap-6">
-          {SUPPORT_OPTIONS.map((option) => (
-            <a
-              key={option.title}
-              href={option.href}
-              target={option.href.startsWith("http") ? "_blank" : undefined}
-              rel={option.href.startsWith("http") ? "noopener noreferrer" : undefined}
-              className="bg-white rounded-xl border border-stone-200 p-6 hover:border-stone-300 hover:shadow-sm transition-all"
+      {/* The ladder: four commands, in the order to run them */}
+      <section className="max-w-5xl mx-auto px-6 py-12 md:py-16" style={{ borderTop: `1px solid ${SOL.base2}` }}>
+        <SectionTitle lede="Run them in this order. Each one either fixes the problem or tells the next one where to look.">
+          Four commands before you write in
+        </SectionTitle>
+        <ol className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {LADDER.map((step, i) => (
+            <li
+              key={step.cmd}
+              className="relative rounded-xl p-5 flex flex-col gap-3"
+              style={{ backgroundColor: "rgba(255,255,255,0.45)", border: `1px solid ${SOL.base2}` }}
             >
-              <div className={`w-12 h-12 rounded-lg flex items-center justify-center mb-4 ${
-                option.color === "amber" ? "bg-amber-100" :
-                option.color === "blue" ? "bg-blue-100" :
-                "bg-stone-100"
-              }`}>
-                <option.icon className={`w-6 h-6 ${
-                  option.color === "amber" ? "text-amber-600" :
-                  option.color === "blue" ? "text-blue-600" :
-                  "text-stone-600"
-                }`} />
-              </div>
-              <h3 className="font-semibold text-stone-900 mb-2">{option.title}</h3>
-              <p className="text-sm text-stone-500 mb-4">{option.description}</p>
-              <span className="text-sm font-medium text-amber-600">
-                {option.action} &rarr;
-              </span>
-            </a>
+              <span className="font-mono text-xs" style={{ color: SOL.orange }}>0{i + 1}</span>
+              <code className="font-mono text-[15px] font-semibold" style={{ color: SOL.base03 }}>{step.cmd}</code>
+              <p className="text-sm leading-6" style={{ color: SOL.base01 }}>{step.what}</p>
+            </li>
           ))}
+        </ol>
+      </section>
+
+      {/* Symptom to fix */}
+      <section className="max-w-5xl mx-auto px-6 py-12 md:py-16" style={{ borderTop: `1px solid ${SOL.base2}` }}>
+        <SectionTitle>Common problems</SectionTitle>
+        <div className="grid md:grid-cols-2 gap-x-10 gap-y-2">
+          {PROBLEMS.map((p) => (
+            <div key={p.symptom} className="py-5" style={{ borderTop: `1px solid ${SOL.base2}` }}>
+              <h3 className="font-semibold text-[15px] mb-2" style={{ color: SOL.base03 }}>{p.symptom}</h3>
+              <p className="text-[15px] leading-7" style={{ color: SOL.base01 }}>{p.fix}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* A report we can act on */}
+      <section className="max-w-5xl mx-auto px-6 py-12 md:py-16" style={{ borderTop: `1px solid ${SOL.base2}` }}>
+        <SectionTitle lede="A report with these five things usually gets fixed on the first reply.">
+          Send a report we can act on
+        </SectionTitle>
+        <div className="grid lg:grid-cols-[1fr_1.1fr] gap-8 lg:gap-12 items-start">
+          <ol className="space-y-3">
+            {REPORT_ITEMS.map((item, i) => (
+              <li key={item} className="flex gap-4 text-[15px] leading-7" style={{ color: SOL.base01 }}>
+                <span className="font-mono text-sm pt-0.5 shrink-0" style={{ color: SOL.orange }}>0{i + 1}</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ol>
+          <div className="rounded-xl overflow-hidden shadow-xl" style={{ backgroundColor: SOL.base03, border: "1px solid #094959" }}>
+            <div className="flex items-center justify-between px-4 py-2.5" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #094959" }}>
+              <span className="text-xs font-mono" style={{ color: SOL.base01 }}>diagnostics command</span>
+              <CopyButton text={REPORT_COMMAND} />
+            </div>
+            <pre className="p-4 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words" style={{ color: SOL.base0 }}>
+              <Cmd>{REPORT_COMMAND}</Cmd>
+            </pre>
+            <p className="px-4 pb-4 text-xs leading-5" style={{ color: SOL.base01 }}>
+              The logs describe what the daemon did, not what your agent said. Skim them before you send if your project names are sensitive.
+            </p>
+          </div>
         </div>
       </section>
 
       {/* FAQ */}
-      <section className="max-w-3xl mx-auto px-6 pb-20">
-        <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold text-stone-900 mb-4">Frequently asked questions</h2>
-        </div>
-
-        <div className="space-y-4">
+      <section className="max-w-5xl mx-auto px-6 py-12 md:py-16" style={{ borderTop: `1px solid ${SOL.base2}` }}>
+        <SectionTitle>Questions we get</SectionTitle>
+        <div className="max-w-3xl">
           {FAQ.map((item) => (
-            <div key={item.q} className="bg-white rounded-xl border border-stone-200 p-6">
-              <h3 className="font-semibold text-stone-900 mb-2">{item.q}</h3>
-              <p className="text-stone-600">{item.a}</p>
-            </div>
+            <details key={item.q} className="group" style={{ borderTop: `1px solid ${SOL.base2}` }}>
+              <summary className="flex items-center justify-between gap-6 py-5 cursor-pointer list-none select-none">
+                <span className="font-semibold text-[15px]" style={{ color: SOL.base03 }}>{item.q}</span>
+                <span
+                  className="font-mono text-lg leading-none shrink-0 transition-transform group-open:rotate-45"
+                  style={{ color: SOL.orange }}
+                  aria-hidden
+                >
+                  +
+                </span>
+              </summary>
+              <p className="pb-6 -mt-1 text-[15px] leading-7 max-w-2xl" style={{ color: SOL.base01 }}>{item.a}</p>
+            </details>
           ))}
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-stone-200 bg-white">
-        <div className="max-w-6xl mx-auto px-6 py-12">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div>
-              <Logo size="md" className="[--logo-c:#444444] text-stone-900 mb-4" />
-              <p className="text-sm text-stone-500">
-                Real-time sync for AI coding sessions.
-              </p>
-            </div>
-            <div>
-              <h4 className="font-semibold text-stone-900 mb-3 text-sm">Product</h4>
-              <ul className="space-y-2 text-sm text-stone-500">
-                <li><Link href="/#how-it-works" className="hover:text-stone-900">How it works</Link></li>
-                <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
-                <li><Link href="/blog" className="hover:text-stone-900">Blog</Link></li>
-                <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-stone-900 mb-3 text-sm">Legal</h4>
-              <ul className="space-y-2 text-sm text-stone-500">
-                <li><Link href="/privacy" className="hover:text-stone-900">Privacy Policy</Link></li>
-                <li><Link href="/terms" className="hover:text-stone-900">Terms of Service</Link></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-stone-900 mb-3 text-sm">Connect</h4>
-              <ul className="space-y-2 text-sm text-stone-500">
-                <li><a href="https://github.com/ashot" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-                <li><a href="mailto:support@codecast.sh" className="hover:text-stone-900">Support</a></li>
-              </ul>
-            </div>
+      {/* Closing contact */}
+      <section className="max-w-5xl mx-auto px-6 pb-20 pt-4">
+        <div
+          className="rounded-2xl px-8 py-10 md:px-12 md:py-12 flex flex-col md:flex-row md:items-center gap-6 md:gap-10"
+          style={{ backgroundColor: SOL.base03 }}
+        >
+          <div className="flex-1">
+            <h2 className="text-2xl font-bold font-mono tracking-tight" style={{ color: SOL.base3 }}>Still stuck?</h2>
+            <p className="mt-2 text-[15px] leading-7" style={{ color: SOL.base1 }}>
+              Write to us with the output above. We read every message and reply from a real inbox.
+            </p>
           </div>
-          <div className="border-t border-stone-200 mt-8 pt-8 text-center text-sm text-stone-400">
-            &copy; 2026 Codecast
+          <div className="flex flex-wrap gap-3">
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="font-medium text-sm px-5 py-2.5 rounded-lg transition-colors"
+              style={{ backgroundColor: SOL.orange, color: SOL.base3 }}
+            >
+              Email support
+            </a>
+            <a
+              href={DISCORD_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-sm px-5 py-2.5 rounded-lg transition-colors hover:bg-[#094959]"
+              style={{ border: `1px solid ${SOL.base01}`, color: SOL.base1 }}
+            >
+              Join Discord
+            </a>
           </div>
         </div>
-      </footer>
+      </section>
+
+      <BlogFooter />
     </main>
   );
 }

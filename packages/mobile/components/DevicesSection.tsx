@@ -7,7 +7,7 @@ import { Text as RNText } from '@/components/Themed';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { deviceDisplayName } from '@codecast/shared/contracts';
 
 /**
@@ -62,6 +62,7 @@ export function useDevices() {
 
 /** Full devices list for the Settings screen. */
 export function DevicesSection() {
+  const Theme = useTheme();
   const { devices } = useDevices();
   const sorted = useMemo(
     () =>
@@ -121,7 +122,7 @@ export function DevicesSection() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3 },
   section: { marginBottom: Spacing.xl },
   sectionTitle: {
@@ -150,4 +151,4 @@ const styles = StyleSheet.create({
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Theme.borderLight, marginLeft: Spacing.lg },
   empty: { fontSize: 14, color: Theme.textMuted },
   footnote: { fontSize: 12, color: Theme.textMuted, marginTop: Spacing.sm, marginHorizontal: Spacing.sm, lineHeight: 17 },
-});
+}));

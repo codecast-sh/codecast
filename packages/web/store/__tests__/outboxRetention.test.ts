@@ -1364,3 +1364,14 @@ describe("stale replay age gate", () => {
     expect(outbox.size).toBe(0);
   });
 });
+
+describe("outbox coalesce keys", () => {
+  it("collapses queued permission-mode presses per conversation, and nothing else that rides convCommand", async () => {
+    const { outboxCoalesceKeyFor } = await import("../mutativeMiddleware");
+    expect(outboxCoalesceKeyFor("convCommand", ["conv1", "setPermissionMode", {}])).toBe("setPermissionMode:conv1");
+    expect(outboxCoalesceKeyFor("convCommand", ["conv1", "setPermissionMode", { target: "bypassPermissions" }])).toBe("setPermissionMode:conv1");
+    expect(outboxCoalesceKeyFor("convCommand", ["conv2", "setPermissionMode", {}])).toBe("setPermissionMode:conv2");
+    expect(outboxCoalesceKeyFor("convCommand", ["conv1", "sendKeysToSession", { keys: "Escape" }])).toBeNull();
+    expect(outboxCoalesceKeyFor("convCommand", ["conv1", "killSession"])).toBeNull();
+  });
+});

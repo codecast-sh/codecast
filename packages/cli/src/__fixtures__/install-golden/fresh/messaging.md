@@ -1,13 +1,17 @@
 
 ## Messaging
 
-`cast send <session_id> "<text>"` reaches any session — old or active — by its short ID. Each is a teammate: be the boss (hand a dormant one a task; it resumes with full context and runs it) or a peer (trade updates on a shared problem). Ask one to ping you when it's done or blocked, then act on the reply yourself.
+`cast send <session_id> "<text>"` starts a turn in another session and can interrupt work. Send to change the recipient's next action, answer a question, prevent a concrete conflict, or deliver finished work. Keep routine progress, hypotheses, and passing checks in your own session or task.
 
-A message is an interruption, and interruptions are expensive. It lands as a new turn, so a session mid-task stops what it is doing to answer you. When you only need to know what another session found, decided, or changed, read it first: `cast read <id>` for its recent turns, `cast diff <id>` for the files it touched. The transcript usually already holds the answer, and reading costs the session nothing. Send when reading is not enough: a question only that session can answer, a task you want it to take on, or a redirect while it is working. Those are worth the interruption, so don't let the cost talk you out of a message that moves the work.
+Use `cast read <id>` and `cast diff <id>` before asking for updates. Ask only for missing information; send tasks or redirects when work needs to change.
 
-A send is attributed to you; inbound arrives wrapped as `<session-message from="jx7c6zk">…</session-message>` — reply to its ID. A person typing into your session from the dashboard arrives as `<user-message from="Their Name">…</user-message>`: a human wrote it directly, not a session, so answer them in this thread as you would your own user.
+After accepting work from another session, send one result: commit or artifact, verification, caveats, and required action. Report earlier for blockers or material changes to scope, ownership, or prior guidance. Honor explicit requests for more frequent reports.
 
-Target on evidence, not inference: work state says who is paying attention, not who wrote what, so check the diff before attributing a change. A teammate's session runs on another machine, in their own checkout: it can never explain your local tree, so coordinate on what you truly share — branches, schemas, deploys — and phrase what you can't verify as a question.
+Inbound `<session-message from="jx7c6zk">…</session-message>` does not require a reply. If no answer or action is needed, incorporate it and continue your task. Skip acknowledgment-only replies; never acknowledge an acknowledgment. When a reply is needed, send to the sender's ID. `<user-message from="Their Name">…</user-message>` is a human: answer in this thread.
+
+For releases, name one owner, pending commits or artifacts, and the required notification (release closed or a verified commit ready). Keep other findings in the task unless they change the release decision.
+
+Check a session's diff before attributing changes to it; its work state only says who acts next. Check its machine and checkout before assuming it explains your local tree. Coordinate on shared files, branches, schemas, and deploys; ask when the evidence is unclear.
 
 For anything multi-line, pass `-` and feed the body via heredoc — never `"$(cat file)"`, which mangles formatting and records only the substitution in the transcript.
 

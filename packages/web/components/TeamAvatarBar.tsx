@@ -20,7 +20,8 @@ import {
 } from "./presence/memberPresence";
 import { MemberFace } from "./presence/MemberFace";
 import { TeamBarFace } from "./presence/TeamBarFace";
-import { useWalkieFaces } from "./presence/useFaceKey";
+import { useFaceKey, useWalkieFaces } from "./presence/useFaceKey";
+import { FaceActions } from "./presence/FaceActions";
 import { useMemberActivity } from "./presence/useMemberActivity";
 import { useMemberHuddle } from "./presence/useMemberHuddle";
 import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
@@ -299,6 +300,22 @@ export function MemberHoverCard({
   // (components/presence/useMemberHuddle), so the two surfaces cannot drift
   // into two answers for the same door.
   const huddle = useMemberHuddle(member, currentUserId, liveRoom, displayName);
+  // TALK, on the card as well as under the face. The card is where a pointer
+  // that dwelt on somebody ends up, and it offered a huddle and a message but
+  // not the one gesture the face exists for. The same key the face itself
+  // holds (useFaceKey), so the two cannot disagree about whether a talk is
+  // running: pressed here, it shows as Stop under the face and on the strip,
+  // and the card closing under the pointer does not end it — the engine owns
+  // the talk, the card only shows it.
+  const memberId = String(member._id);
+  const faces = useWalkieFaces();
+  const key = useFaceKey({
+    viewerId: currentUserId,
+    memberId,
+    callsEnabled: callsEnabled && !isSelf,
+    talking: !!faces.talkingId && faces.talkingId === memberId,
+    joinedRoom: faces.joinedRoom,
+  });
 
   // Local-first: the store action flips the roster row in the same tick (the
   // pill must not wait on a server round-trip) and dispatches the
@@ -414,6 +431,17 @@ export function MemberHoverCard({
             ))
           ) : (
             <>
+              {callsEnabled && (
+                <FaceActions
+                  ptt={key.ptt}
+                  blocked={key.blocked}
+                  roomKey={key.roomKey}
+                  ringIds={[memberId]}
+                  show={["talk"]}
+                  size="sm"
+                  className="face-actions-fill"
+                />
+              )}
               {callsEnabled && (
                 <button
                   type="button"

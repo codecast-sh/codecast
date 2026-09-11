@@ -42,6 +42,7 @@ import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { markChatRailLive } from "../lib/chatLive";
+import { navigateFromHere } from "../lib/desktop";
 import { isConvexId } from "../lib/entityLinks";
 import {
   buildHandleSets,
@@ -462,14 +463,23 @@ function anchorBotsSig(anchors: Record<string, any> | undefined): string {
  *  for the modal, the rail's suggestions and the sidebar's, so "how a DM
  *  opens" is decided in exactly one place. */
 export function useOpenDm(): (memberIds: string[]) => void {
-  const router = useRouter();
+  const openChat = useOpenChatPath();
   return useCallback(
     (memberIds: string[]) => {
       const channelId = useInboxStore.getState().openDmChannel(memberIds);
-      router.push(`/chat/${channelId}`);
+      openChat(`/chat/${channelId}`);
     },
-    [router],
+    [openChat],
   );
+}
+
+/** Go to a chat path from wherever the gesture happened. From a satellite
+ *  window (the voice window's strip, the people window) the path goes to the
+ *  main window and the satellite stays as it was; anywhere else this window
+ *  moves. One hook, so the DM opener and the strip's Chat button agree. */
+export function useOpenChatPath(): (path: string) => void {
+  const router = useRouter();
+  return useCallback((path: string) => navigateFromHere(path, (p) => router.push(p)), [router]);
 }
 
 /** The channel rail, already sorted and counted. */

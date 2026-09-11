@@ -122,16 +122,25 @@ export function OccupancyChip({
 // room opens (a DM or group thread rings its members; a channel or session
 // is an open door and rings nobody); `anchorTitle` is the ring toast's
 // "about:" line.
+//
+// The empty room is an affordance, not information, so at header scale it is
+// the headphones alone — the same shape mobile's button has always had, and
+// one less word competing with the pills that do carry information. The
+// occupied state keeps its faces and its verb: who is in there IS the news.
 export function HuddleButton({
   roomKey,
   ring,
   anchorTitle,
+  hint,
   className = "",
   compact = false,
 }: {
   roomKey: string;
   ring?: string[];
   anchorTitle?: string;
+  /** What this room's huddle is for, when it is more than "talk here" — the
+   *  session room says the agent listens. */
+  hint?: string;
   className?: string;
   /** Header-chip scale (10px, soft border) to sit flush with the other
    *  conversation-header pills; the chat page keeps the larger default. */
@@ -141,6 +150,11 @@ export function HuddleButton({
   const occupied = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
   if (!enabled) return null;
   if (occupied) return <OccupancyChip roomKey={roomKey} className={className} compact={compact} />;
+  const label =
+    hint ??
+    (ring?.length
+      ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
+      : "Start a huddle here — teammates see it and can join");
   const start = () =>
     ring?.length
       ? void startHuddle({ roomKey, toUserIds: ring, anchorTitle })
@@ -151,20 +165,25 @@ export function HuddleButton({
         e.stopPropagation();
         start();
       }}
-      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet ${compact ? "border-sol-border/40 text-[10px] font-medium" : "border-sol-border text-xs"} ${className}`}
-      title={
-        ring?.length
-          ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
-          : "Start a huddle here — teammates see it and can join"
-      }
+      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+      title={label}
+      aria-label={label}
     >
       <Headphones className="h-3 w-3" />
-      <span>{ring?.length ? "Ring" : "Huddle"}</span>
+      {!compact && <span>{ring?.length ? "Ring" : "Huddle"}</span>}
     </button>
   );
 }
 
-// Session headers: the room of one conversation.
+// Session headers: the room of one conversation, and the one room where the
+// agent is listening — a session huddle transcribes into its own session live
+// (transcripts.start seeds the route), so the tooltip says so.
 export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
-  return <HuddleButton roomKey={sessionRoomKey(conversationId)} compact />;
+  return (
+    <HuddleButton
+      roomKey={sessionRoomKey(conversationId)}
+      hint="Talk to this session — what you say reaches the agent as you speak"
+      compact
+    />
+  );
 }

@@ -32,7 +32,20 @@ export const SOL = {
   green: "#859900",
 } as const;
 
-export function BlogNav() {
+const NAV_LINKS = [
+  { href: "/documentation", label: "Docs" },
+  { href: "/features", label: "CLI" },
+  { href: "/blog", label: "Blog" },
+  { href: "/changelog", label: "Changelog" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/support", label: "Support" },
+];
+
+/**
+ * Marketing nav shared by the blog and support surfaces. `active` is the path of
+ * the page rendering it; that link paints in the ink color instead of muted.
+ */
+export function BlogNav({ active = "/blog" }: { active?: string }) {
   return (
     <nav
       className="backdrop-blur-sm sticky top-0 z-50"
@@ -43,36 +56,17 @@ export function BlogNav() {
           <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
         </Link>
         <div className="flex items-center gap-3">
-          <Link
-            href="/documentation"
-            className="hidden sm:block font-medium text-sm px-3 py-1.5 text-[#657b83] hover:text-[#002b36] transition-colors"
-          >
-            Docs
-          </Link>
-          <Link
-            href="/features"
-            className="hidden sm:block font-medium text-sm px-3 py-1.5 text-[#657b83] hover:text-[#002b36] transition-colors"
-          >
-            CLI
-          </Link>
-          <Link
-            href="/blog"
-            className="hidden sm:block font-medium text-sm px-3 py-1.5 text-[#002b36] transition-colors"
-          >
-            Blog
-          </Link>
-          <Link
-            href="/changelog"
-            className="hidden sm:block font-medium text-sm px-3 py-1.5 text-[#657b83] hover:text-[#002b36] transition-colors"
-          >
-            Changelog
-          </Link>
-          <Link
-            href="/pricing"
-            className="hidden sm:block font-medium text-sm px-3 py-1.5 text-[#657b83] hover:text-[#002b36] transition-colors"
-          >
-            Pricing
-          </Link>
+          {NAV_LINKS.map(({ href, label }) => (
+            <Link
+              key={href}
+              href={href}
+              className={`hidden sm:block font-medium text-sm px-3 py-1.5 transition-colors ${
+                href === active ? "text-[#002b36]" : "text-[#657b83] hover:text-[#002b36]"
+              }`}
+            >
+              {label}
+            </Link>
+          ))}
           <a
             href="https://github.com/codecast-sh"
             target="_blank"
@@ -132,6 +126,7 @@ export function BlogFooter() {
               <li><Link href="/blog" className="hover:text-[#073642]">Blog</Link></li>
               <li><Link href="/about" className="hover:text-[#073642]">About</Link></li>
               <li><Link href="/privacy" className="hover:text-[#073642]">Privacy</Link></li>
+              <li><Link href="/support" className="hover:text-[#073642]">Support</Link></li>
             </ul>
           </div>
           <div>

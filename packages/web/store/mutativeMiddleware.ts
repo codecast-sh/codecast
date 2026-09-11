@@ -151,6 +151,13 @@ export const OUTBOX_COALESCE_KEYS: Record<string, (args: any[]) => string | null
     typeof args[0] === "string" ? `updateClientLayout:${args[0]}` : null,
   updateClientDismissed: (args) =>
     typeof args[0] === "string" ? `updateClientDismissed:${args[0]}` : null,
+  // A permission-mode press is a keystroke into a live pane, not a value: a
+  // burst parked during a rewire window (boot, HMR) and drained later must
+  // land as ONE press, not walk the session several modes past where the
+  // user last saw it (five presses drained at once on 2026-09-12). A press
+  // already in flight is unaffected; only queued rows collapse.
+  convCommand: (args) =>
+    typeof args[0] === "string" && args[1] === "setPermissionMode" ? `setPermissionMode:${args[0]}` : null,
 };
 
 export function outboxCoalesceKeyFor(action: string, args: any[]): string | null {

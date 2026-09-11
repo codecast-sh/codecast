@@ -26,7 +26,7 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -85,7 +85,11 @@ const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
 
-function formatIdleDuration(updatedAt: number): string {
+// A row with no activity stamp yet (its fast fields ride the liveness overlay
+// and have not landed) shows no age: Date.now() minus nothing is 1970, which
+// rendered as "20705d".
+function formatIdleDuration(updatedAt: number | null | undefined): string {
+  if (!updatedAt) return "";
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return "<1m";
@@ -3760,9 +3764,11 @@ function SessionListPanelImpl({
   // reach the shared classifier), identically on every client and the server.
   // The header number is the chokepoint's section COUNT (flat cards plus
   // members nested under a same-bucket lead — what the tally and the CLI
-  // report) while no chip narrows the list; a filter that removed nothing
-  // leaves the full count in force.
-  const countOf = (shown: InboxSession[], full: InboxSession[], n: number) => (shown.length === full.length ? n : undefined);
+  // report) while no chip narrows the list and the nested rows are on screen;
+  // shared sectionHeaderCount, so this panel and mobile can't drift.
+  const showSubagents = s.clientState.ui?.show_subagents ?? true;
+  const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
+    sectionHeaderCount(shown, full, n, showSubagents);
   const statusPinned = filteredPinned;
   const statusNew = filteredNew;
   const statusNeedsInput = filteredNeedsInput;
@@ -3959,7 +3965,8 @@ function SessionListPanelImpl({
           !sess.is_pinned &&
           !sess.inbox_snoozed_until &&
           sess._id !== activeSessionId &&
-          (sess.updated_at ?? 0) < staleCutoff,
+          // An unstamped row is unknown, not ancient: never offer it for dismissal.
+          !!sess.updated_at && sess.updated_at < staleCutoff,
       )
       .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   }, [s.sessions, activeSessionId, staleCutoff]);
@@ -4075,7 +4082,6 @@ function SessionListPanelImpl({
   const [globalCardExtra, setGlobalCardExtra] = useState(0);
   // Reset each render; renderSection (a closure over this) consumes it in call order.
   let globalRenderedCards = 0;
-  const showSubagents = s.clientState.ui?.show_subagents ?? true;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
   const viewMode: InboxViewMode =
     s.clientState.ui?.inbox_view_mode ?? ((s.clientState.ui?.inbox_flat_view ?? false) ? "time" : "grouped");
@@ -4832,11 +4838,12 @@ function SessionListPanelImpl({
           dropSessionOnLabel={dropSessionOnLabel}
         />
         {/* One pill: a view-mode dropdown (trigger shows the current mode's
-            icon), a divider, the independent show/hide toggles (subagents,
-            old), then — after another divider, at the far end — the favorites
-            mode toggle. Ctrl+, still cycles view modes. In favorites view the
-            view controls hide (favorites is always project-grouped) and the
-            pill collapses to just the amber star, which stays put. */}
+            icon), the independent show/hide toggles (subagents, old), then at
+            the far end the favorites mode toggle. Even spacing throughout, no
+            rules between groups — the icons read as one row of controls.
+            Ctrl+, still cycles view modes. In favorites view the view controls
+            hide (favorites is always project-grouped) and the pill collapses
+            to just the amber star, which stays put. */}
         <div className="flex items-center flex-shrink-0 ml-auto gap-1.5">
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
@@ -4854,7 +4861,7 @@ function SessionListPanelImpl({
               {blockedSessions.length}
             </button>
           )}
-          <div data-sv-controls className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+          <div data-sv-controls className="flex items-center flex-shrink-0 gap-0.5 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
           {!favoritesView && <>
           {/* Inbox scope: Mine ⇄ Team. Team turns the inbox into a shared board
               of every team-visible session across the active team (a superset of
@@ -4872,7 +4879,6 @@ function SessionListPanelImpl({
               {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
             </button>
           </ShortcutTooltip>
-          <div className="w-px h-3 bg-sol-border/40" />
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },
@@ -4910,9 +4916,6 @@ function SessionListPanelImpl({
               </div>
             );
           })()}
-          {(totalSubagentCount > 0 || oldCount > 0 || scheduleRowsView.length > 0 || anyLiveBars) && (
-            <div className="w-px h-3 bg-sol-border/40" />
-          )}
           {totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
@@ -4970,7 +4973,6 @@ function SessionListPanelImpl({
               <History className="w-3 h-3" />
             </button>
           )}
-          <div className="w-px h-3 bg-sol-border/40" />
           </>}
           {/* Favorites is a MODE of this panel — toggled at the END of the
               group, after the old-sessions toggle. Amber when active. */}

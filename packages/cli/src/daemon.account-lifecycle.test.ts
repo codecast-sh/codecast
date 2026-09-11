@@ -73,7 +73,7 @@ function harness() {
       return { result: "killed_tmux" };
     },
     saveProfile: (name: string) => ({ name }), deleteProfile: () => ({}),
-    startMintFlow: async () => "minted", sendHeartbeat: async () => {},
+    sendHeartbeat: async () => {},
     pushCredentialToRemoteHosts: async () => {}, maintainCcUsageSnapshots: async () => {},
     maintainCodexUsageSnapshot: async () => {},
   };
@@ -270,7 +270,7 @@ test("failed boot, failed swap and no-profile recovery all release the productio
 test("profile maintenance bypasses the switch hold and paced continues do not hold it for minutes", async () => {
   const h = harness(), release = await h.gate.acquireSwitch();
   try {
-    for (const args of [{ save_as: "saved" }, { remove: "saved" }, { refresh_usage: true }, { mint: "account" }]) {
+    for (const args of [{ save_as: "saved" }, { remove: "saved" }, { refresh_usage: true }]) {
       expect((await h.switchAccount(args)).error).toBeUndefined();
     }
     expect(h.state.switchAcquires).toBe(1);

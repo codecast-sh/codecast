@@ -1,7 +1,7 @@
 import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
 
@@ -61,6 +61,7 @@ export function TaskItemRow({
   /** Set on a floated subtask (parent filtered out) so the row names its parent. */
   parentChip?: { short_id: string } | null;
 }) {
+  const Theme = useTheme();
   const status = STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium;
   const labels = task.labels?.slice(0, 2) ?? [];
@@ -190,7 +191,7 @@ export function showTaskActions(
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   row: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
@@ -300,4 +301,4 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: Theme.greenBright,
   },
-});
+}));

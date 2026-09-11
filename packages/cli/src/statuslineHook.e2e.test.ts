@@ -20,19 +20,29 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
 import { handleStatusLinePost } from "./daemon.js";
-import { readUsageCache } from "./ccAccounts.js";
+import { readUsageCache, readProfileStoreCredentials, credentialHealth } from "./ccAccounts.js";
 
 const has = (bin: string) => spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
-const tokenFile = (() => {
+// A saved profile's launch credential (its per-session store, see ccAccounts
+// "Per-profile credential stores"). The keychain cannot be read under the
+// sandboxed $HOME the test runs claude with, so the blob is copied into a
+// file-backed store inside the sandbox instead. Only a pair with hours of
+// access life left is used: claude rotates a pair near expiry, and a rotation
+// from the copy would strand the machine's own.
+const storeCredential = (() => {
   try {
     const dir = path.join(os.homedir(), ".codecast");
-    const f = fs.readdirSync(dir).find((n) => /^cc-account-.+\.env$/.test(n));
-    return f ? path.join(dir, f) : null;
-  } catch {
-    return null;
-  }
+    for (const f of fs.readdirSync(dir)) {
+      const m = /^cc-account-(.+)\.env$/.exec(f);
+      if (!m) continue;
+      const raw = readProfileStoreCredentials(m[1]);
+      const health = credentialHealth(raw, Date.now() + 2 * 3600_000);
+      if (raw && health.pushable) return raw;
+    }
+  } catch {}
+  return null;
 })();
-const CAN_RUN = process.platform !== "win32" && has("tmux") && has("claude") && !!tokenFile;
+const CAN_RUN = process.platform !== "win32" && has("tmux") && has("claude") && !!storeCredential;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(fn: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -76,8 +86,11 @@ describe.skipIf(!CAN_RUN)("live usage from a real Claude turn", () => {
       path.join(configDir, "settings.json"),
       JSON.stringify({ statusLine: { type: "command", command: hook, padding: 0 } }),
     );
+    const storeDir = path.join(home, "store");
+    fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(storeDir, ".credentials.json"), storeCredential!, { mode: 0o600 });
     // Enough of a config to skip onboarding and the trust prompt; the login
-    // itself comes from the sourced setup-token, not from this file.
+    // itself comes from the sandbox store, not from this file.
     fs.writeFileSync(
       path.join(configDir, ".claude.json"),
       JSON.stringify({
@@ -92,12 +105,12 @@ describe.skipIf(!CAN_RUN)("live usage from a real Claude turn", () => {
     try {
       tmux(["new-session", "-d", "-x", "200", "-y", "50", "-s", session, "-c", root]);
       // CODECAST_CC_ACCOUNT is what accountSourcePrefix exports beside the
-      // token, and what the script forwards so the post is attributed.
+      // store, and what the script forwards so the post is attributed.
       tmux([
         "send-keys",
         "-t",
         `${session}:0.0`,
-        `. ${tokenFile}; export CODECAST_CC_ACCOUNT=probe; HOME=${home} CLAUDE_CONFIG_DIR=${configDir} claude`,
+        `export CLAUDE_SECURESTORAGE_CONFIG_DIR=${storeDir}; export CODECAST_CC_ACCOUNT=probe; HOME=${home} CLAUDE_CONFIG_DIR=${configDir} claude`,
         "Enter",
       ]);
       const ready = await waitFor(
