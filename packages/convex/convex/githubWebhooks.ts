@@ -17,6 +17,7 @@
 //     forever and every catch-up sweep pays for it again.
 
 import { v } from "convex/values";
+import { routingTeamForInstallation } from "./githubApp";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { internal, api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -89,13 +90,18 @@ export async function resolveTeamForRepository(
   ctx: { db: any },
   repository: string,
 ): Promise<Id<"teams"> | null> {
-  // A personal installation is one person's credential and routes nothing to
-  // a team, so only a team-bound row answers here — whichever comes first.
+  // One rule for every installation (githubApp.routingTeamForInstallation):
+  // a team install routes to its team, a personal install to wherever its
+  // owner is working now. Attribution only — nothing is minted here.
   const installations = await ctx.db
     .query("github_app_installations")
     .withIndex("by_account_login", (q: any) => q.eq("account_login", repositoryOwner(repository)))
     .collect();
-  return installations.find((row: any) => row.team_id)?.team_id ?? null;
+  for (const installation of installations) {
+    const team = await routingTeamForInstallation(ctx, installation);
+    if (team) return team;
+  }
+  return null;
 }
 
 async function prByNumber(ctx: { db: any }, repository: string, number: number) {

@@ -35,14 +35,14 @@ import {
   setCamera,
   setScreenShare,
   subscribeCallTiles,
-  type ParticipantTile, stopTranscribing } from "../../lib/calls/callManager";
+  type ParticipantTile, startTranscribing } from "../../lib/calls/callManager";
 import { humanizeConvexError, parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
-import { TranscribeControls } from "./TranscribePanel";
+import { TranscribeControls, TranscribeSwitch } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
 import { RoomKnocks } from "./RoomDoor";
 import { HangUpButton, MicButton } from "./CallControls";
@@ -370,13 +370,25 @@ export function CallStage({
         <HeaderRule />
 
         {/* The rails: what else is open beside the stage. */}
+        {/* A rail toggle, not the transcription switch: the dot says the
+            room is being transcribed whether or not the rail is open, and
+            the switch itself lives in the rail, in words. */}
         <StageChromeButton
           onClick={() => toggleRail("transcript")}
           active={rail === "transcript"}
           accent="green"
-          title="Live transcript + feeds (send the words to an agent)"
+          title={
+            live
+              ? "Transcribing. Open the live transcript, its feeds, and the switch to stop."
+              : "Not transcribing. Open the transcript rail to start, or to feed an agent."
+          }
         >
-          <Captions className="h-3.5 w-3.5" />
+          <span className="relative">
+            <Captions className="h-3.5 w-3.5" />
+            {live && (
+              <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sol-green animate-pulse" />
+            )}
+          </span>
           transcript
         </StageChromeButton>
         <StageChromeButton
@@ -465,7 +477,7 @@ export function CallStage({
           )}
         </div>
         {rail && (
-          <StageRail tab={rail} onClose={() => setRail(null)} roomKey={call.roomKey} live={live ?? null} />
+          <StageRail tab={rail} onClose={() => setRail(null)} roomKey={call.roomKey} live={live ?? null} panel={panel} />
         )}
       </div>
 
@@ -476,7 +488,7 @@ export function CallStage({
       <div className="shrink-0 border-t border-white/[0.06] bg-black/[0.12]">
         {rail !== "transcript" && <CaptionsLane live={live ?? null} />}
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
-        <ControlBar call={call} />
+        <ControlBar call={call} transcribing={!!live} />
       </div>
     </div>,
     document.body,
@@ -1017,6 +1029,7 @@ function StageRail({
   onClose,
   roomKey,
   live,
+  panel,
 }: {
   tab: RailTab;
   onClose: () => void;
@@ -1026,6 +1039,7 @@ function StageRail({
     started_at: number;
     routes: Array<{ kind: string; target: string; mode: string; added_by: string }>;
   } | null;
+  panel: boolean;
 }) {
   return (
     <aside className="relative flex w-[340px] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] animate-in fade-in slide-in-from-right-2 duration-200">
@@ -1040,7 +1054,7 @@ function StageRail({
       </button>
       {tab === "chat" ? (
         roomKey ? (
-          <CallChatPanel roomKey={roomKey} className="min-h-0 flex-1 pt-6" />
+          <CallChatPanel roomKey={roomKey} className="min-h-0 flex-1 pt-6" live={live} panel={panel} />
         ) : null
       ) : (
         <TranscriptRail roomKey={roomKey} live={live} />
@@ -1060,7 +1074,6 @@ function TranscriptRail({
     routes: Array<{ kind: string; target: string; mode: string; added_by: string }>;
   } | null;
 }) {
-  const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus);
   const addFeed = useAddLiveFeed({
     roomKey,
     liveTranscriptId: live?.transcript_id ?? null,
@@ -1068,6 +1081,11 @@ function TranscriptRail({
   });
   const removeFeed = useRemoveLiveFeed(live?.transcript_id ?? null);
   const myUserId = useInboxStore((s: any) => s.currentUser?._id?.toString?.() ?? null);
+  // The room's opt-out (liveRooms): "off" because somebody switched it off
+  // reads differently from "nobody has started yet".
+  const switchedOff = useInboxStore(
+    (s: any) => !!(s.liveRooms as any[]).find((r) => r.room_key === roomKey)?.transcribe_off,
+  );
 
   const call = useQueryNoThrow(
     api.transcripts.webGetCall,
@@ -1113,15 +1131,9 @@ function TranscriptRail({
             <Plus className="h-3 w-3" />
             feed
           </button>
-          {scribe.active && (
-            <button
-              onClick={() => roomKey && void stopTranscribing(roomKey)}
-              className="ml-auto rounded-full px-2 py-0.5 font-mono text-[10.5px] text-sol-text-muted transition-colors hover:bg-sol-red/10 hover:text-sol-red"
-              title="Stop transcribing this huddle (for everyone)"
-            >
-              stop
-            </button>
-          )}
+          {/* The switch, in words, where the words are. "on" is the room's
+              truth (anyone transcribing), and off stops it for everyone. */}
+          <TranscribeSwitch live={!!live} className="ml-auto" />
         </div>
       </div>
 
@@ -1133,16 +1145,31 @@ function TranscriptRail({
           <div className="flex h-full flex-col items-center justify-center gap-3 px-3 text-center">
             <Captions className="h-5 w-5 text-sol-text-muted" />
             <p className="text-[12px] leading-relaxed text-sol-text-muted">
-              Nobody is transcribing yet. Feed an agent — or just start the
-              transcript — and the words land here and on the call page.
+              {switchedOff
+                ? "Transcription is off for this huddle. Switch it back on — or feed an agent — and the words land here and on the call page."
+                : "Nobody is transcribing yet. Feed an agent — or just start the transcript — and the words land here and on the call page."}
             </p>
-            <button
-              onClick={openPicker}
-              className="flex items-center gap-1.5 rounded-full bg-sol-violet/15 px-3.5 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              feed an agent
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-1.5">
+              <button
+                onClick={openPicker}
+                className="flex items-center gap-1.5 rounded-full bg-sol-violet/15 px-3.5 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                feed an agent
+              </button>
+              <button
+                onClick={() =>
+                  roomKey &&
+                  void startTranscribing(roomKey).then((ok) => {
+                    if (!ok) toast.error("Somebody else is transcribing this huddle already");
+                  })
+                }
+                className="flex items-center gap-1.5 rounded-full bg-sol-green/10 px-3.5 py-1.5 text-[12px] font-medium text-sol-green transition-colors hover:bg-sol-green/20"
+              >
+                <Captions className="h-3.5 w-3.5" />
+                start transcribing
+              </button>
+            </div>
           </div>
         ) : segCount === 0 ? (
           <div className="py-6 text-center text-[12px] text-sol-text-muted">
@@ -1227,7 +1254,7 @@ function CaptionsLane({
 // muted), never by outline.
 const STAGE_CTL = "rounded-full p-2 transition-colors";
 const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-sol-text";
-function ControlBar({ call }: { call: any }) {
+function ControlBar({ call, transcribing }: { call: any; transcribing: boolean }) {
   const [devicesOpen, setDevicesOpen] = useState(false);
 
   return (
@@ -1252,7 +1279,7 @@ function ControlBar({ call }: { call: any }) {
             align="center"
           />
         )}
-        <TranscribeControls />
+        <TranscribeControls live={transcribing} />
         <span className="relative">
           <button
             onClick={() => setDevicesOpen((o) => !o)}

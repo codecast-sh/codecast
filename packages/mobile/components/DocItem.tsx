@@ -1,7 +1,7 @@
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { DocItem as DocItemType } from "@codecast/web/store/inboxStore";
 import { formatDateSmart, wasEdited } from "@codecast/shared/time";
 
@@ -25,6 +25,7 @@ export function DocItemRow({
   doc: DocItemType;
   onPress: () => void;
 }) {
+  const Theme = useTheme();
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] ?? DOC_TYPE_CONFIG.note;
 
   return (
@@ -77,7 +78,7 @@ export function DocItemRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   row: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
@@ -153,4 +154,4 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Theme.textMuted0,
   },
-});
+}));

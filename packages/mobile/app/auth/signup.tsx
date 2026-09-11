@@ -15,8 +15,10 @@ import { TextInput } from '@/components/Themed';
 import { Text } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
 import { Link } from 'expo-router';
+import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 
 export default function SignupScreen() {
+  const Theme = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -124,7 +126,7 @@ export default function SignupScreen() {
                 <TextInput
                   style={[styles.input, styles.codeInput]}
                   placeholder="XXXXXX"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={Theme.textMuted0}
                   value={code}
                   onChangeText={(v) => setCode(v.toUpperCase())}
                   autoCapitalize="characters"
@@ -202,7 +204,7 @@ export default function SignupScreen() {
                 <TextInput
                   style={styles.input}
                   placeholder="you@example.com"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={Theme.textMuted0}
                   value={email}
                   onChangeText={setEmail}
                   autoCapitalize="none"
@@ -217,7 +219,7 @@ export default function SignupScreen() {
                 <TextInput
                   style={styles.input}
                   placeholder="At least 8 characters"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={Theme.textMuted0}
                   value={password}
                   onChangeText={setPassword}
                   secureTextEntry
@@ -263,10 +265,10 @@ export default function SignupScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f8f8',
+    backgroundColor: Theme.bg,
   },
   scrollContent: {
     flexGrow: 1,
@@ -285,15 +287,15 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: '600',
-    color: '#1a1a1a',
+    color: Theme.text,
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 15,
-    color: '#666',
+    color: Theme.textMuted,
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: Theme.card,
     borderRadius: 16,
     padding: 24,
     shadowColor: '#000',
@@ -303,7 +305,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   appleButton: {
-    backgroundColor: '#fff',
+    backgroundColor: Theme.card,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
@@ -333,7 +335,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emailToggleText: {
-    color: '#d97706',
+    color: Theme.accentAmber,
     fontSize: 15,
     fontWeight: '500',
   },
@@ -345,11 +347,11 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: Theme.borderLight,
   },
   dividerText: {
     marginHorizontal: 12,
-    color: '#888',
+    color: Theme.textMuted0,
     fontSize: 14,
   },
   inputContainer: {
@@ -358,17 +360,17 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#444',
+    color: Theme.textSecondary,
     marginBottom: 8,
   },
   input: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Theme.bgAlt,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: Theme.borderLight,
     borderRadius: 10,
     padding: 14,
     fontSize: 16,
-    color: '#1a1a1a',
+    color: Theme.text,
   },
   codeInput: {
     textAlign: 'center',
@@ -376,7 +378,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
   },
   signUpButton: {
-    backgroundColor: '#d97706',
+    backgroundColor: Theme.accentAmber,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
@@ -393,7 +395,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   backButtonText: {
-    color: '#666',
+    color: Theme.textMuted,
     fontSize: 14,
   },
   footer: {
@@ -403,12 +405,12 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   footerText: {
-    color: '#666',
+    color: Theme.textMuted,
     fontSize: 14,
   },
   footerLink: {
-    color: '#d97706',
+    color: Theme.accentAmber,
     fontSize: 14,
     fontWeight: '600',
   },
-});
+}));

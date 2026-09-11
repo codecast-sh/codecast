@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { themedStyles, useTheme } from '@/constants/Theme';
 import {
   Animated,
   Easing,
@@ -75,6 +76,7 @@ export function MessageNavigatorSheet({
   currentMessageId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [search, setSearch] = useState('');
@@ -332,6 +334,7 @@ function NavigatorRowView({
   onPress: (id: string) => void;
   onLongPress: (id: string) => void;
 }) {
+  const Theme = useTheme();
   const hidden = row.kind !== 'user';
   const timeAgo = formatTimeAgo(row.timestamp);
   const ordinalLabel = hidden ? MACHINE_KIND_LABEL[row.kind as HiddenKind] : `#${row.originalIndex + 1}`;
@@ -399,7 +402,7 @@ function NavigatorRowView({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   fill: { flex: 1 },
   list: {
     flexGrow: 0,
@@ -565,4 +568,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: Spacing.xxl,
   },
-});
+}));

@@ -16,7 +16,7 @@ import {
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
@@ -35,6 +35,7 @@ type TaskStatus = keyof typeof STATUS_CONFIG;
 type TaskPriority = keyof typeof PRIORITY_CONFIG;
 
 export default function TaskDetailScreen() {
+  const Theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const tasks = useInboxStore((s) => s.tasks);
@@ -461,7 +462,7 @@ function executionColor(status: string): { backgroundColor: string; borderColor:
   }
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
   loading: {
@@ -758,4 +759,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
   },
-});
+}));

@@ -67,3 +67,21 @@
 @media (prefers-reduced-motion: reduce) {
   .face-action-talk-on { animation: none; }
 }
+
+/* In a row of equal buttons (the avatar bar's hover card): the key takes its
+   share of the row and wears the row's shape, so Talk, Huddle and Message
+   read as one set rather than a pill among rectangles. */
+.face-actions-fill {
+  flex: 1 1 0;
+  display: flex;
+  min-width: 0;
+}
+.face-actions-fill .face-action {
+  flex: 1 1 0;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}

@@ -10,6 +10,9 @@ import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
+import { filesForWire, type SyncFile } from "./userFiles.js";
+export { filesForWire, type SyncFile } from "./userFiles.js";
 
 const fetchWithIngestDeadline = ((input, init) => {
   const deadline = currentTranscriptDeadline();
@@ -44,6 +47,8 @@ const RESCUABLE_IMAGE_TYPES = new Set([
 ]);
 const MAX_INLINE_IMAGE_SIZE = 500_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
+const MAX_FILES_PER_MESSAGE = 10;
+
 // Upload images concurrently rather than one-at-a-time. Uploads go to file storage
 // (not the conversation hot-doc), so they don't contend on OCC; serializing them
 // made an image-heavy sync chunk slower than the live file grew, so the session
@@ -385,9 +390,10 @@ export class SyncService {
   // only so tests can shorten it; production always uses UPLOAD_IMAGE_TIMEOUT_MS.
   private imageUploadTimeoutMs = UPLOAD_IMAGE_TIMEOUT_MS;
   // App-server progress is re-materialized after every item, so the same local
-  // image path can be seen repeatedly during one turn. Reuse its storage object
-  // while the file's size/mtime are unchanged.
-  private localImageUploads = new Map<string, {
+  // path can be seen repeatedly during one turn. Reuse its storage object while
+  // the file's size/mtime are unchanged. Shared by images and sent files: the
+  // key is the path and the answer is the same storage object either way.
+  private localUploads = new Map<string, {
     size: number;
     mtimeMs: number;
     mediaType: string;
@@ -639,30 +645,13 @@ export class SyncService {
   // Report the browser sign-in flow's outcome (start_login command). Confirmed
   // also makes the server kick off the auth-blocked revive; the returned count
   // is how many sessions it queued.
-  // Setup-token mint flow status (the web's reactive channel, mirrors
-  // completeLoginFlow). "pending" is stamped by the daemon itself for
-  // auto-mints; web-requested mints arrive already pending.
-  async reportMintFlow(
-    status: "pending" | "confirmed" | "rejected",
-    profile: string,
-    email?: string,
-    reason?: string,
-  ): Promise<void> {
-    await this.throttle();
-    await this.mutate("accountSwitch:reportMintFlow" as any, {
-      api_token: this.apiToken,
-      device_id: deviceId(),
-      status,
-      profile,
-      ...(email ? { email } : {}),
-      ...(reason ? { reason } : {}),
-    });
-  }
-
   async completeLoginFlow(
     status: "confirmed" | "rejected",
     email?: string,
     reason?: string,
+    // A sign-in that repaired one saved profile's own store (no keychain
+    // change, nothing to revive on the keychain).
+    profile?: string,
   ): Promise<number> {
     await this.throttle();
     const res = await this.mutate("accountSwitch:completeLoginFlow" as any, {
@@ -671,6 +660,7 @@ export class SyncService {
       status,
       ...(email ? { email } : {}),
       ...(reason ? { reason } : {}),
+      ...(profile ? { profile } : {}),
     });
     return res?.revived ?? 0;
   }
@@ -694,6 +684,58 @@ export class SyncService {
       if (error instanceof AuthExpiredError) throw error;
       return null;
     }
+  }
+
+  /**
+   * Upload sent files to storage, in place, before the messages enter the send
+   * path or the retry queue — the same treatment images get, for the same
+   * reason: the queue must not carry payloads, and a retry must not re-upload.
+   *
+   * A file that cannot be delivered keeps its row and gains an `error`, because
+   * the agent already told the human it sent something. A card that says "this
+   * file was 40 MB, too large to attach" is the honest outcome; a card that
+   * silently disappears is the bug this whole path exists to fix.
+   */
+  async offloadFiles(messages: Array<{ files?: SyncFile[] }>): Promise<void> {
+    const uploads = countingSemaphore(IMAGE_UPLOAD_CONCURRENCY);
+
+    const resolveFile = async (file: SyncFile): Promise<SyncFile> => {
+      if (file.storageId || file.error) return file;
+      const name = file.name || (file.localPath ? fileBasename(file.localPath) : "file");
+      const mediaType = file.mediaType || mediaTypeForFile(name);
+      if (!file.localPath) return { ...file, name, mediaType, error: "missing" };
+      try {
+        const fileStat = await stat(file.localPath);
+        if (!fileStat.isFile()) return { ...file, name, mediaType, error: "missing" };
+        if (fileStat.size > MAX_USER_FILE_SIZE) {
+          return { ...file, name, mediaType, size: fileStat.size, error: "too_large" };
+        }
+        const cached = this.localUploads.get(file.localPath);
+        if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
+          return { ...file, name, mediaType: cached.mediaType, size: fileStat.size, storageId: cached.storageId };
+        }
+        const bytes = await readFile(file.localPath);
+        const storageId = await uploads.run(() => this.uploadBytes(bytes, mediaType, "Sent file"));
+        if (!storageId) return { ...file, name, mediaType, size: fileStat.size, error: "upload_failed" };
+        this.localUploads.set(file.localPath, {
+          size: fileStat.size,
+          mtimeMs: fileStat.mtimeMs,
+          mediaType,
+          storageId,
+        });
+        return { ...file, name, mediaType, size: fileStat.size, storageId };
+      } catch (err) {
+        console.warn(`[SyncService] Failed to read sent file ${file.localPath}: ${err instanceof Error ? err.message : String(err)}`);
+        return { ...file, name, mediaType, error: "missing" };
+      }
+    };
+
+    await Promise.all(
+      messages.map(async (msg) => {
+        if (!msg.files || msg.files.length === 0) return;
+        msg.files = await Promise.all(msg.files.slice(0, MAX_FILES_PER_MESSAGE).map(resolveFile));
+      }),
+    );
   }
 
   // Offload large inline images to Convex storage *before* the messages enter
@@ -730,7 +772,7 @@ export class SyncService {
             console.warn(`[SyncService] Local image too large: ${fileStat.size} bytes > ${MAX_IMAGE_SIZE}`);
             return null;
           }
-          const cached = this.localImageUploads.get(img.localPath);
+          const cached = this.localUploads.get(img.localPath);
           if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
             return {
               mediaType: cached.mediaType,
@@ -765,7 +807,7 @@ export class SyncService {
       const storageId = await uploads.run(() => this.uploadImage(data, candidate.mediaType));
       if (storageId) {
         if (localFile) {
-          this.localImageUploads.set(localFile.path, {
+          this.localUploads.set(localFile.path, {
             size: localFile.size,
             mtimeMs: localFile.mtimeMs,
             mediaType: candidate.mediaType,
@@ -885,12 +927,24 @@ export class SyncService {
       console.warn(`[SyncService] Image upload rejected: invalid media type ${mediaType}`);
       return null;
     }
+    const binaryData = decoded.data;
+    if (binaryData.length > MAX_IMAGE_SIZE) {
+      console.warn(`[SyncService] Image too large: ${binaryData.length} bytes > ${MAX_IMAGE_SIZE}`);
+      return null;
+    }
+    return this.uploadBytes(binaryData, decoded.mediaType, "Image");
+  }
+
+  /**
+   * Put bytes in storage and return the storage id.
+   *
+   * The endpoint is generic — `images:generateUploadUrl` mints an upload URL for
+   * any authenticated caller, and storage holds a PDF as happily as a PNG — so
+   * images and sent files share this one leg. Callers own their own validation
+   * and size caps before they get here; `label` only names the thing in logs.
+   */
+  async uploadBytes(bytes: Uint8Array, mediaType: string, label = "File"): Promise<string | null> {
     try {
-      const binaryData = decoded.data;
-      if (binaryData.length > MAX_IMAGE_SIZE) {
-        console.warn(`[SyncService] Image too large: ${binaryData.length} bytes > ${MAX_IMAGE_SIZE}`);
-        return null;
-      }
       const uploadUrl = await withTimeout(
         this.mutate(
           "images:generateUploadUrl" as any,
@@ -902,21 +956,21 @@ export class SyncService {
       const response = await withTimeout(
         fetchWithIngestDeadline(uploadUrl, {
           method: "POST",
-          headers: { "Content-Type": decoded.mediaType },
-          body: new Uint8Array(binaryData),
+          headers: { "Content-Type": mediaType },
+          body: new Uint8Array(bytes),
           signal: AbortSignal.timeout(this.imageUploadTimeoutMs),
         }),
         this.imageUploadTimeoutMs,
-        "image upload fetch",
+        "upload fetch",
       );
       if (!response.ok) {
-        console.warn(`[SyncService] Image upload failed: HTTP ${response.status}`);
+        console.warn(`[SyncService] ${label} upload failed: HTTP ${response.status}`);
         return null;
       }
       const result = await response.json();
       return result.storageId;
     } catch (err) {
-      console.warn(`[SyncService] Image upload error: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[SyncService] ${label} upload error: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
@@ -1131,6 +1185,7 @@ export class SyncService {
     toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
     images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string }>;
+    files?: SyncFile[];
     subtype?: string;
     model?: string;
   }): Promise<string> {
@@ -1140,6 +1195,8 @@ export class SyncService {
       images: params.images ? params.images.map((image) => ({ ...image })) : undefined,
     }];
     await this.offloadImages(imageHolder);
+    const fileHolder = [{ files: params.files ? params.files.map((file) => ({ ...file })) : undefined }];
+    await this.offloadFiles(fileHolder);
     const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
     const redactedThinking = params.thinking
       ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE)
@@ -1195,6 +1252,7 @@ export class SyncService {
           tool_calls: toolCalls,
           tool_results: toolResults,
           images: images.length > 0 ? images : undefined,
+          files: filesForWire(fileHolder[0].files),
           subtype: params.subtype,
           model: params.model,
           timestamp: params.timestamp,
@@ -1216,6 +1274,7 @@ export class SyncService {
       toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
       images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string }>;
+      files?: SyncFile[];
       subtype?: string;
       model?: string;
     }>;
@@ -1228,6 +1287,7 @@ export class SyncService {
     }
     await this.rescueLocalImageLinks(params.messages);
     await this.offloadImages(params.messages);
+    await this.offloadFiles(params.messages);
 
     const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
       human: "user",
@@ -1290,6 +1350,7 @@ export class SyncService {
         tool_calls: toolCalls,
         tool_results: toolResults,
         images: images.length > 0 ? images : undefined,
+        files: filesForWire(msg.files),
         subtype: msg.subtype,
         model: msg.model,
         timestamp: msg.timestamp,
@@ -1858,7 +1919,6 @@ export class SyncService {
       return result as string;
     });
   }
-
 
   async setSessionError(conversationId: string, error?: string, opts: { force?: boolean } = {}): Promise<void> {
     if (!this.apiToken) return;

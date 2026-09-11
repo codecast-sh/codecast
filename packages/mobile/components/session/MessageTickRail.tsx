@@ -9,7 +9,7 @@ import { Animated, PanResponder, StyleSheet, TouchableOpacity, View, type Access
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { Text } from '@/components/Themed';
-import { CHROME_FONT_CAP, Theme } from '@/constants/Theme';
+import { CHROME_FONT_CAP, Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { type NavigatorRow, type NavigatorTick } from '@codecast/web/lib/messageNavigator';
 
 export const TICK_RAIL_WIDTH = 12;
@@ -53,6 +53,7 @@ function tickColor(row: NavigatorRow, active: boolean): string {
 }
 
 export function MessageTickRail({ ticks, promptCount, activeMessageId, visible, onOpen, onScrub, onScrubEnd }: Props) {
+  const Theme = useTheme();
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const [scrubIndex, setScrubIndex] = useState(-1);
   const scrubIndexRef = useRef(-1);
@@ -179,6 +180,7 @@ export function MessageTickRail({ ticks, promptCount, activeMessageId, visible, 
 // width to render its text in. No entry animation (it must track the finger
 // instantly); it disappears with the scrub state on release.
 function ScrubLabel({ row, top }: { row: NavigatorRow; top: number }) {
+  const Theme = useTheme();
   return (
     <View pointerEvents="none" style={[styles.scrubLabel, { top }]}>
       <Text style={styles.scrubOrdinal} maxFontSizeMultiplier={CHROME_FONT_CAP}>
@@ -197,6 +199,7 @@ function ScrubLabel({ row, top }: { row: NavigatorRow; top: number }) {
 // badge — a count on a header icon reads as an unread indicator; the count
 // only enriches the accessibility label.
 export function MessageListButton({ count, onPress }: { count?: number; onPress: () => void }) {
+  const Theme = useTheme();
   const label = count ? `${count} messages, open message list` : 'Open message list';
   return (
     <TouchableOpacity
@@ -212,7 +215,7 @@ export function MessageListButton({ count, onPress }: { count?: number; onPress:
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   railWrap: {
     position: 'absolute',
     right: 0,
@@ -265,4 +268,4 @@ const styles = StyleSheet.create({
     color: Theme.text,
     flexShrink: 1,
   },
-});
+}));

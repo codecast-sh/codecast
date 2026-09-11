@@ -7,7 +7,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Text as RNText } from '@/components/Themed';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
-import { Theme, CHROME_FONT_CAP } from '@/constants/Theme';
+import { Theme, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 
 // Mobile twin of web's SuggestionPills (components/SuggestionPills.tsx): same
 // server contract — stored suggestions render only while their anchor still
@@ -28,6 +28,7 @@ export function SuggestionPills({
   onSend: (text: string) => void;
   onEdit: (text: string) => void;
 }) {
+  const Theme = useTheme();
   const isRealId = isConvexId(conversationId as string);
 
   // Same primitive tail signature as the web component, so unrelated store
@@ -133,7 +134,7 @@ export function SuggestionPills({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   strip: {
     flexGrow: 0,
     marginBottom: 6,
@@ -163,4 +164,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));
