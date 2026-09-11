@@ -2,7 +2,7 @@ import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS, isTransientRateLimit429,
 import { describe, expect, test } from "bun:test";
 // The REAL web helpers, imported so the cross-check below enforces the
 // convex/web agreement instead of restating it.
-import { isSessionStashed, isSessionKilled, isSessionDismissed } from "../../web/store/inboxStore";
+import { isSessionStashed, isSessionKilled, isSessionDismissed } from "../../web/lib/sessionRetirement";
 import {
   isNoiseTitle,
   isOrphanOrSubagent,

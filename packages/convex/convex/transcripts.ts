@@ -43,6 +43,7 @@ import {
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   RECORDING_SUMMARY_PUSH_TYPE,
   TRANSCRIBE_MAX_BYTES,
@@ -50,7 +51,10 @@ import {
   formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
   isRecRoomKey,
+  liveFeedChunkHeader,
+  ownRoomChunkHeader,
   parseRoomKey,
+  sessionRoomConversationId,
 } from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
@@ -66,6 +70,83 @@ const ROUTE_VALIDATOR = v.object({
   mode: v.union(v.literal("live"), v.literal("after")),
   sent_seq: v.number(),
 });
+
+type Route = { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; sent_seq: number };
+
+/** The session this room BELONGS to, if it is a session room: the one route
+ *  target that is the huddle's own home rather than somewhere to report to. */
+export const ownRoomTarget = sessionRoomConversationId;
+
+/** The routes a room gets for free, on the transcript's first breath.
+ *
+ *  A session room has one: the session itself, live. Talking in a session's
+ *  huddle IS talking to its agent — the words reach it on every conversational
+ *  gap instead of waiting for a digest nobody would read to it. Seeded here
+ *  rather than by the client so it holds for every way a run starts (a joining
+ *  window's auto-scribe, the manual toggle, web and mobile alike) and for
+ *  whoever ends up scribing.
+ *
+ *  A caller that named its own routes has decided already; a route the same
+ *  caller asked for wins on kind and target, so an explicit "after" feed to
+ *  this session is not silently upgraded to live. */
+export function withDefaultRoutes(roomKey: string, routes: Route[]): Route[] {
+  const own = ownRoomTarget(roomKey);
+  if (!own) return routes;
+  if (routes.some((r) => r.kind === "session" && r.target === own)) return routes;
+  return [...routes, { kind: "session", target: own, mode: "live", sent_seq: 0 }];
+}
+
+/** Keep call_agent_feeds equal to this transcript's live session routes.
+ *
+ *  A fed session is a participant: its replies are mirrored into the room
+ *  chat (callChat.mirrorAgentTurn) and the room's chat lines reach it. Both
+ *  need a cheap "which huddle is this session in" that a settle or a chat
+ *  post can answer with one indexed read, and this table is that answer.
+ *  Every writer of routes calls here, and an ended transcript wipes its rows,
+ *  so the table can never claim a feed the transcript no longer has.
+ *
+ *  A new row is stamped with the session's newest assistant message: the
+ *  watermark the mirror advances from, so what the agent said before the
+ *  huddle is never replayed into it. */
+export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<void> {
+  const existing: Doc<"call_agent_feeds">[] = await ctx.db
+    .query("call_agent_feeds")
+    .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
+    .collect();
+  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users"> }>();
+  if (t.status === "live") {
+    for (const r of t.routes) {
+      if (r.kind !== "session" || r.mode !== "live") continue;
+      const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
+      if (!conv) continue;
+      wanted.set(String(conv._id), {
+        conversationId: conv._id as Id<"conversations">,
+        addedBy: (r.added_by ?? t.started_by) as Id<"users">,
+      });
+    }
+  }
+  for (const row of existing) {
+    if (wanted.has(String(row.conversation_id))) wanted.delete(String(row.conversation_id));
+    else await ctx.db.delete(row._id);
+  }
+  for (const { conversationId, addedBy } of wanted.values()) {
+    const newest = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q: any) =>
+        q.eq("conversation_id", conversationId).eq("role", "assistant"),
+      )
+      .order("desc")
+      .first();
+    await ctx.db.insert("call_agent_feeds", {
+      conversation_id: conversationId,
+      transcript_id: t._id,
+      room_key: t.room_key,
+      team_id: t.team_id,
+      added_by: addedBy,
+      last_mirrored_message_id: newest?._id,
+    });
+  }
+}
 
 // A transcript the caller may write to: they started it and it is live.
 async function requireOwnLiveTranscript(
@@ -147,9 +228,13 @@ export const start = mutation({
       started_by: userId,
       status: "live",
       started_at: Date.now(),
-      routes: (args.routes ?? []).map((r) => ({ ...r, added_by: userId })),
+      routes: withDefaultRoutes(args.room_key, args.routes ?? []).map((r) => ({
+        ...r,
+        added_by: userId,
+      })),
       last_seq: 0,
     });
+    await syncAgentFeeds(ctx, (await ctx.db.get(id))!);
     return { transcript_id: id, existing: false, role: "scribe" };
   },
 });
@@ -174,6 +259,7 @@ export const setRoutes = mutation({
       };
     });
     await ctx.db.patch(t._id, { routes });
+    await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
   },
 });
 
@@ -213,6 +299,7 @@ export const addRoute = mutation({
         { kind: args.kind, target: args.target, mode: args.mode, sent_seq: 0, added_by: userId },
       ],
     });
+    await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
     if (args.mode === "live") {
       await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
         transcript_id: t._id,
@@ -242,6 +329,7 @@ export const removeRoute = mutation({
     await ctx.db.patch(t._id, {
       routes: t.routes.filter((r) => !(r.kind === args.kind && r.target === args.target)),
     });
+    await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
   },
 });
 
@@ -475,6 +563,9 @@ export async function endTranscript(
     ended_at: Math.max(t.started_at, endedAt),
     summary_status: "pending",
   });
+  // The fed sessions leave the room with the words: an ended huddle has no
+  // chat to mirror a reply into.
+  await syncAgentFeeds(ctx, { ...t, status: "ended" });
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
     transcript_id: t._id,
     include_after_routes: true,
@@ -683,7 +774,11 @@ async function scheduleHuddleDigest(
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
     as_user: t.started_by,
     to: target.conversationId,
-    body: formatHuddleSummaryTag(String(t._id), digest),
+    body: formatHuddleSummaryTag(String(t._id), digest, {
+      heardLive: t.routes.some(
+        (r) => r.kind === "session" && r.target === target.conversationId && r.mode === "live",
+      ),
+    }),
   });
 }
 
@@ -1448,10 +1543,14 @@ export const deliverRoutes = internalAction({
       const asUser = route.added_by ?? transcript.started_by;
       try {
         if (route.kind === "session") {
+          // A session hearing its OWN room is being spoken to, not sent a
+          // report about a meeting elsewhere, and the two want different
+          // words in front of the same chunk.
+          const own = ownRoomTarget(transcript.room_key) === route.target;
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,
             to: route.target,
-            body: `Huddle transcript (live)\n\n${chunk}`,
+            body: `${own ? ownRoomChunkHeader() : liveFeedChunkHeader()}\n\n${chunk}`,
           });
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {

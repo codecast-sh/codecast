@@ -36,10 +36,13 @@ export class CachedJsonStore<V> {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing: Promise<void> | null = null;
   private exitHandlerRegistered = false;
+  private prunePromise: Promise<void> | null = null;
+  private pruneTouched = new Set<string>();
 
   private readonly filePath: string;
   private readonly flushDelayMs: number;
   private readonly keepOnLoad?: (key: string, value: V) => boolean;
+  private readonly keepOnLoadAsync?: (key: string, value: V) => Promise<boolean>;
 
   constructor(opts: {
     filePath: string;
@@ -47,10 +50,12 @@ export class CachedJsonStore<V> {
     flushDelayMs?: number;
     /** Return false to drop an entry at load time (e.g. its file no longer exists). */
     keepOnLoad?: (key: string, value: V) => boolean;
+    keepOnLoadAsync?: (key: string, value: V) => Promise<boolean>;
   }) {
     this.filePath = opts.filePath;
     this.flushDelayMs = opts.flushDelayMs ?? 1000;
     this.keepOnLoad = opts.keepOnLoad;
+    this.keepOnLoadAsync = opts.keepOnLoadAsync;
   }
 
   private readFromDisk(): Record<string, V> {
@@ -84,7 +89,28 @@ export class CachedJsonStore<V> {
 
     this.cache = data;
     this.registerExitFlush();
+    if (this.keepOnLoadAsync) this.prunePromise = this.pruneLoaded(data);
     return data;
+  }
+
+  private async pruneLoaded(data: Record<string, V>): Promise<void> {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const keys = Object.keys(data);
+    for (let i = 0; i < keys.length; i += 16) {
+      await Promise.all(keys.slice(i, i + 16).map(async (key) => {
+        if (this.pruneTouched.has(key)) return;
+        const keep = await this.keepOnLoadAsync!(key, data[key]).catch(() => true);
+        if (!keep && !this.pruneTouched.has(key)) this.delete(key);
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    this.prunePromise = null;
+    this.pruneTouched.clear();
+  }
+
+  async prune(): Promise<void> {
+    this.ensureLoaded();
+    await this.prunePromise;
   }
 
   get(key: string): V | undefined {
@@ -102,6 +128,7 @@ export class CachedJsonStore<V> {
 
   set(key: string, value: V): void {
     const cache = this.ensureLoaded();
+    if (this.prunePromise) this.pruneTouched.add(key);
     cache[key] = value;
     this.pendingWrites.set(key, value);
     this.pendingDeletes.delete(key);
@@ -110,6 +137,7 @@ export class CachedJsonStore<V> {
 
   delete(key: string): void {
     const cache = this.ensureLoaded();
+    if (this.prunePromise) this.pruneTouched.add(key);
     if (key in cache) delete cache[key];
     this.pendingDeletes.add(key);
     this.pendingWrites.delete(key);
@@ -229,7 +257,7 @@ export class CachedJsonStore<V> {
  */
 export function rebindingStore<V>(
   resolvePath: () => string,
-  opts: { flushDelayMs?: number; keepOnLoad?: (key: string, value: V) => boolean } = {},
+  opts: { flushDelayMs?: number; keepOnLoad?: (key: string, value: V) => boolean; keepOnLoadAsync?: (key: string, value: V) => Promise<boolean> } = {},
 ): () => CachedJsonStore<V> {
   let current: { filePath: string; store: CachedJsonStore<V> } | null = null;
   return () => {

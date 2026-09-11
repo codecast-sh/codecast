@@ -197,6 +197,20 @@ export type ChatRailRow = {
 // altKey supersede rekeys it onto the real row when the echo lands.
 
 export const CHAT_CHANNEL_STUB_PREFIX = "chatstub-";
+
+// The DM opens still on their way to the server, by the stub id the surface
+// was handed. `openDmChannel` answers synchronously with that stub; the burst
+// that starts on it needs the real id the server answers with, and a failed
+// open needs to be a failure now, not a row that never arrives.
+const dmOpensInFlight = new Map<string, Promise<string | null>>();
+
+/** The server's answer to the DM open behind a stub id, while it is still
+ *  in flight: the real channel id, or a rejection carrying the reason. Null
+ *  once it has landed (the row is in the store by then) or for an id that
+ *  was never a stub of this window's. */
+export function dmOpenInFlight(stubId: string): Promise<string | null> | null {
+  return dmOpensInFlight.get(stubId) ?? null;
+}
 export const CHAT_MESSAGE_STUB_PREFIX = "chatmsgstub-";
 export const CHAT_READ_STUB_PREFIX = "chatreadstub-";
 export const CHAT_REACTION_STUB_PREFIX = "chatreactstub-";
@@ -944,9 +958,21 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const existing = findDmChannelId(state.chatChannels, dmKey);
       if (existing) return existing;
       const clientId = newChatChannelClientId();
-      void (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).catch(() => {
-        // Delivery is the outbox's problem; see createChatChannel.
-      });
+      const created = (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).then(
+        // The server names the room it opened or found. Kept beside the stub
+        // so a caller holding only the stub id (the walkie, mid-burst) can
+        // learn the real id from the answer itself rather than waiting for
+        // the row to come back through the channel sync.
+        (res: any) => (typeof res?.channel_id === "string" ? String(res.channel_id) : null),
+      );
+      dmOpensInFlight.set(clientId, created);
+      created
+        .catch(() => {
+          // Delivery is the outbox's problem; see createChatChannel.
+        })
+        .finally(() => {
+          dmOpensInFlight.delete(clientId);
+        });
       return clientId;
     },
 

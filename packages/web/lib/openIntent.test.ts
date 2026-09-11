@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
+import { leavesOf } from "@/store/stageSplit";
 import {
   beginClickIntent,
   divertNavigation,
@@ -20,9 +21,13 @@ describe("openTargetForClick", () => {
     expect(openTargetForClick({ button: 0, ctrlKey: true })).toBe("tab");
     expect(openTargetForClick({ button: 1 })).toBe("tab");
     expect(openTargetForClick({ button: 0, metaKey: true, shiftKey: true })).toBe("window");
-    // Shift alone and Alt (browser "download") are not ours.
+    // Shift alone is not ours; Option alone splits the stage, Option with
+    // any other modifier (or a middle click) is nobody's gesture.
     expect(openTargetForClick({ button: 0, shiftKey: true })).toBeNull();
+    expect(openTargetForClick({ button: 0, altKey: true })).toBe("split");
     expect(openTargetForClick({ button: 0, metaKey: true, altKey: true })).toBeNull();
+    expect(openTargetForClick({ button: 0, shiftKey: true, altKey: true })).toBeNull();
+    expect(openTargetForClick({ button: 1, altKey: true })).toBeNull();
     expect(openTargetForClick({ button: 2, metaKey: true })).toBeNull();
   });
 });
@@ -96,6 +101,38 @@ describe("divertNavigation", () => {
     await flush();
     expect(useInboxStore.getState().tabs).toHaveLength(1);
     expect(opened).toEqual(["/conversation/jx7abc#msg-m1"]);
+  });
+
+  it("Option-click opens the path as a pane beside the stage", async () => {
+    (globalThis as any).window.innerWidth = 1400;
+    beginClickIntent("split");
+    expect(divertNavigation("/tasks/ct-1")).toBe(true);
+    await flush();
+    const { tabs } = useInboxStore.getState();
+    expect(tabs).toHaveLength(1); // no new tab: the view split instead
+    const leaves = tabs[0].layout ? leavesOf(tabs[0].layout) : [];
+    expect(leaves.map((l) => l.path)).toEqual(["/inbox", "/tasks/ct-1"]);
+    expect(tabs[0].focusedLeafId).toBe(leaves[1].id);
+  });
+
+  it("a session link splits in as the conversation itself, not an inbox around it", async () => {
+    (globalThis as any).window.innerWidth = 1400;
+    beginClickIntent("split");
+    expect(divertSessionOpen("jx7abc")).toBe(true);
+    await flush();
+    const layout = useInboxStore.getState().tabs[0].layout;
+    expect(layout && leavesOf(layout).map((l) => l.path)).toEqual(["/inbox", "/conversation/jx7abc"]);
+  });
+
+  it("Option-click on a stage too narrow to split navigates the tab instead", async () => {
+    (globalThis as any).window.innerWidth = 800;
+    beginClickIntent("split");
+    expect(divertNavigation("/tasks/ct-1")).toBe(true);
+    await flush();
+    const { tabs } = useInboxStore.getState();
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].layout).toBeUndefined();
+    expect(tabs[0].path).toBe("/tasks/ct-1");
   });
 
   it("clears on the next macrotask even when nothing claimed it", async () => {

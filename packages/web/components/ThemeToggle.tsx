@@ -1,18 +1,18 @@
 import { useTheme } from "./ThemeProvider";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { TopbarButton } from "./TopbarButton";
 
 export function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
 
   return (
     <ShortcutTooltip label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
-    <button
+    <TopbarButton
       onClick={toggleTheme}
-      className="p-2 rounded-lg transition-colors hover:bg-sol-bg-alt/50"
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
       {theme === "dark" ? (
-        <svg className="w-5 h-5 text-sol-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -21,7 +21,7 @@ export function ThemeToggle() {
           />
         </svg>
       ) : (
-        <svg className="w-5 h-5 text-sol-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -30,7 +30,7 @@ export function ThemeToggle() {
           />
         </svg>
       )}
-    </button>
+    </TopbarButton>
     </ShortcutTooltip>
   );
 }

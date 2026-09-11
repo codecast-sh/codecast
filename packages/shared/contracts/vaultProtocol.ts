@@ -41,6 +41,15 @@ export interface VaultRootsResponse {
   vaults: VaultInfo[];
 }
 
+/** GET /vault/locate?path=<absolute local path> response: the vault that holds
+ *  the path, registered on the spot when none did (vaultRegistry.locateVault),
+ *  and the path's vault-relative form ("" for the root itself). 404 when the
+ *  path does not exist on the daemon's machine. */
+export interface VaultLocateResponse {
+  vault: VaultInfo;
+  rel: string;
+}
+
 /** One file entry from GET /vault/scan. Paths are vault-relative, "/"-separated. */
 export interface VaultFileEntry {
   path: string;

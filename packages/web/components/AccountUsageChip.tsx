@@ -2,11 +2,12 @@
 
 // Header chip: live model usage for ONE provider — the one backing the
 // session you're viewing (sticky to the last shown when the selection is
-// neither Claude nor Codex), with a meter of its most-utilized limit window,
-// always visible so a session-limit surprise never is one. Hovering the chip
-// opens the full panel: the ACTIVE accounts broken out on top (what's "on"
-// right now), the rest grouped by email below, the auto-switch toggle, and
-// the path to Settings.
+// neither Claude nor Codex). A status dot carries its most-utilized limit
+// window — green with headroom, orange near the limit, red once sessions on
+// it are blocked — always visible so a session-limit surprise never is one.
+// Hovering the chip opens the full panel with the real meters: the ACTIVE
+// accounts broken out on top (what's "on" right now), the rest grouped by
+// email below, the auto-switch toggle, and the path to Settings.
 
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -23,7 +24,8 @@ import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
-import { AccountUsageBars, LoginExpiredBadge, UsageRefreshButton } from "./AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
+import { StatusDot } from "./StatusDot";
 
 type ProfileRow = {
   name: string;
@@ -34,52 +36,31 @@ type ProfileRow = {
   login_expired_at?: number;
 };
 
-function MiniMeter({ percent }: { percent: number }) {
-  const tone = usageTone(percent);
-  return (
-    <span className="tb-squeeze-2 inline-block h-[5px] w-14 overflow-hidden rounded-full bg-sol-bg-inset align-middle">
-      <span
-        className="block h-full rounded-full transition-[width] duration-500"
-        style={{ width: `${Math.min(100, Math.max(2, percent))}%`, background: tone }}
-      />
-    </span>
-  );
-}
-
-// The chip's visible slice: name + meter + % — a fixed layout that never
-// reflows on hover (detail lives in the hover panel). A provider with
-// no usage data renders as icon + name with no meter.
+// The chip's visible slice: status dot + provider icon + account name — the
+// same dot-led shape as the daemon and agents chips beside it, and a fixed
+// layout that never reflows on hover (the percentages live in the hover
+// panel). The dot pings while the window is pegged: that is the state that
+// parks sessions, and the one the reader must not miss.
 function ProviderSegment({
   icon,
   label,
   percent,
   tone,
-  stub,
   title,
 }: {
   icon: ReactNode;
   label: string;
   percent: number | null;
   tone: string;
-  stub: boolean;
   title: string;
 }) {
   return (
-    <span className="flex items-center gap-1.5" style={{ opacity: stub ? 0.4 : 1 }} aria-label={title}>
+    <span className="flex items-center gap-1.5" aria-label={title}>
+      <StatusDot color={tone} ping={percent != null && percent >= 100} />
       {icon}
-      {!stub && (
-        <span className="tb-squeeze-1 max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
-          {label}
-        </span>
-      )}
-      {!stub && percent != null && (
-        <>
-          <MiniMeter percent={percent} />
-          <span className="font-mono text-[11px] font-bold tabular-nums" style={{ color: tone }}>
-            {Math.round(percent)}%
-          </span>
-        </>
-      )}
+      <span className="tb-squeeze-1 max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
+        {label}
+      </span>
     </span>
   );
 }
@@ -265,6 +246,7 @@ export function AccountUsageChip() {
                 {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ?? e.p.tier}` : ""}
               </span>
               <LoginExpiredBadge profile={e.p} />
+              {e.provider === "claude" && device && <ProfileSignInButton device={device} profile={e.p} />}
               {e.isActive ? (
                 <span className="shrink-0 text-[10px] font-medium text-sol-green">active</span>
               ) : e.provider === "claude" ? (
@@ -306,7 +288,6 @@ export function AccountUsageChip() {
             label={active?.name ?? "claude"}
             percent={worst}
             tone={claudeTone}
-            stub={false}
             title={
               !claudeUsed
                 ? `Claude "${active?.name}" — no usage this week`
@@ -319,7 +300,6 @@ export function AccountUsageChip() {
             label={codexLabel}
             percent={codexWorst}
             tone={codexTone}
-            stub={false}
             title={
               !codexUsed
                 ? `Codex "${codexLabel}" — no usage this week`

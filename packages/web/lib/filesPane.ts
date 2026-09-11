@@ -4,13 +4,11 @@
 // hold one (lib/stage.openBeside), otherwise the tab navigates. Cmd-click and
 // "open in new tab" never come here; the Link compat handles those.
 
-import { openBeside } from "./stage";
+import { canOpenBeside, openBeside } from "./stage";
 import { tabNavigate } from "../src/compat/tabRouting";
 
 /** True when a Files pane may open beside what's on stage right now. */
-export function canOpenFilesBeside(): boolean {
-  return typeof window !== "undefined" && window.innerWidth >= 900;
-}
+export const canOpenFilesBeside = canOpenBeside;
 
 /** Show `href` (a /files URL) as a pane beside the stage. */
 export function openFilesBeside(href: string): void {

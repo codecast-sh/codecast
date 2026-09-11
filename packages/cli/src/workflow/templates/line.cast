@@ -1,0 +1,39 @@
+// The line (docs/architecture/the-line.md L1): a role's default pipeline for
+// one task. Every agent node is a codecast session (backend=session) started
+// unattended (L4); implement runs in its own worktree; review runs in a fresh
+// session that sees only the branch, the title and the criteria (L3).
+//
+//   cast workflow run line.cast --task ct-x [--review-backend codex]
+//
+// $task_id, $task_title, $acceptance_criteria, $task_status and
+// $review_verdict come from the task; the runner refreshes them after every
+// node so the edges below can route on the verdict. $worktree and $branch are
+// set when the isolated node spawns (line-<task id>, codecast/line-<task id>).
+digraph line {
+  graph [goal="$task_title"]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  exit  [shape=Msquare,  label="Exit"]
+
+  analyze [label="Analyze", backend=session, agent=claude,
+    prompt="Read task $task_id (`cast task context $task_id`) and the code it touches. Do not change code.\n\nWrite the acceptance criteria as task steps, one per line, each a check a reviewer can run or observe:\n\n  cast task update $task_id --steps -\n\nKeep to five steps or fewer. If the task cannot be made concrete, run `cast task handoff $task_id --status needs_context --evidence -` naming what is missing, and stop. Otherwise end your turn with `cast task comment $task_id \"criteria written\" -t progress` and `cast state --status done \"Criteria written for $task_id\"`."]
+
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3,
+    prompt="Implement task $task_id: $task_title\n\nYou are in a dedicated git worktree on your own branch; work there. Read `cast task context $task_id` first: the steps are the acceptance criteria and the review comments hold any verdict from the last round.\n\nWrite the code, run the repo's checks, commit on this branch, and push it. Then end your turn with a structured handoff, never a bare summary:\n\n  cast task handoff $task_id --status done --evidence - --files a,b [--pr <url>]\n\nUse --status blocked or needs_context if you cannot finish, and say why in the evidence."]
+
+  verify [label="Verify", shape=parallelogram,
+    script="cd \"$(cast ws path $worktree 2>/dev/null || pwd)\" && cast ws check"]
+
+  review [label="Review", backend=session, agent=claude,
+    prompt="You are the independent reviewer for task $task_id: $task_title\n\nBranch: $branch (check it out, or read `git diff main...$branch`).\n\nAcceptance criteria:\n- $acceptance_criteria\n\nYou receive only the branch, the title and the criteria. Check each criterion against the diff and by running what you can. Do not fix the code yourself.\n\nEnd your turn with one verdict and the unmet criteria in the note:\n\n  cast task verdict $task_id approve|changes|reject --note -\n\napprove closes the task; changes sends it back to the implementer; reject reopens it as blocked for a person to decide."]
+
+  start -> analyze
+  analyze -> implement
+  implement -> verify
+  verify -> review    [condition="outcome = success"]
+  verify -> implement [condition="outcome = failure", label="checks failed"]
+  review -> exit      [condition="review_verdict = approve"]
+  review -> implement [condition="review_verdict = changes", label="changes"]
+  review -> exit      [condition="review_verdict = reject"]
+}

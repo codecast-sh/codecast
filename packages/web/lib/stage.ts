@@ -19,7 +19,7 @@ import {
 } from "../store/stageSplit";
 import { tabNavigate } from "../src/compat/tabRouting";
 import { isNonTabRoute } from "./tabRoutes";
-import { pathLabel, tabNeedsUrlRestore } from "./pathLabel";
+import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { isDetachedTabWindow } from "./desktop";
 
 // Dynamic on purpose: the tips module drags analytics into any import graph
@@ -111,6 +111,15 @@ export function sessionPanePath(sessionId: string): string {
 export function paneSessionId(path: string): string | null {
   const m = path.split("?")[0].match(/^\/conversation\/([^/#]+)$/);
   return m ? m[1] : null;
+}
+
+/** The spelling a route takes as a pane. A session link may arrive in the
+ *  tab deep-link form (/inbox?s=<id>); a pane shows the conversation itself,
+ *  not an inbox around it, so it takes the /conversation form the pane
+ *  renderer intercepts. Every other route is itself. */
+export function panePath(path: string): string {
+  const sid = inboxTabSessionId(path);
+  return sid ? sessionPanePath(sid) : path;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +304,7 @@ export function placeStagePick(target: { leafId: string } | "newTab") {
  * instead.
  */
 export function openBeside(path: string): boolean {
-  if (typeof window === "undefined" || window.innerWidth < 900 || isDetachedTabWindow()) return false;
+  if (!canOpenBeside()) return false;
   const st = useInboxStore.getState();
   const tab = activeTab();
   if (!tab || isNonTabRoute(path)) return false;
@@ -312,6 +321,13 @@ export function openBeside(path: string): boolean {
   syncUrl();
   firstSplitMilestone();
   return true;
+}
+
+/** True when this window's stage may take another pane at all: wide enough
+ *  to show two, and a real tab shell (a detached window has none). The pane
+ *  cap and the route's eligibility are openBeside's own answer. */
+export function canOpenBeside(): boolean {
+  return typeof window !== "undefined" && window.innerWidth >= 900 && !isDetachedTabWindow();
 }
 
 /** The layout to render for a tab: its tree when it really is a split. */

@@ -44,6 +44,7 @@ import {
 import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
+import { RevealButton, type RevealTarget } from "./ObjectReveal";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -619,6 +620,10 @@ export function ObjectCardFrame({
 
   const compact = count > 1 && !expanded;
   const flat = resolved && !!flatBody;
+  // The full page, inline: the band opens after the message body (RevealHost)
+  // at the same href the open link goes to.
+  const reveal: RevealTarget = { href, title: ariaLabel, onOpen };
+  const revealChrome = `text-sol-text-dim opacity-0 transition-opacity ${accent.hoverText} focus-visible:opacity-100 group-hover/card:opacity-100 aria-pressed:opacity-100`;
 
   return (
     <div
@@ -639,6 +644,7 @@ export function ObjectCardFrame({
       {flat && (
         <>
           <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
+            {resolved && <RevealButton target={reveal} className={`text-sol-text-dim ${accent.hoverText}`} />}
             <Link
               href={href}
               onClick={openObject}
@@ -670,6 +676,7 @@ export function ObjectCardFrame({
           </div>
           <div className="mt-[1px] flex flex-shrink-0 items-center gap-1.5">
             {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
+            {resolved && <RevealButton target={reveal} className={revealChrome} />}
             <Link
               href={href}
               onClick={openObject}
@@ -718,14 +725,19 @@ export function ObjectCardFrame({
               {detail}
               <div className="mt-2.5 flex items-center justify-between border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-1.5">
                 <span className="font-mono text-[10px] text-sol-text-dim">{footerId}</span>
-                <Link
-                  href={href}
-                  onClick={openObject}
-                  className={`inline-flex items-center gap-0.5 text-[10px] ${accent.text} no-underline hover:underline`}
-                >
-                  {openLabel}
-                  <ArrowUpRight className="h-2.5 w-2.5" />
-                </Link>
+                <span className="flex items-center gap-3">
+                  <RevealButton target={reveal} className={`text-[10px] text-sol-text-muted ${accent.hoverText} hover:underline`}>
+                    Show full page here
+                  </RevealButton>
+                  <Link
+                    href={href}
+                    onClick={openObject}
+                    className={`inline-flex items-center gap-0.5 text-[10px] ${accent.text} no-underline hover:underline`}
+                  >
+                    {openLabel}
+                    <ArrowUpRight className="h-2.5 w-2.5" />
+                  </Link>
+                </span>
               </div>
             </div>
           )}

@@ -23,6 +23,15 @@ crons.interval(
   internal.agentTasks.reclaimStaleTasks
 );
 
+// Decision stacks with an auto default policy: answer advisory members whose
+// deadline passed (decisionStacks.applyAutoDefaultsCore).
+crons.interval(
+  "apply decision stack auto defaults",
+  { minutes: 5 },
+  internal.decisionStacks.applyAutoDefaults,
+  {}
+);
+
 crons.interval(
   "reconcile cloud wake requests",
   { seconds: 60 },

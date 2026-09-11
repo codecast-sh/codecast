@@ -98,7 +98,7 @@ function isNoiseDocForWeb(d: any): boolean {
   return CONFIG_DOC_NAMES.has(d.title);
 }
 
-function extractPlanTitleForWeb(d: any) {
+export function extractPlanTitleForWeb(d: any) {
   if (d.source === "plan_mode" && d.content) {
     const match = d.content.match(/^#\s+(.+)/m);
     if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
@@ -564,55 +564,48 @@ export const list = query({
     api_token: v.string(),
     doc_type: v.optional(v.string()),
     project_id: v.optional(v.string()),
+    pinned: v.optional(v.boolean()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    let docs;
+    // Newest first, streamed, and stopped at the limit. A user's docs carry
+    // bodies, entries and embeddings, and collecting the whole set to sort it
+    // in memory blew the query's budget at ~5k docs (2026-09-12: "ran out of
+    // memory (maximum memory usage: 64 MB)" on `cast doc ls`). Filters that
+    // are not index keys (doc_type, pinned, archived) apply to the stream.
     // The by_project_id index is global: a client-supplied project_id could
-    // surface another user's/team's docs, so that branch gets an explicit
-    // owner-or-team-member filter below.
-    let needsAccessFilter = false;
-    if (args.doc_type) {
-      docs = await ctx.db
-        .query("docs")
-        .withIndex("by_user_type", (q) =>
-          q.eq("user_id", auth.userId).eq("doc_type", args.doc_type as any)
-        )
-        .collect();
-    } else if (args.project_id) {
-      docs = await ctx.db
-        .query("docs")
-        .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
-        .collect();
-      needsAccessFilter = true;
-    } else {
-      docs = await ctx.db
-        .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
-        .collect();
-    }
-
-    if (needsAccessFilter) {
-      // Route through canAccessDoc (owner or effective-team member) rather than a
-      // hand-rolled raw-team_id membership set, so a doc linked to a private
-      // conversation stays owner-only here too.
-      const accessible: any[] = [];
-      for (const d of docs) {
-        if (await canAccessDoc(ctx, auth.userId, d)) accessible.push(d);
-      }
-      docs = accessible;
-    }
-
-    // Exclude archived
-    docs = docs.filter((d) => !d.archived_at);
+    // surface another user's/team's docs, so that branch routes each row
+    // through canAccessDoc (owner or effective-team member) rather than a
+    // hand-rolled team_id check, so a doc linked to a private conversation
+    // stays owner-only here too.
+    const stream = args.project_id
+      ? ctx.db
+          .query("docs")
+          .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
+          .order("desc")
+      : ctx.db
+          .query("docs")
+          .withIndex("by_user_updated", (q) => q.eq("user_id", auth.userId))
+          .order("desc");
 
     const limit = args.limit || 50;
-    // Sort by updated_at desc
-    docs.sort((a, b) => b.updated_at - a.updated_at);
-    return docs.slice(0, limit);
+    const out: any[] = [];
+    for await (const d of stream) {
+      if (d.archived_at) continue;
+      if (args.doc_type && d.doc_type !== args.doc_type) continue;
+      if (args.pinned !== undefined && !!d.pinned !== args.pinned) continue;
+      if (args.project_id && !(await canAccessDoc(ctx, auth.userId, d))) continue;
+      // The list is a shelf, not the corpus: bodies, timelines and vectors stay
+      // behind `docs.get`.
+      const { content: _c, entries: _e, embedding: _m, ...thin } = d as any;
+      out.push(thin);
+      if (out.length >= limit) break;
+    }
+    if (args.project_id) out.sort((a, b) => b.updated_at - a.updated_at);
+    return out;
   },
 });
 
@@ -1382,39 +1375,6 @@ export const debugList = internalQuery({
       }
     }
     return { total: docs.length, bySource, byType, byTeam, inlineSamples: samples };
-  },
-});
-
-// One-time restamp for plan-body docs mislabeled "human" (2026-08-26).
-// `cast plan create` stamped source "human" even when an agent session ran it,
-// and plans.* hardcoded "human" onto the plan-body doc, so thousands of agent
-// plans sat on the human docs shelf. History carries no marker of which
-// create path a plan came from, and plans here are overwhelmingly
-// agent-created, so every plan-body doc still stamped "human" flips to
-// "agent"; pinning is the rescue for any a person wants on the shelf. New
-// writes stamp truthfully by path (web UI → human, agent session CLI →
-// agent). Paged — call repeatedly with the returned cursor until isDone.
-// Does not bump updated_at: the docs full crawl re-reads rows fresh, so
-// clients converge without a sync storm.
-export const restampPlanDocOrigins = internalMutation({
-  args: {
-    cursor: v.optional(v.string()),
-    numItems: v.optional(v.number()),
-    dryRun: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("docs")
-      .paginate({ numItems: args.numItems ?? 100, cursor: args.cursor ?? null });
-    let scanned = 0;
-    let restamped = 0;
-    for (const d of page.page) {
-      scanned++;
-      if (!d.plan_id || d.source !== "human") continue;
-      restamped++;
-      if (!args.dryRun) await ctx.db.patch(d._id, { source: "agent" });
-    }
-    return { scanned, restamped, isDone: page.isDone, continueCursor: page.continueCursor };
   },
 });
 

@@ -17,7 +17,7 @@ import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { docSearchText } from "../../lib/liveEntities";
 import {
   FileText,
-  Pin,
+  Star,
   FolderOpen,
   FolderKanban,
   Tag,
@@ -39,7 +39,7 @@ const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: strin
   handoff: { label: "Handoff", color: "text-sol-orange", dot: "bg-sol-orange" },
 };
 
-const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff"];
+const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff", "decision"];
 
 export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
@@ -48,7 +48,17 @@ export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
   return (
     <>
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
-      {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow flex-shrink-0" />}
+      {/* The star (stored as `pinned`): a starred doc sits on the shelf and
+          sorts first. Hidden until hover on an unstarred row so the list
+          stays quiet; always shown once set. */}
+      <button
+        onClick={(e) => { e.stopPropagation(); useInboxStore.getState().pinDoc(doc._id, !doc.pinned); }}
+        className={`flex-shrink-0 p-0.5 -m-0.5 rounded transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim/50 opacity-0 group-hover:opacity-100 hover:text-sol-yellow"}`}
+        title={doc.pinned ? "Unstar" : "Star (keeps it on your shelf)"}
+        aria-label={doc.pinned ? "Unstar document" : "Star document"}
+      >
+        <Star className={`w-3 h-3 ${doc.pinned ? "fill-current" : ""}`} />
+      </button>
       <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
       {docOrigin(doc) === "agent" && (
         <span className="flex-shrink-0 cq-hide-compact" title={`${doc.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
@@ -248,6 +258,7 @@ export function DocListContent() {
       return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "mined");
     }
     if (sourceFilter === "all") return docsList;
+    if (sourceFilter === "starred") return docsList.filter((d) => !!d.pinned);
     // "" (default) and legacy "human" links both mean the human's shelf.
     return docsList.filter(onShelf);
   }, [docsList, sourceFilter]);
@@ -285,13 +296,15 @@ export function DocListContent() {
     return counts;
   }, [sourceFilteredDocs]);
 
-  // One comparator drives both the flat list and within-group ordering. Ties
-  // fall back to updated_at desc (direction-independent) so equal keys stay put
-  // when the user flips asc/desc.
+  // One comparator drives both the flat list and within-group ordering.
+  // Starred docs lead regardless of sort or direction (a star means "keep this
+  // in reach"). Ties fall back to updated_at desc (direction-independent) so
+  // equal keys stay put when the user flips asc/desc.
   const sortDocs = useCallback((list: DocItem[]) => {
     const flip = dir === "desc" ? -1 : 1;
     const title = (d: DocItem) => ((d as any).display_title || d.title || "").toLowerCase();
     return [...list].sort((a, b) => {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
       let r = 0;
       if (sort === "created") r = a.created_at - b.created_at;
       else if (sort === "title") r = title(a).localeCompare(title(b));
@@ -427,6 +440,7 @@ export function DocListContent() {
             key: "source", label: "Source", icon: <Bot className="w-3 h-3" />, value: sourceFilter, showEmptyOption: true,
             options: [
               { key: "", label: "Your docs (default)", icon: User },
+              { key: "starred", label: "Starred", icon: Star, color: "text-sol-yellow" },
               { key: "agent", label: "Agent-internal", icon: Bot, color: "text-sol-cyan" },
               { key: "mined", label: "Mined & synced", icon: Lightbulb, color: "text-sol-yellow" },
               { key: "all", label: "All docs", icon: Layers },

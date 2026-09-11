@@ -50,6 +50,7 @@ import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
+import { RevealButton } from "./ObjectReveal";
 
 export { SessionHoverContent };
 
@@ -901,6 +902,18 @@ export function EntityIdPill({
             <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
         </Link>
+        {/* The full page, inline: opens a band after the message body (RevealHost)
+            instead of leaving. Capture-phase close: the button stops propagation. */}
+        {entity && (
+          <div className="border-t border-sol-border/60 px-3 py-1.5" onClickCapture={closeNow}>
+            <RevealButton
+              target={{ href, title: `${TYPE_LABEL[type]}: ${fullLabel}`, onOpen: handleClick }}
+              className="text-[10px] text-sol-text-muted hover:text-sol-text"
+            >
+              Show full page here
+            </RevealButton>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
     {/* The possessive sits against the label, not a padding-width away. */}

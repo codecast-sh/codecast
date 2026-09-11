@@ -16,13 +16,10 @@ const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 // Rebinding, not a plain store: the file lives under CODECAST_DIR, which a test
 // redirects after this module is imported (ct-49597).
 const store = rebindingStore<number>(() => codecastPath("positions.json"), {
-  keepOnLoad: (filePath) => {
-    try {
-      return fs.existsSync(filePath);
-    } catch {
-      return true; // transient stat failure — keep the entry rather than lose position
-    }
-  },
+  keepOnLoadAsync: (filePath) => fs.promises.access(filePath).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => error.code !== "ENOENT" && error.code !== "ENOTDIR",
+  ),
 });
 
 export function getPosition(filePath: string): number {

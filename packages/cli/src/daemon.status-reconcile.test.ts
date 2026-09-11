@@ -562,7 +562,7 @@ describe("findSessionFile subagent layouts", () => {
   // answers with the top-level copy — which is exactly why a path check on its
   // result let the 2026-08-20 doppelgänger fleet through. The workflow probe
   // must see past that copy for both the agent id and the UUID twin.
-  test("workflowAgentTranscriptPathFor sees the workflow layout past a relocated top-level copy", () => {
+  test("workflowAgentTranscriptPathFor sees the workflow layout past a relocated top-level copy", async () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-wf-agent-"));
     const prevHome = process.env.HOME;
     process.env.HOME = tmpHome;
@@ -576,15 +576,15 @@ describe("findSessionFile subagent layouts", () => {
       fs.writeFileSync(path.join(projectDir, `${uuid}.jsonl`), "{}\n");
 
       expect(findSessionFile(uuid)?.path).toBe(path.join(projectDir, `${uuid}.jsonl`));
-      expect(workflowAgentTranscriptPathFor(uuid)).toBe(path.join(wfDir, `${uuid}.jsonl`));
-      expect(workflowAgentTranscriptPathFor("agent-a920233e1ad3a0d16")).toBe(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"));
+      expect(await workflowAgentTranscriptPathFor(uuid)).toBe(path.join(wfDir, `${uuid}.jsonl`));
+      expect(await workflowAgentTranscriptPathFor("agent-a920233e1ad3a0d16")).toBe(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"));
 
       // An Agent-tool subagent and a plain session are not workflow agents.
       const subagentsDir = path.dirname(path.dirname(wfDir));
       fs.writeFileSync(path.join(subagentsDir, "agent-abc123.jsonl"), "{}\n");
       fs.writeFileSync(path.join(projectDir, "0c25e223-db89-44dd-b7c2-a14b21298e4d.jsonl"), "{}\n");
-      expect(workflowAgentTranscriptPathFor("agent-abc123")).toBeNull();
-      expect(workflowAgentTranscriptPathFor("0c25e223-db89-44dd-b7c2-a14b21298e4d")).toBeNull();
+      expect(await workflowAgentTranscriptPathFor("agent-abc123")).toBeNull();
+      expect(await workflowAgentTranscriptPathFor("0c25e223-db89-44dd-b7c2-a14b21298e4d")).toBeNull();
     } finally {
       process.env.HOME = prevHome;
       fs.rmSync(tmpHome, { recursive: true, force: true });

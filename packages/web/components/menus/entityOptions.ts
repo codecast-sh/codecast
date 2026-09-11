@@ -54,4 +54,5 @@ export const DOC_TYPE_OPTIONS: EntityOption[] = [
   { key: "spec", label: "Spec" },
   { key: "investigation", label: "Investigation" },
   { key: "handoff", label: "Handoff" },
+  { key: "decision", label: "Decision" },
 ];

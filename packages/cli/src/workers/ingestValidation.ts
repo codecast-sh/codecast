@@ -1,6 +1,7 @@
 import { validateIngestBounds } from './ingestTransport.js';
 import type { IngestJob, IngestResult } from './ingestTypes.js';
 import { INGEST_MAX_BYTES } from './ingestTypes.js';
+import { validatePreparationFile } from '../messagePreparationValidation.js';
 
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v) && [Object.prototype,null].includes(Object.getPrototypeOf(v));
 function requireValue(valid: unknown): asserts valid {
@@ -14,10 +15,10 @@ function strings(value: Record<string, any>, names: string[]): void {
   for (const key of names) requireValue(value[key] === undefined || typeof value[key] === 'string');
 }
 function* message(value: unknown): Generator<void> {
-  fields(value,['uuid','role','content','timestamp','thinking','toolCalls','toolResults','images','subtype','stopReason','model']);
+  fields(value,['uuid','role','content','timestamp','thinking','toolCalls','toolResults','images','files','subtype','stopReason','model']);
   requireValue(['user','assistant','system'].includes(value.role) && typeof value.content === 'string' && Number.isFinite(value.timestamp));
   strings(value,['uuid','thinking','subtype','stopReason','model']);
-  for (const key of ['toolCalls','toolResults','images']) requireValue(value[key] === undefined || Array.isArray(value[key]));
+  for (const key of ['toolCalls','toolResults','images','files']) requireValue(value[key] === undefined || Array.isArray(value[key]));
   for (const call of value.toolCalls ?? []) {
     fields(call,['id','name','input']);
     requireValue(typeof call.id === 'string' && typeof call.name === 'string' && object(call.input));
@@ -32,6 +33,10 @@ function* message(value: unknown): Generator<void> {
     fields(image,['mediaType','data','localPath','toolUseId']);
     strings(image,['data','localPath','toolUseId']);
     requireValue(typeof image.mediaType === 'string' && (typeof image.data === 'string') !== (typeof image.localPath === 'string'));
+    yield;
+  }
+  for (const file of value.files ?? []) {
+    validatePreparationFile(file);
     yield;
   }
   yield;

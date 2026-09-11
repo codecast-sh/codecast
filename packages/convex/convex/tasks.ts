@@ -591,6 +591,48 @@ export async function guardParentClose(
   );
 }
 
+export const REVIEW_VERDICTS = ["approve", "changes", "reject"] as const;
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
+
+/**
+ * Independent review (docs/architecture/the-line.md L3). A session filed under
+ * an org role (a hand, `org_role_id`) or serving as one (its standing session,
+ * `standing_role_id`) may move a task to done only on an approve verdict from
+ * outside that role: not its own verdict, not a hand of the same role, not the
+ * role's standing session. People and sessions with no role are unaffected. A
+ * verdict a person wrote (no conversation behind it) counts as outside every
+ * role. Reads the verdict being written in this call first, then the stored
+ * one.
+ */
+export async function enforceIndependentReview(
+  ctx: any,
+  task: any,
+  actor: any,
+  nextStatus: string | undefined,
+  pendingVerdict?: { verdict: ReviewVerdict; by_conversation_id?: Id<"conversations"> },
+): Promise<void> {
+  if (nextStatus !== "done" || task.status === "done") return;
+  const roleId = actor?.org_role_id ?? actor?.standing_role_id;
+  if (!actor || !roleId) return;
+  const refuse = (why: string): never => {
+    throw new Error(
+      `Independent review required (the-line.md L3): a session of role ${String(roleId)} cannot move ` +
+      `${task.short_id} to done ${why}. A session outside the role must run: cast task verdict ${task.short_id} approve`,
+    );
+  };
+  const verdict = pendingVerdict ?? task.review_verdict;
+  if (!verdict || verdict.verdict !== "approve") refuse("without an approve verdict");
+  if (!verdict.by_conversation_id) return;
+  if (String(verdict.by_conversation_id) === String(actor._id)) refuse("on its own verdict");
+  const reviewer = await ctx.db.get(verdict.by_conversation_id);
+  if (
+    reviewer
+    && (String(reviewer.org_role_id) === String(roleId) || String(reviewer.standing_role_id) === String(roleId))
+  ) {
+    refuse("on a verdict from a session of the same role");
+  }
+}
+
 /**
  * Cascade-close the subtree ids guardParentClose returned. `parent` scopes the
  * writes: only same-workspace descendants are touched (a pre-guard row could
@@ -1449,6 +1491,10 @@ export const update = mutation({
     verification_evidence: v.optional(v.string()),
     files_changed: v.optional(v.array(v.string())),
     estimated_minutes: v.optional(v.number()),
+    // The review station's verdict (the-line.md L3), recorded with the status
+    // move in this one write. by_conversation_id is the caller's session.
+    review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
+    review_note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1602,6 +1648,17 @@ export const update = mutation({
       }
     }
 
+    if (args.review_verdict) {
+      updates.review_verdict = {
+        verdict: args.review_verdict,
+        ...(conv ? { by_conversation_id: conv._id } : {}),
+        at: now,
+        ...(args.review_note ? { note: args.review_note } : {}),
+      };
+    }
+    // Refuses before any write, like the close-guard below.
+    await enforceIndependentReview(ctx, task, conv, nextStatus, updates.review_verdict);
+
     if (nextStatus === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
       updates.last_attempted_at = now;
@@ -1626,6 +1683,7 @@ export const update = mutation({
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
     if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
+    if (args.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", args.review_verdict]);
 
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {

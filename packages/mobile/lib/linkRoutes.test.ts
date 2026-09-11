@@ -26,8 +26,10 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/share/doc')).toBeNull();
   });
 
-  test('invites land on the team tab', () => {
-    expect(mobileRouteForUrl('https://codecast.sh/join/abc')).toBe('/(tabs)/team');
+  test('invites, chat and calls land on the chat tab', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/join/abc')).toBe('/(tabs)/chat');
+    expect(mobileRouteForUrl('https://codecast.sh/chat')).toBe('/(tabs)/chat');
+    expect(mobileRouteForUrl('https://codecast.sh/calls')).toBe('/(tabs)/chat');
   });
 
   test('app pages that are not objects stay external', () => {

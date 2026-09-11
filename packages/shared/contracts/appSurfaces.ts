@@ -32,6 +32,7 @@ export const APP_SURFACES: AppSurface[] = [
   { ...dash("inbox", "the agent inbox: sessions grouped by who acts next"), alsoLandsOn: ["/conversation/"] },
   dash("feed", "team activity feed"),
   dash("crosstalk", "agents talking to each other across sessions"),
+  dash("org", "the org tree: people, roles, anchors and every session, edited by reparenting"),
   dash("chat", "human channels and direct messages"),
   dash("search", "search across sessions, docs, tasks and people"),
   dash("notifications", "notification list"),
