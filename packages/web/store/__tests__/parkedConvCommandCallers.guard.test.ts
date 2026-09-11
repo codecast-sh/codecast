@@ -44,7 +44,7 @@ describe("parked convCommand caller policy", () => {
     const conversationView = await source("../../components/ConversationView.tsx");
 
     for (const command of [
-      "sendKeysToSession",
+      "setPermissionMode",
       "rewindSession",
       "sendEscapeToSession",
     ]) {

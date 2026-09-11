@@ -757,7 +757,7 @@ function UnifiedDiffView({
         const language = getFileExtension(file.filename);
 
         return (
-          <div key={file.filename} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`}>
+          <div key={file.filename} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`} style={{ contentVisibility: "auto", containIntrinsicBlockSize: "auto 500px" }}>
             <div className="sticky top-0 z-10 bg-sol-bg-alt px-3 py-1.5 flex items-center justify-between border-y border-sol-border/30">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className={cn("text-[10px] font-bold shrink-0", status.color)}>

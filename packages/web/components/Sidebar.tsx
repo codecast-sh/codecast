@@ -76,6 +76,9 @@ interface SidebarProps {
 
 /** A group label in the rail. Hidden when the rail is narrow, where the icons
  *  stand on their own and a heading would just be a stripe of unreadable text. */
+/** Stable empty bag: a fresh {} here would rewake every reader on each render. */
+const NO_SECTION_PINS: Record<string, boolean> = Object.freeze({});
+
 function RailHeading({ label, isNarrow }: { label: string; isNarrow: boolean }) {
   if (isNarrow) return null;
   return (
@@ -930,8 +933,17 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     [isDocs, docViews, docPrefs]
   );
   // They reveal when you open that page (navigation is the default); the chevron
-  // pins a section open or closed regardless of which page you're on.
-  const [viewSectionOverride, setViewSectionOverride] = useState<Record<string, boolean>>({});
+  // pins a section open or closed regardless of which page you're on. A pin is a
+  // durable preference, not a gesture: it lives in the ui bag, so it survives
+  // reload and is captured by a saved layout with the rest of the chrome.
+  const viewSectionOverride = useInboxStore((s) => s.clientState.ui?.nav_sections) ?? NO_SECTION_PINS;
+  const setViewSectionOverride = useCallback(
+    (next: (cur: Record<string, boolean>) => Record<string, boolean>) => {
+      const cur = useInboxStore.getState().clientState.ui?.nav_sections ?? NO_SECTION_PINS;
+      updateClientUI({ nav_sections: next(cur) });
+    },
+    [updateClientUI],
+  );
   const applyView = useCallback((view: any) => {
     const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
     // Stamp which view this is, so the page can still name it after you change

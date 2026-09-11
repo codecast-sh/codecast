@@ -10,6 +10,7 @@ import { AGENT_MODEL_CONFIG, launchRailOptions, modelAgentKey } from '@codecast/
 import { commitModelChange, modelOptionKey, modelFitsAgent, effortGlyph } from '@codecast/web/lib/modelSwitch';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { Theme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '../constants/Theme';
+import { themedStyles, useTheme } from '@/constants/Theme';
 
 // Session-header model/effort chip + bottom-sheet switcher — the mobile
 // counterpart of the web's HeaderModelControl / LaunchModelPill. Same two
@@ -34,6 +35,7 @@ export function ModelSwitcherChip({
   canEdit: boolean;
   showToast: (msg: string) => void;
 }) {
+  const Theme = useTheme();
   const [sheetVisible, setSheetVisible] = useState(false);
 
   const blank = (messageCount ?? 0) === 0;
@@ -98,7 +100,7 @@ export function ModelSwitcherChip({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   // The session header's shared chip shell, cyan-tinted.
   chip: {
     ...chipShell,
@@ -113,4 +115,4 @@ const styles = StyleSheet.create({
     color: Theme.cyan,
     opacity: 0.8,
   },
-});
+}));

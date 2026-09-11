@@ -71,7 +71,8 @@ import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { tabTitle } from "../lib/tabTitle";
-import { pathLabel } from "../lib/pathLabel";
+import { pathLabel, poppedTabPath } from "../lib/pathLabel";
+import { leavesOf } from "../store/stageSplit";
 import { TabContent } from "./TabContent";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -769,17 +770,21 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           if (v.mode && v.mode !== store.inboxViewMode()) store.setInboxViewMode(v.mode);
         });
       }
-      if (popped.inboxId) return;
       if (isNonTabRoute(window.location.pathname)) return;
       // A detached tab window navigates via React Router only — the shared
       // tabs its store hydrates belong to the main window, so mirroring this
       // window's URL into the "active tab" would rewrite someone else's tab.
       if (isDetachedTabWindow()) return;
       const store = useInboxStore.getState();
-      const id = store.activeTabId;
-      if (!id) return;
-      const full = window.location.pathname + window.location.search;
-      store.updateTab(id, { path: full, title: pathLabel(full) });
+      const tab = store.tabs.find((t) => t.id === store.activeTabId);
+      if (!tab) return;
+      // A session-select entry is the inbox pane's to reconcile while that
+      // pane is mounted; once the tab shows another page, the pane is gone
+      // and the tab itself must return to the inbox (poppedTabPath).
+      const panePaths = tab.layout ? leavesOf(tab.layout).map((l) => l.path) : [tab.path];
+      const full = poppedTabPath(popped, window.location.pathname, window.location.search, panePaths);
+      if (full === null) return;
+      store.updateTab(tab.id, { path: full, title: pathLabel(full) });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1342,7 +1347,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           vanished" with no way back (Jason, 2026-08-24). The fallback is a
           floating chip where the dock lived: retry re-renders, hang up also
           frees the seat, and the ErrorBoundary toast still carries the trace. */}
-      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt shadow-xl">
         <ErrorBoundary
           name="Call window"
           fallback={({ retry }) => (
@@ -1371,7 +1376,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           without a word left the main window looking as though no call were
           running at all — and the first thing that invites is starting a second
           one. It sits where the dock would, and says only where to look. */}
-      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-xl">
         <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
       </div>
       {/* A recording in progress, wherever the person has wandered to. It

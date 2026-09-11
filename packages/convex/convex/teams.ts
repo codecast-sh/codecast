@@ -12,6 +12,7 @@ import {
 import { authorizeRoom, liveMembers } from "./callRooms";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
+import { decommissionAnchorRow } from "./anchors";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { bumpWindow } from "./ipRateLimit";
 import {
@@ -218,6 +219,11 @@ export const createTeam = mutation({
         .withIndex("by_client_key", (q) => q.eq("client_key", args.client_key))
         .first();
       if (existing) {
+        // A deleted team is a tombstone. The replayed create that made it
+        // (an outbox entry delivered after the delete) must not mint it again.
+        if (existing.deleted_at) {
+          throw new Error("This team was deleted");
+        }
         const membership = await ctx.db
           .query("team_memberships")
           .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", existing._id))
@@ -267,7 +273,7 @@ export const joinTeam = mutation({
       .query("teams")
       .withIndex("by_invite_code", (q) => q.eq("invite_code", args.invite_code))
       .unique();
-    if (!team) {
+    if (!team || team.deleted_at) {
       throw new Error("Invalid invite code");
     }
     if (team.invite_code_expires_at && Date.now() > team.invite_code_expires_at) {
@@ -321,7 +327,8 @@ export const getTeam = query({
       .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
       .first();
     if (!membership) return null;
-    return await ctx.db.get(args.team_id);
+    const team = await ctx.db.get(args.team_id);
+    return team && !team.deleted_at ? team : null;
   },
 });
 
@@ -335,7 +342,7 @@ export const getTeamByInviteCode = query({
       .withIndex("by_invite_code", (q) => q.eq("invite_code", args.invite_code))
       .unique();
 
-    if (!team) {
+    if (!team || team.deleted_at) {
       return null;
     }
 
@@ -544,6 +551,172 @@ export const getTeamMembersV2 = query({
   },
 });
 
+// End one user's membership in one team, and everything that rides on it:
+// the roster row, chat state (reads, follows, room seats, queued pushes), the
+// directory mappings that would keep stamping new conversations with the team,
+// and the user's own pointers when they name this team. The fallback pointer is
+// the user's oldest remaining team (never index order), else no team. Every
+// path that ends a membership goes through here: admin removal, self leave,
+// team deletion and test cleanup, so none of them can diverge on what "gone"
+// means.
+export async function endMembership(
+  ctx: { db: any },
+  userId: Id<"users">,
+  teamId: Id<"teams">,
+): Promise<void> {
+  const rows = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+    .collect();
+  for (const row of rows) await ctx.db.delete(row._id);
+  await purgeChatMembership(ctx as any, userId, teamId);
+  const mappings = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+    .collect();
+  for (const dm of mappings) await ctx.db.delete(dm._id);
+
+  const user = await ctx.db.get(userId);
+  if (!user) return;
+  const pointsHere = (id: unknown) => !!id && String(id) === String(teamId);
+  if (!pointsHere(user.team_id) && !pointsHere(user.active_team_id)) return;
+  const remaining = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const fallback = remaining
+    .slice()
+    .sort((a: any, b: any) => (a.joined_at ?? 0) - (b.joined_at ?? 0))[0];
+  const patch: Record<string, unknown> = {};
+  if (pointsHere(user.team_id)) {
+    patch.team_id = fallback?.team_id;
+    patch.role = fallback?.role;
+  }
+  if (pointsHere(user.active_team_id)) patch.active_team_id = fallback?.team_id;
+  await ctx.db.patch(userId, patch);
+}
+
+// Retire a team: end every membership, drop every directory mapping to it,
+// decommission its anchors, and leave the row as a tombstone (deleted_at) that
+// carries the roster for a later restore. The team's shared work stays in the
+// database under a key nobody holds any more.
+export async function retireTeam(
+  ctx: { db: any },
+  team: { _id: Id<"teams">; name: string },
+  actorId: Id<"users"> | undefined,
+): Promise<{ members: number; anchors: number }> {
+  const now = Date.now();
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", team._id))
+    .collect();
+  const roster = memberships.map((m: any) => ({
+    user_id: m.user_id,
+    role: m.role,
+    joined_at: m.joined_at ?? now,
+    visibility: m.visibility,
+  }));
+  // The tombstone lands first so the roster survives even if a later step
+  // throws; the whole mutation is one transaction either way.
+  await ctx.db.patch(team._id, {
+    deleted_at: now,
+    deleted_by: actorId,
+    deleted_members: roster,
+    invite_code_expires_at: now,
+  });
+  for (const m of memberships) await endMembership(ctx, m.user_id, team._id);
+  // Mappings owned by non-members (a user removed earlier, a mapping created
+  // before their membership ended) would otherwise outlive the team.
+  const strays = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", team._id))
+    .collect();
+  for (const dm of strays) await ctx.db.delete(dm._id);
+  const anchors = await ctx.db
+    .query("anchors")
+    .withIndex("by_team", (q: any) => q.eq("team_id", team._id))
+    .collect();
+  let retired = 0;
+  for (const anchor of anchors) {
+    if (anchor.status === "decommissioned") continue;
+    await decommissionAnchorRow(ctx, anchor);
+    retired++;
+  }
+  return { members: memberships.length, anchors: retired };
+}
+
+// Admin delete. The caller types the team's name; the server checks it too, so
+// a stray call with the wrong id cannot delete a team. Returns where the
+// caller's workspace pointer landed so the client mirror can follow in the
+// same dispatch.
+export const deleteTeam = mutation({
+  args: {
+    team_id: v.id("teams"),
+    confirm_name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Not authenticated");
+    const team = await ctx.db.get(args.team_id);
+    if (!team || team.deleted_at) throw new Error("Team not found");
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
+      .unique();
+    if (!membership || membership.role !== "admin") {
+      throw new Error("Only admins can delete a team");
+    }
+    if (args.confirm_name.trim() !== team.name.trim()) {
+      throw new Error("Type the team name exactly to confirm");
+    }
+    const result = await retireTeam(ctx, team, authUserId);
+    const me = await ctx.db.get(authUserId);
+    return {
+      deleted: true as const,
+      name: team.name,
+      active_team_id: me?.active_team_id ?? null,
+      ...result,
+    };
+  },
+});
+
+// Operator recovery for a team retired by deleteTeam: clears the tombstone and
+// re-seats the roster it recorded. Users who left since, or whose account is
+// gone, are skipped. Directory mappings and chat state are not restored; they
+// are per-user choices the members make again.
+export const restoreTeam = internalMutation({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const team = await ctx.db.get(args.team_id);
+    if (!team) throw new Error("Team not found");
+    if (!team.deleted_at) return { restored: false, members: 0 };
+    let seated = 0;
+    for (const m of team.deleted_members ?? []) {
+      const user = await ctx.db.get(m.user_id);
+      if (!user) continue;
+      const existing = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q) => q.eq("user_id", m.user_id).eq("team_id", args.team_id))
+        .unique();
+      if (existing) continue;
+      await ctx.db.insert("team_memberships", {
+        user_id: m.user_id,
+        team_id: args.team_id,
+        role: m.role,
+        joined_at: m.joined_at,
+        visibility: m.visibility,
+      });
+      seated++;
+    }
+    await ctx.db.patch(args.team_id, {
+      deleted_at: undefined,
+      deleted_by: undefined,
+      deleted_members: undefined,
+    });
+    return { restored: true, members: seated };
+  },
+});
+
 export const removeMember = mutation({
   args: {
     // Deprecated/ignored: the requester is the authenticated caller.
@@ -588,13 +761,9 @@ export const removeMember = mutation({
         throw new Error("Cannot remove yourself as the last admin");
       }
     }
-    await ctx.db.delete(memberMembership._id);
-    // Chat is gated on team membership alone, so its per-member rows have to go
-    // with the membership: read state, channel subscriptions, and any push still
-    // queued that would deliver the team's message text after access ended.
-    await purgeChatMembership(ctx, args.member_user_id, teamId);
     const memberUser = await ctx.db.get(args.member_user_id);
     const team = await ctx.db.get(teamId);
+    await endMembership(ctx, args.member_user_id, teamId);
     const memberName = memberUser?.name || memberUser?.email || "A member";
     await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
       team_id: teamId,
@@ -603,26 +772,6 @@ export const removeMember = mutation({
       title: `${memberName} left ${team?.name || "the team"}`,
       description: authUserId === args.member_user_id ? "Left team" : "Removed by admin",
     });
-
-    if (memberUser?.team_id?.toString() === teamId.toString()) {
-      const otherMemberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.member_user_id))
-        .collect();
-      if (otherMemberships.length > 0) {
-        await ctx.db.patch(args.member_user_id, {
-          team_id: otherMemberships[0].team_id,
-          role: otherMemberships[0].role,
-          active_team_id: otherMemberships[0].team_id,
-        });
-      } else {
-        await ctx.db.patch(args.member_user_id, {
-          team_id: undefined,
-          role: undefined,
-          active_team_id: undefined,
-        });
-      }
-    }
   },
 });
 
@@ -842,13 +991,9 @@ export const removeFromTeam = mutation({
         throw new Error("Cannot remove yourself as the last admin");
       }
     }
-    await ctx.db.delete(memberMembership._id);
-    // The same purge `removeMember` runs. These are two separate public
-    // mutations that both end a membership — this one is the self-leave path —
-    // so chat's per-member rows have to be dropped in each of them.
-    await purgeChatMembership(ctx, args.user_id, args.team_id);
     const userToRemove = await ctx.db.get(args.user_id);
     const team = await ctx.db.get(args.team_id);
+    await endMembership(ctx, args.user_id, args.team_id);
     const memberName = userToRemove?.name || userToRemove?.email || "A member";
     await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
       team_id: args.team_id,
@@ -857,26 +1002,6 @@ export const removeFromTeam = mutation({
       title: `${memberName} left ${team?.name || "the team"}`,
       description: authUserId === args.user_id ? "Left team" : "Removed by admin",
     });
-
-    if (userToRemove?.team_id?.toString() === args.team_id.toString()) {
-      const otherMemberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-        .collect();
-      if (otherMemberships.length > 0) {
-        await ctx.db.patch(args.user_id, {
-          team_id: otherMemberships[0].team_id,
-          role: otherMemberships[0].role,
-          active_team_id: otherMemberships[0].team_id,
-        });
-      } else {
-        await ctx.db.patch(args.user_id, {
-          team_id: undefined,
-          role: undefined,
-          active_team_id: undefined,
-        });
-      }
-    }
   },
 });
 
@@ -1100,65 +1225,22 @@ export const createUserFromGithub = internalMutation({
 });
 
 // internal: removes throwaway teams created by agent test runs. Guarded by a
-// name check so a wrong id cannot delete a real team. Deletes the team row and
-// its memberships, then repoints any user whose team_id / active_team_id
-// referenced a deleted team to a team they still belong to.
+// name check so a wrong id cannot delete a real team. Same retirement as the
+// admin delete, so a test team leaves the same tombstone and nothing dangles.
 export const cleanupTestTeams = internalMutation({
   args: { team_ids: v.array(v.id("teams")) },
   handler: async (ctx, args) => {
     const deleted: string[] = [];
     const skipped: string[] = [];
-    const affectedUsers = new Set<string>();
     for (const teamId of args.team_ids) {
       const team = await ctx.db.get(teamId);
-      if (!team) continue;
+      if (!team || team.deleted_at) continue;
       if (!/^(flow test|critique round)/i.test(team.name)) {
         skipped.push(team.name);
         continue;
       }
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-      for (const m of memberships) {
-        affectedUsers.add(m.user_id.toString());
-        await ctx.db.delete(m._id);
-        // A member's directory mappings to this team would otherwise outlive
-        // it and keep stamping new conversations with a dead team_id.
-        const mappings = await ctx.db
-          .query("directory_team_mappings")
-          .withIndex("by_user_team", (q) => q.eq("user_id", m.user_id).eq("team_id", teamId))
-          .collect();
-        for (const dm of mappings) await ctx.db.delete(dm._id);
-      }
-      await ctx.db.delete(teamId);
+      await retireTeam(ctx, team, undefined);
       deleted.push(team.name);
-    }
-    for (const userIdStr of affectedUsers) {
-      const userId = userIdStr as Id<"users">;
-      const user = await ctx.db.get(userId);
-      if (!user) continue;
-      const remaining = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      const remainingIds = new Set(remaining.map((m) => m.team_id.toString()));
-      // Oldest membership, not index order: the fallback decides which team
-      // the user lands on, so it must be their most established one, never
-      // whichever row the scan happened to return first.
-      const fallback = remaining
-        .slice()
-        .sort((a, b) => (a.joined_at ?? 0) - (b.joined_at ?? 0))[0]?.team_id;
-      const patch: Partial<{ team_id: Id<"teams"> | undefined; active_team_id: Id<"teams"> | undefined }> = {};
-      if (user.team_id && !remainingIds.has(user.team_id.toString())) {
-        patch.team_id = fallback;
-      }
-      if (user.active_team_id && !remainingIds.has(user.active_team_id.toString())) {
-        patch.active_team_id = fallback;
-      }
-      if (Object.keys(patch).length > 0) {
-        await ctx.db.patch(userId, patch);
-      }
     }
     return { deleted, skipped };
   },

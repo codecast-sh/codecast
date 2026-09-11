@@ -102,3 +102,65 @@ export async function landBurst(
     }
   }
 }
+
+// ── the channel behind a stub ───────────────────────────────────────────────
+//
+// A face pressed before its DM exists hands the burst an optimistic stub id.
+// The server row that makes it real used to be the only way to learn the real
+// id: the burst polled the store for it and, after eight seconds of nothing,
+// threw itself away with a message that named no cause. Two things were wrong
+// with that. The open's own answer already carries the id, so a row that is
+// slow to sync back (a satellite window fed by replication) is no reason to
+// wait; and an open the server REFUSED is a failure the moment it is refused,
+// not eight seconds later under a generic error.
+
+export type ChannelStubOutcome = { id: string } | { failed: string } | null;
+
+/** Resolve a stub to the channel id the server will accept: the store's
+ *  answer or the open's own answer, whichever comes first. A refused open
+ *  fails at once with its reason; null once the deadline passes or the burst
+ *  ended meanwhile. */
+export function resolveChannelStub(opts: {
+  /** The store's answer right now: the real row the stub rekeyed onto. */
+  lookup: () => string | null;
+  /** The open still in flight behind this stub, if any: resolves to the
+   *  server's id, rejects with its refusal. */
+  inFlight: Promise<string | null> | null;
+  /** The burst ended, so nobody needs the answer. */
+  done: () => boolean;
+  deadlineMs: number;
+  /** The refusal, in words a strip can show. */
+  reason?: (err: unknown) => string;
+  tickMs?: number;
+  now?: () => number;
+}): Promise<ChannelStubOutcome> {
+  const found = opts.lookup();
+  if (found) return Promise.resolve({ id: found });
+  const now = opts.now ?? (() => Date.now());
+  const tickMs = opts.tickMs ?? 200;
+  const deadline = now() + opts.deadlineMs;
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (out: ChannelStubOutcome) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(out);
+    };
+    const tick = () => {
+      const id = opts.lookup();
+      if (id) return finish({ id });
+      if (opts.done() || now() > deadline) return finish(null);
+      timer = setTimeout(tick, tickMs);
+    };
+    opts.inFlight
+      ?.then((id) => {
+        // An answer with no id (an older server) says nothing; the row is
+        // still the way to learn it.
+        if (id) finish({ id });
+      })
+      .catch((err) => finish({ failed: (opts.reason ?? String)(err) }));
+    timer = setTimeout(tick, tickMs);
+  });
+}

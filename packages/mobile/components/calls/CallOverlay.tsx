@@ -7,7 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Text } from "@/components/Themed";
-import { Theme, TAB_BAR_HEIGHT } from "@/constants/Theme";
+import { Theme, SolarizedLight, TAB_BAR_HEIGHT, themedStyles, useTheme } from "@/constants/Theme";
 import { CALL_PUSH_TYPE_RING } from "@codecast/shared/contracts";
 import { useAuth } from "@/lib/auth";
 import {
@@ -58,6 +58,7 @@ export function RingBanner({
   onDecline: (r: RingRow) => void;
   switching?: boolean;
 }) {
+  const Theme = useTheme();
   const slide = useRef(new Animated.Value(-120)).current;
   useEffect(() => {
     Animated.spring(slide, {
@@ -138,6 +139,7 @@ export function useIncomingRingsLoaded(): { rings: RingRow[]; loaded: boolean } 
 //   IN-CALL PILL — while a call is live and the stage is closed, a floating
 //   pill above the tab bar keeps the call one tap away (and mute two).
 export function CallOverlay() {
+  const Theme = useTheme();
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
@@ -254,7 +256,7 @@ export function CallOverlay() {
             <Ionicons
               name={call.muted ? "mic-off" : "mic"}
               size={16}
-              color={call.muted ? Theme.magenta : Theme.bgAlt}
+              color={call.muted ? Theme.magenta : SolarizedLight.bgAlt}
             />
           </Pressable>
         </View>
@@ -263,7 +265,7 @@ export function CallOverlay() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   banner: {
     position: "absolute",
     left: 12,
@@ -335,7 +337,8 @@ const styles = StyleSheet.create({
   pillMain: { flexDirection: "row", alignItems: "center", gap: 7, maxWidth: 160, minHeight: 44, paddingRight: 4 },
   liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Theme.green },
   errorDot: { backgroundColor: Theme.orange },
-  pillText: { fontSize: 12, color: Theme.bgAlt },
+  // The pill floats on the always-dark call surface, so its text stays cream.
+  pillText: { fontSize: 12, color: SolarizedLight.bgAlt },
   pillMute: {
     width: 44,
     height: 44,
@@ -344,4 +347,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(253,246,227,0.12)",
   },
-});
+}));

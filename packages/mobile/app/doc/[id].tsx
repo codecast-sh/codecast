@@ -12,7 +12,7 @@ import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { useSyncDocs } from "@/hooks/useSyncDocs";
@@ -21,6 +21,7 @@ import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { describeDates } from "@codecast/shared/time";
 
 export default function DocDetailScreen() {
+  const Theme = useTheme();
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   const docs = useInboxStore((s) => s.docs);
@@ -182,7 +183,7 @@ export default function DocDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
   loading: {
@@ -310,4 +311,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Theme.text,
   },
-});
+}));

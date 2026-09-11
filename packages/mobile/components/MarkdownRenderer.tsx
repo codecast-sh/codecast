@@ -17,7 +17,7 @@ import { openLink } from '@/lib/links';
 // recognise and normalise the same thing.
 import { URL_SOURCE, urlPattern, trimUrlTail, shortenUrl, isMentionStart } from '@/lib/linkRoutes';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme } from '@/constants/Theme';
+import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { EntityPill, isEntityId } from './EntityPill';
 import { parseEntityUrl, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
@@ -32,6 +32,7 @@ import { parseInsightBlocks } from '@codecast/web/components/insightBlocks';
  * carry the same long-press-to-copy affordance.
  */
 export function LinkText({ url, label, isUser, style }: { url: string; label?: React.ReactNode; isUser?: boolean; style?: any }) {
+  const Theme = useTheme();
   return (
     <RNText
       style={style ?? (isUser ? mdStyles.linkTextUser : mdStyles.linkText)}
@@ -274,6 +275,7 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
 }
 
 export function CodeBlockFullscreen({ content, language, visible, onClose }: { content: string; language: string; visible: boolean; onClose: () => void }) {
+  const Theme = useTheme();
   const [copied, setCopied] = useState(false);
   const lines = content.split('\n');
   if (!visible) return null;
@@ -283,7 +285,7 @@ export function CodeBlockFullscreen({ content, language, visible, onClose }: { c
         <RNView style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 60, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.1)' }}>
           <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <RNText style={{ fontSize: 12, color: '#93a1a1', fontFamily: 'SpaceMono', fontWeight: '500' }}>{language}</RNText>
-            <RNText style={{ fontSize: 10, color: '#657b83' }}>{lines.length} lines</RNText>
+            <RNText style={{ fontSize: 10, color: Theme.textDim }}>{lines.length} lines</RNText>
           </RNView>
           <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <TouchableOpacity onPress={() => { copyToClipboard(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
@@ -314,6 +316,7 @@ export function CodeBlockFullscreen({ content, language, visible, onClose }: { c
 const CODE_BLOCK_PREVIEW_LINES = 12;
 
 export function CodeBlockWithCopy({ content, language }: { content: string; language: string }) {
+  const Theme = useTheme();
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const handleCopy = () => {
@@ -387,6 +390,7 @@ function parseTrustedImageLine(l: string): { alt: string; src: string }[] | null
 }
 
 function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: boolean }) {
+  const Theme = useTheme();
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
   const caption = alt.trim() && !/^(image|img)$/i.test(alt.trim()) ? alt.trim() : undefined;
@@ -413,6 +417,7 @@ function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: 
 }
 
 export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, knownMentionHandles, selectable = true }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean }) {
+  const Theme = useTheme();
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -640,6 +645,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandle
 // "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
 // violet-tinted card, star + uppercase label header, markdown body.
 function InsightCard({ label, content, baseStyle, knownMentionHandles }: { label: string; content: string; baseStyle: any; knownMentionHandles?: Set<string> }) {
+  const Theme = useTheme();
   return (
     <RNView style={mdStyles.insightCard}>
       <RNView style={mdStyles.insightHeader}>
@@ -675,7 +681,7 @@ export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionH
   );
 }
 
-export const mdStyles = StyleSheet.create({
+export const mdStyles = themedStyles((Theme) => StyleSheet.create({
   image: {
     width: '100%',
     height: 200,
@@ -866,4 +872,4 @@ export const mdStyles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-});
+}));
