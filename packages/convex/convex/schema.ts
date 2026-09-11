@@ -129,6 +129,9 @@ export default defineSchema({
       // (emails/digest.ts). Absent reads as ON; the unsubscribe link and the
       // settings toggle both write false here.
       email_notifications: v.optional(v.boolean()),
+      // The Lock Screen Live Activity (liveActivity.ts). Absent reads as ON;
+      // false ends the running activity and stops every start.
+      live_activity: v.optional(v.boolean()),
     })),
     // Cooldown stamp for the email digest — at most one digest per cooldown
     // window, and items created before this stamp are never re-emailed.
@@ -303,6 +306,24 @@ export default defineSchema({
     // (replayed dispatch, timeout after commit) finds the team it already
     // made instead of minting a duplicate.
     client_key: v.optional(v.string()),
+    // Soft delete. The row stays as a tombstone: every membership, mapping
+    // and chat row is gone, so nobody can reach the team, and a replayed
+    // create carrying this row's client_key is refused instead of minting the
+    // team again. `deleted_members` is the roster at deletion time, enough for
+    // an admin restore to re-seat everyone (teams.restoreTeam).
+    deleted_at: v.optional(v.number()),
+    deleted_by: v.optional(v.id("users")),
+    deleted_members: v.optional(v.array(v.object({
+      user_id: v.id("users"),
+      role: v.union(v.literal("member"), v.literal("admin")),
+      joined_at: v.number(),
+      visibility: v.optional(v.union(
+        v.literal("hidden"),
+        v.literal("activity"),
+        v.literal("summary"),
+        v.literal("full")
+      )),
+    }))),
   })
     .index("by_invite_code", ["invite_code"])
     .index("by_client_key", ["client_key"]),
@@ -1093,6 +1114,22 @@ export default defineSchema({
       data: v.optional(v.string()),
       storage_id: v.optional(v.id("_storage")),
       tool_use_id: v.optional(v.string()),
+    }))),
+    // Files the agent handed to the human with SendUserFile. Separate from
+    // images because these are DELIVERIES, not screenshots the agent looked at:
+    // each one is a document the person is meant to open, so it carries its own
+    // name, size and caption, and the client renders a card, not a picture. A
+    // row with `error` and no storage_id is a delivery that could not be
+    // carried (too large, gone, upload failed) — kept, so the card can say so.
+    files: v.optional(v.array(v.object({
+      name: v.string(),
+      media_type: v.string(),
+      size: v.optional(v.number()),
+      storage_id: v.optional(v.id("_storage")),
+      tool_use_id: v.optional(v.string()),
+      caption: v.optional(v.string()),
+      display: v.optional(v.string()),
+      error: v.optional(v.string()),
     }))),
     subtype: v.optional(v.string()),
     client_id: v.optional(v.string()),
@@ -2774,6 +2811,45 @@ export default defineSchema({
     deferred: v.boolean(),
   }).index("by_user", ["user_id"]),
 
+  // The Lock Screen Live Activity: one row per user, the phone's side of the
+  // merged strip (liveActivity.ts). Holds the two APNs credentials ActivityKit
+  // hands out — the push-to-start token (iOS 17.2+, starts an activity while
+  // the app is closed) and the per-activity update token — plus the coalescing
+  // clocks the refresh uses to decide start / update / end / wait. One row per
+  // user mirrors users.push_token: one phone per account for now.
+  live_activities: defineTable({
+    user_id: v.id("users"),
+    // Which APNs host the tokens belong to. Reported by the device from its
+    // build configuration: a development build's tokens only work on sandbox.
+    environment: v.union(v.literal("production"), v.literal("sandbox")),
+    push_to_start_token: v.optional(v.string()),
+    push_to_start_token_at: v.optional(v.number()),
+    // The running activity. Both come from the device after the activity
+    // exists (ActivityKit assigns the id); until they arrive updates cannot be
+    // addressed and the refresh waits out the start grace.
+    activity_id: v.optional(v.string()),
+    activity_token: v.optional(v.string()),
+    // When a start push went out (no id yet). Cleared when the id lands or the
+    // activity ends; while set and inside the grace, no second start goes out.
+    start_sent_at: v.optional(v.number()),
+    last_push_at: v.optional(v.number()),
+    // liveActivityStateKey / liveActivityStatusKey of the last pushed state, so
+    // an unchanged derivation pushes nothing and a status change is urgent.
+    last_state_key: v.optional(v.string()),
+    last_status_key: v.optional(v.string()),
+    // The status key at the moment the person swiped the activity away. No
+    // start goes out for that same picture: a dismissal is an answer, and
+    // only a new event (a row entering, leaving or changing status) earns
+    // another strip.
+    dismissed_status_key: v.optional(v.string()),
+    // The refresh is a single per-user job: a scheduled fire carries its due
+    // stamp and stands down when the row has moved on to a newer one.
+    refresh_due_at: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_activity_id", ["activity_id"]),
+
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
   // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so
@@ -3803,6 +3879,7 @@ export default defineSchema({
     archived_at: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
+    .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_user_type", ["user_id", "doc_type"])
     .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
@@ -4236,6 +4313,11 @@ export default defineSchema({
     // to look would simply start again. Same lifetime as the lock: it belongs
     // to this huddle and dies with it.
     transcribe_off: v.optional(v.boolean()),
+    // When the opt-out was last switched ON. A scribe whose run began before
+    // this stamp is the one being told to stop; a stale "off" the store still
+    // shows for a beat after somebody switched transcription back on by hand
+    // predates their run and must not end it (autoScribe).
+    transcribe_off_at: v.optional(v.number()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -4366,10 +4448,39 @@ export default defineSchema({
   call_chat_messages: defineTable({
     room_key: v.string(),
     team_id: v.optional(v.id("teams")),
+    // The human who owns the line. For an agent's line this is whoever fed
+    // the agent into the huddle (the route's adder): the agent speaks in the
+    // room on that person's authority, the same way its transcript chunks
+    // arrive as them.
     user_id: v.id("users"),
     text: v.string(),
+    // Set when an AGENT said this: the session that is fed the huddle live
+    // and answered. Rendered with the agent's identity, never as user_id's
+    // own words. `source_message_id` is the session message it mirrors, so
+    // a retried mirror can never post the same reply twice.
+    agent_conversation_id: v.optional(v.id("conversations")),
+    source_message_id: v.optional(v.id("messages")),
   })
     .index("by_room", ["room_key"]),
+
+  // One row per session a live transcript feeds: the cheap answer to "is this
+  // session in a huddle right now?", asked on every turn settle so the agent's
+  // reply can be mirrored into the room chat. Written only by
+  // transcripts.syncAgentFeeds, from the transcript's own routes, and gone the
+  // moment the transcript ends or the route is removed. `last_mirrored_message_id`
+  // is the watermark: the newest assistant message already shown in the room,
+  // stamped at feed time with whatever the session last said so nothing said
+  // BEFORE the huddle is replayed into it.
+  call_agent_feeds: defineTable({
+    conversation_id: v.id("conversations"),
+    transcript_id: v.id("transcripts"),
+    room_key: v.string(),
+    team_id: v.optional(v.id("teams")),
+    added_by: v.id("users"),
+    last_mirrored_message_id: v.optional(v.id("messages")),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_transcript", ["transcript_id"]),
 
   workflows: defineTable({
     user_id: v.id("users"),

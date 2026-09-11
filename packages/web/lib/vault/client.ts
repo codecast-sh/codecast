@@ -7,6 +7,7 @@
 import type { ConvexReactClient } from "convex/react";
 import type {
   VaultInfo,
+  VaultLocateResponse,
   VaultScanResponse,
   VaultOpRequest,
   VaultOpResponse,
@@ -94,6 +95,17 @@ export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
   if (!res.ok) throw new VaultRequestError(`vault roots: ${res.status}`, res.status);
   const body = (await res.json()) as { vaults: VaultInfo[] };
   return body.vaults ?? [];
+}
+
+/** The vault holding a local path, registered by the daemon when none did
+ *  (GET /vault/locate). Null when the path does not exist on that machine;
+ *  throws VaultRequestError(404) for a daemon that predates the route. */
+export async function locateVault(ep: VaultEndpoint, localPath: string): Promise<VaultLocateResponse | null> {
+  const res = await vaultFetch(ep, `/vault/locate?path=${encodeURIComponent(localPath)}`);
+  if (res.ok) return (await res.json()) as VaultLocateResponse;
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  if (res.status === 404 && body.error === "no such path") return null;
+  throw new VaultRequestError(`vault locate: ${res.status}`, res.status);
 }
 
 export async function scanVault(

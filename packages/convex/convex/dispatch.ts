@@ -1126,12 +1126,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  // The doc star (rendered as a star; stored as `pinned`). Access is the doc's
+  // own workspace rule, not the viewer's active team: a doc in another team
+  // the viewer belongs to must star too, and team_id is routing, never access.
   pinDoc: async (ctx, userId, [docId, pinned]: [string, boolean]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (doc.user_id !== userId && doc.team_id !== teamId) throw new Error("Not authorized");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
     await ctx.db.patch(doc._id, { pinned, updated_at: Date.now() });
   },
 
@@ -1235,6 +1236,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       client_state: { _: { ui: { active_team_id: teamId } } },
     });
     return teamId;
+  },
+  // Local-first team delete (inboxStore.deleteTeam). The mutation repoints the
+  // canonical users.active_team_id when it named the team; the ui mirror
+  // already moved to the client's fallback, so re-stamp it with the server's
+  // answer in the same transaction. Both apply the oldest-membership rule.
+  dispatchDeleteTeam: async (ctx, userId, [teamId, confirmName]: [string, string, string | undefined]) => {
+    const result = await (ctx as any).runMutation(api.teams.deleteTeam, {
+      team_id: teamId,
+      confirm_name: confirmName,
+    });
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { active_team_id: result?.active_team_id ?? undefined } } },
+    });
+    return result;
   },
   createSavedView: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
@@ -1918,6 +1933,7 @@ const SESSION_COMMANDS = {
   rewindSession: api.conversations.rewindSession,
   forkFromMessage: api.conversations.forkFromMessage,
   sendKeysToSession: api.conversations.sendKeysToSession,
+  setPermissionMode: api.conversations.setPermissionMode,
   sendEscapeToSession: api.conversations.sendEscapeToSession,
   resumeSession: api.users.resumeSession,
 };

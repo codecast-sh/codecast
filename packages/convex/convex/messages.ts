@@ -85,6 +85,7 @@ export function buildExistingMessagePatch(
     tool_calls?: unknown;
     tool_results?: unknown;
     images?: unknown;
+    files?: unknown;
     subtype?: string;
     model?: string;
   },
@@ -95,6 +96,7 @@ export function buildExistingMessagePatch(
     tool_calls?: unknown;
     tool_results?: unknown;
     images?: unknown;
+    files?: unknown;
     subtype?: string;
     model?: string;
   },
@@ -125,6 +127,13 @@ export function buildExistingMessagePatch(
 
   if (incoming.images && JSON.stringify(incoming.images) !== JSON.stringify(existing.images ?? null)) {
     patch.images = incoming.images;
+  }
+
+  // A re-synced turn carries its sent files again, now with storage ids. The
+  // first sync of a live turn can land before the upload finishes, so this is
+  // what fills the card in rather than leaving it stuck on "preparing".
+  if (incoming.files && JSON.stringify(incoming.files) !== JSON.stringify(existing.files ?? null)) {
+    patch.files = incoming.files;
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
@@ -1202,6 +1211,16 @@ export const addMessage = mutation({
       storage_id: v.optional(v.id("_storage")),
       tool_use_id: v.optional(v.string()),
     }))),
+    files: v.optional(v.array(v.object({
+      name: v.string(),
+      media_type: v.string(),
+      size: v.optional(v.number()),
+      storage_id: v.optional(v.id("_storage")),
+      tool_use_id: v.optional(v.string()),
+      caption: v.optional(v.string()),
+      display: v.optional(v.string()),
+      error: v.optional(v.string()),
+    }))),
     subtype: v.optional(v.string()),
     model: v.optional(v.string()),
     timestamp: v.optional(v.number()),
@@ -1253,6 +1272,7 @@ export const addMessage = mutation({
           tool_calls: safeToolCalls,
           tool_results: safeToolResults,
           images: args.images,
+          files: args.files,
           subtype: args.subtype,
           model: args.model,
         });
@@ -1336,6 +1356,7 @@ export const addMessage = mutation({
       tool_calls: safeToolCalls,
       tool_results: safeToolResults,
       images,
+      files: args.files,
       subtype: args.subtype,
       model: args.model,
       client_id: clientIdToStore,
@@ -1578,6 +1599,16 @@ const messageValidator = v.object({
     storage_id: v.optional(v.id("_storage")),
     tool_use_id: v.optional(v.string()),
   }))),
+  files: v.optional(v.array(v.object({
+    name: v.string(),
+    media_type: v.string(),
+    size: v.optional(v.number()),
+    storage_id: v.optional(v.id("_storage")),
+    tool_use_id: v.optional(v.string()),
+    caption: v.optional(v.string()),
+    display: v.optional(v.string()),
+    error: v.optional(v.string()),
+  }))),
   subtype: v.optional(v.string()),
   model: v.optional(v.string()),
   timestamp: v.optional(v.number()),
@@ -1756,6 +1787,7 @@ export const addMessages = mutation({
             tool_calls: safeToolCalls,
             tool_results: safeToolResults,
             images: msg.images,
+            files: msg.files,
             subtype: msg.subtype,
             model: msg.model,
           });
@@ -1869,6 +1901,7 @@ export const addMessages = mutation({
         tool_calls: safeToolCalls,
         tool_results: safeToolResults,
         images,
+        files: msg.files,
         subtype: msg.subtype,
         model: msg.model,
         client_id: clientIdToStore,

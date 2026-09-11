@@ -8,7 +8,7 @@ import { View as RNView,
   StyleSheet,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { Theme, TAB_BAR_HEIGHT } from '@/constants/Theme';
+import { Theme, TAB_BAR_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 
@@ -17,6 +17,7 @@ function TabBarIcon(props: {
   color: string;
   badge?: number;
 }) {
+  const Theme = useTheme();
   const { badge, ...iconProps } = props;
   return (
     <RNView style={{ position: 'relative' }}>
@@ -32,7 +33,7 @@ function TabBarIcon(props: {
   );
 }
 
-const badgeStyles = StyleSheet.create({
+const badgeStyles = themedStyles((Theme) => StyleSheet.create({
   badge: {
     position: 'absolute',
     top: -4,
@@ -51,9 +52,10 @@ const badgeStyles = StyleSheet.create({
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-});
+}));
 
 export default function TabLayout() {
+  const Theme = useTheme();
   const unreadCount = useQuery(api.notifications.getUnreadCount);
 
   return (

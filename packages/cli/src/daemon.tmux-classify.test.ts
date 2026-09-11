@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planTrustPromptStep } from "./daemon.js";
+import { parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planTrustPromptStep } from "./daemon.js";
 import { CODEX_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
@@ -733,5 +733,72 @@ describe("planTrustPromptStep", () => {
   test("walks upward when the affirmative option is above the highlight", () => {
     expect(planTrustPromptStep(["   Yes, I trust this folder", " \u276f No, exit"]))
       .toEqual({ action: "move", key: "Up", times: 1 });
+  });
+});
+
+describe("parsePermissionModeFooter", () => {
+  test("names every mode Claude Code paints in its footer", () => {
+    expect(parsePermissionModeFooter("❯\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents")).toBe("bypassPermissions");
+    expect(parsePermissionModeFooter("  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents")).toBe("auto");
+    expect(parsePermissionModeFooter("  ⏸ manual mode on · ← for agents")).toBe("default");
+    expect(parsePermissionModeFooter("  ⏵⏵ accept edits on (shift+tab to cycle)")).toBe("acceptEdits");
+    expect(parsePermissionModeFooter("  ⏸ plan mode on (shift+tab to cycle)")).toBe("plan");
+  });
+
+  test("a fresh default session paints no mode line", () => {
+    expect(parsePermissionModeFooter("❯\n  ? for shortcuts")).toBeUndefined();
+  });
+
+  test("the live footer (lowest line) wins over one scrolled into history", () => {
+    expect(parsePermissionModeFooter("  ⏸ plan mode on\nsome output\n  ⏵⏵ auto mode on (shift+tab to cycle)")).toBe("auto");
+  });
+});
+
+describe("stepPermissionMode", () => {
+  // Claude Code 2.1.269 with bypass enabled, measured 2026-09-12.
+  const CC_2_1_CYCLE = ["bypassPermissions", "auto", "default", "acceptEdits", "plan"] as const;
+  function fakePane(cycle: readonly string[], startAt: string, opts?: { deaf?: boolean }) {
+    let idx = cycle.indexOf(startAt);
+    let presses = 0;
+    return {
+      presses: () => presses,
+      io: {
+        press: async () => { presses++; if (!opts?.deaf) idx = (idx + 1) % cycle.length; },
+        readMode: async () => cycle[idx] as any,
+        sleep: async () => {},
+      },
+    };
+  }
+
+  test("one press reports where the TUI's own cycle landed, never a predicted order", async () => {
+    const pane = fakePane(CC_2_1_CYCLE, "bypassPermissions");
+    expect(await stepPermissionMode(pane.io)).toEqual({ mode: "auto", presses: 1 });
+    expect(await stepPermissionMode(pane.io)).toEqual({ mode: "default", presses: 1 });
+  });
+
+  test("a target keeps pressing until the footer names it", async () => {
+    const pane = fakePane(CC_2_1_CYCLE, "acceptEdits");
+    expect(await stepPermissionMode(pane.io, "bypassPermissions")).toEqual({ mode: "bypassPermissions", presses: 2 });
+    expect(pane.presses()).toBe(2);
+  });
+
+  test("already on the target: no press at all", async () => {
+    const pane = fakePane(CC_2_1_CYCLE, "plan");
+    expect(await stepPermissionMode(pane.io, "plan")).toEqual({ mode: "plan", presses: 0 });
+    expect(pane.presses()).toBe(0);
+  });
+
+  test("a launch without bypass in its cycle stops after one full lap, back where it started", async () => {
+    const pane = fakePane(["default", "acceptEdits", "plan"], "plan");
+    const out = await stepPermissionMode(pane.io, "bypassPermissions");
+    expect(out).toEqual({ error: "bypass permissions is not in this session's shift+tab cycle" });
+    expect(await pane.io.readMode()).toBe("plan");
+  });
+
+  test("a press the footer never reflects is reported, not retried", async () => {
+    const pane = fakePane(CC_2_1_CYCLE, "auto", { deaf: true });
+    const out = await stepPermissionMode(pane.io, undefined, { settleMs: 0 });
+    expect("error" in out).toBe(true);
+    expect(pane.presses()).toBe(1);
   });
 });

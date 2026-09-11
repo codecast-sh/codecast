@@ -52,7 +52,11 @@ export function useOpenSession(): (id: string) => void {
     // path: the conversation takes the stage.
     if (requestStagePlacement(sessionPanePath(id), store.sessions[id]?.title ?? undefined)) return;
     store.navigateToSession(id);
-    router.push("/inbox");
+    // The inbox carrying the session: the tab's own spelling of "this
+    // session, in the inbox" (stampedTabPath), and the mark by which the
+    // recents rail knows this push is the session's visit rather than a
+    // visit to the Inbox page (tabNavigate).
+    router.push(`/inbox?s=${id}`);
   }, [router]);
 
   return kind === "leave" ? leaveAndOpen : openInPlace;
