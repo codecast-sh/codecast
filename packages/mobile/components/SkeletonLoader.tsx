@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { StyleSheet, Animated, View as RNView } from 'react-native';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 
 function SkeletonPulse({ style }: { style?: any }) {
+  const Theme = useTheme();
   const opacity = useRef(new Animated.Value(0.3)).current;
   useEffect(() => {
     const animation = Animated.loop(
@@ -18,6 +19,7 @@ function SkeletonPulse({ style }: { style?: any }) {
 }
 
 export function SessionSkeleton() {
+  const Theme = useTheme();
   return (
     <RNView style={styles.sessionRow}>
       <RNView style={styles.sessionLeft}>
@@ -30,6 +32,7 @@ export function SessionSkeleton() {
 }
 
 export function SessionListSkeleton({ count = 8 }: { count?: number }) {
+  const Theme = useTheme();
   return (
     <RNView style={styles.container}>
       {Array.from({ length: count }).map((_, i) => (
@@ -40,6 +43,7 @@ export function SessionListSkeleton({ count = 8 }: { count?: number }) {
 }
 
 export function NotificationSkeleton() {
+  const Theme = useTheme();
   return (
     <RNView style={styles.notificationRow}>
       <SkeletonPulse style={styles.notificationAvatar} />
@@ -53,6 +57,7 @@ export function NotificationSkeleton() {
 }
 
 export function NotificationListSkeleton({ count = 8 }: { count?: number }) {
+  const Theme = useTheme();
   return (
     <RNView style={styles.container}>
       {Array.from({ length: count }).map((_, i) => (
@@ -63,6 +68,7 @@ export function NotificationListSkeleton({ count = 8 }: { count?: number }) {
 }
 
 export function MemberSkeleton() {
+  const Theme = useTheme();
   return (
     <RNView style={styles.memberRow}>
       <SkeletonPulse style={styles.avatar} />
@@ -74,7 +80,7 @@ export function MemberSkeleton() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     paddingVertical: 4,
   },
@@ -174,4 +180,4 @@ const styles = StyleSheet.create({
     height: 11,
     borderRadius: 3,
   },
-});
+}));

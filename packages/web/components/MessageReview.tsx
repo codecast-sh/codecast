@@ -46,6 +46,15 @@ const RIGHT_MIN_PX = 188;
 
 type Rect = { top: number; height: number };
 
+// The scroll container the message sits in. The rail's placement is decided by
+// the empty space between THIS element's edges and the column, so both the
+// measurement and the observer that re-runs it need the same element.
+function scrollerOf(el: HTMLElement | null): HTMLElement | null {
+  let s: HTMLElement | null = el;
+  while (s && getComputedStyle(s).overflowY === "visible") s = s.parentElement;
+  return s;
+}
+
 type Props = {
   conversationId: string;
   messageId: string;
@@ -164,8 +173,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     // fall back to shrinking inline only when the margin is too small to be useful.
     const region = containerRef.current;
     if (region) {
-      let scroller: HTMLElement | null = region;
-      while (scroller && getComputedStyle(scroller).overflowY === "visible") scroller = scroller.parentElement;
+      const scroller = scrollerOf(region);
       const rr = region.getBoundingClientRect();
       const sr = scroller ? scroller.getBoundingClientRect() : null;
       const left = sr ? sr.left : 0;
@@ -211,9 +219,26 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     if (!measureActive) return;
     const el = contentRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => measure());
+    // Watch the SCROLLER, not just the column: the column is max-width capped and
+    // centered, so once it reaches that cap a panel toggle or a splitter drag
+    // moves it without resizing it — a ResizeObserver on the column alone never
+    // fires, and no window resize event accompanies either gesture. The rail
+    // would then stay wedged inline on a screen that has since grown wide enough
+    // for the margin. Its height changes on every composer growth and can't move
+    // the rail, so re-measure only when its WIDTH changes.
+    const scroller = scrollerOf(containerRef.current);
+    let scrollerW = -1;
+    const ro = new ResizeObserver((entries) => {
+      if (scroller && entries.every((e) => e.target === scroller)) {
+        const w = entries[entries.length - 1].contentRect.width;
+        if (w === scrollerW) return;
+        scrollerW = w;
+      }
+      measure();
+    });
     ro.observe(el);
-    if (containerRef.current) ro.observe(containerRef.current); // catches margin changes (panel toggles, resize)
+    if (containerRef.current) ro.observe(containerRef.current);
+    if (scroller) ro.observe(scroller);
     getQuoteUnits(el).forEach((u) => ro.observe(u));
     // Re-reserve when the comment thread itself grows/shrinks: the rail floats
     // absolutely, so its size changes don't resize containerRef on their own.
@@ -631,6 +656,19 @@ function CommentEditor({
 }) {
   const [value, setValue] = useState(comment.body);
   const ref = useRef<HTMLTextAreaElement>(null);
+  // What the note said when the editor opened: Cancel on a saved note puts it
+  // back, since typing has already been written through to the store.
+  const openedWithRef = useRef(comment.body);
+
+  // A note is a draft: it lands in the store (and IDB) while you type, on the
+  // composer's 300ms cadence, so a reload or a navigation mid-sentence keeps
+  // it. `latest` lets the unmount flush write what the timer never got to.
+  const latestRef = useRef(comment.body);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flush = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    useInboxStore.getState().commitReviewComment(conversationId, comment.id, latestRef.current.trim());
+  }, [conversationId, comment.id]);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -641,7 +679,16 @@ function CommentEditor({
       el.style.height = "auto";
       el.style.height = el.scrollHeight + "px";
     }
-  }, []);
+    // Closing the tab or backgrounding it (where Chrome throttles timers) must
+    // not strand the last keystrokes inside the debounce window.
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flush);
+      flush();
+    };
+  }, [flush]);
 
   // Only close if this card still owns the editor. Stepping to the next note
   // hands ownership over while this textarea is still mounted; a late blur must
@@ -661,19 +708,24 @@ function CommentEditor({
   // optional note: Save stores it (empty keeps it a bare quote), Cancel just
   // closes and leaves the quote untouched. Removing is the chip's explicit Remove.
   const save = useCallback((refocus: boolean) => {
-    useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
+    flush();
     close(refocus);
-  }, [value, conversationId, comment.id, close]);
+  }, [flush, close]);
 
-  const cancel = close;
+  const cancel = useCallback((refocus: boolean) => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    latestRef.current = openedWithRef.current;
+    useInboxStore.getState().commitReviewComment(conversationId, comment.id, openedWithRef.current);
+    close(refocus);
+  }, [conversationId, comment.id, close]);
 
   // Save what's typed, then open the neighbour's editor.
   const step = useCallback(
     (delta: number) => {
-      useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
+      flush();
       onStep?.(delta);
     },
-    [value, conversationId, comment.id, onStep],
+    [flush, onStep],
   );
 
   // Plain ↑/↓ move between notes, but only once the caret has nowhere left to go
@@ -698,6 +750,9 @@ function CommentEditor({
           className="cc-comment-textarea"
           onChange={(e) => {
             setValue(e.target.value);
+            latestRef.current = e.target.value;
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = setTimeout(flush, 300);
             e.target.style.height = "auto";
             e.target.style.height = e.target.scrollHeight + "px";
           }}

@@ -14,7 +14,7 @@ import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
 import { chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
@@ -47,6 +47,7 @@ type PendingSend = {
 };
 
 export default function ChatChannelScreen() {
+  const Theme = useTheme();
   const { id, m: targetParam } = useLocalSearchParams<{ id: string; m?: string }>();
   const channelId = id as Id<'chat_channels'>;
   const router = useRouter();
@@ -616,7 +617,7 @@ export default function ChatChannelScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   flex: { flex: 1 },
   listWrap: { flex: 1 },
@@ -667,4 +668,4 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   jumpCount: { fontSize: 11, fontWeight: '700', color: Theme.bg },
-});
+}));

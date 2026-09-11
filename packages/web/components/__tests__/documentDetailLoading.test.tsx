@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { afterAll, describe, expect, test, mock } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // The read-mode body has three empty-content states that must not be confused:
@@ -23,11 +23,16 @@ mock.module("next/navigation", () => ({
 mock.module("../ContextChatInput", () => ({
   ContextChatInput: () => <div data-stub="chat-input" />,
 }));
+// Restored afterwards: `mock.module` is process-global, so a stub left in place
+// blanks MessageReview for every later file that mounts it for real (same
+// discipline as mockInboxStore below).
+const realMessageReview = { ...(await import("../MessageReview")) };
 mock.module("../MessageReview", () => ({
   MessageReview: ({ content }: { content: string }) => (
     <div data-stub="message-review">{content}</div>
   ),
 }));
+afterAll(() => mock.module("../MessageReview", () => realMessageReview));
 mock.module("../DocReviewBar", () => ({
   DocReviewBar: () => <div data-stub="review-bar" />,
 }));

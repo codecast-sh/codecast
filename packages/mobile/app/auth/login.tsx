@@ -15,10 +15,11 @@ import { TextInput } from '@/components/Themed';
 import { Text } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
 import { Link } from 'expo-router';
-import { Theme, Spacing, FontSize, BorderRadius } from '@/constants/Theme';
+import { Theme, Spacing, FontSize, BorderRadius, themedStyles, useTheme } from '@/constants/Theme';
 import { Feather, Ionicons } from '@expo/vector-icons';
 
 export default function LoginScreen() {
+  const Theme = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -285,7 +286,7 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -454,4 +455,4 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: '700',
   },
-});
+}));

@@ -1,5 +1,6 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { extractInlineImages } from "./inlineImage.js";
+import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
 import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
@@ -77,6 +78,8 @@ export interface ImageBlock {
   toolUseId?: string;
 }
 
+export type FileBlock = SyncFile;
+
 export interface ParsedMessage {
   uuid?: string;
   role: "user" | "assistant" | "system";
@@ -86,6 +89,8 @@ export interface ParsedMessage {
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageBlock[];
+  /** Files the agent handed to the human with SendUserFile. */
+  files?: FileBlock[];
   subtype?: string;
   stopReason?: string;
   model?: string;
@@ -258,6 +263,7 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
     const toolCalls: ToolCall[] = [];
     const toolResults: ToolResult[] = [];
     const images: ImageBlock[] = [];
+    const files: FileBlock[] = [];
 
     // Handle old format: message is a string directly
     if (typeof entry.message === "string") {
@@ -281,6 +287,9 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
             thinking += block.thinking;
           } else if (block.type === "tool_use") {
             toolCalls.push({ id: block.id, name: block.name, input: block.input });
+            // A file the agent sent the human rides the message the same way a
+            // screenshot does — see userFiles.ts.
+            files.push(...extractSentFiles(block, entry.cwd));
           } else if (block.type === "tool_result") {
             let toolResultContent = block.content;
             if (Array.isArray(block.content)) {
@@ -363,6 +372,7 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
         images: images.length > 0 ? images : undefined,
+        files: files.length > 0 ? files : undefined,
         stopReason,
         model,
       });

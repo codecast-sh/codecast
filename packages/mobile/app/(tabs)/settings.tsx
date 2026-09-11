@@ -21,7 +21,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { DevicesSection } from '@/components/DevicesSection';
 
@@ -38,6 +38,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 export default function SettingsScreen() {
+  const Theme = useTheme();
   const router = useRouter();
   const {
     signOut,
@@ -671,6 +672,7 @@ function EditableRow({ label, value, field, editing, editValue, onEdit, onChange
   onEdit: (field: string, value?: string | null) => void; onChange: (v: string) => void; onSave: () => void;
   placeholder?: string; multiline?: boolean;
 }) {
+  const Theme = useTheme();
   const isEditing = editing === field;
   return (
     <TouchableOpacity style={styles.setting} onPress={() => !isEditing && onEdit(field, value)} activeOpacity={0.6} disabled={isEditing}>
@@ -705,7 +707,7 @@ function EditableRow({ label, value, field, editing, editValue, onEdit, onChange
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -854,4 +856,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.textMuted0,
   },
-});
+}));

@@ -390,6 +390,32 @@ describe("awaitTmuxComposerPayload — real client composers", () => {
 // copies and this one matching a bare prefix, so the composer the gate refused
 // as doubled was the same composer this one waved through to Enter.
 describe("tmuxComposerHoldsPayload", () => {
+  const withFooter = (draft: string) => `${BOX(draft)}  ashot\n  shift+tab to cycle`;
+
+  test.each(["hi", "on", "ashot"])("%s in the footer is not a duplicate draft", (payload) => {
+    expect(tmuxComposerHoldsPayload(withFooter(payload), payload)).toBe(true);
+    expect(tmuxComposerHoldsPayload(withFooter(""), payload)).toBe(false);
+    expect(tmuxComposerHoldsPayload(withFooter(`${payload} ${payload}`), payload)).toBe(false);
+    expect(tmuxComposerHoldsPayload(withFooter(`${payload}\n\n  ${payload}`), payload)).toBe(false);
+  });
+
+  test("a framed multiline composer ends before the keyboard hints", () => {
+    const pane = "│ ❯ hi │\n│ there │\n╰─────────────────╯\nhi there to continue";
+    expect(tmuxComposerHoldsPayload(pane, "hi there")).toBe(true);
+  });
+
+  test("the Enter gate accepts hi without clearing or re-pasting", async () => {
+    const exec = async (args: Args): Promise<{ stdout: string }> => {
+      expect(args[0]).toBe("capture-pane");
+      return { stdout: withFooter("hi") };
+    };
+    expect(await awaitTmuxComposerPayload("t:0.0", "hi", {
+      rePaste: async () => { throw new Error("must not re-paste hi"); },
+      exec: exec as any,
+      budgetMs: 2_000,
+    })).toBe("matched");
+  });
+
   test("the payload at the prompt is recognized across the soft-wrapped lines", () => {
     expect(tmuxComposerHoldsPayload(CODEX_PASTED, MULTILINE)).toBe(true);
     expect(tmuxComposerHoldsPayload(BOX(PAYLOAD), PAYLOAD)).toBe(true);

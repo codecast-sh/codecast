@@ -37,10 +37,13 @@ type ChipCtxPayload =
 //
 // Overflow: the row never scrolls. Chips that don't fit are detected with an
 // IntersectionObserver against the row container and hidden outright; a "+N"
-// pill (always visible, after the row) opens a popover holding the FULL list —
-// filter, reorder, delete, and create all work there too, so nothing clipped
-// is ever out of reach. When the ACTIVE filter's chip is among the hidden,
-// the +N pill carries the accent so filter state can't silently disappear.
+// pill opens a popover holding the FULL list — filter, reorder, delete, and
+// create all work there too, so nothing clipped is ever out of reach. The pill
+// renders outside the clip shell and its width floors the whole component, so
+// squeezing the panel (or zooming the desktop app in, which is the same thing
+// in CSS pixels) can hide every chip but never the way back to them. When the
+// ACTIVE filter's chip is among the hidden, a twin chip is pinned beside the
+// row so filter state can't silently disappear.
 //
 // Reorder UX: dragging a label chip opens a real gap at the insertion point —
 // chips at/after it slide right (transform transition, so they glide back and
@@ -359,8 +362,11 @@ export function LabelChipsRow({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const pillRef = useRef<HTMLButtonElement | null>(null);
   const popRowEls = useRef<Map<string, HTMLElement>>(new Map());
   const POPOVER_WIDTH = 256; // w-64
+  const GUTTER = 8; // smallest gap the popover keeps from a window edge
+  const MIN_POPOVER_HEIGHT = 160;
   // Empty labels (not in rowBucketIds) are tucked behind a collapsed "N empty"
   // row in the popover — the list defaults to labels that hold something.
   // Expanding restores the FULL sortLabels order, so the index-based reorder
@@ -369,15 +375,31 @@ export function LabelChipsRow({
   useWatchEffect(() => {
     if (!popoverOpen) setEmptyOpen(false);
   }, [popoverOpen]);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  // `bottom` instead of `top` means the popover was flipped above the anchor.
+  // maxHeight is the room actually available on the chosen side, so a long list
+  // scrolls inside the window instead of running past its bottom edge.
+  const [popoverPos, setPopoverPos] = useState<{ top?: number; bottom?: number; left: number; maxHeight: number } | null>(null);
   useLayoutEffect(() => {
     if (!popoverOpen) { setPopoverPos(null); return; }
+    // Zooming the desktop app in shrinks the window in CSS pixels, so the room
+    // under the panel header can be far smaller than the list wants. Measure
+    // both sides, take the roomier one, and cap the height to what is there.
     const place = () => {
       const rect = anchorRef.current?.getBoundingClientRect();
       if (!rect) return;
+      const below = window.innerHeight - rect.bottom - GUTTER * 2;
+      const above = rect.top - GUTTER * 2;
+      const flip = below < MIN_POPOVER_HEIGHT && above > below;
+      const room = Math.max(MIN_POPOVER_HEIGHT, flip ? above : below);
       setPopoverPos({
-        top: rect.bottom + 6,
-        left: Math.max(8, rect.right - POPOVER_WIDTH),
+        ...(flip
+          ? { bottom: Math.max(GUTTER, window.innerHeight - rect.top + 6) }
+          : { top: Math.min(rect.bottom + 6, Math.max(GUTTER, window.innerHeight - MIN_POPOVER_HEIGHT - GUTTER)) }),
+        left: Math.min(
+          Math.max(GUTTER, rect.right - POPOVER_WIDTH),
+          Math.max(GUTTER, window.innerWidth - POPOVER_WIDTH - GUTTER),
+        ),
+        maxHeight: Math.min(room, window.innerHeight * 0.6),
       });
     };
     place();
@@ -387,6 +409,10 @@ export function LabelChipsRow({
   useWatchEffect(() => {
     if (!popoverOpen) return;
     const onDown = (e: MouseEvent) => {
+      // The pill is the popover's own toggle, and its mousedown lands before
+      // its click: closing here would let that click reopen what the user just
+      // dismissed, so the pill could never close the popover at all.
+      if (pillRef.current?.contains(e.target as Node)) return;
       if (!popoverRef.current?.contains(e.target as Node)) setPopoverOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
@@ -532,11 +558,18 @@ export function LabelChipsRow({
   };
 
   return (
-    <div ref={anchorRef} className="relative flex-1 min-w-0 flex items-center">
-      {/* Clip shell: everything in-flow (row, pinned active chip, +N pill) is
-          hard-clipped at the component's edge so nothing can bleed under the
-          panel's icon cluster at narrow widths. The popover lives outside the
-          shell — clipping it would cut the dropdown off. */}
+    // min-w-0 is load-bearing: without it the row's automatic minimum width is
+    // its min-content width, and the clip shell contributes every chip's full
+    // width to that (a child's own min-w-0 never lowers what it hands its
+    // parent). The row then grows to the whole chip list, nothing ever clips,
+    // and the panel header runs off the window. The +N pill keeps its room
+    // through flex-shrink-0 alone: the shell collapses first, the pill last.
+    <div ref={anchorRef} className="relative flex-1 min-w-0 flex items-center gap-1">
+      {/* Clip shell: the chip row and the pinned active chips are hard-clipped
+          at the component's edge so nothing can bleed under the panel's icon
+          cluster at narrow widths. The +N pill and the popover sit OUTSIDE it:
+          the pill is the only way to reach a clipped label, so it must survive
+          the shell collapsing, and clipping the popover would cut it off. */}
       <div className="flex-1 min-w-0 flex items-center gap-1 overflow-hidden">
       <div
         ref={rowRef}
@@ -679,8 +712,11 @@ export function LabelChipsRow({
         );
       })}
 
+      </div>
+
       {hiddenCount + zeroHiddenCount > 0 && (
         <button
+          ref={pillRef}
           onClick={() => setPopoverOpen((v) => !v)}
           onDragOver={(e) => {
             // Hidden (clipped or zero-count) labels are still drop targets:
@@ -697,16 +733,15 @@ export function LabelChipsRow({
             }
           }}
           title={`${hiddenCount + zeroHiddenCount} more — view all labels & projects`}
-          // ml-auto pins the pill to the row's right edge: when chips don't fill
-          // the width, the slack opens up to its LEFT (chips stay clustered with
-          // the active-filter pin). Collapses to 0 when the row is full, so the
-          // overflow/narrow case is unchanged.
-          className="flex-shrink-0 ml-auto px-1.5 py-0.5 rounded-full text-[10px] tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+          // Outside the clip shell, so the shell can collapse to nothing and
+          // the pill still paints and still takes clicks. Its own width is what
+          // floors the component (the outer row has no min-w-0), which is why
+          // squeezing the panel can hide every chip but never this pill.
+          className="flex-shrink-0 px-1.5 py-0.5 rounded-full text-[10px] tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
         >
           +{hiddenCount + zeroHiddenCount}
         </button>
       )}
-      </div>
 
       {popoverOpen && popoverPos && createPortal(
         <div
