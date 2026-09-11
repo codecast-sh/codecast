@@ -1,6 +1,29 @@
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
 
+// A theme colour that lives in a CSS variable (light and dark swap the value
+// at runtime) AND honours Tailwind's opacity modifier. A plain `var(--x)`
+// colour cannot: Tailwind has no channels to put an alpha on, so it emits
+// NOTHING for `bg-sol-bg-alt/95`, and the class silently does not exist.
+// Resolved at build time through color-mix instead, which the browser
+// evaluates against whichever value the variable holds when it paints.
+//
+// The bare class must stay byte-identical to what it always was. Tailwind
+// hands the base utility its own `var(--tw-bg-opacity)` slot, so a literal
+// number is the only case that mixes; a variable slot returns the plain
+// colour, exactly as before.
+//
+// Typed as a string because Tailwind's Config type predates function colours;
+// the runtime has accepted them since 3.1.
+const themed = (variable: string): string =>
+  (({ opacityValue }: { opacityValue?: string | number }) => {
+    // The gradient plugin hands its transparent stop over as the number 0.
+    const alpha = opacityValue === undefined ? undefined : String(opacityValue);
+    return alpha === undefined || alpha.startsWith("var(")
+      ? `var(${variable})`
+      : `color-mix(in srgb, var(${variable}) calc(${alpha} * 100%), transparent)`;
+  }) as unknown as string;
+
 const config: Config = {
     darkMode: ["class"],
     content: [
@@ -39,17 +62,17 @@ const config: Config = {
   				blue: '#268bd2',
   				cyan: 'rgb(42 161 152 / <alpha-value>)',
   				green: '#859900',
-  				bg: 'var(--sol-bg)',
-  				'bg-alt': 'var(--sol-bg-alt)',
-  				'bg-inset': 'var(--sol-bg-inset)',
-  				'bg-highlight': 'var(--sol-bg-highlight)',
-  				card: 'var(--sol-card)',
-  				'card-hover': 'var(--sol-card-hover)',
-  				border: 'var(--sol-border)',
-  				text: 'var(--sol-text)',
-  				'text-secondary': 'var(--sol-text-secondary)',
-  				'text-muted': 'var(--sol-text-muted)',
-  				'text-dim': 'var(--sol-text-dim)'
+  				bg: themed('--sol-bg'),
+  				'bg-alt': themed('--sol-bg-alt'),
+  				'bg-inset': themed('--sol-bg-inset'),
+  				'bg-highlight': themed('--sol-bg-highlight'),
+  				card: themed('--sol-card'),
+  				'card-hover': themed('--sol-card-hover'),
+  				border: themed('--sol-border'),
+  				text: themed('--sol-text'),
+  				'text-secondary': themed('--sol-text-secondary'),
+  				'text-muted': themed('--sol-text-muted'),
+  				'text-dim': themed('--sol-text-dim')
   			},
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',

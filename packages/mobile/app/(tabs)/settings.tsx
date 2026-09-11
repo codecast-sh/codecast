@@ -21,7 +21,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { DevicesSection } from '@/components/DevicesSection';
 
@@ -38,6 +38,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 export default function SettingsScreen() {
+  const Theme = useTheme();
   const router = useRouter();
   const {
     signOut,
@@ -171,7 +172,7 @@ export default function SettingsScreen() {
 
   const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : "skip");
 
-  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity') => {
+  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity') => {
     const currentPrefs = currentUser?.notification_preferences || {
       team_session_start: true,
       mention: true,
@@ -513,6 +514,27 @@ export default function SettingsScreen() {
                 />
               </RNView>
 
+              {Platform.OS === 'ios' && (
+                <>
+                  <RNView style={styles.settingDivider} />
+                  <RNView style={styles.setting}>
+                    <RNView style={styles.settingText}>
+                      <RNText style={styles.settingLabel}>Lock Screen</RNText>
+                      <RNText style={styles.settingDescription}>
+                        A Live Activity with every running agent, on the Lock Screen and in the Dynamic Island
+                      </RNText>
+                    </RNView>
+                    <Switch
+                      value={currentUser?.notification_preferences?.live_activity ?? true}
+                      onValueChange={() => handleToggleNotificationType('live_activity')}
+                      trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                      thumbColor="#fff"
+                      ios_backgroundColor={Theme.bgHighlight}
+                    />
+                  </RNView>
+                </>
+              )}
+
               <RNView style={styles.settingDivider} />
               <RNView style={styles.setting}>
                 <RNView style={styles.settingText}>
@@ -671,6 +693,7 @@ function EditableRow({ label, value, field, editing, editValue, onEdit, onChange
   onEdit: (field: string, value?: string | null) => void; onChange: (v: string) => void; onSave: () => void;
   placeholder?: string; multiline?: boolean;
 }) {
+  const Theme = useTheme();
   const isEditing = editing === field;
   return (
     <TouchableOpacity style={styles.setting} onPress={() => !isEditing && onEdit(field, value)} activeOpacity={0.6} disabled={isEditing}>
@@ -705,7 +728,7 @@ function EditableRow({ label, value, field, editing, editValue, onEdit, onChange
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -854,4 +877,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.textMuted0,
   },
-});
+}));

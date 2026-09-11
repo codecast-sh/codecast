@@ -7,7 +7,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 
 // New message: pick one teammate and land in the 1:1, or several and land in
@@ -16,6 +16,7 @@ import { ChatAvatar } from '@/components/chat/MessageRow';
 // room that comes back is the room you already had.
 
 export default function NewMessageScreen() {
+  const Theme = useTheme();
   const router = useRouter();
   const currentUser = useQuery(api.users.getCurrentUser);
   const viewerId = currentUser?._id ? String(currentUser._id) : '';
@@ -140,7 +141,7 @@ export default function NewMessageScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: 'row',
@@ -202,4 +203,4 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     paddingVertical: 8,
   },
-});
+}));

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { useRouteMeta } from "../pageMeta";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
   return (
@@ -98,60 +99,7 @@ export default function PricingPage() {
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "#fdf6e3" }}>
-      {/* Nav */}
-      <nav
-        className="backdrop-blur-sm sticky top-0 z-50"
-        style={{ borderBottom: "1px solid #eee8d5", backgroundColor: "rgba(253,246,227,0.8)" }}
-      >
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/">
-            <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/documentation"
-              className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors"
-              style={{ color: "#657b83" }}
-            >
-              Docs
-            </Link>
-            <Link
-              href="/features"
-              className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors"
-              style={{ color: "#657b83" }}
-            >
-              CLI
-            </Link>
-            <Link href="/pricing" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: "#b58900" }}>
-              Pricing
-            </Link>
-            <Link
-              href="/blog"
-              className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors"
-              style={{ color: "#657b83" }}
-            >
-              Blog
-            </Link>
-            <Link
-              href="/security"
-              className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors"
-              style={{ color: "#657b83" }}
-            >
-              Security
-            </Link>
-            <Link href="/login">
-              <Button variant="ghost" className="font-medium" style={{ color: "#657b83" }}>
-                Sign in
-              </Button>
-            </Link>
-            <Link href="/signup">
-              <Button className="font-medium text-white" style={{ backgroundColor: "#002b36" }}>
-                Get started
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingNav active="/pricing" />
 
       {/* Hero */}
       <section className="max-w-4xl mx-auto px-6 pt-20 pb-8 text-center">

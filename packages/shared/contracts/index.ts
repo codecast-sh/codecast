@@ -13,6 +13,9 @@ export * from "./agentClients";
 export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./workState";
+// The Lock Screen Live Activity wire contract and the merge that produces it,
+// shared by Convex (the pusher) and the app (the local starter).
+export * from "./liveActivity";
 // Session unread: one predicate over (acknowledged_at, conversations.updated_at)
 // so web, mobile and the CLI light the same cards.
 export * from "./sessionRead";
@@ -25,6 +28,7 @@ export * from "./providerKeys";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
 export * from "./agentSwitch";
+export * from "./forkSeed";
 export * from "./teamFeatures";
 export * from "./stableContext";
 export * from "./vaultProtocol";

@@ -144,11 +144,100 @@ export function LoginExpiredBadge({ profile }: { profile: { login_expired_at?: n
   return (
     <span
       className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-[10px] text-sol-red"
-      title="The saved login for this account no longer works — sign into it in Claude Code once and it is re-saved"
+      title="The saved login for this account no longer works — sign into it again and sessions can use it"
     >
       login expired
     </span>
   );
+}
+
+export type ProfileLoginFlow = {
+  status: "pending" | "confirmed" | "rejected";
+  email?: string;
+  profile?: string;
+  reason?: string;
+  started_at: number;
+  finished_at?: number;
+};
+
+// A pending flow older than this means the daemon died mid-flow (its own
+// watcher gives up at 5 min); mirrors LOGIN_FLOW_STALE_MS server-side.
+const PROFILE_LOGIN_STALE_MS = 6 * 60 * 1000;
+
+/**
+ * The one place a browser opens for a saved account: a person clicks it. The
+ * daemon runs `claude auth login` for that profile into the profile's own
+ * credential store, so the machine's current login is untouched, and reports
+ * through the device's cc_login_flow (scoped here by profile name).
+ */
+export function ProfileSignInButton({
+  device,
+  profile,
+  className,
+}: {
+  device: { device_id: string; online?: boolean; is_remote?: boolean; login_flow?: ProfileLoginFlow | null };
+  profile: { name: string; email?: string; login_expired_at?: number | null };
+  className?: string;
+}) {
+  const requestLogin = useMutation(api.accountSwitch.requestLoginFlow);
+  const [launching, setLaunching] = useState(false);
+  const now = useCoarseNowLocal();
+  if (!profile.login_expired_at || device.is_remote || device.online === false) return null;
+  const flow = device.login_flow?.profile === profile.name ? device.login_flow : null;
+  const pending = launching || (flow?.status === "pending" && now - flow.started_at < PROFILE_LOGIN_STALE_MS);
+  const rejected = flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 10 * 60 * 1000;
+
+  const start = async (force = false) => {
+    setLaunching(true);
+    try {
+      await requestLogin({ device_id: device.device_id, profile: profile.name, ...(force ? { force: true } : {}) });
+      toast.success(`Finish signing in as ${profile.email ?? profile.name} in the browser`);
+      setTimeout(() => setLaunching(false), 5_000);
+    } catch (err) {
+      setLaunching(false);
+      toast.error(err instanceof Error ? err.message : "Couldn't start the sign-in");
+    }
+  };
+
+  if (pending) {
+    return (
+      <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] text-amber-500 ${className ?? ""}`}>
+        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
+        finish in browser
+        <button
+          type="button"
+          onClick={() => start(true)}
+          className="underline decoration-dotted underline-offset-2 hover:text-amber-400"
+          title="Kill the running sign-in and open a fresh browser page"
+        >
+          relaunch
+        </button>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => start(false)}
+      title={
+        rejected
+          ? `The last sign-in didn't complete${flow?.reason ? `: ${flow.reason}` : ""}. Opens the browser on the sign-in page for ${profile.email ?? profile.name}; the machine's current login stays as it is.`
+          : `Opens the browser on the sign-in page for ${profile.email ?? profile.name}; the machine's current login stays as it is`
+      }
+      className={`shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500 hover:bg-amber-500/20 ${className ?? ""}`}
+    >
+      {rejected ? "sign in again · retry" : "sign in again"}
+    </button>
+  );
+}
+
+function useCoarseNowLocal(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useMountEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(t);
+  });
+  return now;
 }
 
 // A refresh request is "in flight" until the daemon's heartbeat moves some

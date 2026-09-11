@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildPublishPayload, findChrome, walkBundleDir } from "./publish";
+import { buildPublishPayload, findChrome, thumbArgs, walkBundleDir } from "./publish";
 
 let dir: string;
 
@@ -111,6 +111,25 @@ describe("findChrome", () => {
     } finally {
       if (prev === undefined) delete process.env.CHROME_PATH;
       else process.env.CHROME_PATH = prev;
+    }
+  });
+});
+
+describe("thumbArgs", () => {
+  it("captures into a throwaway profile, never the default one", () => {
+    const args = thumbArgs("/x/index.html", "/x/out.png", "/x/profile");
+    expect(args).toContain("--user-data-dir=/x/profile");
+    expect(args).toContain("--headless=new");
+    expect(args[args.length - 1]).toBe("file:///x/index.html");
+  });
+
+  it("uses the mock keychain when the home has no login keychain", () => {
+    const saved = process.env.HOME;
+    process.env.HOME = dir;
+    try {
+      expect(thumbArgs("/x/index.html", "/x/out.png", "/x/profile").includes("--use-mock-keychain")).toBe(process.platform === "darwin");
+    } finally {
+      process.env.HOME = saved;
     }
   });
 });

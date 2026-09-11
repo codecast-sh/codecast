@@ -214,6 +214,12 @@ http.route({
           installed_by_user_id: bound.user_id as any,
         });
 
+        // The pull requests that already exist on the account arrive now, not
+        // one webhook at a time as people happen to touch them.
+        await ctx.scheduler.runAfter(0, internal.githubApp.backfillInstallationPulls, {
+          installation_id: installationDetails.installation_id,
+        });
+
         const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?success=true`;
         return new Response(null, {
           status: 302,
@@ -330,11 +336,19 @@ http.route({
 
     if (eventType === "installation_repositories") {
       const installationId = payload.installation?.id;
-      if (installationId && payload.repositories_added) {
-        const existing = await ctx.runQuery(internal.githubApp.getCachedToken, {
+      if (installationId) {
+        const repo = (r: any) => ({ id: r.id, name: r.name, full_name: r.full_name });
+        const applied = await ctx.runMutation(internal.githubApp.applyInstallationRepositoriesEvent, {
           installation_id: installationId,
+          repository_selection: payload.repository_selection,
+          added: (payload.repositories_added ?? []).map(repo),
+          removed: (payload.repositories_removed ?? []).map(repo),
         });
-        if (existing) {
+        if (applied.team_id && applied.added.length > 0) {
+          await ctx.scheduler.runAfter(0, internal.githubApp.backfillInstallationPulls, {
+            installation_id: installationId,
+            repositories: applied.added,
+          });
         }
       }
 

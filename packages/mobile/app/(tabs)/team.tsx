@@ -11,7 +11,7 @@ import * as Haptics from 'expo-haptics';
 import { dmRoomKey, teamFeatureEnabled } from '@codecast/shared/contracts';
 import { startHuddle } from '@/lib/calls/callManager';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { SessionData, SessionItem, formatRelativeTime } from '@/components/SessionItem';
 import { SessionListSkeleton, MemberSkeleton } from '@/components/SkeletonLoader';
 import { ChannelList, useChatRail } from '@/components/chat/ChannelList';
@@ -49,6 +49,7 @@ const USER_STATUS_COLOR: Record<string, { bg: string; text: string }> = {
 };
 
 export default function TeamScreen() {
+  const Theme = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [segment, setSegment] = useState<Segment>('sessions');
   const router = useRouter();
@@ -312,7 +313,7 @@ export default function TeamScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   huddleBtn: {
     width: 40,
     height: 40,
@@ -485,4 +486,4 @@ const styles = StyleSheet.create({
     color: Theme.textMuted,
     marginTop: 2,
   },
-});
+}));

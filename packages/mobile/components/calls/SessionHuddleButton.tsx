@@ -6,7 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { sessionRoomKey } from "@codecast/shared/contracts";
 import { Text } from "@/components/Themed";
-import { Theme } from "@/constants/Theme";
+import { Theme, themedStyles, useTheme } from "@/constants/Theme";
 import { joinCall, startHuddle } from "@/lib/calls/callManager";
 
 // The huddle affordance for anything with a room: one tap joins the room
@@ -28,6 +28,7 @@ export function HuddleButton({
   ring?: string[];
   anchorTitle?: string;
 }) {
+  const Theme = useTheme();
   const router = useRouter();
   const config = useQuery(api.calls.getCallConfig);
   const enabled = config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
@@ -67,8 +68,8 @@ export function SessionHuddleButton({ conversationId, teamId }: { conversationId
   return <HuddleButton roomKey={sessionRoomKey(conversationId)} teamId={teamId} />;
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   btn: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 4 },
   btnLive: { backgroundColor: Theme.green + "1f", borderRadius: 10 },
   count: { fontSize: 11, color: Theme.green },
-});
+}));

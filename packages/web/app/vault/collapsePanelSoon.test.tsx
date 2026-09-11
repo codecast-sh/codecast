@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { RefObject } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
-import { collapsePanelSoon } from "./page";
+import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
 
 // react-resizable-panels only derives a late-mounted Panel's constraints one
 // commit after the Panel mounts, so collapse() throws "Panel constraints not

@@ -1,19 +1,21 @@
 import '@/lib/polyfills';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import { AppState } from 'react-native';
-import { useEffect, useRef } from 'react';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { useQuery } from 'convex/react';
 
-import { Theme } from '@/constants/Theme';
+import { Palettes, setActiveScheme, useActiveScheme, type ColorScheme } from '@/constants/Theme';
+import { useColorScheme } from '@/components/useColorScheme';
 import { Mono } from '@/constants/fonts';
 import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -121,6 +123,14 @@ function RootLayout() {
     }
   }, [loaded]);
 
+  // Publish the resolved appearance (Settings choice, else the OS setting)
+  // into the live palette before paint. Every screen subscribes through
+  // useTheme(), so a change here repaints the whole tree.
+  const scheme = useColorScheme();
+  useLayoutEffect(() => {
+    setActiveScheme(scheme);
+  }, [scheme]);
+
   useEffect(() => {
     if (!loaded) return;
 
@@ -177,32 +187,39 @@ export default wrapRoot(RootLayout);
 // our StyleSheets, so parity with web has to come through the nav theme:
 // Solarized surfaces + JetBrains Mono faces. fontWeight stays 'normal' in
 // every entry — the face carries the weight (see constants/fonts.ts).
-const SolarizedNavTheme = {
-  ...DefaultTheme,
-  colors: {
-    ...DefaultTheme.colors,
-    primary: Theme.blue,
-    background: Theme.bg,
-    card: Theme.bgAlt,
-    text: Theme.text,
-    border: Theme.borderLight,
-    notification: Theme.red,
-  },
-  fonts: {
-    regular: { fontFamily: Mono.regular, fontWeight: 'normal' },
-    medium: { fontFamily: Mono.medium, fontWeight: 'normal' },
-    bold: { fontFamily: Mono.semiBold, fontWeight: 'normal' },
-    heavy: { fontFamily: Mono.bold, fontWeight: 'normal' },
-  },
-} as const;
+function solarizedNavTheme(scheme: ColorScheme) {
+  const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
+  const palette = Palettes[scheme];
+  return {
+    ...base,
+    colors: {
+      ...base.colors,
+      primary: palette.blue,
+      background: palette.bg,
+      card: palette.bgAlt,
+      text: palette.text,
+      border: palette.borderLight,
+      notification: palette.red,
+    },
+    fonts: {
+      regular: { fontFamily: Mono.regular, fontWeight: 'normal' },
+      medium: { fontFamily: Mono.medium, fontWeight: 'normal' },
+      bold: { fontFamily: Mono.semiBold, fontWeight: 'normal' },
+      heavy: { fontFamily: Mono.bold, fontWeight: 'normal' },
+    },
+  } as const;
+}
 
 function RootLayoutNav() {
+  const scheme = useActiveScheme();
+  const navTheme = useMemo(() => solarizedNavTheme(scheme), [scheme]);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ConvexProvider client={convex}>
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <AuthProvider>
-            <ThemeProvider value={SolarizedNavTheme}>
+            <ThemeProvider value={navTheme}>
+              <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
               <AnalyticsIdentify />
               <AuthGate>
                 <Stack>

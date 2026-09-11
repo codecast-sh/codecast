@@ -71,3 +71,51 @@
 .call-surface-grip:hover {
   border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
 }
+
+/* The huddle chat's agent rows (components/calls/CallChatPanel.tsx).
+ *
+ * An agent answers in prose with the odd list or code span, so its row
+ * renders markdown, sized to the chat's own text. The dots are the "is
+ * working" foot of the list: three, breathing, opacity only. */
+.call-chat-agent-body p {
+  margin: 0 0 4px;
+}
+.call-chat-agent-body p:last-child {
+  margin-bottom: 0;
+}
+.call-chat-agent-body pre {
+  margin: 4px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.call-chat-agent-body ul,
+.call-chat-agent-body ol {
+  margin: 2px 0 4px;
+  padding-left: 1.1em;
+}
+.call-chat-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.call-chat-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: call-chat-dot 1.2s ease-in-out infinite;
+}
+.call-chat-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.call-chat-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes call-chat-dot {
+  0%, 80%, 100% { opacity: 0.35; }
+  40% { opacity: 1; }
+}

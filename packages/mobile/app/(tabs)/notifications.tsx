@@ -7,7 +7,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { useNavigation, useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { openLink } from '@/lib/links';
@@ -117,6 +117,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   onPress: () => void;
   onMarkRead: () => void;
 }) {
+  const Theme = useTheme();
   const icon = notificationIcon(notification.type);
   const actorName = notification.actor?.name || notification.actor?.github_username || notification.actor_name;
   const avatarUrl = notification.actor?.github_avatar_url || notification.actor_avatar;
@@ -216,6 +217,7 @@ function sectionTitle(ts: number, startOfToday: number): string {
 }
 
 export default function NotificationsScreen() {
+  const Theme = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const router = useRouter();
@@ -376,7 +378,7 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -567,4 +569,4 @@ const styles = StyleSheet.create({
   emptyList: {
     flex: 1,
   },
-});
+}));

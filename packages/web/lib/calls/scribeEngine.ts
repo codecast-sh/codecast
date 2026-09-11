@@ -42,6 +42,10 @@ export type ScribeStatus = {
   error: string | null;
   /** Rolling caption tail, newest last. */
   tail: Array<{ speaker: string; text: string }>;
+  /** When this run started (wall clock), null while idle. What a room-level
+   *  "stop transcribing" is compared against: only an opt-out switched on
+   *  AFTER this ends the run (lib/calls/autoScribe). */
+  startedAt: number | null;
 };
 
 const IDLE: ScribeStatus = {
@@ -50,6 +54,7 @@ const IDLE: ScribeStatus = {
   trackCount: 0,
   error: null,
   tail: [],
+  startedAt: null,
 };
 
 export type ScribeEngine = {
@@ -194,7 +199,7 @@ export function createScribeEngine(): ScribeEngine {
       anySegmentsSinceFlush = false;
       firstUnflushedAt = 0;
       lastFlushAt = Date.now();
-      emit({ active: true, transcriptId, error: null, tail: [] });
+      emit({ active: true, transcriptId, error: null, tail: [], startedAt });
 
       // The gap watcher: flush the live routes when nobody has spoken for
       // GAP_MS, or when the oldest undelivered words have waited MAX_HOLD_MS —
@@ -249,7 +254,7 @@ export function createScribeEngine(): ScribeEngine {
       if (gapTimer) clearInterval(gapTimer);
       gapTimer = null;
       transcriptId = null;
-      emit({ active: false, transcriptId: null, trackCount: 0, tail: [] });
+      emit({ active: false, transcriptId: null, trackCount: 0, tail: [], startedAt: null });
       if (client && id && !opts?.keepLive) {
         await client.mutation(api.transcripts.stop, { transcript_id: id }).catch(() => {});
       }

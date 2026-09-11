@@ -3,6 +3,7 @@ import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   formatTranscriptChunk,
+  HUDDLE_REPLY_NOTE,
   isRecRoomKey,
   transcriptChunkHeader,
 } from "@codecast/shared/contracts";
@@ -192,7 +193,7 @@ export function useAddLiveFeed(opts: {
         const st = useInboxStore.getState() as any;
         const label = st.call?.roomKey === roomKey ? "this huddle" : "a huddle";
         const convexId = await spawnSessionWithMessage(
-          `You're being attached to a live team huddle (${label}). Attributed transcript chunks will arrive here whenever the room pauses. Follow along and reply with anything genuinely useful — answers to questions raised, relevant context, pushback. Keep replies short; the room is mid-conversation.`,
+          `You're being attached to a live team huddle (${label}). Attributed transcript chunks will arrive here whenever the room pauses. Follow along and reply with anything genuinely useful — answers to questions raised, relevant context, pushback. The room is mid-conversation.\n\n${HUDDLE_REPLY_NOTE}`,
         );
         route = { kind: "session", target: convexId };
       }

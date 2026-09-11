@@ -14,7 +14,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { buildChatTimeline, memberHandle } from '@codecast/shared/chat';
 import { MessageRow, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
@@ -41,6 +41,7 @@ type PendingSend = {
 };
 
 export default function ChatThreadScreen() {
+  const Theme = useTheme();
   const { id, channel: channelParam, m: targetParam } = useLocalSearchParams<{ id: string; channel?: string; m?: string }>();
   const rootId = id as Id<'chat_messages'>;
   const router = useRouter();
@@ -447,7 +448,7 @@ export default function ChatThreadScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   flex: { flex: 1 },
   header: {
@@ -485,4 +486,4 @@ const styles = StyleSheet.create({
     marginHorizontal: Spacing.md,
   },
   highlight: { backgroundColor: Theme.accent + '1E' },
-});
+}));

@@ -1,5 +1,5 @@
 import { useSettingsData } from "../../../hooks/useSyncSettings";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -23,7 +23,7 @@ import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "
 import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
-import { ChevronDown, Github, Users } from "lucide-react";
+import { ChevronDown, Github, TriangleAlert, Users } from "lucide-react";
 import {
   SettingsField, SettingsPanel, SettingsSection, SettingsRow,
 } from "../../../components/settings/ui";
@@ -49,6 +49,9 @@ export default function TeamPage() {
   const [isSavingIcon, setIsSavingIcon] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<Id<"users"> | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTyped, setDeleteTyped] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
   const [roleChangeInProgress, setRoleChangeInProgress] = useState<Id<"users"> | null>(null);
   const [githubOrgName, setGithubOrgName] = useState("");
   const [isSyncingGithub, setIsSyncingGithub] = useState(false);
@@ -106,6 +109,39 @@ export default function TeamPage() {
       setMemberToRemove(null);
     } finally {
       setIsRemoving(false);
+    }
+  };
+
+  // The typed name is the guard against deleting the wrong team: two teams
+  // can look alike in the switcher, but only one has this exact name. The
+  // server checks the same string, so the dialog is a courtesy, not the lock.
+  const deleteNameMatches = deleteTyped.trim() === (team?.name ?? "").trim();
+  // The dialog belongs to one team. If the active team changes underneath it
+  // (the delete landed from another window, or the workspace was switched),
+  // it must not stay open and re-aim at whichever team is now active.
+  const dialogTeamId = team?._id;
+  useEffect(() => {
+    setDeleteOpen(false);
+    setDeleteTyped("");
+  }, [dialogTeamId]);
+  const closeDelete = () => {
+    if (isDeleting) return;
+    setDeleteOpen(false);
+    setDeleteTyped("");
+  };
+  const handleDeleteTeam = async () => {
+    if (!effectiveTeamId || !team || !deleteNameMatches || isDeleting) return;
+    const name = team.name;
+    setIsDeleting(true);
+    try {
+      await useInboxStore.getState().deleteTeam(effectiveTeamId, deleteTyped);
+      setDeleteOpen(false);
+      setDeleteTyped("");
+      toast.success(`Deleted ${name}`);
+    } catch (error: any) {
+      toast.error(error?.message?.replace(/^.*Uncaught Error: /, "") || "Could not delete the team");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -431,6 +467,76 @@ export default function TeamPage() {
           isAdmin={isAdmin}
         />
       )}
+
+      {isAdmin && (
+        <SettingsSection
+          title="Danger zone"
+          icon={TriangleAlert}
+          description="Deleting a team ends it for everyone. Nothing here can be undone from the app."
+          className="[&_h3]:text-sol-red [&_svg]:text-sol-red"
+        >
+          <SettingsRow
+            label="Delete this team"
+            description={memberCount === 1
+              ? "You are the only member. The team ends the moment you confirm."
+              : `${memberCount} members lose access the moment you confirm.`}
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteOpen(true)}
+              className="border-sol-red/60 text-sol-red hover:bg-sol-red/10 hover:text-sol-red"
+            >
+              Delete team
+            </Button>
+          </SettingsRow>
+        </SettingsSection>
+      )}
+
+      <Dialog open={deleteOpen} onOpenChange={(open) => { if (!open) closeDelete(); }}>
+        <DialogContent className="bg-sol-bg border-sol-border">
+          <DialogHeader>
+            <DialogTitle className="text-sol-text">Delete {team.name}?</DialogTitle>
+            <DialogDescription className="text-sol-text-muted">
+              This ends the team for every member, now.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-1.5 text-sm text-sol-text-muted">
+            <li className="flex gap-2"><span className="text-sol-red">•</span>Every member loses access, and their workspace moves to another team or to personal.</li>
+            <li className="flex gap-2"><span className="text-sol-red">•</span>Sessions, tasks, docs and plans shared in this team stop being reachable. Personal work is untouched.</li>
+            <li className="flex gap-2"><span className="text-sol-red">•</span>Team chat and calls close, the invite link stops working, and the team&apos;s anchor agent is retired.</li>
+          </ul>
+          <div className="space-y-1.5">
+            <label htmlFor="delete-team-confirm" className="block text-xs text-sol-text-muted">
+              Type <span className="font-mono text-sol-red">{team.name}</span> to confirm
+            </label>
+            <Input
+              id="delete-team-confirm"
+              value={deleteTyped}
+              onChange={(e) => setDeleteTyped(e.target.value)}
+              placeholder="Team name"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={isDeleting}
+              onKeyDown={(e) => { if (e.key === "Enter" && deleteNameMatches) void handleDeleteTeam(); }}
+              className="bg-sol-bg border-sol-border text-sol-text"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDelete} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDeleteTeam}
+              disabled={!deleteNameMatches || isDeleting}
+              className="bg-sol-red hover:bg-sol-red/80 text-sol-base03"
+            >
+              {isDeleting ? "Deleting..." : "Delete team"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!memberToRemove} onOpenChange={() => setMemberToRemove(null)}>
         <DialogContent className="bg-sol-bg border-sol-border">
