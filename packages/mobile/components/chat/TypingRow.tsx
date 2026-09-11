@@ -4,7 +4,7 @@ import { Text as RNText } from '@/components/Themed';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 
 // "Samvit is typing…" above the composer — the same contract as the web
 // indicator: one subscription for the whole channel, the client filters to the
@@ -25,6 +25,7 @@ export function TypingRow({
   viewerId: string;
   nameOf: (userId: string) => string;
 }) {
+  const Theme = useTheme();
   const rows = useQuery(
     api.chatTyping.list,
     channelId ? { channel_id: channelId as Id<'chat_channels'> } : 'skip',
@@ -60,7 +61,7 @@ export function TypingRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   row: { paddingHorizontal: Spacing.md, paddingBottom: 2 },
   text: { fontSize: 10.5, fontStyle: 'italic', color: Theme.textMuted0 },
-});
+}));

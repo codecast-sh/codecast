@@ -28,7 +28,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { isRecRoomKey } from '@codecast/shared/contracts';
 import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
-import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP } from '@/constants/Theme';
+import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import {
   dismissRecorderError,
   getRecorderSnapshot,
@@ -42,6 +42,7 @@ import { recordingIsWorking, recordingStatusLine } from '@/lib/recordingStatus';
 /** The clock, in its own component with its own interval, so a ticking second
  *  re-renders eleven characters instead of the screen. */
 function Elapsed({ startedAt }: { startedAt: number }) {
+  const Theme = useTheme();
   const [, tick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => tick((n) => n + 1), 1000);
@@ -54,6 +55,7 @@ function Elapsed({ startedAt }: { startedAt: number }) {
  *  cost a React render for it — the recorder publishes to a plain subscriber
  *  list and this writes straight into an Animated.Value. */
 function LevelBar() {
+  const Theme = useTheme();
   const width = useRef(new Animated.Value(0)).current;
   useEffect(() => subscribeLevel((v) => width.setValue(v)), [width]);
   return (
@@ -71,6 +73,7 @@ function LevelBar() {
 }
 
 export default function RecordScreen() {
+  const Theme = useTheme();
   const router = useRouter();
   const convex = useConvex();
   const rec = useSyncExternalStore(subscribeRecorder, getRecorderSnapshot, getRecorderSnapshot);
@@ -208,6 +211,7 @@ export default function RecordScreen() {
 }
 
 function RecordingListItem({ row, onPress }: { row: any; onPress: () => void }) {
+  const Theme = useTheme();
   const status = recordingStatusLine(row);
   const working = recordingIsWorking(row);
   const duration = row.ended_at ? fmtClock(row.ended_at - row.started_at) : null;
@@ -239,7 +243,7 @@ function RecordingListItem({ row, onPress }: { row: any; onPress: () => void }) 
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: 'row',
@@ -336,4 +340,4 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1, gap: 2 },
   rowTitle: { fontSize: FontSize.md, color: Theme.text },
   rowMeta: { fontSize: FontSize.xs, color: Theme.textMuted },
-});
+}));

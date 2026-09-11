@@ -1342,7 +1342,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           vanished" with no way back (Jason, 2026-08-24). The fallback is a
           floating chip where the dock lived: retry re-renders, hang up also
           frees the seat, and the ErrorBoundary toast still carries the trace. */}
-      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt shadow-xl">
         <ErrorBoundary
           name="Call window"
           fallback={({ retry }) => (
@@ -1371,7 +1371,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           without a word left the main window looking as though no call were
           running at all — and the first thing that invites is starting a second
           one. It sits where the dock would, and says only where to look. */}
-      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-xl">
         <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
       </div>
       {/* A recording in progress, wherever the person has wandered to. It

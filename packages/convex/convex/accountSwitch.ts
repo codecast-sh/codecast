@@ -39,7 +39,6 @@ import {
   targetAccountEmail,
   shouldSweepStaleFlag,
   LOGIN_FLOW_STALE_MS,
-  MINT_FLOW_STALE_MS,
   STALE_FLAG_AFTER_MS,
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_SPACING_MS,
@@ -665,6 +664,9 @@ export const requestLoginFlow = mutation({
     // closed) — skips the pending gate here and tells the daemon to supersede
     // its running flow instead of joining it.
     force: v.optional(v.boolean()),
+    // Sign into ONE saved profile again (its login expired): the credential
+    // lands in that profile's own store and the machine's login is untouched.
+    profile: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -696,18 +698,24 @@ export const requestLoginFlow = mutation({
       return { device_id: target.device_id, email: existing.email, already_pending: true };
     }
 
-    const email = target.cc_accounts?.active_email;
+    let email = target.cc_accounts?.active_email;
+    const profile = args.profile;
+    if (profile) {
+      const row = target.cc_accounts?.profiles.find((p) => p.name === profile);
+      if (!row) throw new Error(`No saved profile "${profile}" on that machine`);
+      email = row.email;
+    }
     await ctx.db.patch(target._id, {
-      cc_login_flow: { status: "pending" as const, email, started_at: now },
+      cc_login_flow: { status: "pending" as const, email, ...(profile ? { profile } : {}), started_at: now },
     });
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_login" as const,
-      args: JSON.stringify({ email, ...(args.force ? { force: true } : {}) }),
+      args: JSON.stringify({ email, ...(profile ? { profile } : {}), ...(args.force ? { force: true } : {}) }),
       created_at: now,
       target_device_id: target.device_id,
     });
-    return { command_id: commandId, device_id: target.device_id, email };
+    return { command_id: commandId, device_id: target.device_id, email, profile };
   },
 });
 
@@ -726,6 +734,9 @@ export const completeLoginFlow = mutation({
     status: v.union(v.literal("confirmed"), v.literal("rejected")),
     email: v.optional(v.string()),
     reason: v.optional(v.string()),
+    // A profile sign-in changed one store, not the keychain: nothing on the
+    // keychain login is revived by it.
+    profile: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -738,7 +749,7 @@ export const completeLoginFlow = mutation({
 
     const now = Date.now();
     let revived = 0;
-    if (args.status === "confirmed") {
+    if (args.status === "confirmed" && !args.profile) {
       const allDevices: Doc<"devices">[] = await ctx.db
         .query("devices")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
@@ -765,10 +776,12 @@ export const completeLoginFlow = mutation({
     }
 
     const prior = device.cc_login_flow;
+    const profile = args.profile ?? prior?.profile;
     await ctx.db.patch(device._id, {
       cc_login_flow: {
         status: args.status,
         email: args.email ?? prior?.email,
+        ...(profile ? { profile } : {}),
         ...(args.reason ? { reason: args.reason } : {}),
         started_at: prior?.started_at ?? now,
         finished_at: now,
@@ -1113,47 +1126,12 @@ export const setAutoSwitchAccounts = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// Per-session accounts (setup-tokens)
+// Per-session accounts
 // ---------------------------------------------------------------------------
 
-// Start a mint on a device: stamp the pending state the web watches and hand
-// the daemon a `mint` mode of switch_account (a mode, like save_as/remove, so
-// daemons that predate it ignore it — they see no `profile`, no sessions —
-// instead of failing an unknown command). The token is always minted for the
-// machine's CURRENT login: that is the account the browser is signed into.
-async function enqueueMintFlow(
-  ctx: { db: any },
-  userId: Id<"users">,
-  target: Doc<"devices">,
-  opts: { force?: boolean; now: number },
-): Promise<{ device_id: string; profile?: string; email?: string; already_pending?: boolean; command_id?: Id<"daemon_commands"> }> {
-  const existing = target.cc_mint_flow;
-  if (!opts.force && existing?.status === "pending" && opts.now - existing.started_at < MINT_FLOW_STALE_MS) {
-    return { device_id: target.device_id, profile: existing.profile, email: existing.email, already_pending: true };
-  }
-  const email = target.cc_accounts?.active_email;
-  const profile = email ? resolveDeviceProfile(target.cc_accounts, { email }) : undefined;
-  if (!profile) {
-    throw new Error(
-      "The machine's current login isn't saved as a profile yet — the daemon saves it within ~30 seconds; try again then",
-    );
-  }
-  await ctx.db.patch(target._id, {
-    cc_mint_flow: { status: "pending" as const, profile, email, started_at: opts.now },
-  });
-  const commandId = await ctx.db.insert("daemon_commands", {
-    user_id: userId,
-    command: "switch_account" as const,
-    args: JSON.stringify({ mint: profile, ...(opts.force ? { force: true } : {}) }),
-    created_at: opts.now,
-    target_device_id: target.device_id,
-  });
-  return { command_id: commandId, device_id: target.device_id, profile, email };
-}
-
 // Rollout compatibility for older web clients that still render the removed
-// toggle. Session tokens are always enabled; a write can only prompt a missing
-// active token to mint.
+// toggle. Every saved login carries sessions through its own credential store,
+// provisioned by the daemon on its heartbeat; there is nothing to enable.
 export const setSessionTokens = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -1163,44 +1141,8 @@ export const setSessionTokens = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
-    let mint: Awaited<ReturnType<typeof enqueueMintFlow>> | null = null;
-    const now = Date.now();
-    const activeEmail = device.cc_accounts?.active_email;
-    const activeProfile = activeEmail
-      ? resolveDeviceProfile(device.cc_accounts, { email: activeEmail })
-      : undefined;
-    if (
-      isDeviceOnline(device, now) &&
-      activeProfile &&
-      !activeTokenProfile(device.cc_accounts, now)
-    ) {
-      mint = await enqueueMintFlow(ctx, userId, device, { now });
-    }
-    return { enabled: true, mint };
-  },
-});
-
-// The web's "mint now" / "try again" button.
-export const requestMintToken = mutation({
-  args: {
-    api_token: v.optional(v.string()),
-    device_id: v.optional(v.string()),
-    force: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const now = Date.now();
-    const { online, primary: freshestPrimary } = await listOnlineDevices(ctx, userId, now);
-    const target = args.device_id ? online.find((d) => d.device_id === args.device_id) : freshestPrimary;
-    if (!target) {
-      throw new Error(args.device_id ? "That device's daemon is offline" : "No online daemon on a primary (non-remote) machine");
-    }
-    if (target.is_remote) {
-      throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
-    }
-    return await enqueueMintFlow(ctx, userId, target, { force: args.force === true, now });
+    await loadPrimaryForToggle(ctx, userId, args.device_id);
+    return { enabled: true, mint: null };
   },
 });
 
@@ -1234,41 +1176,6 @@ export const requestUsageRefresh = mutation({
       target_device_id: target.device_id,
     });
     return { command_id: commandId, device_id: target.device_id };
-  },
-});
-
-// The daemon's status report for a mint (pending for its own auto-mints,
-// then confirmed/rejected). The token itself never leaves the machine; its
-// metadata arrives on the next heartbeat's cc_accounts.
-export const reportMintFlow = mutation({
-  args: {
-    api_token: v.optional(v.string()),
-    device_id: v.string(),
-    status: v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected")),
-    profile: v.string(),
-    email: v.optional(v.string()),
-    reason: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
-      .first();
-    if (!device) return;
-    const now = Date.now();
-    const prior = device.cc_mint_flow;
-    await ctx.db.patch(device._id, {
-      cc_mint_flow: {
-        status: args.status,
-        profile: args.profile,
-        email: args.email ?? prior?.email,
-        ...(args.reason ? { reason: args.reason } : {}),
-        started_at: args.status === "pending" ? now : (prior?.started_at ?? now),
-        ...(args.status !== "pending" ? { finished_at: now } : {}),
-      },
-    });
   },
 });
 
@@ -2033,7 +1940,6 @@ export const listAccountProfiles = query({
           active_email: d.cc_accounts?.active_email,
           login_flow: d.cc_login_flow,
           session_tokens: true,
-          mint_flow: d.cc_mint_flow,
           profiles: d.cc_accounts?.profiles ?? [],
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,
