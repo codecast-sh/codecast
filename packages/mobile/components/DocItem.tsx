@@ -1,7 +1,7 @@
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { DocItem as DocItemType } from "@codecast/web/store/inboxStore";
 import { formatDateSmart, wasEdited } from "@codecast/shared/time";
 
@@ -16,7 +16,7 @@ export const DOC_TYPE_CONFIG: Record<string, { icon: IconName; label: string; co
   handoff: { icon: "exchange", label: "Handoff", color: Theme.orange },
 };
 
-export const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff"];
+export const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff", "decision"];
 
 export function DocItemRow({
   doc,
@@ -25,6 +25,7 @@ export function DocItemRow({
   doc: DocItemType;
   onPress: () => void;
 }) {
+  const Theme = useTheme();
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] ?? DOC_TYPE_CONFIG.note;
 
   return (
@@ -34,7 +35,7 @@ export function DocItemRow({
           <FontAwesome name={cfg.icon} size={13} color={cfg.color} style={styles.typeIcon} />
           <RNText style={styles.title} numberOfLines={1}>{doc.title || "Untitled"}</RNText>
           {doc.pinned && (
-            <FontAwesome name="thumb-tack" size={10} color={Theme.accent} style={{ marginLeft: 4 }} />
+            <FontAwesome name="star" size={10} color={Theme.accent} style={{ marginLeft: 4 }} />
           )}
         </RNView>
         <RNText style={styles.age}>{formatDateSmart(wasEdited(doc) ? doc.updated_at : doc.created_at)}</RNText>
@@ -77,7 +78,7 @@ export function DocItemRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   row: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
@@ -153,4 +154,4 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Theme.textMuted0,
   },
-});
+}));

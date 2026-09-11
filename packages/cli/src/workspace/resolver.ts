@@ -105,6 +105,7 @@ export function mergeManifests(
     teardown: {
       run: replaceArrayIfNonEmpty(override.teardown.run, base.teardown.run),
     },
+    ...(override.verify?.command ? { verify: override.verify } : base.verify ? { verify: base.verify } : {}),
     browser: mergeBrowser(base.browser, override.browser),
     backend: override.backend !== "local" ? override.backend : base.backend,
     detected: override.detected ?? base.detected,

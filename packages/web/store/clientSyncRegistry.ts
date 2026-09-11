@@ -493,6 +493,15 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { kind: "singleton" },
     feeds: ["sessionThreads.listSessionThreads"],
   },
+  // The org tree (people, roles, anchors, top sessions per parent): one
+  // server-derived snapshot for the active workspace. Singleton; the store's
+  // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
+  orgTree: {
+    persistence: { kind: "meta", key: "orgTree" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "singleton" },
+    feeds: ["org.tree"],
+  },
   // Timeline lanes. Both queries are windows (commits: 2×limit newest,
   // PRs: 50 by updated_at), so delta overlays accumulate history.
   commits: {
@@ -673,6 +682,12 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   queuedMessages: {
     persistence: { kind: "meta", key: "queuedMessages" },
+  },
+  // Inline-review quotes and their notes, per conversation (or `doc:<id>`).
+  // A note the user typed is a draft of their next message: persisted like
+  // `drafts` so a reload or a navigation never loses it.
+  reviewComments: {
+    persistence: { kind: "meta", key: "reviewComments" },
   },
   recentProjects: {
     persistence: { kind: "meta", key: "recentProjects" },
@@ -951,6 +966,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   anchorSpaces: "shared",
   anchors: "shared",
   sessionThreads: "shared",
+  orgTree: "shared",
   commits: "shared",
   pullRequests: "shared",
   codeComments: "shared",
@@ -981,6 +997,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pending: "local",
   drafts: "local",
   queuedMessages: "local",
+  reviewComments: "local",
   pendingMessages: "local",
   blockedReviveRequestedAt: "local",
   lastFocusedConversationId: "local",

@@ -129,6 +129,9 @@ export default defineSchema({
       // (emails/digest.ts). Absent reads as ON; the unsubscribe link and the
       // settings toggle both write false here.
       email_notifications: v.optional(v.boolean()),
+      // The Lock Screen Live Activity (liveActivity.ts). Absent reads as ON;
+      // false ends the running activity and stops every start.
+      live_activity: v.optional(v.boolean()),
     })),
     // Cooldown stamp for the email digest — at most one digest per cooldown
     // window, and items created before this stamp are never re-emailed.
@@ -303,6 +306,24 @@ export default defineSchema({
     // (replayed dispatch, timeout after commit) finds the team it already
     // made instead of minting a duplicate.
     client_key: v.optional(v.string()),
+    // Soft delete. The row stays as a tombstone: every membership, mapping
+    // and chat row is gone, so nobody can reach the team, and a replayed
+    // create carrying this row's client_key is refused instead of minting the
+    // team again. `deleted_members` is the roster at deletion time, enough for
+    // an admin restore to re-seat everyone (teams.restoreTeam).
+    deleted_at: v.optional(v.number()),
+    deleted_by: v.optional(v.id("users")),
+    deleted_members: v.optional(v.array(v.object({
+      user_id: v.id("users"),
+      role: v.union(v.literal("member"), v.literal("admin")),
+      joined_at: v.number(),
+      visibility: v.optional(v.union(
+        v.literal("hidden"),
+        v.literal("activity"),
+        v.literal("summary"),
+        v.literal("full")
+      )),
+    }))),
   })
     .index("by_invite_code", ["invite_code"])
     .index("by_client_key", ["client_key"]),
@@ -756,6 +777,15 @@ export default defineSchema({
     // Back-link to the owning anchors row when this conversation IS an anchor's
     // standing session (vs an ephemeral hand it spawned).
     anchor_id: v.optional(v.id("anchors")),
+    // The org role this session reports to (docs/architecture/org-roles.md
+    // S1). Written only by orgRoles.reparentSession / retire; absent = the
+    // session files under its primary owner in the org tree. Owners are
+    // untouched by it — the role sits between the session and the person.
+    org_role_id: v.optional(v.id("org_roles")),
+    // Set when this row IS a role's standing session (org-roles-standing.md
+    // T1), the way anchor_id marks the workspace anchor's. Reserved for the
+    // provisioning wave; nothing writes it in the org page slice.
+    standing_role_id: v.optional(v.id("org_roles")),
     // Durable execution fencing is opt-in during the mixed-version rollout.
     // Absence means the conversation is still served by the legacy daemon rail.
     // `legacy-quiescing` closes every legacy claim/status endpoint while the
@@ -821,6 +851,10 @@ export default defineSchema({
     // Sparse: only spawned schedule runs carry agent_task_id. Powers the run
     // history strip (agentTasks.webListRuns) — every run of one schedule.
     .index("by_agent_task", ["agent_task_id"])
+    // Sparse: only sessions filed under an org role carry org_role_id. Powers
+    // retire's "clear every session under this role" sweep (orgRoles.retire).
+    .index("by_org_role", ["org_role_id"])
+    .index("by_standing_role", ["standing_role_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
@@ -950,6 +984,9 @@ export default defineSchema({
     ),
     // Per-anchor governance: cap daily spawned-hand/session count; absent = default.
     daily_session_cap: v.optional(v.number()),
+    // Back link to the org role this standing agent serves (org-roles-standing.md
+    // T1); absent on the workspace anchor. Reserved for the provisioning wave.
+    org_role_id: v.optional(v.id("org_roles")),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })
@@ -983,6 +1020,48 @@ export default defineSchema({
     // Channel ids are only unique WITHIN a workspace, so multi-workspace routing
     // resolves on (surface, workspace, channel).
     .index("by_workspace_channel", ["surface", "workspace_key", "channel_key"]),
+
+  // ── Org roles ───────────────────────────────────────────────────────────────
+  // A named seat in the reporting structure with a scope (docs/architecture/
+  // org-roles.md S2). Sessions and other roles report to it through
+  // `conversations.org_role_id` and `reports_to`; the person behind it is
+  // `host_user_id`. No standing session yet: `anchor_id` is reserved for the
+  // one that gets provisioned later. Access is the anchor rule (lib/orgAccess):
+  // scope_type/team_id/scope_user_id carry the ACCESS boundary exactly as
+  // anchors do, so there is no `workspace` key on this table.
+  org_roles: defineTable({
+    short_id: v.string(), // "or-N" from counters.nextShortId
+    scope_type: v.union(v.literal("team"), v.literal("user")),
+    // Exactly one of these is set, matching scope_type.
+    team_id: v.optional(v.id("teams")), // routing AND the membership grant
+    scope_user_id: v.optional(v.id("users")), // the personal owner
+    host_user_id: v.id("users"), // creator; would host the role's session
+    name: v.string(), // display, e.g. "Head of Growth"
+    handle: v.string(), // unique inside the boundary; [a-z0-9-]{2,32}
+    // Empty arrays = the whole workspace.
+    scope: v.object({
+      project_ids: v.array(v.id("projects")),
+      plan_ids: v.array(v.id("plans")),
+    }),
+    reports_to: v.union(
+      v.object({ kind: v.literal("user"), user_id: v.id("users") }),
+      v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
+    ),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("retired")),
+    charter: v.optional(v.string()), // short free text for now; a doc later
+    anchor_id: v.optional(v.id("anchors")), // reserved: the standing session
+    // Chat channels whose lines ride the role's wake frame (agent-channels.md
+    // C1/C2 pull mode). Edited by orgChannels.follow/unfollow.
+    follow_channel_ids: v.optional(v.array(v.id("chat_channels"))),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"])
+    .index("by_team_handle", ["team_id", "handle"])
+    .index("by_scope_user_handle", ["scope_user_id", "handle"])
+    .index("by_short_id", ["short_id"]),
 
   // A Slack workspace connected via the "Add to Slack" OAuth flow. Holds the
   // per-workspace bot token (replaces the single app-level SLACK_BOT_TOKEN env
@@ -1093,6 +1172,22 @@ export default defineSchema({
       data: v.optional(v.string()),
       storage_id: v.optional(v.id("_storage")),
       tool_use_id: v.optional(v.string()),
+    }))),
+    // Files the agent handed to the human with SendUserFile. Separate from
+    // images because these are DELIVERIES, not screenshots the agent looked at:
+    // each one is a document the person is meant to open, so it carries its own
+    // name, size and caption, and the client renders a card, not a picture. A
+    // row with `error` and no storage_id is a delivery that could not be
+    // carried (too large, gone, upload failed) — kept, so the card can say so.
+    files: v.optional(v.array(v.object({
+      name: v.string(),
+      media_type: v.string(),
+      size: v.optional(v.number()),
+      storage_id: v.optional(v.id("_storage")),
+      tool_use_id: v.optional(v.string()),
+      caption: v.optional(v.string()),
+      display: v.optional(v.string()),
+      error: v.optional(v.string()),
     }))),
     subtype: v.optional(v.string()),
     client_id: v.optional(v.string()),
@@ -2774,6 +2869,61 @@ export default defineSchema({
     deferred: v.boolean(),
   }).index("by_user", ["user_id"]),
 
+  push_ring: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    epoch: v.string(),
+    seq: v.number(),
+    key: v.string(),
+    type: v.optional(v.string()),
+    title: v.string(),
+    subtitle: v.optional(v.string()),
+    body: v.string(),
+    data: v.optional(v.any()),
+    channel_id: v.optional(v.string()),
+    interruption_level: v.optional(v.string()),
+    created_at: v.number(),
+  }).index("by_user_seq", ["user_id", "seq"]),
+
+  // The Lock Screen Live Activity: one row per user, the phone's side of the
+  // merged strip (liveActivity.ts). Holds the two APNs credentials ActivityKit
+  // hands out — the push-to-start token (iOS 17.2+, starts an activity while
+  // the app is closed) and the per-activity update token — plus the coalescing
+  // clocks the refresh uses to decide start / update / end / wait. One row per
+  // user mirrors users.push_token: one phone per account for now.
+  live_activities: defineTable({
+    user_id: v.id("users"),
+    // Which APNs host the tokens belong to. Reported by the device from its
+    // build configuration: a development build's tokens only work on sandbox.
+    environment: v.union(v.literal("production"), v.literal("sandbox")),
+    push_to_start_token: v.optional(v.string()),
+    push_to_start_token_at: v.optional(v.number()),
+    // The running activity. Both come from the device after the activity
+    // exists (ActivityKit assigns the id); until they arrive updates cannot be
+    // addressed and the refresh waits out the start grace.
+    activity_id: v.optional(v.string()),
+    activity_token: v.optional(v.string()),
+    // When a start push went out (no id yet). Cleared when the id lands or the
+    // activity ends; while set and inside the grace, no second start goes out.
+    start_sent_at: v.optional(v.number()),
+    last_push_at: v.optional(v.number()),
+    // liveActivityStateKey / liveActivityStatusKey of the last pushed state, so
+    // an unchanged derivation pushes nothing and a status change is urgent.
+    last_state_key: v.optional(v.string()),
+    last_status_key: v.optional(v.string()),
+    // The status key at the moment the person swiped the activity away. No
+    // start goes out for that same picture: a dismissal is an answer, and
+    // only a new event (a row entering, leaving or changing status) earns
+    // another strip.
+    dismissed_status_key: v.optional(v.string()),
+    // The refresh is a single per-user job: a scheduled fire carries its due
+    // stamp and stands down when the row has moved on to a newer one.
+    refresh_due_at: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_activity_id", ["activity_id"]),
+
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
   // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so
@@ -2809,21 +2959,54 @@ export default defineSchema({
 
   // An explicit decision an agent hands to its human: one question, real
   // options, and enough context to choose without opening the session. Written
-  // by `cast decide`; consumed by the web decision queue. Answering happens
-  // client-side through the normal message send pipeline — this row only
-  // tracks the ask and its resolution, it is never a delivery channel.
+  // by `cast decide`; consumed by the web decision queue. The web answers
+  // client-side through the normal message send pipeline; a server-side answer
+  // (`cast decide answer`, a role under a grant, a stack auto default) delivers
+  // through finalizeAnswer in sessionDecisions.ts.
+  //
+  // W2 (docs/architecture/decisions-as-documents.md D1): a decision is a
+  // document with rich options, routed through the org as a race, bound to a
+  // task and station, grouped into stacks.
   session_decisions: defineTable({
     conversation_id: v.id("conversations"),
     session_id: v.string(),
     // Denormalized owner so the queue subscription indexes by (user, status).
+    // Rows created before W2 have no decision_inbox rows: listForUser falls
+    // back to this field for them.
     user_id: v.id("users"),
+    short_id: v.optional(v.string()), // "sd-N" from counters.nextShortId
     question: v.string(),
     // Markdown: the reasoning, the tradeoff, what happens under each choice.
     context_md: v.optional(v.string()),
+    kind: v.optional(
+      v.union(v.literal("single"), v.literal("multi"), v.literal("rank"), v.literal("form"))
+    ),
+    // Server assigned from lib/decisionCategory; the asker's proposal is kept.
+    category: v.optional(v.string()),
+    category_proposed: v.optional(v.string()),
+    // Rich body: a docs row (doc_type "decision"); report_slug stays for a
+    // published page.
+    doc_id: v.optional(v.id("docs")),
     options: v.array(
       v.object({
         label: v.string(),
         description: v.optional(v.string()),
+        body_md: v.optional(v.string()),
+        evidence: v.optional(v.array(v.object({ label: v.string(), url: v.string() }))),
+        cost: v.optional(v.string()),
+        risk: v.optional(v.string()),
+      })
+    ),
+    form: v.optional(
+      v.object({
+        fields: v.array(
+          v.object({
+            key: v.string(),
+            label: v.string(),
+            type: v.union(v.literal("text"), v.literal("number"), v.literal("select"), v.literal("bool")),
+            options: v.optional(v.array(v.string())),
+          })
+        ),
       })
     ),
     // Published artifact slug (cast publish) carrying a full HTML report.
@@ -2844,6 +3027,51 @@ export default defineSchema({
     ),
     answer_index: v.optional(v.number()),
     answer_text: v.optional(v.string()),
+    // multi: number[] (indexes); rank: number[] (ordered); form: Record<key, value>.
+    answer_json: v.optional(v.any()),
+    // The task this decision blocks or informs, and the station (task status
+    // category or team status id) the task is held at.
+    task_id: v.optional(v.id("tasks")),
+    station: v.optional(v.string()),
+    stack_id: v.optional(v.id("decision_stacks")),
+    // Who may answer: the people, or a role holding a grant for this category
+    // and scope. holder_key is the flattened "user:<id>" / "role:<id>" for the
+    // index (a user holder with several people uses the primary owner).
+    holder: v.optional(
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string() })
+    ),
+    holder_key: v.optional(v.string()),
+    // The people it is visible to; materialized one row each in decision_inbox.
+    asked_user_ids: v.optional(v.array(v.id("users"))),
+    // The ladder: roles from the asker up to the first person, in order. A
+    // recommendation or a skip note lands on the role's hop.
+    hops: v.optional(
+      v.array(
+        v.object({
+          role_id: v.id("org_roles"),
+          recommendation: v.optional(v.number()),
+          note: v.optional(v.string()),
+          at: v.number(),
+        })
+      )
+    ),
+    answered_by: v.optional(
+      v.object({
+        kind: v.union(v.literal("user"), v.literal("role"), v.literal("policy")),
+        id: v.string(),
+      })
+    ),
+    // Set when a role answered under a grant.
+    grant_id: v.optional(v.id("decision_grants")),
+    // The scope keys a grant may match for this row (the asker's role, its
+    // projects and plans, the task's project and plan, the stack). Stored so
+    // agreement history and grant matching read one field.
+    scope_keys: v.optional(v.array(v.string())),
+    // A person reopened a granted answer: the grant and the answer it gave, so
+    // the person's own answer can be scored as an agreement or an override.
+    reopened_from: v.optional(
+      v.object({ grant_id: v.id("decision_grants"), answer_index: v.optional(v.number()), at: v.number() })
+    ),
     created_at: v.number(),
     // conversation.message_count when the ask landed. The live count minus this
     // is "messages since the ask" — how far the session has run past the
@@ -2858,7 +3086,66 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_conversation_status", ["conversation_id", "status"])
     // Global recency scan for the email digest sweep: recent pending decisions.
-    .index("by_status_created", ["status", "created_at"]),
+    .index("by_status_created", ["status", "created_at"])
+    .index("by_task", ["task_id", "status"])
+    .index("by_stack", ["stack_id"])
+    .index("by_holder_status", ["holder_key", "status"])
+    .index("by_short_id", ["short_id"]),
+
+  // One row per person a decision is visible to (D2): the queue reads
+  // (user, pending) here and joins the decision. `done` once the decision is
+  // resolved, so "Handled without you" can list what a role answered.
+  decision_inbox: defineTable({
+    decision_id: v.id("session_decisions"),
+    user_id: v.id("users"),
+    status: v.union(v.literal("pending"), v.literal("done")),
+    created_at: v.number(),
+  })
+    .index("by_user_status", ["user_id", "status"])
+    .index("by_decision", ["decision_id"]),
+
+  // An ordered set of decisions one person clears in one sitting (D5).
+  // Access is the anchor rule (lib/orgAccess): team_id / scope_user_id carry
+  // the boundary; owner_user_id is the host.
+  decision_stacks: defineTable({
+    short_id: v.string(), // "ds-N"
+    title: v.string(),
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")),
+    owner_user_id: v.id("users"),
+    role_id: v.optional(v.id("org_roles")),
+    decision_ids: v.array(v.id("session_decisions")),
+    policy: v.object({
+      // Advisory members answer with their default when this passes.
+      auto_default_after_ms: v.optional(v.number()),
+      // This role holds every non protected category for the stack's members.
+      delegate_role_id: v.optional(v.id("org_roles")),
+    }),
+    status: v.union(v.literal("open"), v.literal("done")),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"])
+    .index("by_short_id", ["short_id"])
+    .index("by_status", ["status"]),
+
+  // A role may answer decisions of one category in one scope without a person
+  // (D2). Earned from agreement history or delegated by a stack policy; expires
+  // after 30 days; revoked after two consecutive overrides.
+  decision_grants: defineTable({
+    role_id: v.id("org_roles"),
+    category: v.string(),
+    scope_key: v.string(), // "role:<id>" | "project:<id>" | "plan:<id>" | "stack:<id>"
+    granted_by: v.id("users"),
+    granted_from_decision_id: v.optional(v.id("session_decisions")),
+    granted_at: v.number(),
+    expires_at: v.number(),
+    revoked_at: v.optional(v.number()),
+    revoked_reason: v.optional(v.string()),
+    // Consecutive person overrides of this grant's answers; 2 revokes it.
+    override_streak: v.optional(v.number()),
+  }).index("by_role", ["role_id", "category"]),
 
   // A signed-in link recipient (someone who opened a shared conversation but is
   // neither its owner nor a team member) asking to do more than read: to send
@@ -3593,6 +3880,15 @@ export default defineSchema({
     execution_concerns: v.optional(v.string()),
     verification_evidence: v.optional(v.string()),
     files_changed: v.optional(v.array(v.string())),
+    // The review station's verdict (docs/architecture/the-line.md L3).
+    // Written by tasks.update alongside the status move; the independence
+    // rule reads it when a role's session tries to close the task.
+    review_verdict: v.optional(v.object({
+      verdict: v.union(v.literal("approve"), v.literal("changes"), v.literal("reject")),
+      by_conversation_id: v.optional(v.id("conversations")),
+      at: v.number(),
+      note: v.optional(v.string()),
+    })),
     estimated_minutes: v.optional(v.number()),
     actual_minutes: v.optional(v.number()),
     started_at: v.optional(v.number()),
@@ -3740,7 +4036,9 @@ export default defineSchema({
       v.literal("spec"),
       v.literal("investigation"),
       v.literal("handoff"),
-      v.literal("note")
+      v.literal("note"),
+      // The long body of a `cast decide --doc` decision (session_decisions.doc_id).
+      v.literal("decision")
     ),
 
     // Hierarchy: parent doc for nesting (Notion-like pages-within-pages)
@@ -3803,6 +4101,7 @@ export default defineSchema({
     archived_at: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
+    .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_user_type", ["user_id", "doc_type"])
     .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
@@ -4236,6 +4535,11 @@ export default defineSchema({
     // to look would simply start again. Same lifetime as the lock: it belongs
     // to this huddle and dies with it.
     transcribe_off: v.optional(v.boolean()),
+    // When the opt-out was last switched ON. A scribe whose run began before
+    // this stamp is the one being told to stop; a stale "off" the store still
+    // shows for a beat after somebody switched transcription back on by hand
+    // predates their run and must not end it (autoScribe).
+    transcribe_off_at: v.optional(v.number()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -4366,10 +4670,39 @@ export default defineSchema({
   call_chat_messages: defineTable({
     room_key: v.string(),
     team_id: v.optional(v.id("teams")),
+    // The human who owns the line. For an agent's line this is whoever fed
+    // the agent into the huddle (the route's adder): the agent speaks in the
+    // room on that person's authority, the same way its transcript chunks
+    // arrive as them.
     user_id: v.id("users"),
     text: v.string(),
+    // Set when an AGENT said this: the session that is fed the huddle live
+    // and answered. Rendered with the agent's identity, never as user_id's
+    // own words. `source_message_id` is the session message it mirrors, so
+    // a retried mirror can never post the same reply twice.
+    agent_conversation_id: v.optional(v.id("conversations")),
+    source_message_id: v.optional(v.id("messages")),
   })
     .index("by_room", ["room_key"]),
+
+  // One row per session a live transcript feeds: the cheap answer to "is this
+  // session in a huddle right now?", asked on every turn settle so the agent's
+  // reply can be mirrored into the room chat. Written only by
+  // transcripts.syncAgentFeeds, from the transcript's own routes, and gone the
+  // moment the transcript ends or the route is removed. `last_mirrored_message_id`
+  // is the watermark: the newest assistant message already shown in the room,
+  // stamped at feed time with whatever the session last said so nothing said
+  // BEFORE the huddle is replayed into it.
+  call_agent_feeds: defineTable({
+    conversation_id: v.id("conversations"),
+    transcript_id: v.id("transcripts"),
+    room_key: v.string(),
+    team_id: v.optional(v.id("teams")),
+    added_by: v.id("users"),
+    last_mirrored_message_id: v.optional(v.id("messages")),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_transcript", ["transcript_id"]),
 
   workflows: defineTable({
     user_id: v.id("users"),
@@ -4392,6 +4725,8 @@ export default defineSchema({
       retry_target: v.optional(v.string()),
       goal_gate: v.optional(v.boolean()),
       backend: v.optional(v.string()),
+      agent: v.optional(v.string()),
+      isolated: v.optional(v.boolean()),
     })),
     edges: v.array(v.object({
       from: v.string(),
@@ -4784,7 +5119,11 @@ export default defineSchema({
     // readable/writable only by their chat_channel_members rows. A DM is a
     // private room whose member set IS its identity: no name, no rename, no
     // invite affordance beyond group-DM creation.
-    kind: v.optional(v.union(v.literal("public"), v.literal("private"), v.literal("dm"))),
+    // "agents" is a public room whose expected posters are roles and sessions
+    // (docs/architecture/agent-channels.md C1): same access as "public", the
+    // people in it default to notify level "mentions", agents are capped per
+    // day (chat_agent_quota).
+    kind: v.optional(v.union(v.literal("public"), v.literal("private"), v.literal("dm"), v.literal("agents"))),
     // ACCESS, workspaceKey-shaped: "team:<id>" for public, "restricted:<own id>"
     // for private/dm. Stamped so the workspace redesign's predicate can adopt
     // chat without a migration; chat's own gate is canAccessChannel.
@@ -4850,7 +5189,28 @@ export default defineSchema({
     content: v.string(),
     // Resolved SERVER-side by parsing `content` against the team roster. Never a
     // caller argument: a client-supplied id array is a notification cannon.
-    mentions: v.optional(v.array(v.id("users"))),
+    // Three shapes in one array (@codecast/shared/chat ChatMentionRef): a bare
+    // user id is a person (every row written before roles and sessions could be
+    // named is this shape alone), an object is a role (`@<handle>`, org_roles)
+    // or a session (`@<7-char short id>`, conversations).
+    mentions: v.optional(v.array(v.union(
+      v.id("users"),
+      v.object({
+        kind: v.literal("role"),
+        role_id: v.id("org_roles"),
+        short_id: v.string(),
+        handle: v.string(),
+      }),
+      v.object({
+        kind: v.literal("session"),
+        conversation_id: v.id("conversations"),
+        short_id: v.string(),
+      }),
+    ))),
+    // A role or session this line named was NOT woken: the sender or the target
+    // was over its hourly mention cap (agent-channels.md C2). The mention still
+    // renders as a pill; the party reads it on its next wake instead.
+    mention_folded: v.optional(v.boolean()),
     // "here" notifies the members who are actually present (user_presence).
     // `@channel` is deliberately absent in v1 — on a team small enough to share
     // one codecast workspace it is the same blast radius with worse manners.
@@ -4960,6 +5320,22 @@ export default defineSchema({
       searchField: "content",
       filterFields: ["team_id", "channel_id"],
     }),
+
+  // Windowed counters behind the agent noise rules (agent-channels.md C2/C3):
+  // how many lines a role or session posted in a channel today, how many thread
+  // roots it started, how many mention wakes a sender caused or a target took
+  // this hour. `key` names what is counted ("post:<channel>:<poster>",
+  // "root:<channel>:<poster>", "mention_from:<user>", "mention_to:<target>")
+  // and `bucket` is the window it counts in (a UTC day "2026-09-12" or hour
+  // "2026-09-12T14"). One row per (key, bucket); old buckets are simply never
+  // read again. Separate from `rate_limits`, whose window is one minute.
+  chat_agent_quota: defineTable({
+    key: v.string(),
+    bucket: v.string(),
+    count: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_key_bucket", ["key", "bucket"]),
 
   // Reactions are their own rows, NOT an array on the message.
   //

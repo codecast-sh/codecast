@@ -1,11 +1,16 @@
 // Modifier clicks on in-app objects — the browser's tab gestures, applied to
-// the app's own tab strip and to detached windows. DESKTOP ONLY: on the web the
-// browser keeps its own Cmd-click (a real browser tab), by decision; the shell
-// has no browser tabs, so the app's tab strip and OS windows take that role.
+// the app's own tab strip, to detached windows, and to the split stage.
 //
 //   Cmd/Ctrl-click, middle-click   → new in-app tab, opened in the BACKGROUND
 //                                    and mounted hidden so it is warm on switch
 //   Cmd/Ctrl-Shift-click           → detached OS window
+//   Option/Alt-click               → a pane beside what's on stage (lib/stage)
+//
+// The tab and window gestures are DESKTOP ONLY: on the web the browser keeps
+// its own Cmd-click (a real browser tab), by decision; the shell has no browser
+// tabs, so the app's tab strip and OS windows take that role. The split gesture
+// runs everywhere: the browser's own Alt-click downloads the link target, which
+// is never what an in-app route means.
 //
 // Object links reach navigation through a handful of chokepoints, not through
 // their hundreds of call sites: anchors rendered by the `Link` shim, the
@@ -27,9 +32,10 @@
 import { useInboxStore } from "../store/inboxStore";
 import { bridge, isDesktop, isDetachedTabWindow } from "./desktop";
 import { pathLabel, conversationTabPath, inboxTabSessionId } from "./pathLabel";
-import { isNonTabRoute, shouldUseTabRouting } from "../src/compat/tabRouting";
+import { isNonTabRoute, shouldUseTabRouting, tabNavigate } from "../src/compat/tabRouting";
+import { openBeside, panePath } from "./stage";
 
-export type OpenTarget = "tab" | "window";
+export type OpenTarget = "tab" | "window" | "split";
 
 type Intent =
   | { kind: "none" }
@@ -49,9 +55,10 @@ export function openTargetForClick(e: {
   altKey?: boolean;
   button?: number;
 }): OpenTarget | null {
-  if (e.altKey) return null;
+  if (e.button !== undefined && e.button !== 0 && e.button !== 1) return null;
+  // Option alone splits; Option with any other modifier is nobody's gesture.
+  if (e.altKey) return e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1 ? null : "split";
   if (e.button === 1) return "tab";
-  if (e.button !== undefined && e.button !== 0) return null;
   if (!(e.metaKey || e.ctrlKey)) return null;
   return e.shiftKey ? "window" : "tab";
 }
@@ -117,8 +124,20 @@ const prewarmTabIds: Set<string> = ((globalThis as any).__codecastPrewarmTabs ??
 export function isPrewarmTab(id: string): boolean { return prewarmTabIds.has(id); }
 export function clearPrewarmTab(id: string): void { prewarmTabIds.delete(id); }
 
-/** Open `path` in a background in-app tab, or in a detached window. */
+/** Open `path` in a background in-app tab, beside the stage, or in a detached window. */
 export function openIn(target: OpenTarget, path: string): void {
+  if (target === "split") {
+    // Same microtask hop as the tab case (below): the intent may be claimed
+    // from inside a store action's draft. When the stage can't take a pane
+    // (narrow window, pane cap, a route with no pane form) the click still
+    // means "go there": navigate the tab instead of dropping the gesture.
+    queueMicrotask(() => {
+      if (openBeside(panePath(path))) return;
+      if (shouldUseTabRouting(path)) tabNavigate(path, "push");
+      else window.location.assign(path);
+    });
+    return;
+  }
   if (target === "tab" && shouldUseTabRouting(path)) {
     const tabPath = conversationTabPath(path);
     const store = useInboxStore.getState();
@@ -190,9 +209,10 @@ export function anchorAppPath(a: HTMLAnchorElement): string | null {
 }
 
 function onCaptureClick(e: MouseEvent): void {
-  if (!isDesktop()) return;
   const target = openTargetForClick(e);
   if (!target) return;
+  if (target !== "split" && !isDesktop()) return; // the browser's own tab gestures
+
   const el = e.target as Element | null;
   const a = el?.closest?.("a[href]") as HTMLAnchorElement | null;
   const path = a ? anchorAppPath(a) : null;
@@ -201,7 +221,7 @@ function onCaptureClick(e: MouseEvent): void {
   if (!path) return; // a row/button: its handler's navigation claims the intent
   // Routes outside the shell (settings, marketing) have no tab to open into;
   // let the browser handle those the way it always did.
-  if (target === "tab" && isNonTabRoute(path)) { endClickIntent(); return; }
+  if (target !== "window" && isNonTabRoute(path)) { endClickIntent(); return; }
   e.preventDefault();
   divertNavigation(path);
 }

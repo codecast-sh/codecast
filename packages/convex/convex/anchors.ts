@@ -5,6 +5,7 @@ import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueueKillSessionCommand } from "./cleanup";
 import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
+import { roleGrants } from "./lib/orgAccess";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -20,34 +21,15 @@ import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages
 // Authorization for an anchor: the human host that runs it, the user a personal
 // anchor belongs to, or any member of a team anchor's team. Every ACT path (wake,
 // decommission) and the channel/post paths gate on this — authentication alone is
-// not enough (injecting a turn runs and bills code on the host's daemon).
-async function anchorGrants(
-  ctx: { db: any },
-  userId: Id<"users">,
-  anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
-  teamRoleAllows: (m: any) => boolean,
-): Promise<boolean> {
-  if (!anchor) return false;
-  if (anchor.host_user_id === userId) return true;
-  if (anchor.scope_user_id && anchor.scope_user_id === userId) return true;
-  if (anchor.team_id) {
-    const m = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) =>
-        q.eq("user_id", userId).eq("team_id", anchor.team_id),
-      )
-      .first();
-    if (m && teamRoleAllows(m)) return true;
-  }
-  return false;
-}
-
+// not enough (injecting a turn runs and bills code on the host's daemon). The
+// rule itself lives in lib/orgAccess (roleGrants): an anchor and an org role
+// carry the same boundary shape, so the two tables share one grant.
 export async function userCanAccessAnchor(
   ctx: { db: any },
   userId: Id<"users">,
   anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
 ): Promise<boolean> {
-  return anchorGrants(ctx, userId, anchor, () => true);
+  return roleGrants(ctx, userId, anchor, () => true);
 }
 
 // Stricter gate for DESTRUCTIVE / config changes (retire, rename, persona): the
@@ -58,7 +40,7 @@ export async function userCanAdminAnchor(
   userId: Id<"users">,
   anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
 ): Promise<boolean> {
-  return anchorGrants(ctx, userId, anchor, (m) => m.role === "admin");
+  return roleGrants(ctx, userId, anchor, (m) => m.role === "admin");
 }
 
 // The anchors a caller may see/act on: their personal anchor plus the team anchor
@@ -536,51 +518,58 @@ export const decommissionAnchor = mutation({
     if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
       throw new Error("Only an admin (or the host) can retire this anchor");
     }
-    if (anchor.conversation_id) {
-      const conv = await ctx.db.get(anchor.conversation_id);
-      if (conv) {
-        // Tear down the running host agent (status alone doesn't stop the daemon's
-        // tmux/process — kill_session does), clear persistence so the row can
-        // complete, unpin it, and mark it completed. (All writes here commit
-        // atomically, so the relative order is for readability, not correctness.)
-        await enqueueKillSessionCommand(ctx, conv as any);
-        await ctx.db.patch(anchor.conversation_id, {
-          persistent: false,
-          inbox_pinned_at: undefined,
-          status: "completed",
-        });
-        // Drop any already-queued turns so the daemon can't auto-resume the
-        // just-killed session for one more billed turn (the pending-message rail
-        // ignores conversation.status).
-        const pending = await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_status", (q: any) =>
-            q.eq("conversation_id", anchor.conversation_id).eq("status", "pending"),
-          )
-          .collect();
-        for (const p of pending) await ctx.db.delete(p._id);
-      }
-    }
-    const chans = await ctx.db
-      .query("anchor_channels")
-      .withIndex("by_anchor", (q: any) => q.eq("anchor_id", args.anchor_id))
-      .collect();
-    for (const ch of chans) await ctx.db.delete(ch._id);
-    // Remove the bot from team rosters so retired anchors don't pile up as dead
-    // members. Keep the bot user row itself so its past messages still resolve an
-    // author.
-    const botMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", anchor.bot_user_id))
-      .collect();
-    for (const m of botMemberships) await ctx.db.delete(m._id);
-    await ctx.db.patch(args.anchor_id, {
-      status: "decommissioned",
-      updated_at: Date.now(),
-    });
+    await decommissionAnchorRow(ctx, anchor);
     return { decommissioned: true };
   },
 });
+
+// Retire one anchor: kill its host session, drop its channel bindings and
+// roster seats, and mark the row. Shared by the admin verb above and by team
+// deletion, which retires every anchor the team owned.
+export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void> {
+  if (anchor.conversation_id) {
+    const conv = await ctx.db.get(anchor.conversation_id);
+    if (conv) {
+      // Tear down the running host agent (status alone doesn't stop the daemon's
+      // tmux/process — kill_session does), clear persistence so the row can
+      // complete, unpin it, and mark it completed. (All writes here commit
+      // atomically, so the relative order is for readability, not correctness.)
+      await enqueueKillSessionCommand(ctx, conv as any);
+      await ctx.db.patch(anchor.conversation_id, {
+        persistent: false,
+        inbox_pinned_at: undefined,
+        status: "completed",
+      });
+      // Drop any already-queued turns so the daemon can't auto-resume the
+      // just-killed session for one more billed turn (the pending-message rail
+      // ignores conversation.status).
+      const pending = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", anchor.conversation_id).eq("status", "pending"),
+        )
+        .collect();
+      for (const p of pending) await ctx.db.delete(p._id);
+    }
+  }
+  const chans = await ctx.db
+    .query("anchor_channels")
+    .withIndex("by_anchor", (q: any) => q.eq("anchor_id", anchor._id))
+    .collect();
+  for (const ch of chans) await ctx.db.delete(ch._id);
+  // Remove the bot from team rosters so retired anchors don't pile up as dead
+  // members. Keep the bot user row itself so its past messages still resolve an
+  // author.
+  const botMemberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", anchor.bot_user_id))
+    .collect();
+  for (const m of botMemberships) await ctx.db.delete(m._id);
+  await ctx.db.patch(anchor._id, {
+    status: "decommissioned",
+    updated_at: Date.now(),
+  });
+}
 
 // The Slack workspace installation bound to an anchor's scope (inline lookup to
 // avoid importing slack.ts, which imports this module).

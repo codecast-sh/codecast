@@ -4,6 +4,7 @@ import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { planForkFanout } from "./forkFanout.js";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
@@ -14,7 +15,7 @@ import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 import { buildTaskStartBody } from "./taskClaim.js";
-import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
+import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -74,7 +75,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -98,9 +99,7 @@ import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
-import { isClaudeTranscriptOutOfWatchScope, isTestArtifactPath } from "./syncScope.js";
-import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
+import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import {
   getLastReconciliation,
   isTranscriptFileInSyncScope,
@@ -176,6 +175,7 @@ import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./
 import { resolveOwnTarget } from "./ownTarget.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { readTaskPulseFor } from "./taskPulse.js";
 
 const program = new Command();
 const isStableContextFastPath = isStableContextFastPathArgv(process.argv);
@@ -890,15 +890,7 @@ function clearTaskPulseIfBound(sessionId: string, closedShortId: string): void {
 }
 
 function readTaskPulse(): { task?: string; plan?: string } | null {
-  const sessionId = detectCurrentSessionId();
-  if (!sessionId) return null;
-  try {
-    const file = path.join(defaultConfigDir(), "task-pulse", `${sessionId}.json`);
-    if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, "utf-8"));
-  } catch {
-    return null;
-  }
+  return readTaskPulseFor(detectCurrentSessionId());
 }
 
 const TASK_PULSE_HOOK = `#!/bin/bash
@@ -1266,96 +1258,6 @@ function getAgentLabel(agentType?: string): string | null {
 
 const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
 
-const STUCK_SYNC_THRESHOLD_MS = 5 * 60 * 1000;
-const STUCK_SYNC_MIN_BYTES = 4096;
-
-type StuckSync = {
-  filePath: string;
-  sessionId: string;
-  unsyncedBytes: number;
-  fileSize: number;
-  lastSyncedAt: number;
-  conversationId?: string;
-};
-
-// Read the first ~2KB (enough for the session_meta line) and decide whether this
-// Codex rollout is app-server-managed. On any read error, treat it as not managed
-// so a genuine wedge is never silently hidden.
-function isAppServerManagedRollout(filePath: string): boolean {
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(filePath, "r");
-    const buf = Buffer.alloc(2048);
-    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
-    return isAppServerManagedCodexSessionHead(buf.toString("utf-8", 0, bytes));
-  } catch {
-    return false;
-  } finally {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch { /* ignore */ }
-    }
-  }
-}
-
-function getStuckSyncs(): StuckSync[] {
-  const ledger = getAllSyncRecords();
-  const now = Date.now();
-  const out: StuckSync[] = [];
-
-  for (const [filePath, record] of Object.entries(ledger)) {
-    let stats: fs.Stats;
-    try {
-      stats = fs.statSync(filePath);
-    } catch {
-      continue;
-    }
-    // A never-synced record (lastSyncedAt === 0) is NOT a wedged sync — it's a
-    // file the sync loop hasn't (and for out-of-scope files, won't) ever synced.
-    // Reporting it formats epoch 0 as "last sync 20618 days ago" and points the
-    // user at "cast restart", which can't help. Genuine stuck syncs have synced
-    // at least once, so they carry a real timestamp.
-    if (record.lastSyncedAt <= 0) continue;
-    // Files the sync loop refuses to sync (a test run's transcripts) are never
-    // actionable here — skip them defensively.
-    if (isTestArtifactPath(filePath)) continue;
-    // A ledger row the live watcher would never advance (e.g. a workflow run's
-    // journal.jsonl an older sweep synced) is not a wedge either.
-    if (isClaudeTranscriptOutOfWatchScope(filePath)) continue;
-    // Codex rollouts started by codecast are synced live by the app-server path,
-    // which never advances the transcript-file ledger. The watchdog's stale scan
-    // already skips them; without the same skip here they always read as stuck
-    // (file grows past lastSyncedPosition) even though every message is synced.
-    if (filePath.includes("/.codex/sessions/") && isAppServerManagedRollout(filePath)) continue;
-    if (filePath.includes("/.codex/sessions/") && stats.size <= getPosition(filePath)) continue;
-    const unsynced = stats.size - record.lastSyncedPosition;
-    if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
-    if (stats.mtimeMs <= record.lastSyncedAt) continue;
-    if (now - record.lastSyncedAt < STUCK_SYNC_THRESHOLD_MS) continue;
-    // lastSyncedAt alone can't tell a wedge from a session that sat quiet for an
-    // hour and just burst back to life (dead session auto-resumed): both have a
-    // stale stamp, but the resumed session's unsynced bytes are seconds old and
-    // the daemon is already draining them. Only flag when the unsynced content
-    // itself has been waiting past the threshold; keep the conservative
-    // (flagging) behavior when no timestamp is readable.
-    const unsyncedBornAt = readOldestUnsyncedTimestamp(filePath, record.lastSyncedPosition);
-    if (unsyncedBornAt !== null && now - unsyncedBornAt < STUCK_SYNC_THRESHOLD_MS) continue;
-
-    const base = path.basename(filePath, ".jsonl");
-    const m = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-    out.push({
-      filePath,
-      sessionId: m ? m[0] : base,
-      unsyncedBytes: unsynced,
-      fileSize: stats.size,
-      lastSyncedAt: record.lastSyncedAt,
-      conversationId: record.conversationId,
-    });
-  }
-
-  out.sort((a, b) => b.unsyncedBytes - a.unsyncedBytes);
-  return out;
-}
-
 function formatBytesShort(n: number): string {
   if (n < 1024) return `${n}B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
@@ -1421,7 +1323,7 @@ function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
   return { blocked: true, restarted: false };
 }
 
-function showStatus(): void {
+async function showStatus(): Promise<void> {
   const pid = getDaemonPid();
   const launchdStatus = getMacLaunchdDaemonStatus();
   const config = readConfig();
@@ -1531,7 +1433,8 @@ function showStatus(): void {
 
   console.log("");
 
-  const stuck = getStuckSyncs();
+  const { getStuckSyncs } = await import("./syncHealth.js");
+  const stuck = await getStuckSyncs();
   if (stuck.length > 0) {
     const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
     row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
@@ -1846,7 +1749,7 @@ async function runOnboarding(config: Config): Promise<void> {
   }
 
   console.log("\nStatus:");
-  showStatus();
+  await showStatus();
 
   // Closing pointer: showWelcome() scrolled away during the prompts, so the last
   // thing on screen must tell the user where their sessions actually appear.
@@ -2899,6 +2802,7 @@ async function runSync(): Promise<void> {
             toolCalls: msg.toolCalls,
             toolResults: msg.toolResults,
             images: msg.images,
+            files: msg.files,
             subtype: msg.subtype,
           });
         }
@@ -2983,6 +2887,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
           toolCalls: msg.toolCalls,
           toolResults: msg.toolResults,
           images: msg.images,
+          files: msg.files,
           subtype: msg.subtype,
         });
       }
@@ -4361,12 +4266,12 @@ accountsCmd
       for (const p of profiles) {
         const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
         const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
-        const tok = accountTokenInfo(p.name);
-        const tokenNote = tok
-          ? (tok.expires_at <= Date.now()
-            ? ` ${c.yellow}· token expired${c.reset}`
-            : ` ${c.dim}· token, ${Math.ceil((tok.expires_at - Date.now()) / 86400000)}d left${c.reset}`)
-          : "";
+        const launch = accountLaunchInfo(p.name);
+        const tokenNote = p.login_expired_at
+          ? ` ${c.yellow}· login expired — cast accounts signin ${p.name}${c.reset}`
+          : launch
+            ? (launch.expires_at <= Date.now() ? ` ${c.yellow}· refresh lifetime over — cast accounts signin ${p.name}${c.reset}` : ` ${c.dim}· sessions${c.reset}`)
+            : "";
         console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
       }
     } catch (err) {
@@ -4431,31 +4336,32 @@ accountsCmd
   });
 
 accountsCmd
-  .command("token <name>")
+  .command("signin <name>")
+  .alias("login")
   .description(
-    "Store a `claude setup-token` for a saved profile so sessions can run on that account\n" +
-    "without switching the machine's login: cast spawn --account <name> \"<task>\".\n" +
-    "Mint it with `claude setup-token` while the browser is signed into THAT account,\n" +
-    "then paste it here (hidden prompt) or pipe it on stdin. Tokens last one year."
+    "Sign into a saved profile again when its login expired. Opens the browser on the\n" +
+    "OAuth page for that account; the credential lands in the profile's own store, so the\n" +
+    "machine's current login is untouched. Sessions pinned to the profile work again after."
   )
-  .option("--rm", "Forget the stored token (the token itself stays valid until revoked at claude.ai → Settings → Claude Code)")
-  .action(async (name: string, options: any) => {
+  .action(async (name: string) => {
     try {
-      if (options.rm) {
-        const existed = removeAccountToken(name);
-        console.log(existed ? `${c.green}✓${c.reset} removed token for ${c.cyan}${name}${c.reset}` : `${c.dim}no token stored for ${name}${c.reset}`);
-        return;
-      }
-      const token = await promptHiddenSecret(`Paste the setup-token for ${name}: `);
-      const file = writeAccountToken(name, token);
-      const info = accountTokenInfo(name)!;
-      console.log(`${c.green}✓${c.reset} token stored for ${c.cyan}${name}${c.reset} (${file}, expires ${new Date(info.expires_at).toISOString().slice(0, 10)})`);
-      console.log(`${c.dim}  launch on it: cast spawn --account ${name} "<task>"${c.reset}`);
+      const profile = listProfiles().find((p) => p.name === name);
+      if (!profile) throw new CcAccountError(`No saved profile "${name}" on this machine`);
+      const dir = profileStoreDir(name);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      console.log(`${c.dim}Signing into ${profile.email ?? name} in the browser…${c.reset}`);
+      const run = spawnSync("claude", ["auth", "login", "--claudeai", ...(profile.email ? ["--email", profile.email] : [])], {
+        stdio: "inherit",
+        env: { ...process.env, CLAUDE_SECURESTORAGE_CONFIG_DIR: dir },
+      });
+      if (run.status !== 0) throw new CcAccountError("the sign-in did not complete");
+      const identity = await adoptProfileStoreCredential(name);
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${name}${c.reset} signed in again${identity.email ? ` (${identity.email})` : ""}`);
+      ensureProfileStore(name);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
-    // Token metadata rides the accounts inventory — show it in Settings now.
     await publishAccountsInventory();
   });
 
@@ -5031,9 +4937,7 @@ program
 program
   .command("status")
   .description("Show daemon status, connection state, and sync information")
-  .action(() => {
-    showStatus();
-  });
+  .action(showStatus);
 
 program
   .command("attach")
@@ -5205,7 +5109,8 @@ program
     // pre-fix is wedged, this command unsticks it by dropping the cached ID so the
     // next pass calls createConversation (which looks up by session_id + current
     // user_id and returns the right one).
-    const stuck = getStuckSyncs().filter(s => s.conversationId);
+    const { getStuckSyncs } = await import("./syncHealth.js");
+    const stuck = (await getStuckSyncs()).filter(s => s.conversationId);
     if (stuck.length === 0) {
       console.log("No stuck session files with cached conversation IDs found.");
       return;
@@ -5615,7 +5520,7 @@ function doctorDeps(config: Config & { auth_token: string; convex_url: string })
     getDaemonPid,
     getLaunchdStatus: getMacLaunchdDaemonStatus,
     readDaemonState,
-    getStuckSyncs,
+    getStuckSyncs: async () => (await import("./syncHealth.js")).getStuckSyncs(),
   };
 }
 
@@ -10936,14 +10841,18 @@ async function fileSessionsUnderLabel(
 program
   .command("fork")
   .description(
-    "Fork a conversation into one or more parallel branches\n\n" +
+    "Fork a conversation into parallel branches\n\n" +
     "Each branch keeps the full history up to the fork point, then heads off in\n" +
-    "its own direction. Every branch becomes a live session in your inbox — an\n" +
-    "independent thread you can review and continue.\n\n" +
+    "its own direction as a live session in your inbox. With two or more\n" +
+    "directions this thread IS one of them: it takes the first and continues in\n" +
+    "place, the rest become branches. One direction spins off a branch and this\n" +
+    "thread carries on with its own work. Each branch receives its direction as\n" +
+    "its human's next message.\n\n" +
     "Examples:\n" +
-    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # 3 branches from here\n" +
+    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # this thread takes Redis, 2 branches\n" +
+    "  cast fork --all-branches \"use Redis\" \"use Postgres\"       # 2 branches, this thread stays out\n" +
     "  cast fork --at 42 \"what if we cache\" \"what if we don't\"   # branch at message 42\n" +
-    "  cast fork \"explore the bold refactor\"                     # one branch\n" +
+    "  cast fork \"explore the bold refactor\"                     # one branch, this thread continues\n" +
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
@@ -10953,7 +10862,8 @@ program
   .option("--tip", "Fork at the very end instead, keeping everything including the latest user message — use when forking on your own initiative, where there is no fork request to strip")
   .option("--from <index>", "Alias for --at (back-compat)")
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
-  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id")
+  .option("--all-branches", "Make every direction a branch and keep this thread out of the fan-out (default with two or more directions: this thread takes the first)")
+  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id. This thread's own direction stays here unless --all-branches")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -11076,11 +10986,13 @@ program
       }
     }
 
-    // Multi-direction fork: branch once per direction from the same anchor, then
-    // seed each branch with its direction over the same pending-message rail
-    // `cast send` uses. Each lands in the inbox as its own session. The seed is
-    // the direction verbatim — the branch just receives its next instruction;
-    // keeping it ignorant of the fan-out is what keeps branches independent.
+    // Seeded fork: branch once per branch direction from the same anchor. The
+    // fork mutation queues each direction to its branch as the human's own next
+    // turn (raw text, no sender), so a branch never learns it is a fork and has
+    // nobody to report back to. With two or more directions this thread takes
+    // the first itself (planForkFanout) — the roster below tells the agent to
+    // continue with it in place.
+    const fanout = planForkFanout(directions, { allBranches: !!options.allBranches });
     if (options.cloud && directions.length === 0) {
       console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
       process.exit(1);
@@ -11116,7 +11028,7 @@ program
 
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean; worktree?: string }[] = [];
-      for (const direction of directions) {
+      for (const direction of fanout.branchDirections) {
         let cloudPlacement: Record<string, unknown> = {};
         let worktreeName: string | undefined;
         if (cloud) {
@@ -11155,17 +11067,9 @@ program
         }
         const result = await response.json() as any;
         const newShortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
-        // Seed via cliFetch (not cliPost) so a failed seed flags this branch
-        // instead of exiting and abandoning the branches already created.
-        let seeded = false;
-        try {
-          const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
-          });
-          seeded = seedResp.ok;
-        } catch {}
+        // The mutation queued the seed in the same transaction as the branch;
+        // a missing id means an older server that only titled the row.
+        const seeded = !!result.seed_message_id;
         roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded, worktree: worktreeName });
       }
 
@@ -11175,7 +11079,7 @@ program
       }
 
       if (options.json) {
-        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, branches: roster }, null, 2));
+        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, parent_direction: fanout.parentDirection ?? null, branches: roster }, null, 2));
         return;
       }
 
@@ -11188,11 +11092,21 @@ program
         `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:${labelNote}`
       );
       for (const b of roster) {
-        const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
+        const warn = b.seeded ? "" : ` ${c.yellow}(seed not queued — send it with cast send ${b.short_id})${c.reset}`;
         console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${promptGist(b.direction)}${warn}`);
       }
       if (labelResult?.failures) {
         console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} branch${labelResult.failures === 1 ? "" : "es"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
+      }
+      // The agent running this command reads the result mid-turn: it is now
+      // the thread for the first direction and simply keeps going.
+      if (fanout.parentDirection !== undefined) {
+        const one = roster.length === 1;
+        console.log(
+          `\n${c.bold}This thread is the branch for the first direction — continue with it now:${c.reset}\n` +
+          `  ${promptGist(fanout.parentDirection)}\n` +
+          `${c.dim}The other branch${one ? " runs on its own" : "es run on their own"} in the human's inbox; do not message, monitor, or wait on ${one ? "it" : "them"}.${c.reset}`
+        );
       }
       return;
     }
@@ -11337,6 +11251,7 @@ program
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
   .option("--label <name>", "File each spawned session under a label (created if new)")
+  .option("--unattended", "Run as an unattended principal: reversible actions proceed, protected decisions go through cast decide, no inline questions (the briefing every line hand gets)")
   .option("--json", "Machine-readable output")
   .action(async (rawPrompts: string[], options: any) => {
     const config = readConfig();
@@ -11346,7 +11261,9 @@ program
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
+    const { applyUnattended } = await import("./unattended.js");
+    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean)
+      .map((p) => (options.unattended ? applyUnattended(p) : p));
     if (prompts.length === 0) {
       console.error("Give at least one task: cast spawn \"<task>\"");
       process.exit(1);
@@ -12640,6 +12557,178 @@ anchor
     console.log(`${c.green}✓${c.reset} posted to Slack`);
   });
 
+// ── Org roles: channel follows ───────────────────────────────────────────────
+// A role reads the channels it follows on every wake (agent-channels.md C1).
+// The `role` group may already exist (the org roles CLI registers it); these
+// verbs join it either way.
+const roleGroup = program.commands.find((cmd) => cmd.name() === "role")
+  ?? program.command("role").description("Org roles: named seats in the reporting structure");
+
+async function roleFollowAction(path: "/cli/role/follow" | "/cli/role/unfollow", handle: string, channel: string, options: any) {
+  const result = await cliPost(path, { role: handle, channel });
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const verb = path.endsWith("/follow") ? "follows" : "no longer follows";
+  console.log(`${c.green}✓${c.reset} @${result.handle} ${c.dim}(${result.short_id})${c.reset} ${verb} ${c.bold}#${result.channel_name}${c.reset}`);
+  if (result.follow_channel_ids?.length) {
+    console.log(`${c.dim}  following ${result.follow_channel_ids.length} channel${result.follow_channel_ids.length === 1 ? "" : "s"}${c.reset}`);
+  }
+}
+
+roleGroup
+  .command("follow")
+  .description("Have a role read a chat channel on every wake")
+  .argument("<handle>", "The role: @handle or its short id (or-N)")
+  .argument("<channel>", "#name or channel id")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, channel: string, options: any) => {
+    await roleFollowAction("/cli/role/follow", handle, channel, options);
+  });
+
+roleGroup
+  .command("unfollow")
+  .description("Stop a role reading a chat channel")
+  .argument("<handle>", "The role: @handle or its short id (or-N)")
+  .argument("<channel>", "#name or channel id")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, channel: string, options: any) => {
+    await roleFollowAction("/cli/role/unfollow", handle, channel, options);
+  });
+
+// ── Org roles ────────────────────────────────────────────────────────────────
+// The reporting structure (docs/architecture/org-roles.md S7): who reports to
+// whom, and which sessions sit under which seat. Routes map one to one onto
+// orgRoles.* mutations and the org.tree query.
+const org = program
+  .command("org")
+  .description("The workspace's reporting structure: people, roles, and the sessions under them")
+  .showHelpAfterError(true);
+
+const ORG_STATE_ORDER = ["needs_input", "working", "dormant", "done", "idle"] as const;
+function orgTally(counts: Record<string, number>): string {
+  return ORG_STATE_ORDER.filter((k) => counts[k] > 0).map((k) => `${counts[k]} ${k.replace("_", " ")}`).join(", ") || "no sessions";
+}
+function orgSessionLine(s: any): string {
+  return `      ${c.dim}${s.short_id ?? String(s._id).slice(0, 7)}${c.reset} ${s.title || "(untitled)"} ${c.dim}· ${s.work_state}${s.subagent_count ? ` · ${s.subagent_count} subagents` : ""}${c.reset}`;
+}
+async function resolveOrgTarget(ref: string, ws: Workspace): Promise<{ kind: "user"; user_id: string } | { kind: "role"; role_id: string }> {
+  // A role by short id, id, or @handle; otherwise a person by name or email.
+  if (/^or-\d+$/.test(ref)) return { kind: "role", role_id: ref };
+  const tree = await cliPost("/cli/org/tree", workspaceArgs(ws));
+  const handle = ref.replace(/^@/, "").toLowerCase();
+  const role = (tree?.roles ?? []).find((r: any) => r._id === ref || r.handle === handle);
+  if (role) return { kind: "role", role_id: role._id };
+  const needle = ref.toLowerCase();
+  const person = (tree?.people ?? []).find((p: any) => p.user_id === ref || (p.name || "").toLowerCase() === needle || (needle === "me" && p.is_me));
+  if (person) return { kind: "user", user_id: person.user_id };
+  console.error(`No role or person matches "${ref}" in ${workspaceLabel(ws)}.`);
+  process.exit(1);
+}
+
+org
+  .command("ls")
+  .alias("list")
+  .description("Show the org tree for the active workspace")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await readWorkspace(options.team);
+    const tree = await cliPost("/cli/org/tree", workspaceArgs(ws));
+    if (options.json) { console.log(JSON.stringify(tree, null, 2)); return; }
+    if (!tree) { console.error(`You are not a member of ${workspaceLabel(ws)}.`); process.exit(1); }
+    console.log(`${c.bold}${tree.workspace.name || workspaceLabel(ws)}${c.reset}${tree.truncated ? ` ${c.yellow}(truncated at the row cap)${c.reset}` : ""}`);
+    for (const p of tree.people) {
+      console.log(`  ${c.cyan}${p.name}${c.reset}${p.is_me ? " (you)" : ""} ${c.dim}· ${p.role} · ${p.presence ?? "offline"} · ${orgTally(p.counts)}${c.reset}`);
+      for (const s of p.sessions) console.log(orgSessionLine(s));
+      if (p.total > p.sessions.length) console.log(`      ${c.dim}+${p.total - p.sessions.length} more${c.reset}`);
+    }
+    for (const r of tree.roles) {
+      const parent = r.reports_to.kind === "role"
+        ? (tree.roles.find((x: any) => x._id === r.reports_to.role_id)?.name ?? r.reports_to.role_id)
+        : (tree.people.find((x: any) => x.user_id === r.reports_to.user_id)?.name ?? "a person");
+      console.log(`  ${c.magenta}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · reports to ${parent} · ${orgTally(r.counts)}${c.reset}`);
+      for (const s of r.sessions) console.log(orgSessionLine(s));
+      if (r.total > r.sessions.length) console.log(`      ${c.dim}+${r.total - r.sessions.length} more${c.reset}`);
+    }
+    for (const a of tree.anchors) {
+      console.log(`  ${c.green}${a.name}${c.reset} ${c.dim}· anchor · ${a.status}${a.work_state ? ` · ${a.work_state}` : ""}${c.reset}`);
+    }
+  });
+
+org
+  .command("show")
+  .description("One role: its scope and every session under it")
+  .argument("<role>", "Role short id (or-N), id, or @handle")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--json", "Machine-readable output")
+  .action(async (ref: string, options: any) => {
+    const ws = await readWorkspace(options.team);
+    const tree = await cliPost("/cli/org/tree", workspaceArgs(ws));
+    const handle = ref.replace(/^@/, "").toLowerCase();
+    const role = (tree?.roles ?? []).find((r: any) => r.short_id === ref || r._id === ref || r.handle === handle);
+    if (!role) { console.error(`No role "${ref}" in ${workspaceLabel(ws)}.`); process.exit(1); }
+    const page = await cliPost("/cli/org/sessions-under", { ...workspaceArgs(ws), parent: { kind: "role", role_id: role._id }, limit: 200 });
+    if (options.json) { console.log(JSON.stringify({ ...role, sessions: page.sessions }, null, 2)); return; }
+    console.log(`${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} · ${role.short_id} · ${role.status}${c.reset}`);
+    if (role.charter) console.log(`  ${role.charter}`);
+    const scope = [...role.scope_names.projects.map((p: any) => `project ${p.title}`), ...role.scope_names.plans.map((p: any) => `plan ${p.short_id} ${p.title}`)];
+    console.log(`  ${c.dim}scope: ${scope.length ? scope.join(", ") : "whole workspace"}${c.reset}`);
+    console.log(`  ${c.dim}${orgTally(role.counts)}${c.reset}`);
+    for (const s of page.sessions) console.log(orgSessionLine(s));
+  });
+
+org
+  .command("create")
+  .description("Create a role in the active workspace")
+  .argument("<name>", "Display name, e.g. \"Head of Growth\"")
+  .requiredOption("--handle <handle>", "Unique handle in the workspace: a-z, 0-9 and -, 2 to 32 chars")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--reports-to <target>", "A role (or-N or @handle) or a person (name, email, or me); default: you")
+  .option("--charter <text>", "One or two sentences on what the role owns")
+  .option("--json", "Machine-readable output")
+  .action(async (name: string, options: any) => {
+    const ws = await writeWorkspace(options.team);
+    const reports_to = options.reportsTo ? await resolveOrgTarget(options.reportsTo, ws) : undefined;
+    const role = await cliPost("/cli/org/create", { ...workspaceArgs(ws), name, handle: options.handle, reports_to, charter: options.charter });
+    if (options.json) { console.log(JSON.stringify(role, null, 2)); return; }
+    console.log(`${c.green}✓${c.reset} created ${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} (${role.short_id}) in ${workspaceLabel(ws)}${c.reset}`);
+  });
+
+org
+  .command("reparent")
+  .description("Move a role or a session under another role or person")
+  .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
+  .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, email, or me)")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--json", "Machine-readable output")
+  .action(async (subject: string, options: any) => {
+    const ws = await readWorkspace(options.team);
+    const target = await resolveOrgTarget(options.to, ws);
+    const isRole = /^or-\d+$/.test(subject) || subject.startsWith("@");
+    const result = isRole
+      ? await cliPost("/cli/org/reparent", { role_id: (await resolveOrgTarget(subject, ws) as any).role_id, reports_to: target })
+      : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target });
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    console.log(`${c.green}✓${c.reset} ${subject} now reports to ${options.to}`);
+  });
+
+org
+  .command("retire")
+  .description("Retire a role; its sessions fall back to their owners")
+  .argument("<role>", "Role short id (or-N), id, or @handle")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--json", "Machine-readable output")
+  .action(async (ref: string, options: any) => {
+    const ws = await readWorkspace(options.team);
+    const target = await resolveOrgTarget(ref, ws);
+    if (target.kind !== "role") { console.error(`"${ref}" is a person, not a role.`); process.exit(1); }
+    const result = await cliPost("/cli/org/retire", { role_id: target.role_id });
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    console.log(`${c.green}✓${c.reset} retired ${result.name} ${c.dim}(${result.cleared} session${result.cleared === 1 ? "" : "s"} back under their owners)${c.reset}`);
+  });
+
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is
 // the verb the anchor's wake prompt names, so this group is not optional
@@ -12741,8 +12830,42 @@ chat
   .requiredOption("--channel <id>", "Channel id (from cast chat channels)")
   .option("-n, --limit <n>", "How many messages (default 30)")
   .option("--cursor <cursor>", "Page further back, from a previous next_cursor")
+  .option("--since <ts|duration>", "Only lines after this: a ms timestamp, an ISO date, or an age like 2h (compact, one line each)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
+    // The compact view a role's wake frame embeds: threads and replies alike,
+    // oldest first, text cut to one short line.
+    if (options.since) {
+      const age = parseDuration(options.since);
+      const since = age !== undefined ? Date.now() - age
+        : /^\d{12,}$/.test(options.since) ? Number(options.since)
+          : Date.parse(options.since);
+      if (!Number.isFinite(since)) {
+        console.error(`--since wants a timestamp, an ISO date or an age like 30m, 2h, 1d (got ${options.since})`);
+        process.exit(1);
+      }
+      const result = await cliPost("/cli/chat/lines-since", {
+        channel_ids: [options.channel],
+        since,
+        limit: options.limit ? parseInt(options.limit, 10) : 20,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (!result.lines?.length) {
+        console.log(`${c.dim}nothing since ${new Date(since).toLocaleString()}${c.reset}`);
+        return;
+      }
+      for (const line of result.lines) {
+        const when = new Date(line.created_at).toLocaleTimeString();
+        const who = line.is_agent ? `${c.magenta}${line.author_name}${c.reset}` : `${c.cyan}${line.author_name}${c.reset}`;
+        const where = line.is_root ? `${c.dim}root ${String(line.message_id).slice(0, 7)}${c.reset}` : `${c.dim}↳ ${String(line.thread_root_id).slice(0, 7)}${c.reset}`;
+        console.log(`  ${c.dim}${when}${c.reset} ${who} ${where} ${line.text}`);
+      }
+      if (result.truncated) console.log(`${c.dim}  (older lines cut — raise -n or narrow --since)${c.reset}`);
+      return;
+    }
     const result = await cliPost("/cli/chat/read", {
       channel_id: options.channel,
       limit: options.limit ? parseInt(options.limit, 10) : 30,
@@ -14296,10 +14419,11 @@ work
       if (options.plan) body.plan_id = options.plan;
       if (options.parent) body.parent_id = options.parent;
 
-      if (sessionId) {
-        body.conversation_id = sessionId;
-        body.source = "agent";
-      }
+      // Origin by evidence (workOriginStamp): a session binds the task and
+      // stamps agent; a terminal or --human stamps human; a missed session
+      // stays agent. --human also promotes, so a person's ask reaches the
+      // board even when an agent session filed it.
+      Object.assign(body, workOriginStamp({ sessionId, human: options.human, stdoutIsTTY: !!process.stdout.isTTY }));
       // A meeting task is something PEOPLE decided; the agent only transcribed
       // it. It belongs on the human board on its own, with no promotion stamp —
       // so this overrides the "agent" default a session would otherwise set.
@@ -14529,6 +14653,64 @@ work
     await warnIfThreadStateStale();
   });
 
+// Structured handoff (docs/architecture/the-line.md L2): a hand ends its turn
+// by moving the task to in_review with what it did and how it checked it. The
+// role reads handoffs, not transcripts.
+work
+  .command("handoff")
+  .description("Hand a task over for review: record what was done and verified, move it to in_review")
+  .argument("<short_id>", "Task short ID")
+  .requiredOption("--status <status>", "done | blocked | needs_context")
+  .requiredOption("--evidence <text>", stdinText("What you verified and how (or why you stopped)"))
+  .option("--files <paths>", "Comma-separated files changed")
+  .option("--pr <url>", "Pull request URL")
+  .action(async (shortId: string, options: any) => {
+    const { buildTaskHandoffBody, handoffCommentText, parseFilesFlag, parseHandoffStatus } = await import("./taskClaim.js");
+    let input!: Parameters<typeof buildTaskHandoffBody>[2];
+    let body!: Record<string, any>;
+    try {
+      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr };
+      body = buildTaskHandoffBody(shortId, detectCurrentSessionId(), input);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    await cliPost("/cli/work/update", body);
+    const commentBody: Record<string, any> = { short_id: shortId, text: handoffCommentText(input), comment_type: "review" };
+    if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
+    await cliPost("/cli/work/comment", commentBody);
+    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review`);
+    if (body.conversation_id) clearTaskPulseIfBound(body.conversation_id, shortId);
+    await warnIfThreadStateStale();
+  });
+
+// Review verdict (the-line.md L3): approve closes the task, changes sends it
+// back to in_progress, reject reopens it as blocked. The server records who
+// judged it and refuses a role's session closing its own work (L3 rule).
+work
+  .command("verdict")
+  .description("Record a review verdict on a task: approve (done), changes (back to in_progress) or reject (open, blocked)")
+  .argument("<short_id>", "Task short ID")
+  .argument("<verdict>", "approve | changes | reject")
+  .option("--note <text>", stdinText("Unmet criteria or review notes"))
+  .action(async (shortId: string, rawVerdict: string, options: any) => {
+    const { buildTaskVerdictBody, parseReviewVerdict, verdictCommentText } = await import("./taskClaim.js");
+    let verdict!: ReturnType<typeof parseReviewVerdict>;
+    try {
+      verdict = parseReviewVerdict(rawVerdict);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    const body = buildTaskVerdictBody(shortId, detectCurrentSessionId(), verdict, options.note);
+    await cliPost("/cli/work/update", body);
+    const commentBody: Record<string, any> = { short_id: shortId, text: verdictCommentText(verdict, options.note), comment_type: "review" };
+    if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
+    await cliPost("/cli/work/comment", commentBody);
+    console.log(`${c.green}ok${c.reset} Verdict ${c.bold}${verdict}${c.reset} on ${c.cyan}${shortId}${c.reset} → ${body.status}`);
+    await warnIfThreadStateStale();
+  });
+
 work
   .command("drop")
   .description("Drop/cancel a task")
@@ -14570,10 +14752,15 @@ work
   .option("--only-parent", "When closing: close just this task, leaving open subtasks")
   .option("--human", "Put the task on the human's board (rare)")
   .option("--no-human", "Take the task off the human's board")
+  .option("--steps <lines>", stdinText("Acceptance criteria as ordered steps, one per line (replaces the list)"))
+  .option("--criteria <lines>", stdinText("Acceptance criteria, one per line (replaces the list)"))
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
     if (sessionId) body.conversation_id = sessionId;
+    const lines = (raw: string) => raw.split("\n").map((l) => l.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
+    if (options.steps) body.steps = lines(options.steps).map((title) => ({ title }));
+    if (options.criteria) body.acceptance_criteria = lines(options.criteria);
     if (options.human !== undefined) body.promoted = options.human;
     if (options.parent !== undefined) body.parent = options.parent;
     if (options.cascade) body.subtask_resolution = "cascade";
@@ -15180,6 +15367,7 @@ doc
   .option("-t, --type <type>", "Document type (note, plan, insight, decision, runbook)", "note")
   .option("-l, --labels <labels>", "Comma-separated labels")
   .option("--project <ref>", "Project ID, short ID, or title substring")
+  .option("--human", "File it as a person's doc, on the shelf (a script a person drives; a terminal is detected on its own)")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title };
     if (options.contentFile) {
@@ -15196,13 +15384,7 @@ doc
     body.project_path = getRealCwd();
     if (options.project) body.project_id = await resolveProjectId(options.project);
 
-    const sessionId = detectCurrentSessionId();
-    if (sessionId) {
-      body.conversation_id = sessionId;
-      body.source = "agent";
-    } else {
-      body.source = "human";
-    }
+    Object.assign(body, workOriginStamp({ sessionId: detectCurrentSessionId(), human: options.human, stdoutIsTTY: !!process.stdout.isTTY }));
 
     const result = await cliPost("/cli/docs/create", body);
     const id = result.id || result._id;
@@ -15218,19 +15400,39 @@ doc
   .option("-t, --type <type>", "Filter by type (note, plan, insight, decision, runbook)")
   .option("--project <ref>", "Filter by project ID, short ID, or title substring")
   .option("-n, --limit <n>", "Max results", "20")
+  .option("--starred", "Only starred documents")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
     if (options.type) body.doc_type = options.type;
     if (options.project) body.project_id = await resolveProjectId(options.project);
-    const docs = await cliPost("/cli/docs/list", body);
-    if (!docs?.length) { console.log("No documents found."); return; }
+    if (options.starred) body.pinned = true;
+    let docs = await cliPost("/cli/docs/list", body);
+    if (!docs?.length) { console.log(options.starred ? "No starred documents." : "No documents found."); return; }
+    // Starred docs lead, as on the web list (a star means "keep this in reach").
+    docs = [...docs].sort((a: any, b: any) => (!!a.pinned === !!b.pinned ? 0 : a.pinned ? -1 : 1));
     for (const d of docs) {
       const icon = DOC_TYPE_ICONS[d.doc_type] || "?";
-      const pinned = d.pinned ? " *" : "";
+      const star = d.pinned ? ` ${c.yellow}★${c.reset}` : "";
       const age = formatDateSmart(wasEdited(d) ? d.updated_at : d.created_at);
-      console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}${pinned} ${c.dim}${age}${c.reset}`);
+      console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}${star} ${c.dim}${age}${c.reset}`);
     }
   });
+
+// The star is the human's "keep this in reach" mark: a starred doc sits on
+// the shelf (the default docs list) whatever its origin, and sorts first.
+// Stored as `pinned` on the row.
+for (const [verb, pinned] of [["star", true], ["unstar", false]] as const) {
+  doc
+    .command(verb)
+    .description(pinned
+      ? "Star a document: keep it on the shelf and at the top of the list"
+      : "Remove a document's star")
+    .argument("<id>", "Document ID")
+    .action(async (id: string) => {
+      await cliPost("/cli/docs/update", { id, pinned });
+      console.log(`${c.green}ok${c.reset} ${pinned ? "Starred" : "Unstarred"} doc ${c.cyan}${id}${c.reset}`);
+    });
+}
 
 doc
   .command("show")
@@ -15490,6 +15692,7 @@ plan
   .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("-t, --template <name>", "Use a workflow template (plan-implement-verify, implement-review-fix, full-lifecycle)")
   .option("--model-stylesheet <stylesheet>", "CSS-like model routing rules")
+  .option("--human", "File it as a person's plan, on the shelf (a script a person drives; a terminal is detected on its own)")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title };
     if (options.goal) body.goal = options.goal;
@@ -15506,14 +15709,11 @@ plan
     if (options.fromSession) {
       body.source = "promoted";
       if (sessionId) body.session_id = sessionId;
-    } else if (sessionId) {
-      // An agent session filing a plan is agent work, same as doc/task create:
-      // stamp it truthfully and bind the creating conversation so the plan
-      // (and its body doc) stay off the human shelf until promoted.
-      body.source = "agent";
-      body.conversation_id = sessionId;
     } else {
-      body.source = "human";
+      // Same stamp as doc/task create: an agent session's plan binds to its
+      // conversation and stays off the human shelf, and a missed session is
+      // not a person (workOriginStamp).
+      Object.assign(body, workOriginStamp({ sessionId, human: options.human, stdoutIsTTY: !!process.stdout.isTTY }));
     }
     body.project_path = getRealCwd();
 
@@ -17871,19 +18071,26 @@ workflow
   .option("--auto-approve", "Skip human gate prompts, auto-select first option")
   .option("--task <short_id>", "Bind workflow to a task (injects task context)")
   .option("--plan <short_id>", "Bind workflow to a plan (injects plan context)")
+  .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...); pick one that differs from implement for an independent review")
   .action(async (file: string, options: any) => {
-    const { parseWorkflowFile } = await import("./workflow/parser.js");
+    const { parseWorkflowSource } = await import("./workflow/parser.js");
+    const { resolveWorkflowSource } = await import("./workflow/templates.js");
     const { runWorkflow } = await import("./workflow/runner.js");
-    const path = await import("path");
-    const fs = await import("fs");
 
-    const filePath = path.resolve(file);
-    if (!fs.existsSync(filePath)) {
-      console.error(`File not found: ${filePath}`);
+    // A path on disk, or a shipped template by name (line, feature, ...).
+    const resolved = resolveWorkflowSource(file);
+    if (!resolved) {
+      console.error(`Workflow not found: ${file} (not a file, and not a shipped template; see cast workflow list)`);
       process.exit(1);
     }
-
-    const graph = parseWorkflowFile(filePath);
+    const source = resolved.source;
+    const graph = parseWorkflowSource(source, resolved.dir);
+    if (options.reviewBackend) {
+      const review = graph.nodes.get("review");
+      if (!review) { console.error("--review-backend needs a node named 'review' in the workflow"); process.exit(1); }
+      review.agent = String(options.reviewBackend).toLowerCase();
+      if (review.backend !== "session") review.backend = options.reviewBackend as any;
+    }
 
     const { siteUrl, apiToken } = getCliEndpoint();
     const projectPath = process.cwd();
@@ -17895,6 +18102,7 @@ workflow
       cwd: projectPath,
       convexSiteUrl: siteUrl,
       apiToken,
+      spawnerSession: ownSessionId(getRealCwd()) || undefined,
     };
 
     if (options.task) {
@@ -17913,7 +18121,6 @@ workflow
 
     if (!options.dryRun && apiToken) {
       // Push workflow to Convex so the web UI can render it
-      const source = fs.readFileSync(filePath, "utf-8");
       const slug = graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
       const nodes = [...graph.nodes.values()].map((n: any) => ({
         id: n.id, label: n.label, shape: n.shape, type: n.type,
@@ -17921,6 +18128,8 @@ workflow
         ...(n.script ? { script: n.script } : {}),
         ...(n.model ? { model: n.model } : {}),
         ...(n.backend ? { backend: n.backend } : {}),
+        ...(n.agent ? { agent: n.agent } : {}),
+        ...(n.isolated !== undefined ? { isolated: n.isolated } : {}),
         ...(n.reasoning_effort ? { reasoning_effort: n.reasoning_effort } : {}),
         ...(n.max_visits !== undefined ? { max_visits: n.max_visits } : {}),
         ...(n.max_retries !== undefined ? { max_retries: n.max_retries } : {}),
@@ -18011,19 +18220,18 @@ workflow
 
 workflow
   .command("validate <file>")
-  .description("Validate a workflow file without running it")
+  .description("Validate a workflow file (or a shipped template by name) without running it")
   .action(async (file: string) => {
-    const { parseWorkflowFile, validateWorkflow } = await import("./workflow/parser.js");
-    const path = await import("path");
-    const fs = await import("fs");
+    const { parseWorkflowSource, validateWorkflow } = await import("./workflow/parser.js");
+    const { resolveWorkflowSource } = await import("./workflow/templates.js");
 
-    const filePath = path.resolve(file);
-    if (!fs.existsSync(filePath)) {
-      console.error(`File not found: ${filePath}`);
+    const resolved = resolveWorkflowSource(file);
+    if (!resolved) {
+      console.error(`Workflow not found: ${file}`);
       process.exit(1);
     }
 
-    const graph = parseWorkflowFile(filePath);
+    const graph = parseWorkflowSource(resolved.source, resolved.dir);
     const errors = validateWorkflow(graph);
 
     console.log(`Workflow: ${graph.name}`);
@@ -18059,19 +18267,33 @@ workflow
     const path = await import("path");
     const os = await import("os");
 
-    const builtinDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "workflows");
+    const { parseWorkflowSource } = await import("./workflow/parser.js");
+    const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./workflow/templates.js");
+    // Shipped templates live inside the binary; run one by name:
+    // cast workflow run line --task ct-x
+    for (const [name, source] of Object.entries(BUILTIN_WORKFLOW_TEMPLATES)) {
+      try {
+        const graph = parseWorkflowSource(source);
+        console.log(`  ${name.padEnd(24)} ${graph.goal || graph.name}`);
+        console.log(`  ${" ".repeat(24)} builtin (cast workflow run ${name})`);
+      } catch {
+        console.log(`  ${name} (parse error)`);
+      }
+    }
+
     const searchDirs = [
       path.join(process.cwd(), "workflows"),
       path.join(os.homedir(), ".cast", "workflows"),
-      builtinDir,
     ];
 
-    let found = false;
+    let found = true;
     for (const dir of searchDirs) {
       if (!fs.existsSync(dir)) continue;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
+        // The source tree of the CLI itself carries the shipped templates.
+        if (Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, entry.name)) continue;
         const wfFile = path.join(dir, entry.name, "workflow.cast");
         if (!fs.existsSync(wfFile)) continue;
 

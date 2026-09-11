@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -1100,6 +1101,7 @@ export const updateNotificationPreferences = mutation({
       // stored object back and every toggle on web and mobile fails validation.
       chat_activity: v.optional(v.boolean()),
       email_notifications: v.optional(v.boolean()),
+      live_activity: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
@@ -1130,6 +1132,13 @@ export const updateNotificationPreferences = mutation({
       updateData.muted_members = args.muted_members;
     }
     await ctx.db.patch(userId, updateData);
+    // Flipping the Lock Screen switch ends the running activity (or starts one
+    // for what is already live) on the next refresh.
+    const before = (await ctx.db.get(userId))?.notification_preferences?.live_activity;
+    const after = updateData.notification_preferences?.live_activity;
+    if (args.notification_preferences !== undefined && before !== after) {
+      await scheduleLiveActivityRefresh(ctx, userId, { urgent: true });
+    }
   },
 });
 

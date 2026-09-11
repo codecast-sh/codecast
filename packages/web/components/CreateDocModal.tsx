@@ -14,6 +14,7 @@ const DOC_TYPES = [
   { value: "plan", label: "Plan" },
   { value: "investigation", label: "Investigation" },
   { value: "handoff", label: "Handoff" },
+  { value: "decision", label: "Decision" },
 ] as const;
 
 const FIDELITY_OPTIONS = [

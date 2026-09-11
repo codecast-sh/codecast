@@ -299,7 +299,7 @@ export async function upsertRoomState(
   ctx: any,
   roomKey: string,
   seat: { team_id: Id<"teams">; user_id: Id<"users"> },
-  patch: { locked?: boolean; transcribe_off?: boolean },
+  patch: { locked?: boolean; transcribe_off?: boolean; transcribe_off_at?: number },
   now: number,
 ): Promise<void> {
   const existing = await readRoomState(ctx, roomKey);
@@ -317,6 +317,7 @@ export async function upsertRoomState(
     locked: patch.locked ?? false,
     locked_by: seat.user_id,
     transcribe_off: patch.transcribe_off,
+    transcribe_off_at: patch.transcribe_off_at,
     updated_at: now,
   });
 }

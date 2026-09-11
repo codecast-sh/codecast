@@ -19,7 +19,7 @@ import * as path from "path";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync, whichBin } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
@@ -56,12 +56,14 @@ import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
   hasLiveClaudeOnActiveCredential,
+  liveClaudeProfiles,
   liveClaudeSessions,
   markClaudeSessionEnded,
   markClaudeSessionLive,
   onLiveClaudeDrained,
   reconcileLiveClaudeSessions,
   seedLiveClaudeSessions,
+  setActiveProfileResolver,
   type LiveClaudeSession,
 } from "./ccLiveGate.js";
 import {
@@ -82,12 +84,18 @@ import {
   activeAccountSummary,
   listProfiles,
   accountSourcePrefix,
-  accountTokenInfo,
-  writeAccountToken,
-  extractSetupToken,
-  fetchRateLimitFingerprint,
-  sameAccountFingerprint,
-  attributeFingerprintToProfile,
+  activeProfileName,
+  ensureProfileStore,
+  deleteProfileStore,
+  probeSecureStorageSupport,
+  absorbProfileStore,
+  adoptProfileStoreCredential,
+  profileStoreDir,
+  readProfileStoreCredentialsAsync,
+  readProfileSecretCredentialsAsync,
+  writeActiveCredential,
+  credentialIsFresher,
+  CcAccountError,
   readActiveOauth,
   createMtimeGatedCache,
   ingestStatusLineUsage,
@@ -819,48 +827,24 @@ export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void>
 // stall verdict on the same window must not swallow that recovery.
 
 
-// A long gap between timer ticks has two very different causes: the MACHINE slept
-// (the process consumed ~no CPU during the gap) or the EVENT LOOP was pinned by
-// synchronous work (the process burned CPU the whole time). They demand opposite
-// responses: a real wake needs recovery (watcher restart + unsynced sweep), while a
-// busy stall must NOT trigger recovery — the sweep it fires is itself the kind of
-// work that pins the loop, so recovery-on-stall becomes a self-sustaining freeze
-// loop (observed 2026-08-14: stall → "Sleep detected" → sweep → stall → …).
-// Threshold is deliberately low: a truly suspended process accrues ~zero CPU, so
-// anything above 20% of wall time can only be a busy process.
-// The wall clock keeps running while the machine is suspended and the monotonic
-// clock does not, so the time the loop actually failed to run is the smaller of
-// the two gaps. A gap the monotonic clock barely saw is a suspend however busy
-// the CPU counter looks, because the loop was ticking normally on both sides of
-// it. A big monotonic gap is a real stall even when it straddles a wake, where
-// the wall number alone reads as hours of sleep with a few percent of CPU and
-// answers a freeze with the recovery sweep that feeds it.
-// The sleep shortcut asks for BOTH halves: the monotonic clock barely moved AND
-// it disagrees with the wall clock. Without the second half a caller that has
-// only the wall clock (monoElapsedMs defaults to it) would hear "sleep" for
-// every gap under 30s, including a short window where the loop was genuinely
-// pinned. With it, that caller keeps exactly the old CPU verdict, since the two
-// clocks it passes are the same number.
 export function classifyTickGap(
   elapsedMs: number,
   cpuMs: number,
-  monoElapsedMs: number = elapsedMs,
+  monoElapsedMs?: number,
 ): "sleep" | "stall" {
-  if (monoElapsedMs < SUSPEND_GAP_MIN_MS && sawSuspend(elapsedMs, monoElapsedMs)) return "sleep";
-  return cpuMs >= Math.min(elapsedMs, monoElapsedMs) * 0.2 ? "stall" : "sleep";
+  if (monoElapsedMs === undefined) return cpuMs >= elapsedMs * 0.2 ? "stall" : "sleep";
+  return sawSuspend(elapsedMs, monoElapsedMs) && monoElapsedMs < SUSPEND_GAP_MIN_MS ? "sleep" : "stall";
 }
 
-// Both verdicts for one long tick gap, in one call, because the two timers that
-// watch the loop must answer it identically. `recover` falls back to the stall
-// verdict so a platform whose monotonic clock runs through suspend keeps the
-// behavior it had before the monotonic cross check existed.
 export function classifyTickWindow(
   elapsedMs: number,
   cpuMs: number,
   monoElapsedMs: number,
 ): { stalled: boolean; recover: boolean } {
-  const stalled = classifyTickGap(elapsedMs, cpuMs, monoElapsedMs) === "stall";
-  return { stalled, recover: sawSuspend(elapsedMs, monoElapsedMs) || !stalled };
+  return {
+    stalled: classifyTickGap(elapsedMs, cpuMs, monoElapsedMs) === "stall",
+    recover: sawSuspend(elapsedMs, monoElapsedMs),
+  };
 }
 
 // Backend outage clock behind the self-heal restart. It must count only time the
@@ -1314,6 +1298,73 @@ const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 // a CLI-first status addition throw on every heartbeatBatch validation and mark
 // live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
+const PERMISSION_MODES: ReadonlySet<string> = new Set(["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto"]);
+// Claude Code paints the active permission mode in its composer footer
+// ("⏵⏵ bypass permissions on (shift+tab to cycle)", "⏸ plan mode on",
+// "⏸ manual mode on"). Which mode a shift+tab lands on is the TUI's own
+// business: the order changed when auto mode arrived (2.1.x walks bypass →
+// auto → manual → accept edits → plan), bypass is only in the cycle when the
+// launch enabled it, and auto only where the account has it. So nothing here
+// predicts a press; the footer is read back instead.
+const PERMISSION_MODE_FOOTER: ReadonlyArray<readonly [RegExp, PermissionMode]> = [
+  [/bypass permissions on/i, "bypassPermissions"],
+  [/auto mode on/i, "auto"],
+  [/accept edits on/i, "acceptEdits"],
+  [/plan mode on/i, "plan"],
+  [/manual mode on/i, "default"],
+];
+// The mode named in the pane's footer, or undefined when no mode line is
+// painted (a fresh default-mode session shows none). Scans bottom-up so a
+// footer scrolled into history never wins over the live one.
+export function parsePermissionModeFooter(pane: string): PermissionMode | undefined {
+  const lines = pane.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    for (const [re, mode] of PERMISSION_MODE_FOOTER) if (re.test(lines[i])) return mode;
+  }
+  return undefined;
+}
+
+export type PermissionModeIo = {
+  press: () => Promise<void>;
+  readMode: () => Promise<PermissionMode | undefined>;
+  sleep?: (ms: number) => Promise<void>;
+};
+export type PermissionModeStep = { mode: PermissionMode; presses: number } | { error: string };
+const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
+  default: "default", plan: "plan mode", acceptEdits: "accept edits", bypassPermissions: "bypass permissions", dontAsk: "don't ask", auto: "auto mode",
+};
+// Press shift+tab and read where it landed. With a target, keep pressing until
+// the footer names it; a full lap back to the starting mode means this launch
+// does not offer the target, so stop there rather than leave the session on a
+// random mode. A press the footer never reflects (a dialog has the keyboard)
+// is reported, not retried.
+export async function stepPermissionMode(io: PermissionModeIo, target?: PermissionMode, opts?: { settleMs?: number; pollMs?: number }): Promise<PermissionModeStep> {
+  const settleMs = opts?.settleMs ?? 1500;
+  const pollMs = opts?.pollMs ?? 100;
+  const sleep = io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const start = (await io.readMode()) ?? "default";
+  if (target && start === target) return { mode: start, presses: 0 };
+  let before = start;
+  const maxPresses = target ? PERMISSION_MODE_FOOTER.length + 1 : 1;
+  for (let presses = 1; presses <= maxPresses; presses++) {
+    await io.press();
+    let after: PermissionMode | undefined;
+    const deadline = Date.now() + settleMs;
+    for (;;) {
+      after = await io.readMode();
+      if (after !== undefined && after !== before) break;
+      if (Date.now() >= deadline) break;
+      await sleep(pollMs);
+    }
+    if (after === undefined || after === before) {
+      return { error: "The session did not change mode; a dialog may have the keyboard" };
+    }
+    if (!target || after === target) return { mode: after, presses };
+    if (after === start) return { error: `${PERMISSION_MODE_LABEL[target]} is not in this session's shift+tab cycle` };
+    before = after;
+  }
+  return { error: `${PERMISSION_MODE_LABEL[target!]} not reached after ${maxPresses} presses` };
+}
 type HookStatusData = {
   status: AgentStatus;
   ts: number;
@@ -2761,7 +2812,7 @@ async function pollDaemonCommands(): Promise<void> {
         device_id: deviceId(),
         device_label: deviceLabel(),
         boot_id: BOOT_ID,
-        ...syncHealthFields(),
+        ...await syncHealthFields(),
       }),
     });
     if (!response.ok) {
@@ -2890,7 +2941,7 @@ export function freezeBeatFields(freeze: LoopFreezeSummary): {
   };
 }
 
-function syncHealthFields(): {
+async function syncHealthFields(): Promise<{
   pending_sync_count: number;
   oldest_pending_ms: number;
   pending_sync_messages: number;
@@ -2900,8 +2951,9 @@ function syncHealthFields(): {
   loop_freeze_1h_ms: number;
   loop_freeze_max_ms: number;
   loop_freeze_top: string;
-} {
-  const health = retryQueueRef?.getHealth();
+}> {
+  const { readStuckSyncs } = await import("./syncHealth.js");
+  const health = retryQueueRef?.getHealth(await readStuckSyncs());
   return {
     pending_sync_count: health?.pending ?? 0,
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
@@ -3087,258 +3139,83 @@ async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: b
 }
 
 // ---------------------------------------------------------------------------
-// Setup-token mint flow (switch_account {mint}): per-session accounts pin a
-// session to a profile's `claude setup-token` (see accountSourcePrefix), so
-// every saved login needs one. The CLI's own `setup-token` runs the OAuth
-// flow and prints the token; this block (1) runs it in a utility pane with
-// $BROWSER pointed at a hook that RECORDS the sign-in URL instead of opening
-// it, (2) drives the one-button approval in the agent browser — a clone of the
-// human's Chrome, so signed into the same claude.ai account — falling back to
-// the default browser for a human click, (3) reads the token off the pane,
-// (4) proves it belongs to the machine's login by comparing rate-limit
-// fingerprints with the keychain credential (the browser may be signed into
-// another account; the token itself can't say whose it is), (5) stores it
-// under that profile. Outcome goes back through reportMintFlow, the web's
-// reactive state channel — the same shape as the login flow below.
+// Per-profile credential stores: every saved login can carry sessions of its
+// own, with no browser involved (ccAccounts.ts, "Per-profile credential
+// stores"). Runs on every beat and stays offline: a store is filled from the
+// snapshot codecast already keeps. The one-time probe guards against a Claude
+// Code that ignores CLAUDE_SECURESTORAGE_CONFIG_DIR: a pinned session would
+// land on the keychain login in silence, so no launch file exists until the
+// installed binary has proved it honors the variable. A saved login the
+// endpoint refused (login_expired_at) is not repaired here; it is shown in
+// Settings with a sign-in button, and that click is the only time a browser
+// opens (signInProfile below).
 // ---------------------------------------------------------------------------
 
-const MINT_FLOW_TMUX = "cc-mint-flow";
-const MINT_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
-const MINT_FLOW_POLL_MS = 2000;
-// Re-mint this close to the one-year expiry: CC never warns, and a dead token
-// silently drops every pinned session onto the keychain login.
-const MINT_RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000;
-let mintFlowActive = false;
-let mintFlowGeneration = 0;
-// One auto-mint attempt per account per daemon lifetime — a rejected mint
-// (wrong browser account, closed tab) is not nagged; the web's "try again"
-// relaunches explicitly. Attempts are also stamped on disk so a daemon
-// restart (deploys, watchdog) doesn't re-open the consent tab within hours.
-const autoMintDecidedAccounts = new Set<string>();
-const AUTO_MINT_RETRY_MS = 6 * 60 * 60 * 1000;
+let secureStorageSupport: { bin: string; supported: boolean } | null = null;
+let profileStoresInFlight = false;
+let lastStoreReport = "";
 
-function autoMintAttemptsPath(): string {
-  return path.join(CONFIG_DIR, "cc-mint-attempts.json");
-}
-
-function readAutoMintAttempts(): Record<string, number> {
+async function ensureProfileStores(reason: string): Promise<void> {
+  if (isRemoteDevice() || profileStoresInFlight) return;
+  profileStoresInFlight = true;
   try {
-    const parsed = JSON.parse(fs.readFileSync(autoMintAttemptsPath(), "utf-8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function stampAutoMintAttempt(key: string): void {
-  try {
-    const attempts = readAutoMintAttempts();
-    attempts[key] = Date.now();
-    fs.writeFileSync(autoMintAttemptsPath(), JSON.stringify(attempts), { mode: 0o600 });
-  } catch {}
-}
-
-function mintUrlPath(): string {
-  return path.join(CONFIG_DIR, "mint-flow.url");
-}
-
-/** The $BROWSER hook: CC hands it the OAuth URL as its one argument. */
-function writeMintBrowserHook(): string {
-  const hook = path.join(CONFIG_DIR, "mint-browser-hook.sh");
-  fs.writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' "$1" > ${shellEscapeForSh(mintUrlPath())}\n`, { mode: 0o700 });
-  return hook;
-}
-
-// Same PATH rule as the login flow (the pane inherits launchd's PATH); the
-// trailing sleep keeps a dying CLI's last words capturable.
-export function buildMintFlowCommand(hookPath: string): string {
-  return `PATH=${shellEscapeForSh(agentSpawnPath())} BROWSER=${shellEscapeForSh(hookPath)} claude setup-token; sleep 4`;
-}
-
-// The agent browser approves in ~6s when it is signed into claude.ai, and it
-// usually is NOT — so this budget is what a signed-in run needs, not what a
-// signed-out one takes to give up. A minute of it bought nothing and read as
-// "the sign-in never opened": the fallback is the browser the human is looking
-// at, and reaching it fast is worth more than the automatic click.
-const MINT_AGENT_APPROVE_MS = 20 * 1000;
-
-async function approveMintInBrowser(url: string): Promise<"agent" | "opened"> {
-  const res = await runCastCommand(["browser", "do", `open ${url}`, "find Authorize", "click"], { timeoutMs: MINT_AGENT_APPROVE_MS });
-  if (res.code === 0) return "agent";
-  const why = (res.stderr.trim() || res.stdout.trim()).split("\n").pop()?.slice(0, 160) ?? `exit ${res.code}`;
-  log(`[MINT-FLOW] agent-browser approval failed (${why}) — opening the default browser for a manual approve`);
-  spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore", detached: true }).unref();
-  return "opened";
-}
-
-async function startMintFlow(profile: string, force = false): Promise<string> {
-  if (isRemoteDevice()) {
-    throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
-  }
-  if (mintFlowActive && !force) return "mint_flow_already_running";
-  const gen = ++mintFlowGeneration;
-  mintFlowActive = true;
-  try {
-    // Only the ACTIVE login can be minted for: that is the account the
-    // browser is signed into, and the one we can fingerprint-check against.
-    const active = activeAccountSummary();
-    const covering = listProfiles().find((p) => p.active);
-    if (!covering) throw new Error("the machine's current login isn't saved as a profile yet");
-    if (covering.name !== profile) {
-      throw new Error(
-        `"${profile}" is not the machine's current login (${active?.email ?? "unknown"}, saved as "${covering.name}") — switch to it first`,
+    const bin = launchBinary("claude", { warn: log });
+    const resolved = path.isAbsolute(bin) ? bin : (whichBin(bin) ?? bin);
+    if (!secureStorageSupport || secureStorageSupport.bin !== resolved) {
+      const supported = await probeSecureStorageSupport(resolved, { env: { ...process.env, PATH: agentSpawnPath() } });
+      secureStorageSupport = { bin: resolved, supported };
+      log(
+        supported
+          ? `[CC-STORE] ${resolved} honors per-session credential stores`
+          : `[CC-STORE] ${resolved} ignores CLAUDE_SECURESTORAGE_CONFIG_DIR — sessions cannot be pinned to saved logins until Claude Code is updated`,
       );
     }
-    fs.rmSync(mintUrlPath(), { force: true });
-    const hook = writeMintBrowserHook();
-    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
-    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", MINT_FLOW_TMUX, buildMintFlowCommand(hook)], { timeout: 5000 });
-    log(`[MINT-FLOW] started setup-token mint for "${profile}"${active?.email ? ` (${active.email})` : ""}${force ? " [forced relaunch]" : ""}`);
-    void watchMintFlow(profile, active?.email, gen)
-      .catch((err) => log(`[MINT-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => { if (gen === mintFlowGeneration) mintFlowActive = false; });
-    return "mint_flow_started";
-  } catch (err) {
-    if (gen === mintFlowGeneration) mintFlowActive = false;
-    throw err;
-  }
-}
-
-async function watchMintFlow(profile: string, email: string | undefined, gen: number): Promise<void> {
-  const deadline = Date.now() + MINT_FLOW_TIMEOUT_MS;
-  let lastPane = "";
-  let urlHandled = false;
-
-  // `storedFor` is the profile the token actually landed under — the active
-  // login's profile in the common case, another saved profile when the browser
-  // was signed into that account instead (see attributeFingerprint).
-  const finish = async (status: "confirmed" | "rejected", rawReason?: string, storedFor?: string): Promise<void> => {
-    // The reason renders inline on the Settings page — keep it one line.
-    const reason = rawReason?.replace(/\s+/g, " ").trim().slice(0, 200);
-    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
-    fs.rmSync(mintUrlPath(), { force: true });
-    const owner = storedFor ?? profile;
-    log(`[MINT-FLOW] ${status}${reason ? `: ${reason}` : ` — token stored for "${owner}"`}`);
-    // The token's metadata reaches the web on the inventory beat; push it now.
-    if (status === "confirmed") sendHeartbeat().catch(() => {});
-    const ownerEmail = owner === profile ? email : listProfiles().find((p) => p.name === owner)?.email;
-    await syncServiceRef?.reportMintFlow(status, owner, ownerEmail, reason).catch((err) => {
-      log(`[MINT-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  };
-
-  const storeMinted = async (token: string): Promise<void> => {
-    let owner: string | null = null;
-    try {
-      // Keep the comparison credential usable: an idle login may have lapsed.
-      if (((await activeCredentialExpiresAt()) ?? 0) <= Date.now() + 60_000) {
-        await refreshActiveCredential().catch(() => null);
-      }
-      const activeToken = readActiveOauth()?.accessToken;
-      const [mineRes, minted] = await Promise.all([
-        typeof activeToken === "string" && activeToken
-          ? fetchRateLimitFingerprint(activeToken).then((fp) => ({ fp }), (err) => ({ err }))
-          : Promise.resolve({ err: new Error("no usable keychain login") }),
-        fetchRateLimitFingerprint(token),
-      ]);
-      if ("fp" in mineRes && sameAccountFingerprint(mineRes.fp, minted)) {
-        owner = profile;
-      } else {
-        // Not the machine's login — the browser was signed into another
-        // account. If it is one we have saved, the token is still worth
-        // keeping: file it there.
-        owner = attributeFingerprintToProfile(minted);
-        // Only the direct comparison can rule `profile` out. When it never ran
-        // (no usable keychain login, a probe that threw), a snapshot pointing
-        // back at `profile` is the best evidence we have — throwing it away
-        // rejected tokens that were correct.
-        if (owner === profile && "fp" in mineRes) owner = null;
-      }
-      if (!owner) {
-        return finish(
-          "rejected",
-          `the browser is signed into a Claude account that matches no saved profile (this machine's login is ${email ?? "unknown"}) — sign into a saved account at claude.ai and try again`,
-        );
-      }
-      writeAccountToken(owner, token);
-    } catch (err) {
-      return finish("rejected", `could not verify or store the token: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    return finish("confirmed", undefined, owner);
-  };
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, MINT_FLOW_POLL_MS));
-    if (gen !== mintFlowGeneration) return;
-    if (!urlHandled) {
-      let url = "";
-      try { url = fs.readFileSync(mintUrlPath(), "utf-8").trim(); } catch {}
-      if (url.startsWith("http")) {
-        urlHandled = true;
-        void approveMintInBrowser(url)
-          .then((how) => log(`[MINT-FLOW] sign-in URL handed to ${how === "agent" ? "the agent browser (auto-approved)" : "the default browser"}`))
-          .catch((err) => log(`[MINT-FLOW] browser hand-off failed: ${err instanceof Error ? err.message : String(err)}`));
-      }
-    }
-    let pane: string;
-    try {
-      // -J joins wrapped lines: the token is ~100 chars and the pane is narrower.
-      pane = tmuxExecSync(["capture-pane", "-p", "-J", "-t", MINT_FLOW_TMUX], { timeout: 3000 });
-    } catch {
-      // A capture can fail because tmux was slow under load (2026-09-01: a 3s
-      // timeout mid-flow was read as "CLI exited" and killed a live approval).
-      // Only a missing session means the CLI is gone.
-      try {
-        tmuxExecSync(["has-session", "-t", MINT_FLOW_TMUX], { timeout: 3000 });
-        continue;
-      } catch {}
-      // Pane gone = the CLI exited; its last capture may still hold the token.
-      const late = extractSetupToken(lastPane);
-      if (late) return storeMinted(late);
-      const tail = summarizeLoginPaneTail(lastPane);
-      return finish(
-        "rejected",
-        tail && !/paste code here/i.test(tail)
-          ? tail
-          : "claude setup-token exited before the browser approval completed",
-      );
-    }
-    lastPane = pane;
-    const token = extractSetupToken(pane);
-    if (token) return storeMinted(token);
-  }
-  return finish("rejected", "timed out waiting for the browser approval (5 min)");
-}
-
-// The active login needs a live per-session token (only the active one can be
-// minted — see startMintFlow). Runs on every beat; acts once per account per
-// daemon lifetime, and again a week before a token's expiry.
-function maybeAutoMintToken(): void {
-  if (isRemoteDevice() || mintFlowActive) return;
-  try {
-    const active = listProfiles().find((p) => p.active);
-    if (!active) return;
-    const key = active.uuid || active.email || active.name;
-    if (autoMintDecidedAccounts.has(key)) return;
-    const tok = accountTokenInfo(active.name);
-    if (tok && tok.expires_at > Date.now() + MINT_RENEW_BEFORE_MS) return;
-    autoMintDecidedAccounts.add(key);
-    const lastAttempt = readAutoMintAttempts()[key] ?? 0;
-    if (Date.now() - lastAttempt < AUTO_MINT_RETRY_MS) {
-      log(`[MINT-FLOW] auto-mint for "${active.name}" skipped — attempted ${Math.round((Date.now() - lastAttempt) / 60000)}m ago (retry after 6h, or "mint now" in Settings)`);
+    const profiles = listProfiles();
+    if (!secureStorageSupport.supported) {
+      for (const p of profiles) deleteProfileStore(p.name);
       return;
     }
-    stampAutoMintAttempt(key);
-    syncServiceRef?.reportMintFlow("pending", active.name, active.email).catch(() => {});
-    startMintFlow(active.name)
-      .then((r) => log(`[MINT-FLOW] auto-mint for "${active.name}": ${r}`))
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log(`[MINT-FLOW] auto-mint launch failed: ${msg}`);
-        syncServiceRef?.reportMintFlow("rejected", active.name, active.email, msg).catch(() => {});
-      });
+    const provisioned: string[] = [];
+    const needsSignIn: string[] = [];
+    for (const p of profiles) {
+      const state = ensureProfileStore(p.name);
+      if (state === "provisioned") provisioned.push(p.name);
+      else if (state !== "ready") needsSignIn.push(p.name);
+    }
+    if (provisioned.length) {
+      log(`[CC-STORE] provisioned launch credentials for ${provisioned.join(", ")} (${reason})`);
+      sendHeartbeat().catch(() => {});
+    }
+    const report = needsSignIn.join(",");
+    if (report !== lastStoreReport) {
+      lastStoreReport = report;
+      if (report) log(`[CC-STORE] saved logins that need a person to sign in again: ${needsSignIn.join(", ")}`);
+    }
   } catch (err) {
-    log(`[MINT-FLOW] auto-mint check failed: ${err instanceof Error ? err.message : String(err)}`);
+    log(`[CC-STORE] provisioning failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    profileStoresInFlight = false;
+  }
+}
+
+/** Fold what live sessions rotated in their stores back into the snapshots,
+ *  and hand the active profile's fresher pair to the keychain when a session
+ *  pinned to it (launched while it was dormant) rotated the grant there. */
+async function absorbProfileStores(): Promise<void> {
+  const active = activeProfileName();
+  for (const name of liveClaudeProfiles()) {
+    if (await absorbProfileStore(name)) log(`[CC-STORE] absorbed the pair a live session rotated for "${name}"`);
+  }
+  if (!active) return;
+  const activeHeld = liveClaudeSessions().some((s) => s.account === active);
+  if (!activeHeld) return;
+  if (await absorbProfileStore(active)) {
+    const [snapshot, keychain] = await Promise.all([readProfileSecretCredentialsAsync(active), readActiveCredentialAsync()]);
+    if (snapshot && credentialIsFresher(snapshot, keychain)) {
+      writeActiveCredential(snapshot);
+      log(`[CC-STORE] keychain updated from the pair a session pinned to "${active}" rotated`);
+      pushCredentialToRemoteHosts("token_refresh").catch(() => {});
+    }
   }
 }
 
@@ -3385,12 +3262,15 @@ export function summarizeLoginPaneTail(pane: string): string | null {
 // trailing sleep keeps a dead CLI's pane alive past the watcher's next 2s
 // poll — an instantly-dying pane vanishes before the first capture and
 // reduces the failure report to the generic fallback.
-export function buildLoginFlowCommand(email: string | undefined): string {
-  const login = `PATH=${shellEscapeForSh(agentSpawnPath())} claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
+export function buildLoginFlowCommand(email: string | undefined, storeDir?: string): string {
+  // A profile sign-in lands in that profile's own credential store, so the
+  // machine's keychain login is untouched by it.
+  const store = storeDir ? `CLAUDE_SECURESTORAGE_CONFIG_DIR=${shellEscapeForSh(storeDir)} ` : "";
+  const login = `PATH=${shellEscapeForSh(agentSpawnPath())} ${store}claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
   return `${login}; sleep 4`;
 }
 
-async function startLoginFlow(email: string | undefined, force = false): Promise<string> {
+async function startLoginFlow(email: string | undefined, force = false, profile?: string): Promise<string> {
   // A second click while a flow is live joins it — the browser tab is already
   // open, and a second `claude auth login` would fight it for the callback
   // port. A FORCED relaunch (the banner's "reopen" action) supersedes it
@@ -3400,12 +3280,13 @@ async function startLoginFlow(email: string | undefined, force = false): Promise
   const gen = ++loginFlowGeneration;
   loginFlowActive = true;
   try {
-    const baselineHash = credentialHashOf(await readActiveCredentialAsync());
+    const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
+    const baselineHash = credentialHashOf(await readCredential());
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
-    const cmd = buildLoginFlowCommand(email);
+    const cmd = buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined);
     await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", LOGIN_FLOW_TMUX, cmd], { timeout: 5000 });
-    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
-    void watchLoginFlow(baselineHash, email, gen)
+    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""}${profile ? ` into profile "${profile}"` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
+    void watchLoginFlow(baselineHash, email, gen, profile)
       .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => { if (gen === loginFlowGeneration) loginFlowActive = false; });
     return "login_flow_started";
@@ -3418,20 +3299,53 @@ async function startLoginFlow(email: string | undefined, force = false): Promise
 // Poll until the credential store proves the sign-in (hash changed + healthy),
 // the pane dies (the CLI exited — success or failure, the grace re-check
 // tells them apart), or the timeout lapses (abandoned browser tab).
-async function watchLoginFlow(baselineHash: string | null, requestedEmail: string | undefined, gen: number): Promise<void> {
+async function watchLoginFlow(
+  baselineHash: string | null,
+  requestedEmail: string | undefined,
+  gen: number,
+  profile?: string,
+): Promise<void> {
   const deadline = Date.now() + LOGIN_FLOW_TIMEOUT_MS;
   let lastPane = "";
+  const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
 
   // The keychain and the pane are read off the loop: this polls every 2s for
   // the whole sign in, and a busy keychain answered `security` in 2 to 3s.
   const confirmedNow = async (): Promise<boolean> => {
-    const raw = await readActiveCredentialAsync();
+    const raw = await readCredential();
     if (!raw) return false;
     const health = credentialHealth(raw, Date.now());
     return credentialHashOf(raw) !== baselineHash && health.pushable;
   };
 
+  const finishRejected = async (reason: string): Promise<void> => {
+    log(`[LOGIN-FLOW] rejected: ${reason}`);
+    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+    await syncServiceRef?.completeLoginFlow("rejected", requestedEmail, reason, profile).catch((err) => {
+      log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    });
+  };
+
   const finishConfirmed = async (): Promise<void> => {
+    if (profile) {
+      // The store now holds whatever account the browser signed into; adopt
+      // it only once it has proved to be the profile's own.
+      let identity: { email?: string };
+      try {
+        identity = await adoptProfileStoreCredential(profile);
+      } catch (err) {
+        return finishRejected(err instanceof Error ? err.message : String(err));
+      }
+      log(`[LOGIN-FLOW] confirmed — profile "${profile}" signed in again${identity.email ? ` as ${identity.email}` : ""}`);
+      await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+      sendHeartbeat().catch(() => {});
+      await syncServiceRef?.completeLoginFlow("confirmed", identity.email ?? requestedEmail, undefined, profile).catch((err) => {
+        log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+        return 0;
+      });
+      return;
+    }
     const email = activeAccountSummary()?.email ?? requestedEmail;
     log(`[LOGIN-FLOW] confirmed${email ? ` — signed in as ${email}` : ""}`);
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
@@ -3447,15 +3361,6 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
       return 0;
     });
     if (revived) log(`[LOGIN-FLOW] server queued revive for ${revived} auth-blocked session(s)`);
-  };
-
-  const finishRejected = async (reason: string): Promise<void> => {
-    log(`[LOGIN-FLOW] rejected: ${reason}`);
-    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
-    await syncServiceRef?.completeLoginFlow("rejected", requestedEmail, reason).catch((err) => {
-      log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
-      return 0;
-    });
   };
 
   while (Date.now() < deadline) {
@@ -3475,7 +3380,7 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
       // the CLI printed "Login successful." and exited with an unchanged
       // keychain item). A healthy pushable credential after a clean exit
       // means the machine is signed in, whatever the hash says.
-      const health = credentialHealth(await readActiveCredentialAsync(), Date.now());
+      const health = credentialHealth(await readCredential(), Date.now());
       if (health.pushable) return finishConfirmed();
       const tail = summarizeLoginPaneTail(lastPane);
       return finishRejected(tail ?? "the sign-in window closed before completing");
@@ -3518,7 +3423,8 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
     const expiresAt = await activeCredentialExpiresAt();
     if (expiresAt != null && expiresAt - Date.now() < CC_TOKEN_REFRESH_THRESHOLD_MS) {
       if (hasLiveClaudeOnActiveCredential()) {
-        const holders = liveClaudeSessions().filter((s) => !s.account);
+        const active = activeProfileName();
+        const holders = liveClaudeSessions().filter((s) => !s.account || s.account === active);
         log(
           `[CC-AUTH] Refresh deferred: ${holders.length} live claude session(s) hold the active credential ` +
             `(${holders.map((s) => s.id).join(", ")}) — reading back what the CLI rotates (${reason})`,
@@ -3536,6 +3442,10 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
         }
       }
     }
+    // Sessions on per-profile stores rotate there; fold that back first so the
+    // snapshots (and, for the active profile, the keychain) never lag a live
+    // session's rotation by more than one tick.
+    await absorbProfileStores().catch((err) => log(`[CC-STORE] absorb failed: ${err instanceof Error ? err.message : String(err)}`));
     // Propagate a fresher active credential into its saved profile: a manual
     // /login, the refresh above, or — when the gate deferred — the rotation a
     // live claude performed. Cheap no-op when already in step.
@@ -3730,7 +3640,10 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
           `${readOauthAccount()?.emailAddress ?? "unknown"}; using the verified identity`,
       );
     }
-    const res = await refreshUsageSnapshots(opts.force ? { minIntervalMs: 0 } : {});
+    const res = await refreshUsageSnapshots({
+      ...(opts.force ? { minIntervalMs: 0 } : {}),
+      heldProfiles: liveClaudeProfiles(),
+    });
     if (res.probed.length > 0 || res.failed.length > 0 || res.expired.length > 0) {
       const failNote = res.failed.length
         ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
@@ -3947,7 +3860,7 @@ async function sendHeartbeat(): Promise<void> {
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
-        ...syncHealthFields(),
+        ...await syncHealthFields(),
       }),
     });
 
@@ -3981,7 +3894,7 @@ async function sendHeartbeat(): Promise<void> {
         void wakeCloudDevice(w.device_id, w.label ?? undefined);
       }
     }
-    maybeAutoMintToken();
+    void ensureProfileStores("heartbeat");
     // Team-gated agent snippets follow the team feature flags: install when a
     // team turns chat/calls on, disable when the last team turns it off.
     if (data.snippet_availability && typeof data.snippet_availability === "object") {
@@ -4557,6 +4470,50 @@ async function tmuxPaneCwd(target: string): Promise<string | undefined> {
   }
 }
 
+const panePermissionModeLocks = new Map<string, Promise<unknown>>();
+function withPanePermissionModeLock<T>(tmuxTarget: string, run: () => Promise<T>): Promise<T> {
+  const prior = panePermissionModeLocks.get(tmuxTarget) ?? Promise.resolve();
+  const next = prior.catch(() => {}).then(run);
+  panePermissionModeLocks.set(tmuxTarget, next);
+  next.finally(() => { if (panePermissionModeLocks.get(tmuxTarget) === next) panePermissionModeLocks.delete(tmuxTarget); }).catch(() => {});
+  return next;
+}
+
+// The session behind a conversation, for a command that arrived before the
+// conversation cache learned about a just-created session: retry the reverse
+// lookup for a few seconds before giving up.
+async function resolveCommandSessionId(conversationId: string): Promise<string | undefined> {
+  for (let i = 0; i < 11; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 500));
+    const sessionId = buildReverseConversationCache(readConversationCache())[conversationId];
+    if (sessionId) return sessionId;
+  }
+  return undefined;
+}
+
+// A permission mode read off the pane after a shift+tab is the truth of the
+// moment; the next hook post carries it too, but only when the agent next
+// does something. Record it as if a hook had posted it: same last-status
+// record, same file, same publish, so every consumer downstream (phantom
+// bypass suppression, the web's pill) sees it now. Without a prior hook
+// record the status comes from the pane itself, and an unreadable pane
+// publishes nothing rather than a guess.
+function recordObservedPermissionMode(sessionId: string, conversationId: string, mode: PermissionMode, pane: string): void {
+  const prev = lastHookStatus.get(sessionId);
+  if (prev?.permission_mode === mode) return;
+  let status = prev?.status;
+  if (!status) {
+    const live = classifyTmuxLiveState(extractTmuxLiveRegion(pane));
+    if (live === "busy") status = "working";
+    else if (live === "idle") status = "idle";
+    else return;
+  }
+  const data: HookStatusData = { ...prev, status, ts: Math.floor(Date.now() / 1000), permission_mode: mode };
+  lastHookStatus.set(sessionId, data);
+  queueAgentStatusWrite(sessionId, () => lastHookStatus.get(sessionId) || data);
+  if (syncServiceRef) publishHookStatus(syncServiceRef, conversationId, sessionId, data, false, true);
+}
+
 async function executeRemoteCommand(
   commandId: string,
   command: string,
@@ -4576,7 +4533,7 @@ async function executeRemoteCommand(
   // races the owner — e.g. after a move-to-remote the local daemon would resume a
   // local copy and answer in parallel with the remote (split-brain). An OFFLINE
   // owner does NOT skip, so this daemon can reclaim a session whose owner died.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind", "hibernate_session"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "hibernate_session"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const parsedArgs = JSON.parse(commandArgs);
@@ -4874,11 +4831,11 @@ async function executeRemoteCommand(
         // passed through to the CLI.
         const requestedModelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
         const requestedEffort: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
-        // Per-session Claude account: a saved profile whose setup-token file is
-        // sourced into this launch's env, so the session runs on that account
+        // Per-session Claude account: a saved profile whose credential store is
+        // exported into this launch's env, so the session runs on that account
         // while the keychain login (and every other session) stays put.
-        // Validated by name shape here; a missing token file is logged and the
-        // launch falls back to the keychain (see accountSourcePrefix).
+        // Validated by name shape here; a profile with no launch credential is
+        // logged and the launch falls back to the keychain (accountSourcePrefix).
         const requestedAccount: string | undefined =
           agentType === "claude" && typeof parsed.cc_account === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.cc_account)
             ? parsed.cc_account
@@ -5137,9 +5094,9 @@ async function executeRemoteCommand(
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-        // Same file-not-argv rule for the per-session Claude account token.
+        // Same file-not-argv rule for the per-session Claude account store.
         const accountPrefix = accountSourcePrefix(requestedAccount, log);
-        // An empty prefix means the account did not resolve to a token file and
+        // An empty prefix means the account did not resolve to a launch file and
         // the launch falls back to the keychain login — which the OAuth refresh
         // gate must then treat as held. Attribute what runs, not what was asked.
         const launchedAccount = accountPrefix ? requestedAccount : undefined;
@@ -5247,7 +5204,7 @@ async function executeRemoteCommand(
           await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
           if (agentType === "claude") {
             // The OAuth refresh gate: this pane holds the machine's active
-            // credential unless it was pinned to a profile's setup-token. The
+            // credential unless it was pinned to a dormant profile's store. The
             // stamp carries the same account name accountSourcePrefix exports as
             // CODECAST_CC_ACCOUNT, so the gate survives a daemon restart even for
             // panes started by an older build (ct-49526).
@@ -5507,21 +5464,7 @@ async function executeRemoteCommand(
           error = `Key '${invalidKey}' not in allowlist`;
           break;
         }
-        let sessionId: string | undefined;
-        {
-          const cache = readConversationCache();
-          const reverse = buildReverseConversationCache(cache);
-          sessionId = reverse[conversationId];
-        }
-        if (!sessionId) {
-          for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 500));
-            const freshCache = readConversationCache();
-            const freshReverse = buildReverseConversationCache(freshCache);
-            sessionId = freshReverse[conversationId];
-            if (sessionId) break;
-          }
-        }
+        const sessionId = await resolveCommandSessionId(conversationId);
         if (!sessionId) {
           error = `No session found for conversation ${conversationId}`;
           break;
@@ -5555,6 +5498,50 @@ async function executeRemoteCommand(
         } else {
           error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
         }
+        break;
+      }
+      // Shift+tab through Claude Code's permission modes and read back where
+      // it landed (stepPermissionMode). With `target`, press until the footer
+      // names that mode. The observed mode is published like a hook post, so
+      // the web's pill moves within the second instead of at the next turn.
+      case "set_permission_mode": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        const target = typeof parsed.target === "string" ? parsed.target : undefined;
+        if (!conversationId) {
+          error = "Missing conversation_id";
+          break;
+        }
+        if (target && !PERMISSION_MODES.has(target)) {
+          error = `Unknown permission mode '${target}'`;
+          break;
+        }
+        const sessionId = await resolveCommandSessionId(conversationId);
+        if (!sessionId) {
+          error = `No session found for conversation ${conversationId}`;
+          break;
+        }
+        const { tmuxTarget } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        if (!tmuxTarget) {
+          error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const capture = async () => (await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-8"])).stdout;
+        // One press-and-read at a time per pane: commands in one batch run
+        // concurrently, and two presses racing one footer read each report
+        // the other's landing mode (seen with a drained burst, 2026-09-12).
+        const outcome = await withPanePermissionModeLock(tmuxTarget, () => stepPermissionMode({
+          press: async () => { await tmuxExec(["send-keys", "-t", tmuxTarget, "BTab"]); },
+          readMode: async () => parsePermissionModeFooter(await capture()),
+        }, target as PermissionMode | undefined));
+        if ("error" in outcome) {
+          error = outcome.error;
+          log(`[REMOTE] set_permission_mode${target ? ` → ${target}` : ""} for session ${sessionId.slice(0, 8)} failed: ${outcome.error}`);
+          break;
+        }
+        recordObservedPermissionMode(sessionId, conversationId, outcome.mode, await capture());
+        result = outcome.mode;
+        log(`[REMOTE] set_permission_mode${target ? ` → ${target}` : ""}: session ${sessionId.slice(0, 8)} now ${outcome.mode} after ${outcome.presses} press(es) via tmux ${tmuxTarget}`);
         break;
       }
       case "kill_session": {
@@ -5666,17 +5653,10 @@ async function executeRemoteCommand(
           break;
         }
 
-        // mint mode: mint a setup-token for the machine's current login (the
-        // web "mint now" action or automatic provisioning). Returns at once —
-        // the browser approval outlives any command TTL — and the detached
-        // watcher reports the outcome through reportMintFlow (see MINT-FLOW).
+        // mint mode (web clients that predate per-profile stores): there is
+        // nothing to mint any more — stores are provisioned on the beat.
         if (typeof parsed.mint === "string" && parsed.mint) {
-          try {
-            result = await startMintFlow(parsed.mint, parsed.force === true);
-          } catch (err) {
-            error = `Mint launch failed: ${err instanceof Error ? err.message : String(err)}`;
-            syncServiceRef?.reportMintFlow("rejected", parsed.mint, undefined, error).catch(() => {});
-          }
+          error = "Session credentials are provisioned automatically now; a dead saved login is repaired by signing into it again from Settings";
           break;
         }
 
@@ -5828,13 +5808,17 @@ async function executeRemoteCommand(
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const email: string | undefined =
           typeof parsed.email === "string" && parsed.email ? parsed.email : undefined;
+        // A profile sign-in repairs one saved login in its own store; the
+        // machine's keychain login stays as it is.
+        const profile: string | undefined =
+          typeof parsed.profile === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.profile) ? parsed.profile : undefined;
         try {
-          result = await startLoginFlow(email, parsed.force === true);
+          result = await startLoginFlow(email, parsed.force === true, profile);
         } catch (err) {
           error = `Sign-in launch failed: ${err instanceof Error ? err.message : String(err)}`;
           // The web is watching cc_login_flow, not command errors — report the
           // failure there too so the CTA comes back instead of spinning.
-          syncServiceRef?.completeLoginFlow("rejected", email, error).catch(() => {});
+          syncServiceRef?.completeLoginFlow("rejected", email, error, profile).catch(() => {});
         }
         break;
       }
@@ -7986,7 +7970,7 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
   }
 }
 
-export type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string };
+export type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string };
 
 // A cached conversation_id can become invalid against the current api_token in two ways:
 // the conversation was deleted (Convex returns "Conversation not found") or the auth token
@@ -8002,7 +7986,7 @@ function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
 
-function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string } {
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string } {
   return {
     messageUuid: msg.uuid,
     role: mapRole(msg.role),
@@ -8012,6 +7996,7 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
     toolCalls: msg.toolCalls,
     toolResults: msg.toolResults,
     images: msg.images,
+    files: msg.files,
     subtype: msg.subtype,
     model: msg.model,
   };
@@ -12778,14 +12763,19 @@ function normalizePromptText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function tmuxComposerRegion(pane: string): string | null {
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return null;
+  return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
+}
+
 export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
   const normalizedInput = normalizePromptText(input);
   if (!normalizedInput) return false;
   const lines = paneContent.split("\n");
   const recent = lines.slice(-80).join("\n");
-  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
-  if (lastPromptIndex === -1) return false;
-  const fromPrompt = recent.slice(lastPromptIndex);
+  const fromPrompt = tmuxComposerRegion(recent);
+  if (fromPrompt === null) return false;
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
 
@@ -12798,9 +12788,8 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // stranger's draft to avoid stomping.
 export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
   const recent = paneContent.split("\n").slice(-80).join("\n");
-  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
-  if (lastPromptIndex === -1) return false;
-  return /\[[^\]\n]*pasted[^\]\n]*\]/i.test(recent.slice(lastPromptIndex));
+  const composer = tmuxComposerRegion(recent);
+  return composer !== null && /\[[^\]\n]*pasted[^\]\n]*\]/i.test(composer);
 }
 
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
@@ -15302,9 +15291,9 @@ export function tmuxComposerPayloadMatcher(payload: string): ((pane: string) => 
   // keeps the plain prefix match rather than failing every delivery.
   const countable = stripComposerChrome(payload).indexOf(prefix, prefix.length) === -1;
   return (pane: string) => {
-    const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
-    if (glyphAt === -1) return false;
-    const stripped = stripComposerChrome(pane.slice(glyphAt + 1));
+    const composer = tmuxComposerRegion(pane);
+    if (composer === null) return false;
+    const stripped = stripComposerChrome(composer);
     return stripped.startsWith(prefix) && (!countable || stripped.indexOf(prefix, prefix.length) === -1);
   };
 }
@@ -16280,53 +16269,15 @@ function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
 }
 
-// Every path a Claude transcript for `sessionId` can live at, in lookup
-// order: the project dir's own <sessionId>.jsonl, then under each session dir
-// the subagent layouts —
-//   <parent-session-id>/<sessionId>.jsonl
-//   <parent-session-id>/subagents/<sessionId>.jsonl            (Agent tool)
-//   <parent-session-id>/subagents/workflows/<run>/<id>.jsonl   (Workflow tool)
-// Paths are yielded whether or not they exist; callers check.
-function* claudeTranscriptCandidates(sessionId: string): Generator<string> {
-  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  if (!fs.existsSync(claudeProjectsDir)) return;
-  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
-    .filter(d => d.isDirectory()).map(d => d.name);
-  for (const dir of projectDirs) {
-    const dirPath = path.join(claudeProjectsDir, dir);
-    yield path.join(dirPath, `${sessionId}.jsonl`);
-    try {
-      const subEntries = fs.readdirSync(dirPath, { withFileTypes: true })
-        .filter(d => d.isDirectory());
-      for (const subDir of subEntries) {
-        const parentDir = path.join(dirPath, subDir.name);
-        yield path.join(parentDir, `${sessionId}.jsonl`);
-        const subagentsDir = path.join(parentDir, "subagents");
-        yield path.join(subagentsDir, `${sessionId}.jsonl`);
-        const workflowsDir = path.join(subagentsDir, "workflows");
-        if (fs.existsSync(workflowsDir)) {
-          for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
-            if (!wfRun.isDirectory()) continue;
-            yield path.join(workflowsDir, wfRun.name, `${sessionId}.jsonl`);
-          }
-        }
-      }
-    } catch {}
+export async function workflowAgentTranscriptPathFor(sessionId: string): Promise<string | null> {
+  const home = process.env.HOME || "";
+  if (!sessionFileIndexReady || sessionFileIndexHome !== home || Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS) {
+    await refreshSessionFileIndex();
   }
-}
-
-// The Workflow-tool agent transcript for `sessionId`, if one exists anywhere,
-// else null. Deliberately NOT findSessionFile(...).path: the resume repair
-// ladder copies such a transcript to the project dir's top level (so
-// `claude --resume` can see it), and that copy is what findSessionFile returns
-// first — a path check on it would wave the agent through. The agent has no
-// process of its own to reach and no standalone resume that means anything, so
-// both the delivery rail and autoResumeSession refuse it.
-export function workflowAgentTranscriptPathFor(sessionId: string): string | null {
-  for (const candidate of claudeTranscriptCandidates(sessionId)) {
-    if (isWorkflowAgentTranscriptPath(candidate) && fs.existsSync(candidate)) return candidate;
+  if (!sessionFileIndexReady || sessionFileIndexHome !== home || home !== (process.env.HOME || "")) {
+    throw new Error("Transcript index unavailable; deferring workflow-agent recovery check");
   }
-  return null;
+  return workflowAgentTranscriptIndex.get(sessionId) ?? null;
 }
 
 // ─── Session-file index ────────────────────────────────────────────────────
@@ -16361,6 +16312,7 @@ let sessionFileIndex: Map<string, SessionFileInfo> | null = null;
 // (the SIGKILL-the-parent hole), so it needs a lookup the claude stores can't
 // shadow — this map is built exclusively from ~/.codex/sessions.
 let codexRolloutIndex: Map<string, string> | null = null;
+let workflowAgentTranscriptIndex = new Map<string, string>();
 let sessionFileIndexBuiltAt = 0;
 // Ids confirmed absent from the CURRENT index build (cleared on rebuild),
 // tracked per map since an id can be present in one store and not the other.
@@ -16384,6 +16336,7 @@ export function resetSessionFileIndexForTests(): void {
   borrowsUnknownUntil.clear();
   sessionFileIndex = null;
   codexRolloutIndex = null;
+  workflowAgentTranscriptIndex = new Map();
   sessionFileIndexBuiltAt = 0;
   sessionFileKnownMisses.clear();
   codexRolloutKnownMisses.clear();
@@ -16474,12 +16427,15 @@ function sessionFileIndexStores(home: string): IndexStore[] {
   ];
 }
 
-type SessionFileIndexBuild = { index: Map<string, SessionFileInfo>; codexRollouts: Map<string, string> };
+type SessionFileIndexBuild = { index: Map<string, SessionFileInfo>; codexRollouts: Map<string, string>; workflowAgents: Map<string, string> };
 function recordIndexFiles(build: SessionFileIndexBuild, store: IndexStore, files: WalkEntry[]): void {
   for (const f of files) {
     const id = store.idOf(f);
     if (!id) continue;
     indexSessionFile(build.index, id, f.path, store.agentType);
+    if (store.agentType === "claude" && isWorkflowAgentTranscriptPath(f.path) && !build.workflowAgents.has(id)) {
+      build.workflowAgents.set(id, f.path);
+    }
     // The codex store's own view: first found wins, as the old recursive walk did.
     if (store.agentType === "codex" && !build.codexRollouts.has(id)) build.codexRollouts.set(id, f.path);
   }
@@ -16488,7 +16444,7 @@ function recordIndexFiles(build: SessionFileIndexBuild, store: IndexStore, files
 // Synchronous: for a lookup that cannot wait (no index yet, or HOME changed
 // under a test). readdir only, ~4ms warm; never the periodic path.
 function buildSessionFileIndex(home: string): SessionFileIndexBuild {
-  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
+  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map(), workflowAgents: new Map() };
   for (const store of sessionFileIndexStores(home)) {
     walkDirsSync(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
   }
@@ -16496,7 +16452,7 @@ function buildSessionFileIndex(home: string): SessionFileIndexBuild {
 }
 
 async function buildSessionFileIndexAsync(home: string, signal?: AbortSignal): Promise<SessionFileIndexBuild> {
-  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
+  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map(), workflowAgents: new Map() };
   for (const store of sessionFileIndexStores(home)) {
     await walkEntryBatches(store.root, { ...store.walk, signal, requireComplete: true }, (files) => recordIndexFiles(build, store, files));
   }
@@ -16508,6 +16464,7 @@ function installSessionFileIndex(home: string, built: SessionFileIndexBuild, rea
   sessionFileIndexHome = home;
   sessionFileIndex = built.index;
   codexRolloutIndex = built.codexRollouts;
+  workflowAgentTranscriptIndex = built.workflowAgents;
   sessionFileIndexBuiltAt = Date.now();
   sessionFileKnownMisses.clear();
   codexRolloutKnownMisses.clear();
@@ -16557,7 +16514,7 @@ export function refreshSessionFileIndex(): Promise<void> {
  *  the refresh lands the real map off the loop. Every replayed session would
  *  otherwise hit the cold sync build before the warmup finished. */
 export function primeSessionFileIndexAtBoot(): Promise<void> {
-  installSessionFileIndex(process.env.HOME || "", { index: new Map(), codexRollouts: new Map() }, false);
+  installSessionFileIndex(process.env.HOME || "", { index: new Map(), codexRollouts: new Map(), workflowAgents: new Map() }, false);
   return refreshSessionFileIndex();
 }
 
@@ -17120,6 +17077,7 @@ function buildAppServerProgressSignature(messages: RawMessage[]): string {
     toolCalls: message.toolCalls,
     toolResults: message.toolResults,
     images: message.images,
+    files: message.files,
     subtype: message.subtype,
     model: message.model,
   })));
@@ -19797,7 +19755,7 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   // lives inside its host session, and the only pane it could have had was a
   // standalone copy. Nothing to reconstitute — the regeneration below would
   // rewrite the host's transcript and the resume would be refused anyway.
-  const workflowAgentTranscript = workflowAgentTranscriptPathFor(sessionId);
+  const workflowAgentTranscript = await workflowAgentTranscriptPathFor(sessionId);
   if (workflowAgentTranscript) {
     log(`[HEARTBEAT-HEALTH] not reconstituting ${sessionId.slice(0, 8)} — workflow agent transcript (${workflowAgentTranscript}); the host session owns it`);
     if (conversationId && syncServiceRef) await syncServiceRef.updateSessionAgentStatus(conversationId, "idle").catch(() => {});
@@ -21192,7 +21150,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
   // Every caller lands here (delivery, kill & restart, `cast restart <id>`):
   // a Workflow-tool agent transcript is never resumed as a session of its own.
-  const workflowAgentTranscript = workflowAgentTranscriptPathFor(sessionId);
+  const workflowAgentTranscript = await workflowAgentTranscriptPathFor(sessionId);
   if (workflowAgentTranscript) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: workflow agent transcript (${workflowAgentTranscript}) — the host session owns it`);
     return false;
@@ -21376,7 +21334,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       : null;
     const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
     resumeAccountPrefix = accountSourcePrefix(pinnedAccount, log);
-    // An empty prefix means the pin did not resolve to a token file, so this
+    // An empty prefix means the pin did not resolve to a launch file, so this
     // resume lands on the keychain login after all — and then it DOES hold the
     // credential the refresh gate protects. Attribute what happens, not what
     // was asked for.
@@ -21682,7 +21640,7 @@ async function repairAndResumeSession(
   // its transcript from Convex overwrites the host run's agent file (the
   // `.bak` + truncated `agent-*.jsonl` pairs of 2026-08-20) and the resume is
   // refused downstream anyway. Stop before touching the disk.
-  const workflowAgentTranscript = workflowAgentTranscriptPathFor(sessionId);
+  const workflowAgentTranscript = await workflowAgentTranscriptPathFor(sessionId);
   if (workflowAgentTranscript) {
     log(`Cannot repair ${sessionId.slice(0, 8)}: workflow agent transcript (${workflowAgentTranscript}) — the host session owns it`);
     return false;
@@ -22649,7 +22607,7 @@ async function deliverMessage(
   // over, and a standalone resume of it only spawns a copy that runs the brief
   // again for nobody. Cancel the message rather than retry: no injection path
   // can ever succeed for it.
-  const workflowAgentPath = workflowAgentTranscriptPathFor(sessionId);
+  const workflowAgentPath = await workflowAgentTranscriptPathFor(sessionId);
   if (workflowAgentPath) {
     logDelivery(`Refusing to resume workflow agent ${sessionId.slice(0, 8)} for msg=${messageId.slice(0, 8)}: ${workflowAgentPath}`);
     throw new UndeliverableMessageError(`workflow agent transcript ${workflowAgentPath}`);
@@ -24105,35 +24063,15 @@ export function isSuspendGap(lateMs: number, cpuMs: number): boolean {
   return lateMs >= SUSPEND_GAP_MIN_MS && cpuMs < lateMs * SUSPEND_CPU_RATE;
 }
 
-// The monotonic clock does not run while the machine is suspended, so the time
-// the loop actually failed to run is the SMALLER of the wall gap and the
-// monotonic gap. A wall gap with little monotonic lateness is a sleep whatever
-// the CPU counter says, and a big monotonic gap is a real freeze even when it
-// straddles a wake (the wall number would then wildly overstate it).
-// The CPU rule stays as the second signal, so on a platform where the monotonic
-// clock DOES advance across suspend this degrades to exactly the old behavior.
-// Exported for tests.
 export function classifyLoopGap(
   wallLateMs: number,
   monoLateMs: number,
-  cpuMs: number,
+  _cpuMs: number,
 ): { kind: "freeze" | "suspend"; freezeMs: number } {
-  const blockedMs = Math.min(wallLateMs, monoLateMs);
-  if (blockedMs < LOOP_FREEZE_REPORT_MS) return { kind: "suspend", freezeMs: 0 };
-  // The two clocks disagreed, which proves this platform's monotonic clock
-  // stops while the machine sleeps. The sleep is already subtracted by the min
-  // above, so what remains is time the loop truly failed to run: a freeze,
-  // whatever the CPU counter says about the window as a whole. This is the case
-  // the CPU rule gets wrong on its own — a blocking read or a child wait burns
-  // almost no CPU and would read as more sleep.
-  // The bar here is a tenth of the gap rather than the tick monitor's absolute
-  // 30s: this probe ticks every 100ms, so any real suspend dwarfs the gap it
-  // lands in, and an absolute floor would miss every sleep shorter than 30s.
-  if (clocksDisagree(wallLateMs, monoLateMs, wallLateMs * 0.1)) return { kind: "freeze", freezeMs: blockedMs };
-  // The clocks agree: either nothing slept, or the monotonic clock kept running
-  // through the sleep. Only the CPU rule is left to tell those apart.
-  if (isSuspendGap(blockedMs, cpuMs)) return { kind: "suspend", freezeMs: 0 };
-  return { kind: "freeze", freezeMs: blockedMs };
+  const blockedMs = Math.max(0, Math.min(wallLateMs, monoLateMs));
+  return blockedMs < LOOP_FREEZE_REPORT_MS
+    ? { kind: "suspend", freezeMs: 0 }
+    : { kind: "freeze", freezeMs: blockedMs };
 }
 
 export function summarizeSamplingTraces(raw: unknown, top = 5): string {
@@ -25273,6 +25211,9 @@ async function main(): Promise<void> {
   // reconcile confirms them against tmux; without the seed the daemon would
   // come back believing the machine is idle and rotate the single-use refresh
   // token out from under a running claude (ct-49526).
+  // Which pinned sessions hold the keychain grant depends on which profile is
+  // the machine's login; the gate asks on every mark.
+  setActiveProfileResolver(activeProfileName);
   seedLiveClaudeSessions()
     .then((restored) => {
       if (restored.length) log(`[CC-AUTH] Restored ${restored.length} live claude session(s) into the refresh gate`);

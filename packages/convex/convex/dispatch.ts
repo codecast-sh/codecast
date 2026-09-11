@@ -94,6 +94,11 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "_id", "_creationTime", "user_id", "conversation_id", "session_id",
       "question", "context_md", "options", "report_slug", "blocking",
       "default_option", "created_at",
+      // W2 routing fields: server assigned, changed only by the named
+      // mutations (recommend / answer / grant / stacks).
+      "short_id", "kind", "category", "category_proposed", "doc_id", "form",
+      "task_id", "station", "stack_id", "holder", "holder_key", "asked_user_ids",
+      "hops", "answered_by", "grant_id", "reopened_from", "scope_keys",
     ]),
   },
   // Kept for backward compatibility with already-persisted generic edit
@@ -566,6 +571,43 @@ async function linkConversationToObject(
 }
 
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
+  // Org roles (docs/architecture/org-roles.md S5/S6). The web patches the
+  // `orgTree` store singleton optimistically; that snapshot is not a dispatch
+  // table, so these named effects are the only server write. The functions
+  // live in orgRoles.ts; `api` is widened so this file compiles before that
+  // module exists in a given checkout.
+  reparentOrgSession: async (ctx, _userId, [conversationId, target]: [string, any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.reparentSession, {
+      conversation_id: conversationId,
+      target,
+    });
+  },
+  reparentOrgRole: async (ctx, _userId, [roleId, reportsTo]: [string, any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo });
+  },
+  createOrgRole: async (ctx, _userId, [input]: [any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.create, {
+      name: input.name,
+      handle: input.handle,
+      ...(input.team_id ? { team_id: input.team_id } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.reports_to ? { reports_to: input.reports_to } : {}),
+      ...(input.charter ? { charter: input.charter } : {}),
+    });
+  },
+  updateOrgRole: async (ctx, _userId, [roleId, fields]: [string, any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.update, {
+      role_id: roleId,
+      ...(fields.name !== undefined ? { name: fields.name } : {}),
+      ...(fields.handle !== undefined ? { handle: fields.handle } : {}),
+      ...(fields.scope !== undefined ? { scope: fields.scope } : {}),
+      ...(fields.charter !== undefined ? { charter: fields.charter } : {}),
+      ...(fields.status !== undefined ? { status: fields.status } : {}),
+    });
+  },
+  retireOrgRole: async (ctx, _userId, [roleId]: [string]) => {
+    return await ctx.runMutation!((api as any).orgRoles.retire, { role_id: roleId });
+  },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
   // no error, so a generic patch to capability_bindings would silently not
@@ -1126,12 +1168,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  // The doc star (rendered as a star; stored as `pinned`). Access is the doc's
+  // own workspace rule, not the viewer's active team: a doc in another team
+  // the viewer belongs to must star too, and team_id is routing, never access.
   pinDoc: async (ctx, userId, [docId, pinned]: [string, boolean]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (doc.user_id !== userId && doc.team_id !== teamId) throw new Error("Not authorized");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
     await ctx.db.patch(doc._id, { pinned, updated_at: Date.now() });
   },
 
@@ -1235,6 +1278,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       client_state: { _: { ui: { active_team_id: teamId } } },
     });
     return teamId;
+  },
+  // Local-first team delete (inboxStore.deleteTeam). The mutation repoints the
+  // canonical users.active_team_id when it named the team; the ui mirror
+  // already moved to the client's fallback, so re-stamp it with the server's
+  // answer in the same transaction. Both apply the oldest-membership rule.
+  dispatchDeleteTeam: async (ctx, userId, [teamId, confirmName]: [string, string, string | undefined]) => {
+    const result = await (ctx as any).runMutation(api.teams.deleteTeam, {
+      team_id: teamId,
+      confirm_name: confirmName,
+    });
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { active_team_id: result?.active_team_id ?? undefined } } },
+    });
+    return result;
   },
   createSavedView: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
@@ -1918,6 +1975,7 @@ const SESSION_COMMANDS = {
   rewindSession: api.conversations.rewindSession,
   forkFromMessage: api.conversations.forkFromMessage,
   sendKeysToSession: api.conversations.sendKeysToSession,
+  setPermissionMode: api.conversations.setPermissionMode,
   sendEscapeToSession: api.conversations.sendEscapeToSession,
   resumeSession: api.users.resumeSession,
 };

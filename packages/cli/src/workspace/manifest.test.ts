@@ -277,3 +277,16 @@ describe("parseManifestText — error reporting", () => {
     }
   });
 });
+
+describe("[verify]", () => {
+  test("verify.command parses; absent verify is absent, not defaulted", () => {
+    const m = parseManifestText(`[verify]\ncommand = "bun test"\n`);
+    expect(m.verify).toEqual({ command: "bun test" });
+    expect(parseManifestText(`[setup]\ninstall = ["true"]\n`).verify).toBeUndefined();
+  });
+
+  test("unknown keys and empty commands are refused", () => {
+    expect(() => parseManifestText(`[verify]\nrun = "x"\n`)).toThrow(/unknown key in \[verify\]/);
+    expect(() => parseManifestText(`[verify]\ncommand = ""\n`)).toThrow(/verify.command/);
+  });
+});

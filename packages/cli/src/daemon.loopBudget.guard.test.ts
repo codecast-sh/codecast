@@ -51,6 +51,7 @@ type Row = {
 const D = "daemon.ts";
 const MAIN = "async function main(";
 const ROWS: Row[] = [
+  { file: D, name: "workflowAgentTranscriptPathFor", kind: "function", minLines: 8, mustContain: "await refreshSessionFileIndex" },
   ...["processSessionFile", "processCursorSession", "processCursorTranscriptFile", "processCodexSession", "processGeminiSession", "processOpencodeSession", "processTranscriptDeltaSession"].map(name => ({ file: D, name: `${name}Pass`, kind: "function" as const, minLines: 70, mustContain: "await readTranscriptIngest" })),
   { file: D, name: "sendHeartbeat", kind: "function", minLines: 40, mustContain: "has_tmux" },
   { file: D, name: "collectResourceSnapshot", kind: "function", minLines: 30, mustContain: "classifySharedPidSessions" },

@@ -127,6 +127,13 @@ Subcommands:
   cast decide ls                      This session's decisions, with ids and answers
   cast decide edit [id] [flags]       Change the open decision in place (question, -o, --context, --report, --advisory/--blocking)
   cast decide cancel [id]             Withdraw the open decision
+  cast decide show <sd>               One decision with its document, ladder and holder
+  cast decide recommend <sd> <n>      A role on the ladder recommends option n (within 5 minutes; --note -)
+  cast decide answer <sd> <n>         Answer: n | "1,3" (multi) | "2>1>3" (rank) | --form k=v (form)
+  cast decide escalate <sd>           A role passes it upward without a recommendation
+
+Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
+  --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md
 
 Examples:
   cast decide "Which schema wins?" -o "Frontmatter wins" -o "Path wins" --context -  <<'EOF'
@@ -144,6 +151,20 @@ Examples:
   EOF
   cast decide cancel                           # the question no longer applies`,
     load: () => import("./decideCommand.js").then((m) => m.registerDecideCommand),
+  },
+  {
+    token: "stack",
+    args: ["[sub]", "[args...]"],
+    hasOptions: true,
+    description: `Decision stacks: an ordered set of decisions your human clears in one sitting
+
+  cast stack create "<title>" [--policy auto-default:24h] [--delegate @handle]
+  cast stack ls [--all]
+  cast stack show ds-N
+  cast stack add ds-N sd-N
+  cast stack policy ds-N [--auto-default 24h | --no-auto-default] [--delegate @handle]
+  cast stack delegate ds-N @handle       # the role answers every open category for the stack's members`,
+    load: () => import("./stackCommand.js").then((m) => m.registerStackCommand),
   },
   {
     token: "image",
