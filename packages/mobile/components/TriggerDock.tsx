@@ -3,7 +3,7 @@ import { Text as RNText } from '@/components/Themed';
 import { useState, useCallback } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { taskDisplayTitle, isTriggerFailing, type TriggerRow, type TaskRow } from '@codecast/web/components/triggerTasks';
@@ -31,6 +31,7 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
   unreadCount: number;
   nextRunAt?: number;
 }) {
+  const Theme = useTheme();
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const now = useCoarseNow(30_000);
@@ -113,7 +114,7 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   dock: {
     borderTopWidth: 1,
     borderTopColor: Theme.bgHighlight,
@@ -208,4 +209,4 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     fontWeight: '500',
   },
-});
+}));

@@ -10,8 +10,10 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
-  BookOpen, ExternalLink, Radio, Newspaper,
+  BookOpen, ExternalLink, Radio, Newspaper, Home, Monitor,
 } from "lucide-react";
+import { isDesktopShell } from "../lib/desktop";
+import { track } from "../lib/analytics";
 import type { LucideIcon } from "lucide-react";
 
 function MenuItem({
@@ -216,6 +218,25 @@ export function UserMenu() {
               onClick={() => { setOpen(false); window.open("/changelog", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
             />
+            <MenuItem
+              icon={Home}
+              label="Home page"
+              onClick={() => { setOpen(false); window.open("/", "_blank", "noopener"); }}
+              trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
+            />
+            {/* Inside the desktop app the download is moot; Settings > Desktop owns updates. */}
+            {!isDesktopShell() && (
+              <MenuItem
+                icon={Monitor}
+                label="Desktop app"
+                onClick={() => {
+                  setOpen(false);
+                  track("desktop_download_clicked", { location: "user_menu" });
+                  window.open("/download", "_blank", "noopener");
+                }}
+                trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
+              />
+            )}
           </div>
 
           <div className="border-t border-sol-border py-1">

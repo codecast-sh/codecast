@@ -128,3 +128,30 @@ export function tabNeedsUrlRestore(livePathname: string, tabPath: string): boole
   if (livePathname === tabPath.split("?")[0].split("#")[0]) return false;
   return conversationTabPath(livePathname) !== tabPath;
 }
+
+/** The path the active tab must take when history traverses onto an entry,
+ *  or null when the tab already renders that entry's owner.
+ *
+ *  Two kinds of entry share the stack. A tab navigation (`{ tabNav }`) is
+ *  mirrored into the tab as-is. A session select (`{ inboxId }`) belongs to
+ *  the inbox pane, whose own popstate listener re-selects the session — but
+ *  only while that pane is mounted. Once the tab moved on to another page
+ *  (a task opened out of a conversation), the pane and its listener are
+ *  gone, so traversing back onto the select entry must re-point the tab at
+ *  the inbox in its tab spelling (`/inbox?s=<id>`): the pane mounts and its
+ *  `?s=` param drives the view. Returning null there left the address bar on
+ *  the conversation while the task page stayed on screen. */
+export function poppedTabPath(
+  state: { inboxId?: string } | null | undefined,
+  pathname: string,
+  search: string,
+  activeTabPanePaths: string[],
+): string | null {
+  if (state?.inboxId) {
+    // Any pane of the active tab on the inbox route keeps the pane's listener
+    // alive (a split stage with the inbox beside the task counts).
+    if (activeTabPanePaths.some((p) => p.split("?")[0] === "/inbox")) return null;
+    return `/inbox?s=${state.inboxId}`;
+  }
+  return pathname + search;
+}

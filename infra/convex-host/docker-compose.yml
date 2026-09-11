@@ -1,0 +1,51 @@
+# Convex backend on our own hardware (plan pl-592).
+#
+# Two deliberate differences from how this ran on Railway:
+#
+# 1. THE IMAGE IS PINNED BY DIGEST, not :latest. On Railway we tracked :latest,
+#    so any restart could silently carry a multi-version upgrade — that happened
+#    twice unannounced (1.31.2 -> 1.36.1 on 2026-09-05, and a new binary on
+#    2026-09-10 that still reported 1.36.1). Upgrades here are a deliberate edit
+#    to this file, reviewed like any other change.
+# 2. THE BACKEND HAS A MEMORY LIMIT well below physical RAM. It grows until it
+#    is killed, roughly every one to three days, and on a shared box an
+#    unbounded backend would take Postgres down with it. The limit keeps the
+#    blast radius to the backend, which docker then restarts on its own —
+#    something Railway did for us and a bare host will not.
+services:
+  backend:
+    image: ghcr.io/get-convex/convex-backend@sha256:71acf855388a71ad2fc597cd1dbea3fd262e179a07f93e754842a522024f1034
+    restart: unless-stopped
+    # 64 GB of a 128 GB box. Postgres gets its own budget; the OS keeps the rest
+    # for page cache. Raise only after measuring growth on this hardware — more
+    # headroom does not fix the growth, it only lengthens the cycle.
+    mem_limit: 64g
+    env_file: [.env]
+    volumes:
+      - /srv/convex/data:/convex/data
+    ports:
+      - "127.0.0.1:3210:3210"   # cloud origin (api)
+      - "127.0.0.1:3211:3211"   # site origin (http actions)
+    healthcheck:
+      # /instance_version answers on the cheap path and does not touch Postgres,
+      # so it reports "process alive", NOT "queries working". Real health is the
+      # verification list in the cutover runbook.
+      test: ["CMD", "curl", "-fsS", "http://localhost:3210/instance_version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: { max-size: "100m", max-file: "5" }
+
+  dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    restart: unless-stopped
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:6791:6791"
+    depends_on: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "2" }

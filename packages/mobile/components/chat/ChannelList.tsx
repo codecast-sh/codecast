@@ -6,7 +6,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { formatRelativeTime } from '@/components/SessionItem';
 import { dmOtherIds } from '@codecast/shared/chat';
 import { ChatAvatar } from './MessageRow';
@@ -57,6 +57,7 @@ export function useChatRail(teamId: Id<'teams'> | undefined) {
  *  corner — who it is and whether they're there, in one glance. Group DMs keep
  *  a neutral glyph (three faces at 15pt read as noise). */
 function DmFace({ channel, viewerId, members }: { channel: any; viewerId: string; members?: any[] }) {
+  const Theme = useTheme();
   const others = dmOtherIds(channel.dm_key, viewerId);
   const one = others.length === 1
     ? (members ?? []).find((m) => String(m._id) === others[0])
@@ -80,6 +81,7 @@ type ListItem =
   | { kind: 'channel'; key: string; channel: any; rail?: ChannelRailRow };
 
 export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
+  const Theme = useTheme();
   const rail = useChatRail(teamId);
   const router = useRouter();
   // DM naming: the other side's names, resolved live from the roster — the
@@ -199,7 +201,7 @@ export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -256,4 +258,4 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 32 },
   emptyTitle: { fontSize: 14, fontWeight: '600', color: Theme.textSecondary },
   emptySub: { fontSize: 12, color: Theme.textMuted0, textAlign: 'center', lineHeight: 18 },
-});
+}));

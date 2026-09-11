@@ -20,7 +20,7 @@ import {
 export interface StampFile {
   /** sha256 of the bytes the laptop sent. */
   sha: string;
-  /** sha256 of the bytes the MIRROR last put on disk (after apply + refresh). */
+  /** sha256 of mirrored bytes, or owned MCP fields when mcp_fields is present. */
   written: string;
   mode: "0600" | "0700";
   /** Absent in stamps older than the kind-aware prune: treated as verbatim. */
@@ -32,6 +32,7 @@ export interface StampFile {
   alias?: string;
   satisfied_alias?: { project: string; target: string };
   mcp_disabled?: string[];
+  mcp_fields?: string[][];
 }
 
 export interface MirrorStamp {
@@ -449,7 +450,9 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
       }
       const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
       if (info.alias && info.alias !== dest) complete = false;
-      const hash = hashIfRegular(path.join(home, dest));
+      const hash = info.kind === "claude-mcp" && info.mcp_fields
+        ? claudeMcpWritten(fs.readFileSync(path.join(home, dest)), info)
+        : hashIfRegular(path.join(home, dest));
       const mode = fs.statSync(path.join(home, dest)).mode & 0o777;
       if (info.host_edited || hash !== info.written || mode !== Number.parseInt(info.mode, 8)) complete = false;
     } catch {
@@ -581,6 +584,45 @@ function claudeMcpSections(value: Record<string, any>): Array<[string | null, Re
   ];
 }
 
+function claudeMcpFields(text: string, previous?: StampFile): string[][] {
+  const fields = new Map((previous?.mcp_fields ?? []).map((field) => [JSON.stringify(field), field]));
+  const visit = (value: unknown, field: string[]) => {
+    if (isPlainObject(value)) {
+      for (const [key, child] of Object.entries(value)) visit(child, [...field, key]);
+    } else fields.set(JSON.stringify(field), field);
+  };
+  for (const source of [previous?.source, text]) if (source) {
+    for (const [root, servers] of claudeMcpSections(JSON.parse(source))) {
+      for (const [name, server] of Object.entries(servers)) visit(server, [...(root === null ? [] : ["projects", root]), "mcpServers", name]);
+    }
+  }
+  const current = JSON.parse(text);
+  return [...fields.entries()].filter(([, field]) => {
+    const value = mcpFieldValue(current, field);
+    return value[0] !== field.length || !isPlainObject(value[1]);
+  }).sort(([a], [b]) => a.localeCompare(b)).map(([, field]) => field);
+}
+
+function mcpFieldValue(value: unknown, field: string[]): unknown[] {
+  for (const [index, key] of field.entries()) {
+    if (value === undefined) return [];
+    if (!isPlainObject(value)) return [index, value];
+    value = Object.hasOwn(value, key) ? value[key] : undefined;
+  }
+  return value === undefined ? [] : [field.length, value];
+}
+
+function claudeMcpWritten(bytes: Buffer, info: Pick<StampFile, "mcp_fields" | "mcp_disabled">): string {
+  const value = JSON.parse(bytes.toString("utf8"));
+  if (!isPlainObject(value)) throw new Error("invalid Claude MCP host state");
+  const fields = [...(info.mcp_fields ?? []), ...(info.mcp_disabled ?? []).map((pin) => {
+    const [root, name] = JSON.parse(pin);
+    return [...(root === null ? [] : ["projects", root]), "mcpServers", name];
+  })];
+  return sha256(JSON.stringify(fields.map((field) => mcpFieldValue(value, field)), (_key, item) =>
+    isPlainObject(item) ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]])) : item));
+}
+
 function claudeMcpPins(text: string, overrides: HostMcpOverrides): { pinned: string[]; next: HostMcpOverrides } {
   const pinned: string[] = [];
   const names = new Set<string>();
@@ -613,6 +655,10 @@ export function finalBytes(file: ParsedFile, current: Buffer | null, home: strin
       const original = parse(cur) ?? {};
       const masked = structuredClone(original);
       const prior = previous?.source ? parse(previous.source) : {};
+      const incoming = parse(text);
+      for (const field of previous?.mcp_fields ?? []) {
+        if (!mcpFieldValue(prior, field).length && !mcpFieldValue(incoming, field).length && mcpFieldValue(original, field).length) conflict();
+      }
       for (const [root, servers] of claudeMcpSections(prior)) {
         for (const [name, server] of Object.entries(servers)) {
           if (!previous?.mcp_disabled?.includes(JSON.stringify([root, name]))) continue;
@@ -620,7 +666,7 @@ export function finalBytes(file: ParsedFile, current: Buffer | null, home: strin
           if (!Object.hasOwn(section.mcpServers ?? {}, name)) (section.mcpServers ??= {})[name] = server;
         }
       }
-      const merged = reconcileFields(prior, masked, parse(text), conflict) as Record<string, any>;
+      const merged = reconcileFields(prior, masked, incoming, conflict) as Record<string, any>;
       const pins = overrides ? claudeMcpPins(text, overrides).pinned : [];
       for (const [root, servers] of claudeMcpSections(merged)) {
         for (const name of Object.keys(servers)) if (pins.includes(JSON.stringify([root, name]))) delete servers[name];
@@ -793,6 +839,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
         ...(dest !== file.path ? { alias: dest } : {}),
         ...(mcp ? { mcp_disabled: mcp.pinned } : {}),
       };
+      if (file.kind === "claude-mcp") {
+        stampFiles[file.path]!.mcp_fields = claudeMcpFields(file.bytes.toString("utf8"), before);
+        stampFiles[file.path]!.written = claudeMcpWritten(bytes, stampFiles[file.path]!);
+      }
     } catch (err) {
       if (prev?.files[file.path]) stampFiles[file.path] = prev.files[file.path]!;
       result.errors.push({ path: file.path, error: err instanceof Error ? err.message : String(err) });
@@ -882,7 +932,12 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
             result.pruned.push(rel);
           }
           if (conflicted) result.host_edited.push(rel);
-          stampFiles[rel] = { ...info, written: sha256(bytes), source: conflicted ? info.source : empty, ...(conflicted ? { host_edited: true as const } : {}), ...(!bytes.toString().trim() ? { removed: true as const } : {}) };
+          stampFiles[rel] = { ...info, written: sha256(bytes), source: conflicted ? info.source : empty, host_edited: conflicted ? true : undefined, ...(!bytes.toString().trim() ? { removed: true as const } : {}) };
+          if (kind === "claude-mcp") {
+            stampFiles[rel]!.mcp_fields = claudeMcpFields(empty, info);
+            stampFiles[rel]!.mcp_disabled = [];
+            stampFiles[rel]!.written = claudeMcpWritten(bytes, stampFiles[rel]!);
+          }
         } catch (err) {
           stampFiles[rel] = info;
           result.errors.push({ path: rel, error: err instanceof Error ? err.message : String(err) });
@@ -923,6 +978,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       }
       const current = readIfRegular(path.join(home, dest));
       if (!current) throw new Error("file missing after refresh");
+      if (info.kind === "claude-mcp" && info.mcp_fields) {
+        if (claudeMcpWritten(current, info) !== info.written) throw new Error("mirrored MCP content changed during refresh");
+        continue;
+      }
       if (info.source !== undefined && info.kind) {
         const bytes = Buffer.from(info.source);
         finalBytes({ path: rel, kind: info.kind, mode: info.mode, size: bytes.length, sha256: sha256(bytes), bytes }, current, home, pinned, info, () => { throw new Error("mirrored content changed during refresh"); }, overrides);

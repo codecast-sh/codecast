@@ -102,6 +102,19 @@ describe("tabNavigate", () => {
     expect(calls).toEqual([{ op: "replace", url: "/inbox", state: { tabNav: true, tabId: "tab_1" } }]);
   });
 
+  // The recents rail lists sessions (recordSessionView) and real pages. The
+  // inbox is a session's container, not a place of its own: opening a session
+  // from another surface selects it and then pushes /inbox, and that push was
+  // filing an "Inbox" entry on top of the session — the Ctrl+Tab switcher then
+  // showed Inbox between the things the user had actually looked at.
+  it("records page visits for real pages, never for the inbox container", () => {
+    useInboxStore.setState({ recentVisits: [] });
+    tabNavigate("/tasks/ct-1", "push");
+    tabNavigate("/inbox?s=jx7abc", "push");
+    tabNavigate("/inbox", "push");
+    expect(useInboxStore.getState().recentVisits.map((v) => v.key)).toEqual(["page:/tasks/ct-1"]);
+  });
+
   it("replaces (no new entry) in replace mode", () => {
     tabNavigate("/tasks", "replace");
     expect(calls[0].op).toBe("replace");

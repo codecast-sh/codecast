@@ -99,6 +99,20 @@ export function recRoomKey(recId: string): string {
   return `rec:${recId}`;
 }
 
+/** The session a room BELONGS to, when it is a session's own room.
+ *
+ *  This is the one room with a listener who never takes a seat: its agent.
+ *  That makes it the exception to two rules written for rooms full of people
+ *  — the transcript feeds it live by default (transcripts.withDefaultRoutes),
+ *  and one person in it is a conversation rather than someone waiting for an
+ *  answer (autoScribe). Both sides ask here so they cannot disagree about
+ *  which rooms those exceptions cover. */
+export function sessionRoomConversationId(roomKey: string | null | undefined): string | null {
+  if (!roomKey) return null;
+  const parsed = parseRoomKey(roomKey);
+  return parsed?.kind === "session" ? parsed.conversationId : null;
+}
+
 /** Is this key a recording rather than a room? Asked on both sides — the server
  *  to shut every live-call door on it, the client to draw a microphone instead
  *  of a telephone. */

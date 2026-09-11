@@ -19,6 +19,7 @@ export const DAEMON_COMMANDS = [
   "resume_session",
   "kill_session",
   "send_keys",
+  "set_permission_mode",
   "rewind",
   "config_list",
   "config_read",

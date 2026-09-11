@@ -20,6 +20,7 @@ import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFr
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
+import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
@@ -37,7 +38,7 @@ import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
-import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import {
   extractNestedActions,
   toolSummary,
@@ -115,6 +116,7 @@ const LinearGradient = ({ colors, style, children, pointerEvents }: { colors: st
 };
 
 function Toast({ message, visible }: { message: string; visible: boolean }) {
+  const Theme = useTheme();
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -167,6 +169,7 @@ type Message = {
   tool_calls?: ToolCall[];
   tool_results?: ToolResult[];
   images?: ImageData[];
+  files?: SentFileData[];
   subtype?: string;
   message_uuid?: string;
   usage?: {
@@ -312,6 +315,7 @@ type ConversationData = {
 // The red/green wrapped diff rows, shared between the inline preview and the
 // fullscreen view so both render the edit identically.
 function DiffRows({ oldLines, newLines }: { oldLines: string[]; newLines: string[] }) {
+  const Theme = useTheme();
   return (
     <RNView style={{ borderRadius: 4, overflow: 'hidden' }}>
       {oldLines.map((line, i) => (
@@ -333,6 +337,7 @@ function DiffRows({ oldLines, newLines }: { oldLines: string[]; newLines: string
 // Fullscreen, vertically scrollable view of a whole edit — same wrapped colored
 // rows as inline, so long diffs are readable instead of clipped in the transcript.
 function DiffFullscreen({ oldStr, newStr, filePath, visible, onClose }: { oldStr: string; newStr: string; filePath: string; visible: boolean; onClose: () => void }) {
+  const Theme = useTheme();
   const [copied, setCopied] = useState(false);
   if (!visible) return null;
   const oldLines = oldStr.split('\n');
@@ -365,6 +370,7 @@ function DiffFullscreen({ oldStr, newStr, filePath, visible, onClose }: { oldStr
 }
 
 function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
+  const Theme = useTheme();
   const [fullscreen, setFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
   const oldLines = oldStr.split('\n');
@@ -603,6 +609,7 @@ function getFileExtension(filePath: string): string | undefined {
 // Specialized tool rendering components
 
 function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; result?: ToolResult; childConversationId?: string }) {
+  const Theme = useTheme();
   const [expanded, setExpanded] = useState(false);
   const router = useRouter();
 
@@ -686,6 +693,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
 const _askUserSentState = new Map<string, string>();
 
 function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string }) {
+  const Theme = useTheme();
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -821,6 +829,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
 }
 
 function TodoWriteBlock({ tool }: { tool: ToolCall }) {
+  const Theme = useTheme();
   let parsedInput: { todos?: Array<{ content: string; status: string; activeForm?: string }> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -864,6 +873,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
 }
 
 function TaskListBlock({ result }: { result?: ToolResult }) {
+  const Theme = useTheme();
   if (!result) return null;
 
   const lines = result.content.split('\n');
@@ -933,6 +943,7 @@ function TaskListBlock({ result }: { result?: ToolResult }) {
 }
 
 function SkillCard({ tool }: { tool: ToolCall }) {
+  const Theme = useTheme();
   let parsedInput: { skill?: string; args?: string } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -947,6 +958,7 @@ function SkillCard({ tool }: { tool: ToolCall }) {
 }
 
 function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCall; result?: ToolResult; taskSubjectMap?: Record<string, string> }) {
+  const Theme = useTheme();
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -1019,6 +1031,7 @@ function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCal
 }
 
 function SendMessageBlock({ tool }: { tool: ToolCall }) {
+  const Theme = useTheme();
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -1050,6 +1063,7 @@ function SendMessageBlock({ tool }: { tool: ToolCall }) {
 }
 
 function TeamCreateBlock({ tool }: { tool: ToolCall }) {
+  const Theme = useTheme();
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -1093,6 +1107,7 @@ function imageKeyOf(image: ImageData): string | undefined {
 }
 
 function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void }) {
+  const Theme = useTheme();
   const src = useImageSrc(image);
 
   if (!src) {
@@ -1270,6 +1285,7 @@ function GalleryImage({ image, screenWidth, screenHeight, onZoomChange, onReques
 // One thumb in the gallery's bottom filmstrip. Dimmed unless current; a
 // storage-backed entry shows a placeholder square until its URL resolves.
 function GalleryThumb({ image, active, onPress }: { image: ImageData; active: boolean; onPress: () => void }) {
+  const Theme = useTheme();
   const src = useImageSrc(image);
   if (!src) return <RNView style={[styles.galleryThumb, styles.galleryThumbPlaceholder]} />;
   return (
@@ -1291,6 +1307,7 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
   visible: boolean;
   onClose: () => void;
 }) {
+  const Theme = useTheme();
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isZoomed, setIsZoomed] = useState(false);
   const [isLandscape, setIsLandscape] = useState(false);
@@ -1387,6 +1404,7 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
 }
 
 function CompactionSummaryBlock({ content }: { content: string }) {
+  const Theme = useTheme();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -1414,6 +1432,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 }
 
 function GitDiffView({ diff }: { diff: string }) {
+  const Theme = useTheme();
   const lines = diff.split('\n');
   return (
     <ScrollView horizontal style={styles.hScroll} nestedScrollEnabled>
@@ -1446,6 +1465,7 @@ function GitDiffView({ diff }: { diff: string }) {
 const PLAN_MAX_HEIGHT = 1800;
 
 function PlanBlock({ content, timestamp, collapsed: collapsedProp }: { content: string; timestamp?: number; collapsed?: boolean }) {
+  const Theme = useTheme();
   const [expanded, setExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -1577,6 +1597,7 @@ const agentColors: Record<string, string> = {
 };
 
 function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
+  const Theme = useTheme();
   const [expanded, setExpanded] = useState(false);
 
   const safeContent = content || '';
@@ -1693,6 +1714,7 @@ function parseSkillBlocks(text: string): SkillBlockPart[] {
 }
 
 function SkillBlockCard({ name, description, path }: { name?: string; description?: string; path?: string }) {
+  const Theme = useTheme();
   const shortPath = path ? path.replace(/^\/Users\/[^/]+\//, "~/") : undefined;
   return (
     <RNView style={styles.skillBlockCard}>
@@ -1726,6 +1748,7 @@ const taskStatusConfig: Record<string, { icon: string; color: string; bg: string
 };
 
 function TaskNotificationLine({ content, timestamp, childConversationMap }: { content: string; timestamp?: number; childConversationMap?: Record<string, string> }) {
+  const Theme = useTheme();
   const router = useRouter();
   const parsed = parseTaskNotification(content);
   if (!parsed) return null;
@@ -1759,6 +1782,7 @@ function TaskNotificationLine({ content, timestamp, childConversationMap }: { co
 const COLLAPSED_BODY_HEIGHT = 160;
 
 function CollapsibleBody({ fadeColor, children }: { fadeColor: string; children: React.ReactNode }) {
+  const Theme = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   // The tallest height this content has ever reported. Unlike the web, Yoga
@@ -1800,6 +1824,7 @@ function CollapsibleBody({ fadeColor, children }: { fadeColor: string; children:
 // (<agent-message from="…">) — the same card in violet, and a sender that is an
 // agent name rather than a session short id, so it stays a badge.
 function SessionMessageBlock({ from, name, body, timestamp, variant }: { from: string; name?: string; body: string; timestamp?: number; variant?: 'agent' }) {
+  const Theme = useTheme();
   const isAgentReport = variant === 'agent';
   const accent = isAgentReport ? Theme.violet : Theme.cyan;
   const hasRealSender = !isAgentReport && !!from && from !== 'unknown';
@@ -1832,6 +1857,7 @@ function SessionMessageBlock({ from, name, body, timestamp, variant }: { from: s
 // Shows the channel, who asked, and the quoted thread by speaker; the briefing
 // around the quote is for the agent, not the reader.
 function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: number }) {
+  const Theme = useTheme();
   const router = useRouter();
   // Land in the thread when it is known — the same route a chat push opens.
   const open = wake.channelId
@@ -1867,6 +1893,7 @@ function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: 
 // Mobile port of web's ScheduledTaskBlock: a `cast trigger` prompt injection.
 // (<scheduled-task> is the frozen pre-rename wire tag; old transcripts carry it.)
 function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp?: number }) {
+  const Theme = useTheme();
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
   const title = match?.[1]?.replace(/&quot;/g, '"') || 'Trigger Run';
@@ -1915,6 +1942,7 @@ function parseApiErrorContent(content?: string | null): { statusCode: number; me
 }
 
 function ApiErrorCard({ statusCode, message, errorType, requestId }: { statusCode: number; message: string; errorType?: string; requestId?: string }) {
+  const Theme = useTheme();
   const isServer = statusCode >= 500;
   const color = isServer ? Theme.red : Theme.orange;
   return (
@@ -1961,6 +1989,7 @@ const contextTypeConfig: Record<string, { icon: 'list' | 'crosshairs' | 'file-te
 };
 
 function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
+  const Theme = useTheme();
   const config = contextTypeConfig[ctx.type] || contextTypeConfig.doc;
   return (
     <RNView style={[styles.contextPill, { borderColor: config.color + '40' }]}>
@@ -2304,6 +2333,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 // reasoning-only turn would disappear from the transcript entirely. Faded,
 // collapsed to 2 lines by default, tap to expand.
 function ThinkingBlock({ content }: { content: string }) {
+  const Theme = useTheme();
   const [expanded, setExpanded] = useState(false);
   const isLong = content.split('\n').length > 2 || content.length > 200;
   return (
@@ -2325,6 +2355,7 @@ function ThinkingBlock({ content }: { content: string }) {
 }
 
 function SystemMessage({ message }: { message: Message }) {
+  const Theme = useTheme();
   if (isHiddenSystemNotice(message.content, message.subtype)) return null;
 
   if (message.subtype === 'compact_boundary') {
@@ -2424,6 +2455,7 @@ function formatTokenCount(n: number): string {
 }
 
 function UsageBar({ usage }: { usage: UsageData }) {
+  const Theme = useTheme();
   const CONTEXT_LIMIT = 200000;
   const contextPercent = (usage.contextSize / CONTEXT_LIMIT) * 100;
   const isWarning = contextPercent > 80;
@@ -2450,6 +2482,7 @@ const CONTENT_TRUNCATE_LENGTH = 3000;
 const ASSISTANT_CONTENT_MAX_HEIGHT = 400;
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
+  const Theme = useTheme();
   const cmdType = getCommandType(content);
   const displayText = cleanCommandContent(content).slice(0, 100) || content.replace(/<[^>]+>/g, '').slice(0, 100);
 
@@ -2481,6 +2514,7 @@ const WF_NODE_COLORS: Record<string, string> = {
 };
 
 function WorkflowGateCard({ event }: { event: Record<string, any> }) {
+  const Theme = useTheme();
   const runId = typeof event.run_id === 'string' ? event.run_id : null;
   const run = useQuery(
     api.workflow_runs.get,
@@ -2532,6 +2566,7 @@ function WorkflowGateCard({ event }: { event: Record<string, any> }) {
 }
 
 function WorkflowEventBlock({ event }: { event: Record<string, any> }) {
+  const Theme = useTheme();
   const router = useRouter();
   const wf = event.__wf as string;
 
@@ -2604,6 +2639,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
+  const Theme = useTheme();
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -2910,6 +2946,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskGet') {
               return <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} />;
             }
+            if (tc.name === 'SendUserFile') {
+              return <SentFileBlock key={tc.id} files={(message.files ?? []).filter(f => f.tool_use_id === tc.id)} />;
+            }
             if (tc.name === 'SendMessage') {
               return <SendMessageBlock key={tc.id} tool={tc} />;
             }
@@ -3012,6 +3051,7 @@ const AGENT_STATUS_META: Record<string, { color: string; label: string }> = {
 };
 
 function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null; autoFocus?: boolean }) {
+  const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
   const inputRef = useRef<NativeTextInput>(null);
@@ -3447,6 +3487,7 @@ function useAndroidImeInset(): number {
 }
 
 function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
+  const Theme = useTheme();
   const isCurrent = node.id === currentId || node.is_current;
   const date = new Date(node.started_at);
   const timeStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -3465,6 +3506,7 @@ function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeN
 }
 
 export default function SessionDetailScreen() {
+  const Theme = useTheme();
   const { id, message: highlightMessageParam, focus: focusParam } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
   // Wire the store's server dispatch (idempotent — just sets a ref). The inbox
   // tab mounts useSyncInboxSessions and stays mounted under this pushed screen,
@@ -5314,7 +5356,7 @@ export default function SessionDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -7265,4 +7307,4 @@ const styles = StyleSheet.create({
     fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
   },
-});
+}));

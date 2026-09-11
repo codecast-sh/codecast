@@ -317,7 +317,7 @@ export function AttachTabButton() {
   return (
     <button
       onClick={() => void attach(window.location.pathname + window.location.search)}
-      className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+      className="flex items-center p-1.5 rounded-md text-sol-text-muted hover:text-sol-text transition-colors"
       title="Move into main window"
     >
       <PanelsTopLeft className="w-[18px] h-[18px]" />
