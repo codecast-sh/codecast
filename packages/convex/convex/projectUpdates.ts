@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import { resolveActor } from "./lib/actor";
+import { enqueueForScopeChange } from "./orgEvents";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -523,17 +525,31 @@ export const post = mutation({
     // Same rule as task comments: a post from inside a session is an agent's.
     // Judged on the RESOLVED conversation — an id that resolves to nothing (or
     // to someone else's session) must not strip authorship from the poster.
+    // A role's standing session posts as the role's bot user (lib/actor).
     const fromAgent = !!conversation_id;
-    return insertUpdate(ctx, project, {
-      user_id: auth.userId,
-      author: user?.name || user?.email || "unknown",
+    const conversation = conversation_id ? await ctx.db.get(conversation_id) : null;
+    const actor = await resolveActor(ctx, auth.userId, conversation);
+    const kind = args.kind ?? "update";
+    const result = await insertUpdate(ctx, project, {
+      user_id: actor.kind === "role" ? actor.user_id : auth.userId,
+      author: actor.kind === "role" ? (actor.name ?? "role") : (user?.name || user?.email || "unknown"),
       author_user_id: fromAgent ? undefined : auth.userId,
       author_kind: fromAgent ? "agent" : "user",
-      kind: args.kind ?? "update",
+      kind,
       title: args.title,
       body: args.body,
       conversation_id,
     });
+    // A subordinate's digest is a fold row for every role whose scope holds
+    // the project (org-roles-standing.md T3); the loop rules drop the
+    // poster's own role and its parent.
+    if (kind === "digest" && fromAgent) {
+      await enqueueForScopeChange(ctx, "tasks", { _id: project._id, project_id: project._id, team_id: project.team_id, user_id: project.user_id, title: args.title ?? "digest", status: "posted", short_id: result.short_id }, {
+        actorConversationId: conversation_id,
+        cause: `digest ${result.short_id} posted on project ${project.title}: ${(args.title ?? args.body).slice(0, 120)}`,
+      });
+    }
+    return result;
   },
 });
 

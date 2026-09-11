@@ -19,7 +19,7 @@ import { ActivityIndicator, Animated, Easing, LayoutAnimation, PanResponder, Pre
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { Text } from '@/components/Themed';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 
 export type StickyPrompt = { id: string; ordinal: number; text: string; pending?: boolean };
 
@@ -55,6 +55,7 @@ function oneLine(text: string): string {
 }
 
 export function StickyPromptBanner({ prompt, top, translateY, onJump, onDismiss, onHeight }: Props) {
+  const Theme = useTheme();
   // The pill keeps painting the last prompt while it fades out, so the
   // rendered prompt lags the prop by one exit animation.
   const [shown, setShown] = useState<StickyPrompt | null>(prompt);
@@ -248,7 +249,7 @@ export function StickyPromptBanner({ prompt, top, translateY, onJump, onDismiss,
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   wrap: {
     position: 'absolute',
     left: 0,
@@ -307,4 +308,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));

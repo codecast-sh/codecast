@@ -5,6 +5,7 @@ import { parseHuddleDigestContent } from "@codecast/shared/contracts";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { remarkSanitizeInvisibleUnicode } from "../../lib/markdownPlugins";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
+import { RevealHost } from "../ObjectReveal";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
@@ -444,14 +445,16 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         ) : (
           <div className="ch-msg-body">
-            <ReactMarkdown
-              remarkPlugins={remarkPlugins}
-              rehypePlugins={MESSAGE_MD_REHYPE}
-              components={MESSAGE_MD_COMPONENTS}
-            >
-              {/* The digest's lead line moved into the header above. */}
-              {callHead ? callHead.body : message.content}
-            </ReactMarkdown>
+            <RevealHost>
+              <ReactMarkdown
+                remarkPlugins={remarkPlugins}
+                rehypePlugins={MESSAGE_MD_REHYPE}
+                components={MESSAGE_MD_COMPONENTS}
+              >
+                {/* The digest's lead line moved into the header above. */}
+                {callHead ? callHead.body : message.content}
+              </ReactMarkdown>
+            </RevealHost>
             {message.attachments && message.attachments.length > 0 && (
               <ChatAttachments messageId={message.id} attachments={message.attachments} />
             )}

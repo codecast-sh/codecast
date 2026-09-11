@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
+import { enqueueRoleEvent } from "./orgEvents";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { enqueueCloudSpawn } from "./cloud";
@@ -9,7 +10,7 @@ import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus } from "@codecast/shared/contracts";
-import { PATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
 import {
   openTasksVouchForWaiting,
   OPEN_TASKS_FRESH_MS,
@@ -50,6 +51,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -4989,7 +4991,9 @@ export const setAvailableSkills = mutation({
     skillsMap[key] = JSON.parse(args.skills);
     const skillsJson = JSON.stringify(skillsMap);
     if (skillsRow) {
-      await ctx.db.patch(skillsRow._id, { skills_json: skillsJson, updated_at: Date.now() });
+      if (skillsRow.skills_json !== skillsJson) {
+        await ctx.db.patch(skillsRow._id, { skills_json: skillsJson, updated_at: Date.now() });
+      }
     } else {
       await ctx.db.insert("user_skills", { user_id: authUserId, skills_json: skillsJson, updated_at: Date.now() });
     }
@@ -5514,10 +5518,12 @@ export const forkFromMessage = mutation({
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
     session_id: v.optional(v.string()),
-    // The branch's seed prompt (cast fork "<direction>"). Used ONLY to title the
-    // new row — sibling branches otherwise all read "Fork: <parent title>" and
-    // are indistinguishable in the inbox (the direction itself arrives later as
-    // a separate seed message).
+    // The branch's seed prompt (cast fork "<direction>"). It titles the new
+    // row (sibling branches otherwise all read "Fork: <parent title>") and is
+    // queued to the branch as the human's own next turn: raw text, no sender,
+    // stamped with a fork-seed client_id so the web can mark it (see
+    // @codecast/shared/contracts/forkSeed). Enqueued in this same transaction
+    // so a retried fork can never seed twice or create a branch nobody seeds.
     direction: v.optional(v.string()),
     target_agent_type: v.optional(v.union(
       v.literal("claude_code"),
@@ -5848,9 +5854,29 @@ export const forkFromMessage = mutation({
     // larger ones chain via _continueFork.
     await advanceForkCopy(makeForkCtx(ctx), newConversationId);
 
+    // Seed the branch. The direction lands as the person's next instruction —
+    // the same rail the web composer uses, marked human so the wake rules for
+    // a person writing into a thread apply — never as a session-to-session
+    // message from the parent: that wrapper tells the branch who forked it
+    // and invites it to report back, which is the one thing a branch must
+    // not do. Delivery waits for the branch's session to come up.
+    let seedMessageId: Id<"pending_messages"> | undefined;
+    const seed = args.direction?.trim();
+    if (seed) {
+      const branch = await ctx.db.get(newConversationId);
+      if (branch) {
+        seedMessageId = await enqueuePendingMessage(ctx, branch, userId, {
+          content: seed,
+          client_id: forkSeedClientId(forkSessionId),
+          human: true,
+        });
+      }
+    }
+
     return {
       conversation_id: newConversationId,
       short_id: newConversationId.toString().slice(0, 7),
+      seed_message_id: seedMessageId,
     };
   },
 });
@@ -8564,10 +8590,25 @@ export async function scanInboxConversations(
   ctx: any,
   userId: Id<"users">,
   now: number,
-  opts: { includeLiveness: boolean; extraConvIds?: string[]; teamScope?: Id<"teams"> },
+  opts: {
+    includeLiveness: boolean;
+    extraConvIds?: string[];
+    teamScope?: Id<"teams">;
+    // Also read the user's recently updated SUBAGENT rows (one indexed range,
+    // never merged into the candidate set). This is the fast-field ownership
+    // window: the list strips message_count/updated_at from exactly the child
+    // rows in it, and the liveness overlay stamps exactly those children, so
+    // the two channels read one window and can never disagree about which
+    // child rows carry the fields. Off for team scope, whose list never
+    // strips them.
+    subagentWindow?: boolean;
+  },
 ): Promise<{
   conversations: any[];
   maps: InboxSessionMaps;
+  // The subagent window (see opts.subagentWindow): newest INBOX_WINDOW_CAP
+  // subagent rows inside the recency window. Empty when not requested.
+  recentSubagents: any[];
   // Rows that reached the candidate set by a deliberate act rather than by
   // recency: a label's filed extras, and sessions ASSIGNED to this user but run
   // by another account. Both are exempt from the cluster cutoff (they are old
@@ -8699,8 +8740,24 @@ export async function scanInboxConversations(
   // queries, whose latency was almost entirely sequential await depth (each
   // await is a db round trip; under load the sum crossed the system-op
   // timeout: "Your request timed out performing too many system operations").
-  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows] =
-    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ]);
+  // The subagent window is a sibling range of the same index the recent
+  // window reads (is_subagent: true). Children never crowd the top-level caps:
+  // they are returned on their own, not merged into the candidate set.
+  const recentSubagentsQ: Promise<any[]> = opts.subagentWindow && !opts.teamScope
+    ? ctx.db
+      .query("conversations")
+      .withIndex("by_user_subagent_updated", (q: any) =>
+        q.eq("user_id", userId).eq("is_subagent", true).gte("updated_at", sessionWindowCutoff)
+      )
+      .order("desc")
+      .filter((q: any) => q.or(
+        q.eq(q.field("status"), "active"),
+        q.eq(q.field("status"), "completed")
+      ))
+      .take(INBOX_WINDOW_CAP)
+    : Promise.resolve([]);
+  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows, recentSubagents] =
+    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ, recentSubagentsQ]);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
@@ -8840,7 +8897,7 @@ export async function scanInboxConversations(
 
   return {
     conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
-    ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds,
+    ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds, recentSubagents,
   };
 }
 
@@ -8904,15 +8961,24 @@ export async function computeInboxSessions(
   // liveness threshold compare against the minute, so two executions inside
   // one minute over the same data are byte identical (sync-convergence C2).
   const now = inboxEpoch(Date.now());
+  const fastFieldsInOverlay = !includeLiveness && opts.fastFieldsInOverlay === true;
   const scan = await scanInboxConversations(ctx, userId, now, {
     includeLiveness,
     extraConvIds: opts.extraConvIds,
     teamScope: opts.teamScope,
+    subagentWindow: fastFieldsInOverlay,
   });
   const { conversations, maps, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds } = scan;
+  // The child rows whose fast fields the overlay owns (see the scan's
+  // subagentWindow). A child outside the window keeps message_count and
+  // updated_at on its list row: the overlay never sees it, so a stripped row
+  // would stay null on the client forever (an idle Agent-tool subagent showed
+  // an idle age of 20705 days — Date.now() minus nothing).
+  const overlayOwnedChildIds = new Set<string>(scan.recentSubagents.map((c: any) => c._id.toString()));
 
   let hiddenCount = 0;
   const results: any[] = [];
+  const childRowIds = new Set<string>();
   // Parked rows skip the per-row children scan (see enrichInboxSessionRow), so
   // their implementation-session pointer resolves from the candidate pool
   // instead — a recently active plan-handoff child is already in the recent
@@ -9050,12 +9116,18 @@ export async function computeInboxSessions(
     for (const child of r.subagentChildren) {
       const childRow = buildSubagentChildRow(child, maps, now, r.conv._id);
       stampChildRow?.(child, childRow);
+      childRowIds.add(childRow._id.toString());
       results.push(childRow);
     }
   }
 
   sortInboxRows(results);
-  if (!includeLiveness) for (const row of results) stripInboxLiveness(row, opts.fastFieldsInOverlay === true);
+  if (!includeLiveness) {
+    for (const row of results) {
+      const id = row._id.toString();
+      stripInboxLiveness(row, fastFieldsInOverlay && (!childRowIds.has(id) || overlayOwnedChildIds.has(id)));
+    }
+  }
   return { sessions: results, hidden_count: hiddenCount, truncated: truncatedList(truncated) };
 }
 
@@ -9570,6 +9642,53 @@ function deriveLivenessAt(
   };
 }
 
+// One row's liveness facts and placement at instant `t`: the per-row input
+// builder every classifier consumer goes through — the overlay's stamp and
+// its time flip (computeSessionsLiveness) and the org tree (classifyWorkStates)
+// — so a placement can never be derived from a different set of inputs on
+// one path only.
+function placeLivenessRowAt(
+  conv: any,
+  maps: InboxSessionMaps,
+  reads: LivenessRowReads,
+  producingUntil: number | null,
+  askingFor: (lv: LivenessFields) => boolean,
+  t: number,
+): { lv: LivenessFields; asking: boolean; placement: InboxPlacement } {
+  const lv = deriveLivenessAt(conv, maps, reads, producingUntil, t);
+  const asking = askingFor(lv);
+  return { lv, asking, placement: placeConversationRow(conv, lv, asking, reads.lastUserMessage, t) };
+}
+
+// The classifier verdict for rows OUTSIDE the inbox scan (the org tree,
+// org.ts): the caller's managed-session maps with the foreign rows' liveness
+// merged, the same per-row reads, and placeLivenessRowAt — one classifier,
+// one alphabet. `childrenByParent` (keyed by nestParentIdOf) supplies the
+// producing rollup that keeps a parent working while a child streams. The
+// asking input only moves the bucket, never work_state, so the row's own ask
+// is all it needs.
+export async function classifyWorkStates(
+  ctx: any,
+  userId: Id<"users">,
+  conversations: any[],
+  childrenByParent: Map<string, any[]>,
+  now: number,
+): Promise<Map<string, WorkState>> {
+  const maps = await buildUserSessionMaps(ctx, userId, now);
+  const uid = userId.toString();
+  const foreign = conversations.filter((c) => c.user_id.toString() !== uid);
+  if (foreign.length > 0) await mergeForeignConversationLiveness(ctx, maps, foreign, now);
+  const reads = await Promise.all(conversations.map((conv) => readLivenessRowInputs(ctx, conv, maps, now)));
+  const out = new Map<string, WorkState>();
+  conversations.forEach((conv, i) => {
+    const cid = conv._id.toString();
+    const producingUntil = producingUntilOf(childrenByParent.get(cid) ?? [], maps);
+    const { placement } = placeLivenessRowAt(conv, maps, reads[i], producingUntil, (lv) => ownAsk(lv, conv), now);
+    out.set(cid, placement.work_state);
+  });
+  return out;
+}
+
 // The reads for one row: the un-backfilled last-role fallback and the AUQ
 // probe are the same newest-message read, so a row pays it at most once.
 async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps, now: number): Promise<LivenessRowReads> {
@@ -9625,7 +9744,7 @@ export async function computeSessionsLiveness(
   // The epoch is the payload's ONLY clock: no raw Date.now() may reach the
   // result, so two executions inside one minute are byte identical (C2).
   const now = inboxEpoch(Date.now());
-  const scan = await scanInboxConversations(ctx, userId, now, { includeLiveness: true, teamScope });
+  const scan = await scanInboxConversations(ctx, userId, now, { includeLiveness: true, teamScope, subagentWindow: true });
   const { conversations, maps, truncated } = scan;
   // Decisions FIRST: a parent already asking through a pending `cast decide`
   // never spends child message probes (see buildAskingParents), and a child
@@ -9678,13 +9797,8 @@ export async function computeSessionsLiveness(
     const cid = conv._id.toString();
     const producingUntil = producingUntilFor(cid);
     const askingFor = (lv: LivenessFields) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
-    const placeAt = (t: number): InboxPlacement => {
-      const lvAt = deriveLivenessAt(conv, maps, reads[i], producingUntil, t);
-      return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage, t);
-    };
-    const lv = deriveLivenessAt(conv, maps, reads[i], producingUntil, now);
-    const asking = askingFor(lv);
-    const placement = placeConversationRow(conv, lv, asking, reads[i].lastUserMessage, now);
+    const placeAt = (t: number): InboxPlacement => placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, t).placement;
+    const { lv, asking, placement } = placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, now);
     const stale = computeBucketStale(
       // The shared deadline list over the SHIPPED facts: the replica's
       // recompute scheduler reads the same list, so no time term exists on
@@ -9743,6 +9857,26 @@ export async function computeSessionsLiveness(
       };
       liveness[cid] = deriveLivenessAt(c, maps, childReads, null, now);
     }
+  }
+  // The subagent window's children of shown parents, idle ones included: the
+  // list strips message_count/updated_at from exactly these rows (they change
+  // on every streamed message of an Agent-tool subagent, which has no managed
+  // session and so never enters the live pool), so this overlay is their only
+  // writer. Grouped by parent_conversation_id, the same link the list's
+  // children scan reads, so the two sets agree child for child. No probe: an
+  // AUQ answer comes from this execution's pool probes or the cache, as for
+  // the pool children above.
+  for (const c of scan.recentSubagents) {
+    const cid = c._id.toString();
+    if (liveness[cid] || (c.message_count ?? 0) === 0) continue;
+    const pid = c.parent_conversation_id?.toString();
+    if (!pid || !shownIds.has(pid)) continue;
+    const childReads: LivenessRowReads = {
+      lastMsgRole: c.last_message_role,
+      lastUserMessage: c.last_message_preview || null,
+      auqOpen: probedAuqOpen.get(cid) ?? childAuqProbeCache.get(`${cid}:${c.message_count ?? 0}`) ?? false,
+    };
+    liveness[cid] = deriveLivenessAt(c, maps, childReads, null, now);
   }
 
   const projection: InboxProjection = {
@@ -10421,6 +10555,7 @@ export const setSessionError = mutation({
     if (!conv || conv.user_id !== userId) return;
     if (isConversationSafetyBlocked(conv)) return;
     const safetyPatch = safetyBlockPatch(conv, [{ role: "assistant", content: args.error }], Date.now());
+    if (conv.session_error === args.error && !safetyPatch) return;
     // A "couldn't start / no local checkout" error is impossible if the session
     // is actually running. Reject stale error writes (device-agnostic, so it holds
     // even for un-upgraded daemons) when a live managed session exists — that's a
@@ -10923,6 +11058,7 @@ export const setThreadState = mutation({
 
     if (!text) {
       await ctx.db.patch(conv._id, clearedThreadStateFields());
+      await scheduleLiveActivityRefresh(ctx, conv.user_id, {});
       return { ok: true as const, short_id: shortId, cleared: true as const, state: null, previous_state: previous };
     }
 
@@ -10949,6 +11085,20 @@ export const setThreadState = mutation({
         inbox_dismissed_at: undefined,
       });
       resurfaced = true;
+    }
+    // The pin is the strip's title, and a blocked / done declaration can move
+    // the row between Lock Screen statuses: those refresh at once, a reworded
+    // working line rides the next routine push.
+    await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: status !== "working" });
+    // A hand declaring blocked wakes its role now; a hand settling done is a
+    // fact for the role's next frame (org-roles-standing.md T3).
+    if (conv.org_role_id && (status === "blocked" || status === "done")) {
+      await enqueueRoleEvent(ctx, conv.org_role_id, {
+        kind: status === "blocked" ? "immediate" : "passive",
+        cause: `hand ${shortId} "${(conv.title ?? "").slice(0, 60)}" declared ${status}: ${text.split("\n")[0].slice(0, 200)}`,
+        ref: { table: "conversations", id: String(conv._id), short_id: shortId },
+        actorConversationId: conv._id,
+      });
     }
     return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced };
   },
@@ -12090,6 +12240,37 @@ export const sendKeysToSession = mutation({
   },
 });
 
+// Shift+tab through the session's permission modes. The daemon presses and
+// reads the mode back off the pane (Claude Code's cycle depends on version and
+// launch flags, so nothing predicts it); with `target` it presses until the
+// footer names that mode. The result reaches the client as the session's
+// permission_mode, published like a hook post.
+export const setPermissionMode = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    target: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
+
+    // Routed to the owning device like a resume: a broadcast row is claimed by
+    // whichever daemon answers first, and a daemon that predates this command
+    // answers "Unknown command" and swallows the press (2 of 5 lost on
+    // 2026-09-12). Unresolved owner = broadcast, and the daemon's own owner
+    // guard decides.
+    await ctx.db.insert("daemon_commands", {
+      user_id: conv.user_id,
+      command: "set_permission_mode",
+      target_device_id: conv.owner_device_id ?? undefined,
+      args: JSON.stringify({ conversation_id: args.conversation_id, ...(args.target ? { target: args.target } : {}) }),
+      created_at: Date.now(),
+    });
+  },
+});
+
 export const rewindSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -12378,6 +12559,8 @@ export const killSession = mutation({
         patch.status = "completed";
       }
       await ctx.db.patch(args.conversation_id, patch);
+      // A retired row leaves the Lock Screen strip with the next push.
+      await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
       // Kill must stick: cancel any armed schedule that injects into this
       // conversation, or its next fire would resurrect the session the user
       // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's

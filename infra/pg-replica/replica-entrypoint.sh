@@ -9,7 +9,6 @@ set -euo pipefail
 : "${PRIMARY_HOST:?PRIMARY_HOST is required (e.g. postgres.railway.internal)}"
 : "${PRIMARY_PORT:=5432}"
 : "${REPLICATION_USER:=replicator}"
-: "${REPLICATION_PASSWORD:?REPLICATION_PASSWORD is required}"
 : "${REPLICATION_SLOT:=pg_replica_backup}"
 export PGDATA
 
@@ -37,10 +36,19 @@ if [ ! -f "$MARKER" ]; then
     fi
   fi
 
-  conninfo="host=$PRIMARY_HOST port=$PRIMARY_PORT user=$REPLICATION_USER password=$REPLICATION_PASSWORD sslmode=prefer application_name=pg-replica"
+  # Two ways to authenticate to the primary. A client certificate (the
+  # migration standby: it crosses the public internet through a TCP proxy, so
+  # the primary cannot restrict by source address and the certificate is the
+  # identity) or a password (a standby on the same private network).
+  if [ -n "${REPLICATION_SSLCERT:-}" ]; then
+    auth="sslmode=verify-ca sslrootcert=${REPLICATION_SSLROOTCERT:?} sslcert=$REPLICATION_SSLCERT sslkey=${REPLICATION_SSLKEY:?}"
+  else
+    auth="password=${REPLICATION_PASSWORD:?REPLICATION_PASSWORD or REPLICATION_SSLCERT is required} sslmode=prefer"
+  fi
+  conninfo="host=$PRIMARY_HOST port=$PRIMARY_PORT user=$REPLICATION_USER $auth application_name=${REPLICA_APPLICATION_NAME:-pg-replica}"
 
   log "checking replication access to $PRIMARY_HOST:$PRIMARY_PORT as $REPLICATION_USER"
-  gosu postgres psql "$conninfo dbname=postgres replication=database" -Atc "IDENTIFY_SYSTEM"
+  gosu postgres psql "$conninfo replication=true" -Atc "IDENTIFY_SYSTEM"
 
   # A slot left behind by an earlier failed bootstrap would make --create-slot
   # fail; dropping it first keeps the bootstrap idempotent.
@@ -89,6 +97,7 @@ hot_standby_feedback = off
 shared_buffers = '${REPLICA_SHARED_BUFFERS:-2GB}'
 effective_cache_size = '${REPLICA_EFFECTIVE_CACHE_SIZE:-6GB}'
 maintenance_work_mem = '256MB'
+${PG_EXTRA_CONF:-}
 CONF
 fi
 

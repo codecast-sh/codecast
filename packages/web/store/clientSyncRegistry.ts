@@ -419,6 +419,27 @@ export const CLIENT_SYNC_REGISTRY = {
   // `addSource` takes no client key, so an add's optimistic stub has no altKey
   // to supersede onto; the next snapshot carries the real row and drops the
   // stub, which is the same convergence by a slower door.
+  // Agent definitions and chains (settings > Agent library, `cast agent`).
+  // A workspace's complete set rides one snapshot query each; the upsert
+  // stamps a client_key so an optimistic stub supersedes onto its row.
+  agentDefinitions: {
+    persistence: { kind: "collection", key: "agentDefinitions" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, name",
+    sync: { altKey: "client_key" },
+    feeds: ["agentDefinitions.list"],
+  },
+  agentChains: {
+    persistence: { kind: "collection", key: "agentChains" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, name",
+    sync: { altKey: "client_key" },
+    feeds: ["agentDefinitions.listChains"],
+  },
   issueSyncSources: {
     persistence: { kind: "collection", key: "issueSyncSources" },
     hydration: { phase: "deferred" },
@@ -492,6 +513,15 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
     feeds: ["sessionThreads.listSessionThreads"],
+  },
+  // The org tree (people, roles, anchors, top sessions per parent): one
+  // server-derived snapshot for the active workspace. Singleton; the store's
+  // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
+  orgTree: {
+    persistence: { kind: "meta", key: "orgTree" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "singleton" },
+    feeds: ["org.tree"],
   },
   // Timeline lanes. Both queries are windows (commits: 2×limit newest,
   // PRs: 50 by updated_at), so delta overlays accumulate history.
@@ -673,6 +703,12 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   queuedMessages: {
     persistence: { kind: "meta", key: "queuedMessages" },
+  },
+  // Inline-review quotes and their notes, per conversation (or `doc:<id>`).
+  // A note the user typed is a draft of their next message: persisted like
+  // `drafts` so a reload or a navigation never loses it.
+  reviewComments: {
+    persistence: { kind: "meta", key: "reviewComments" },
   },
   recentProjects: {
     persistence: { kind: "meta", key: "recentProjects" },
@@ -945,12 +981,15 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   foreignTriggers: "shared",
   agentTaskRuns: "shared",
   issueSyncSources: "shared",
+  agentDefinitions: "shared",
+  agentChains: "shared",
   workflows: "shared",
   workflowRuns: "shared",
   artifacts: "shared",
   anchorSpaces: "shared",
   anchors: "shared",
   sessionThreads: "shared",
+  orgTree: "shared",
   commits: "shared",
   pullRequests: "shared",
   codeComments: "shared",
@@ -981,6 +1020,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pending: "local",
   drafts: "local",
   queuedMessages: "local",
+  reviewComments: "local",
   pendingMessages: "local",
   blockedReviveRequestedAt: "local",
   lastFocusedConversationId: "local",

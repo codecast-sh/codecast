@@ -18,7 +18,7 @@
  *     allocatePorts uses) and pass it explicitly.
  */
 
-import { spawn } from "../proc.js";
+import { spawn, spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -89,14 +89,21 @@ export function findChromeBinary(): string | null {
       /* ignore */
     }
   }
+  for (const name of ["google-chrome", "chromium", "chromium-browser"]) {
+    try {
+      const found = spawnSync("which", [name], { encoding: "utf-8" }).stdout?.trim();
+      if (found) return found;
+    } catch {
+      /* ignore */
+    }
+  }
   return null;
 }
 
 /** Probe list (in priority order). Exported for error reporting. */
 export function chromeBinaryProbes(): string[] {
-  const env = process.env.CODECAST_CHROMIUM;
   const probes: string[] = [];
-  if (env) probes.push(env);
+  for (const env of [process.env.CODECAST_CHROMIUM, process.env.CHROME_PATH]) if (env) probes.push(env);
   // macOS app bundles
   probes.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
   probes.push("/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary");

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseExecTimeout, parseOutputFormat, resolveExecPrompt } from "./execCommand.js";
+import { parseExecTimeout, parseOutputFormat, resolveExecPrompt, resolveExecPrompts } from "./execCommand.js";
 
 describe("resolveExecPrompt", () => {
   test("joins positional words into one prompt", () => {
@@ -52,5 +52,17 @@ describe("parseOutputFormat", () => {
   test("rejects unknown values", () => {
     expect(parseOutputFormat("yaml")).toBeUndefined();
     expect(parseOutputFormat(undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveExecPrompts (parallel mode)", () => {
+  test("every positional is its own prompt", () => {
+    expect(resolveExecPrompts(["a", "b c", " "], { stdinIsTTY: true, readStdin: () => "" })).toEqual(["a", "b c"]);
+  });
+  test("several '-' arguments split stdin on --- lines", () => {
+    expect(resolveExecPrompts(["-", "-"], { stdinIsTTY: false, readStdin: () => "first\n---\nsecond\n" })).toEqual(["first", "second"]);
+  });
+  test("no arguments with piped stdin splits the whole body on --- lines", () => {
+    expect(resolveExecPrompts([], { stdinIsTTY: false, readStdin: () => "one\n---\ntwo\n" })).toEqual(["one", "two"]);
   });
 });

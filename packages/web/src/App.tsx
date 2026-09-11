@@ -28,6 +28,7 @@ const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-yo
 const BlogTeamMemory = lazy(() => import("@/app/(marketing)/blog/your-agents-forget-your-team-does-not/page"));
 const BlogTriggers = lazy(() => import("@/app/(marketing)/blog/this-post-wrote-itself/page"));
 const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everything-your-agent-makes/page"));
+const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -42,6 +43,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Org = lazy(() => import("@/app/org/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
@@ -118,6 +120,7 @@ const CallRing = lazy(() => import("@/app/call-ring/page"));
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
 const SettingsAgents = lazy(() => import("@/app/settings/agents/page"));
+const SettingsAgentLibrary = lazy(() => import("@/app/settings/agent-library/page"));
 const SettingsDevices = lazy(() => import("@/app/settings/devices/page"));
 const SettingsMigrate = lazy(() => import("@/app/settings/migrate/page"));
 const SettingsSync = lazy(() => import("@/app/settings/sync/page"));
@@ -174,6 +177,7 @@ export function App() {
               <Route path="blog/your-agents-forget-your-team-does-not" element={<E name="BlogTeamMemory"><BlogTeamMemory /></E>} />
               <Route path="blog/this-post-wrote-itself" element={<E name="BlogTriggers"><BlogTriggers /></E>} />
               <Route path="blog/a-url-for-everything-your-agent-makes" element={<E name="BlogPublish"><BlogPublish /></E>} />
+              <Route path="blog/agents-that-talk-to-each-other" element={<E name="BlogAgentsTalk"><BlogAgentsTalk /></E>} />
               <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
               <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>
@@ -196,6 +200,7 @@ export function App() {
               <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
               <Route path="feed" element={<E name="Feed"><Feed /></E>} />
               <Route path="crosstalk" element={<E name="Crosstalk"><Crosstalk /></E>} />
+              <Route path="org" element={<E name="Org"><Org /></E>} />
               {/* Team chat. The bare route picks the busiest channel; the
                   parameterized one is the permalink the server mints
                   (convex/chatText.ts chatPermalink → /chat/<id>?m=<msg>). */}
@@ -331,6 +336,7 @@ export function App() {
               <Route index element={<E name="Settings"><Settings /></E>} />
               <Route path="cli" element={<E name="SettingsCli"><SettingsCli /></E>} />
               <Route path="agents" element={<E name="SettingsAgents"><SettingsAgents /></E>} />
+              <Route path="agent-library" element={<E name="SettingsAgentLibrary"><SettingsAgentLibrary /></E>} />
               <Route path="devices" element={<E name="SettingsDevices"><SettingsDevices /></E>} />
               <Route path="migrate" element={<E name="SettingsMigrate"><SettingsMigrate /></E>} />
               <Route path="sync" element={<E name="SettingsSync"><SettingsSync /></E>} />

@@ -15,6 +15,7 @@ import {
   stopAnchorReply,
   archiveChannel,
   getThread,
+  linesSince,
   listChannels,
   listLiveVoiceBursts,
   listMessages,
@@ -55,6 +56,8 @@ import { dmKeyFor } from "@codecast/shared/chat";
 import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } from "./threads";
 import { backfillThreadReads } from "./threadReads";
 import { ENTITY_TYPE, NOTIFICATION_TYPE, PREFERENCE_MAP } from "./notificationRouter";
+import { dayBucket, hourBucket } from "./lib/chatQuota";
+import { follow as followChannel, unfollow as unfollowChannel } from "./orgChannels";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -3074,5 +3077,314 @@ describe("postCallDigest", () => {
     expect((await call(postCallDigest, ctx, digest("session:conv"))).posted).toBe(false);
     expect((await call(postCallDigest, ctx, digest("channel:chat_channels_missing"))).posted).toBe(false);
     expect(messagesIn(ctx)).toEqual([]);
+  });
+});
+
+// ── Agent channels (docs/architecture/agent-channels.md) ────────────────────
+
+describe("agent channels: roles and sessions in chat", () => {
+  const ROLE = "org_roles_growth" as any;
+  const CONV = "conv-anchor" as any;
+
+  // A team role @growth whose standing session is the anchor's conversation
+  // (hosted by Bob), Alice's session jx7alic, and Bob's team-visible session
+  // jx7bobb. Alice owns hers and, as a teammate, may send into Bob's.
+  function seed(extra: Record<string, any[]> = {}) {
+    return {
+      anchors: [{
+        _id: ANCHOR, team_id: TEAM, bot_user_id: BOT, host_user_id: BOB,
+        status: "active", name: "Anchor", conversation_id: CONV,
+      }],
+      org_roles: [{
+        _id: ROLE, short_id: "or-7", scope_type: "team", team_id: TEAM, host_user_id: BOB,
+        name: "Head of Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] },
+        reports_to: { kind: "user", user_id: BOB }, status: "active", anchor_id: ANCHOR,
+        created_by: BOB, created_at: 1, updated_at: 1,
+      }],
+      conversations: [
+        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-alice", short_id: "jx7alic", user_id: ALICE, session_id: "sess-alice", title: "Alice's session", agent_type: "codex", status: "active", updated_at: 1, is_private: true },
+        { _id: "conv-bob", short_id: "jx7bobb", user_id: BOB, session_id: "sess-bob", title: "Bob's session", agent_type: "claude_code", status: "active", updated_at: 1, team_id: TEAM, is_private: false },
+        { _id: "conv-carol", short_id: "jx7caro", user_id: CAROL, session_id: "sess-carol", title: "Carol's private spike", status: "active", updated_at: 1, is_private: true },
+      ],
+      session_owners: [
+        { _id: "so-1", conversation_id: "conv-alice", user_id: ALICE, added_at: 1 },
+        { _id: "so-2", conversation_id: "conv-bob", user_id: BOB, added_at: 1 },
+        { _id: "so-3", conversation_id: "conv-carol", user_id: CAROL, added_at: 1 },
+      ],
+      chat_agent_quota: [],
+      managed_sessions: [],
+      ...extra,
+    };
+  }
+  const pending = (ctx: any) => ctx.db._tables.pending_messages;
+  const row = (ctx: any, id: string) => messagesIn(ctx).find((m: any) => m._id === id);
+
+  test("a role mention stores a role ref and wakes its standing session once", async () => {
+    const ctx = context(ALICE, seed());
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth please review the funnel" });
+    expect(sent.mention_wakes).toEqual({ roles: 1, sessions: 0, folded: 0, skipped: [] });
+    expect(sent.mentioned).toBe(1);
+    expect(row(ctx, sent.message_id).mentions).toEqual([
+      { kind: "role", role_id: ROLE, short_id: "or-7", handle: "growth" },
+    ]);
+    // The anchor was not addressed by name, so no placeholder; the role's
+    // session got exactly one wake, keyed on the message.
+    expect(messagesIn(ctx).filter((m: any) => m.author_kind === "agent").length).toBe(0);
+    expect(pending(ctx).length).toBe(1);
+    expect(pending(ctx)[0].conversation_id).toBe(CONV);
+    expect(pending(ctx)[0].client_id).toBe(`chat-mention:${sent.message_id}:${ROLE}`);
+    const wake = pending(ctx)[0].content;
+    expect(wake).toContain("Alice mentioned @growth in #general.");
+    expect(wake).toContain("please review the funnel");
+    expect(wake).toContain(`cast chat send --channel ${CHANNEL} --thread ${sent.message_id}`);
+    const nonce = wake.match(/--- begin thread ([0-9a-f]{12}) ---/)![1];
+    expect(wake).toContain(`--- end thread ${nonce} ---`);
+
+    // A retried send wakes nobody twice.
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth again", client_id: "c1" });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth again", client_id: "c1" });
+    expect(pending(ctx).length).toBe(2);
+  });
+
+  test("an agent-typed line still wakes the role it names, and a person's handle outranks a role handle", async () => {
+    const ctx = context(ALICE, seed({
+      users: [...users(), { _id: "user-growth", name: "Growth Person", email: "g@example.test", github_username: "growth" }],
+      team_memberships: [...memberships(), { _id: "m-growth", user_id: "user-growth", team_id: TEAM, role: "member" }],
+    }));
+    const agentLine = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@growth the deploy is green", origin: "agent", origin_session_id: "sess-alice",
+    });
+    // @growth is a teammate's login here, so it names the person and no role.
+    expect(agentLine.mention_wakes.roles).toBe(0);
+    expect(row(ctx, agentLine.message_id).mentions).toEqual(["user-growth"]);
+
+    const ctx2 = context(ALICE, seed());
+    const woke = await call(sendMessage, ctx2, {
+      channel_id: CHANNEL, content: "@growth the deploy is green", origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(woke.mention_wakes.roles).toBe(1);
+    expect(woke.anchor_wake_skipped).toBe(null);
+  });
+
+  test("a session mention delivers a chat-mention wrapper into that session; private sessions do not resolve", async () => {
+    const ctx = context(ALICE, seed());
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "context" });
+    const sent = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "@jx7bobb can you check the deploy? cc @jx7caro",
+    });
+    expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 1, folded: 0, skipped: [] });
+    expect(row(ctx, sent.message_id).mentions).toEqual([
+      { kind: "session", conversation_id: "conv-bob", short_id: "jx7bobb" },
+    ]);
+    expect(pending(ctx).length).toBe(1);
+    expect(pending(ctx)[0].conversation_id).toBe("conv-bob");
+    expect(pending(ctx)[0].client_id).toBe(`chat-mention:${sent.message_id}:conv-bob`);
+    const body = pending(ctx)[0].content;
+    expect(body.startsWith(`<chat-mention channel="#general" thread="${root.message_id}" from="Alice">\n`)).toBe(true);
+    expect(body.endsWith("\n</chat-mention>")).toBe(true);
+    expect(body).toContain("can you check the deploy?");
+    expect(body).toContain(`cast chat send --channel ${CHANNEL} --thread ${root.message_id}`);
+  });
+
+  test("naming the session that started the thread costs it one turn, not two", async () => {
+    const ctx = context(ALICE, seed());
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "is prod green?", origin: "agent", origin_session_id: "sess-alice",
+    });
+    // Alice (the owner, typing as a human) replies AND names the session: the
+    // thread relay already carries the line, so the mention wakes nothing more.
+    const reply = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "@jx7alic yes, green",
+    });
+    expect(reply.session_relay.delivered).toBe(true);
+    expect(reply.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: ["relayed:jx7alic"] });
+    expect(pending(ctx).length).toBe(1);
+    expect(pending(ctx)[0].client_id).toBe(`chat-relay:${reply.message_id}`);
+  });
+
+  test("a session never wakes itself by naming its own short id", async () => {
+    const ctx = context(ALICE, seed());
+    const sent = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@jx7alic noted", origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(sent.mention_wakes.sessions).toBe(0);
+    expect(pending(ctx).length).toBe(0);
+  });
+
+  test("mention wakes fold past the sender's or the target's hourly cap", async () => {
+    const hour = hourBucket();
+    const bySender = context(ALICE, seed({
+      chat_agent_quota: [{ _id: "q1", key: `mention_from:${ALICE}`, bucket: hour, count: 10, updated_at: 1 }],
+    }));
+    const folded = await call(sendMessage, bySender, { channel_id: CHANNEL, content: "@growth @jx7bobb ping" });
+    expect(folded.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 2, skipped: [] });
+    expect(row(bySender, folded.message_id).mention_folded).toBe(true);
+    expect(pending(bySender).length).toBe(0);
+    // The mention still renders: the refs are stored as usual.
+    expect(row(bySender, folded.message_id).mentions.length).toBe(2);
+
+    const byTarget = context(ALICE, seed({
+      chat_agent_quota: [{ _id: "q2", key: `mention_to:${ROLE}`, bucket: hour, count: 30, updated_at: 1 }],
+    }));
+    const partly = await call(sendMessage, byTarget, { channel_id: CHANNEL, content: "@growth @jx7bobb ping" });
+    expect(partly.mention_wakes).toEqual({ roles: 0, sessions: 1, folded: 1, skipped: [] });
+    expect(row(byTarget, partly.message_id).mention_folded).toBe(true);
+
+    // Under the cap nothing folds and the row carries no stamp.
+    const fresh = context(ALICE, seed());
+    const ok = await call(sendMessage, fresh, { channel_id: CHANNEL, content: "@growth ping" });
+    expect(row(fresh, ok.message_id).mention_folded).toBeUndefined();
+  });
+
+  test("a role with no standing session is reported, not woken", async () => {
+    const ctx = context(ALICE, seed({
+      org_roles: [{
+        _id: ROLE, short_id: "or-7", scope_type: "team", team_id: TEAM, host_user_id: BOB,
+        name: "Head of Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] },
+        reports_to: { kind: "user", user_id: BOB }, status: "active",
+        created_by: BOB, created_at: 1, updated_at: 1,
+      }],
+    }));
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth ping" });
+    expect(sent.mention_wakes.skipped).toEqual(["role_has_no_session:growth"]);
+    expect(pending(ctx).length).toBe(0);
+  });
+
+  test("an agent may start 5 threads and post 30 lines per channel per day; a person is uncapped", async () => {
+    const ctx = context(ALICE, seed());
+    const agent = { channel_id: CHANNEL, origin: "agent" as const, origin_session_id: "sess-alice" };
+    const roots: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      roots.push((await call(sendMessage, ctx, { ...agent, content: `root ${i}` })).message_id);
+    }
+    await expect(call(sendMessage, ctx, { ...agent, content: "root 6" }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("at most 5 threads per day in #general") } });
+    // Replies still land: the root cap is about threads, not lines.
+    await call(sendMessage, ctx, { ...agent, content: "a reply", thread_root_id: roots[0] });
+    // Another channel counts separately.
+    await call(sendMessage, ctx, { ...agent, channel_id: OTHER_CHANNEL, content: "elsewhere" });
+    // The person behind the session is not an agent.
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "human root" });
+
+    const capped = context(ALICE, seed({
+      chat_agent_quota: [{ _id: "q1", key: `post:${CHANNEL}:${ALICE}:sess-alice`, bucket: dayBucket(), count: 30, updated_at: 1 }],
+    }));
+    const root = await call(sendMessage, capped, { channel_id: CHANNEL, content: "root" });
+    await expect(call(sendMessage, capped, { ...agent, content: "one more", thread_root_id: root.message_id }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("at most 30 lines per day in #general") } });
+    // A bot author is capped the same way, by its own identity.
+    const bot = context(BOB, seed({
+      chat_agent_quota: [{ _id: "q1", key: `post:${CHANNEL}:${BOT}`, bucket: dayBucket(), count: 30, updated_at: 1 }],
+    }));
+    await expect(call(sendAsAnchor, bot, { anchor_id: ANCHOR, channel_id: CHANNEL, content: "digest" }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED" } });
+  });
+
+  test("an agent line rings the bell but never pushes a phone", async () => {
+    const ctx = context(ALICE, seed({ chat_reads: [readRow(BOB, "all")] }));
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "machine line", origin: "agent", origin_session_id: "sess-alice" });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "human line" });
+    const emits = ctx._emitted.filter((e: any) => e.args.direct_recipient_id === BOB);
+    expect(emits.length).toBe(2);
+    expect(emits[0].args.push).toBe(false);
+    expect(emits[1].args.push).toBeUndefined();
+  });
+
+  test("a session's reply relays to the session that mentioned it, once, never to itself", async () => {
+    const ctx = context(ALICE, seed());
+    // Alice's session asks Bob's session in a thread.
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "deploy check", origin: "agent", origin_session_id: "sess-alice",
+    });
+    const ask = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "@jx7bobb is prod green?",
+      origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(ask.mention_wakes.sessions).toBe(1);
+    expect(pending(ctx).length).toBe(1);
+
+    // Bob's session answers: relayed into Alice's session.
+    const answer = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "yes, all green",
+      origin: "agent", origin_session_id: "sess-bob", client_id: "c-answer",
+    });
+    expect(answer.session_relay).toEqual({ delivered: true, skipped: null, session_short_id: "jx7alic", conversation_id: "conv-alice" });
+    expect(pending(ctx).length).toBe(2);
+    const relay = pending(ctx)[1];
+    expect(relay.conversation_id).toBe("conv-alice");
+    expect(relay.client_id).toBe(`chat-relay:${answer.message_id}`);
+    expect(relay.content).toContain("Bob's session replied in a thread you are part of.");
+    expect(relay.content).toContain("answers a session this session mentioned");
+    expect(relay.content).toContain("yes, all green");
+    // Alice's own earlier lines read back as its own words.
+    expect(relay.content).toContain("You (earlier): @jx7bobb is prod green?");
+
+    // A retry is one relay.
+    await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "yes, all green",
+      origin: "agent", origin_session_id: "sess-bob", client_id: "c-answer",
+    });
+    expect(pending(ctx).length).toBe(2);
+
+    // Alice's session replying on its own thread relays nowhere.
+    const self = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "thanks",
+      origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(self.session_relay.delivered).toBe(false);
+    // A third session nobody mentioned stays a plain agent line.
+    const bystander = await call(sendMessage, as(ctx, CAROL), {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "fyi",
+      origin: "agent", origin_session_id: "sess-carol",
+    });
+    expect(bystander.session_relay.skipped).toBe("agent_authored");
+    expect(pending(ctx).length).toBe(2);
+  });
+
+  test("linesSince returns compact lines after a stamp, oldest first, only from readable channels", async () => {
+    const long = "x".repeat(300);
+    const ctx = context(ALICE, seed({
+      chat_messages: [
+        { _id: "l1", team_id: TEAM, channel_id: CHANNEL, user_id: ALICE, content: "old", created_at: 10, updated_at: 10 },
+        { _id: "l2", team_id: TEAM, channel_id: CHANNEL, user_id: BOB, content: long, created_at: 20, updated_at: 20, thread_root_id: "l1", origin: "agent", origin_session_id: "conv-bob", origin_session_title: "Bob's session" },
+        { _id: "l3", team_id: TEAM, channel_id: CHANNEL, user_id: BOT, author_kind: "agent", agent_status: "done", content: "digest", created_at: 30, updated_at: 30 },
+        { _id: "l4", team_id: TEAM, channel_id: CHANNEL, user_id: BOT, author_kind: "agent", agent_status: "listening", content: "", created_at: 31, updated_at: 31 },
+        { _id: "l5", team_id: TEAM, channel_id: OTHER_CHANNEL, user_id: CAROL, content: "elsewhere", created_at: 40, updated_at: 40 },
+      ],
+    }));
+    const result = await call(linesSince, ctx, { channel_ids: [CHANNEL, OTHER_CHANNEL], since: 15 });
+    expect(result.truncated).toBe(false);
+    expect(result.lines.map((l: any) => l.message_id)).toEqual(["l2", "l3", "l5"]);
+    expect(result.lines[0]).toMatchObject({
+      channel_name: "general", author_name: "Bob's session", is_bot: false, is_agent: true,
+      thread_root_id: "l1", is_root: false, origin_session_id: "conv-bob",
+    });
+    expect(result.lines[0].text.length).toBeLessThanOrEqual(200);
+    expect(result.lines[1]).toMatchObject({ author_name: "Anchor", is_bot: true, is_agent: true, is_root: true, text: "digest" });
+    expect(result.lines[2]).toMatchObject({ channel_name: "random", author_name: "Carol" });
+
+    const capped = await call(linesSince, ctx, { channel_ids: [CHANNEL, OTHER_CHANNEL], since: 0, limit: 2 });
+    expect(capped.truncated).toBe(true);
+    expect(capped.lines.map((l: any) => l.message_id)).toEqual(["l3", "l5"]);
+
+    const outsider = await call(linesSince, as(ctx, OUTSIDER), { channel_ids: [CHANNEL], since: 0 });
+    expect(outsider.lines).toEqual([]);
+  });
+
+  test("a role follows and unfollows a channel by #name; only its admins may edit the list", async () => {
+    const ctx = context(BOB, seed());
+    const followed = await call(followChannel, ctx, { role: "@growth", channel: "#general" });
+    expect(followed).toMatchObject({ short_id: "or-7", handle: "growth", channel_id: CHANNEL, channel_name: "general", follow_channel_ids: [CHANNEL] });
+    // Idempotent, and by short id too.
+    await call(followChannel, ctx, { role: "or-7", channel: CHANNEL });
+    expect(ctx.db._tables.org_roles[0].follow_channel_ids).toEqual([CHANNEL]);
+    await call(followChannel, ctx, { role: "or-7", channel: "#random" });
+    expect(ctx.db._tables.org_roles[0].follow_channel_ids).toEqual([CHANNEL, OTHER_CHANNEL]);
+    const left = await call(unfollowChannel, ctx, { role: "growth", channel: "#general" });
+    expect(left.follow_channel_ids).toEqual([OTHER_CHANNEL]);
+    // Alice is a plain member, not the host and not an admin.
+    await expect(call(followChannel, as(ctx, ALICE), { role: "growth", channel: "#general" }))
+      .rejects.toThrow("No role you administer");
   });
 });

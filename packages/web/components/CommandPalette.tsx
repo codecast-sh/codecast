@@ -199,6 +199,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
+  { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/workflows", icon: "workflow", keywords: "orchestration runs graph dot gates", secondary: true },
@@ -1941,7 +1942,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (actionKey === "pin" && targetType === "doc") {
       const doc = target as DocItem;
       pinDoc(doc._id, !doc.pinned);
-      toast.success(doc.pinned ? "Unpinned" : "Pinned");
+      toast.success(doc.pinned ? "Unstarred" : "Starred");
       closePalette();
       return;
     }

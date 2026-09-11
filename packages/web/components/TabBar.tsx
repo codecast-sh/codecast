@@ -1,3 +1,4 @@
+import { TopbarButton } from "./TopbarButton";
 import { useCallback, useRef, useEffect, useState } from "react";
 import { activePaneDrag, dragCarriesPane, readPaneDrop, stageMoveLeafToTab, startPaneDrag } from "../lib/stage";
 import { X, Plus, XCircle, ArrowRightToLine, Copy as CopyIcon, ExternalLink, AppWindow, PanelsTopLeft } from "lucide-react";
@@ -315,12 +316,11 @@ export function AttachTabButton() {
   const attach = bridge("attachTab");
   if (!attach) return null;
   return (
-    <button
+    <TopbarButton
       onClick={() => void attach(window.location.pathname + window.location.search)}
-      className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
       title="Move into main window"
     >
-      <PanelsTopLeft className="w-[18px] h-[18px]" />
-    </button>
+      <PanelsTopLeft />
+    </TopbarButton>
   );
 }

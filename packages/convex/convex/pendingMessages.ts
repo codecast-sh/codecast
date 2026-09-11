@@ -25,6 +25,7 @@ import {
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
+import { enqueueRoleEvent } from "./orgEvents";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -386,6 +387,8 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
+    // The wake rail's own frame (orgWakes.deliver): never re-enters the rail.
+    role_wake?: boolean;
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -461,6 +464,30 @@ export async function enqueuePendingMessage(
     ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? clearedThreadStateFields() : {}),
   });
+
+  // A standing role's session (org-roles-standing.md T3): a person's message,
+  // another session's send, or a routine firing is an immediate wake. The row
+  // stays queued as written; the flush folds its frame into it.
+  if (
+    conversation.standing_role_id && !fields.role_wake &&
+    (fields.human === true || fields.from_conversation_id || fields.origin === "scheduler")
+  ) {
+    const sender = await ctx.db.get(fromUserId);
+    const who = sender?.name || sender?.github_username || sender?.email?.split("@")[0] || "someone";
+    const from = fields.from_conversation_id ? await ctx.db.get(fields.from_conversation_id) : null;
+    const label = fields.origin === "scheduler"
+      ? "a routine fired"
+      : from
+        ? `session ${from.short_id ?? String(from._id).slice(0, 7)} (${who}) sent instructions`
+        : `${who} wrote`;
+    await enqueueRoleEvent(ctx, conversation.standing_role_id, {
+      kind: "immediate",
+      cause: `${label}:\n${fields.content}`,
+      ref: { table: "pending_messages", id: String(messageId) },
+      actorConversationId: fields.from_conversation_id ?? null,
+      pendingMessageId: messageId,
+    });
+  }
 
   return messageId;
 }
@@ -1523,6 +1550,10 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
       if (!safetyBlocked.has(conversationId)) {
         const conversation = await ctx.db.get(msg.conversation_id);
         safetyBlocked.set(conversationId, !!conversation && isConversationSafetyBlocked(conversation));
+        if (!conversation) {
+          ready.delete(conversationId);
+          live.delete(conversationId);
+        }
       }
       if (safetyBlocked.get(conversationId)) {
         waiting++;

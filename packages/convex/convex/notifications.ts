@@ -1,4 +1,5 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
+import { enqueueRoleEvent } from "./orgEvents";
 import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -13,6 +14,7 @@ import {
   trustedAgentStatus,
   deriveSessionActivity,
   classifyWorkState,
+  type WorkState,
   needsInputKind,
   subagentKeepsParentWorking,
   userRestOf,
@@ -597,54 +599,31 @@ export const createSessionNotification = mutation({
   },
 });
 
-// ── Needs-input push ─────────────────────────────────────────────────────────
+// ── The single-row verdict ───────────────────────────────────────────────────
 //
-// Pushes "this session is waiting on you" when a session TRANSITIONS into the
-// inbox's needs-input bucket — the same classification that drives the web
-// inbox grouping and its idle sound (classifyWorkState server-side;
-// isSessionWaitingForInput / waitingSoundKey are the client mirrors). The
-// daemon can't own this: it only reports raw agent_status, and "needs input"
-// is a composite verdict (status + idle grace + queued messages + open polls)
-// that can settle 45s AFTER the last write. So the write sites SCHEDULE a
-// re-check — managedSessions.updateAgentStatus / heartbeat on a status change,
-// messages.addMessages on an AskUserQuestion arrival — and this mutation
-// recomputes the verdict at fire time. Deduped per (message_count, kind), the
-// idle sound's exact key: one waiting episode pushes once, each new turn can
-// push again.
-//
-// Exported as a plain function so the fake-db tests can drive the real logic
-// (same pattern as pendingMessages).
-export async function performNeedsInputCheck(
+// Single-row mirror of enrichInboxSessionRow's derivation: the trusted status,
+// the activity read, the open-poll and live-subagent checks, then the same
+// classifyWorkState the inbox buckets by. Two consumers read it — the
+// needs-input push below and the Lock Screen Live Activity (liveActivity.ts) —
+// so a rule added here reaches both, and the phone can never file a session
+// differently from the inbox.
+export interface ConversationVerdict {
+  state: WorkState;
+  agentStatus: string | undefined;
+  activity: ReturnType<typeof deriveSessionActivity>;
+  isIdle: boolean;
+  awaitingInput: boolean;
+  hasPending: boolean;
+  lastMsg: any;
+  boundary: boolean;
+}
+
+export async function deriveConversationVerdict(
   ctx: any,
-  args: { conversation_id: any; status_ts?: number },
-): Promise<{ notified: boolean; reason?: string }> {
-  const conv = await ctx.db.get(args.conversation_id);
-  if (!conv || !conv.message_count) return { notified: false, reason: "no_content" };
-  // A killed row is retired for good — the teardown is deliberate, and its
-  // frozen flags never resurface anything.
-  if (conv.inbox_killed_at) return { notified: false, reason: "killed" };
-  // Hidden rows (stashed, or a folded run carrying the legacy dismissed stamp)
-  // do NOT return yet: the stall rule below needs the same derivation this
-  // push uses. "Stash hides work, not stalls" — a hidden session may be quiet,
-  // never quietly stuck, so a HARD block (open question, permission prompt,
-  // dead process) clears the hide and the row surfaces in Needs Input. The
-  // push-etiquette guards (pinned, subagents, spawned fleets, schedule runs)
-  // apply to the CHIME only and move below the stall block: a folded schedule
-  // run stalled on a permission prompt is exactly the invisible-stall trap.
-  const hidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
-
-  const session = await ctx.db
-    .query("managed_sessions")
-    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
-    .first();
-  // Scheduled off a specific status change: if the status has moved since, the
-  // newer write has its own check in flight — this one is stale.
-  if (args.status_ts !== undefined && session?.agent_status_updated_at !== args.status_ts) {
-    return { notified: false, reason: "superseded" };
-  }
-
-  const now = Date.now();
-  // Single-row mirror of enrichInboxSessionRow's derivation.
+  conv: any,
+  session: any,
+  now: number,
+): Promise<ConversationVerdict> {
   const heartbeatFresh = !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
   const agentStatus = trustedAgentStatus(
     session?.agent_status, conv.updated_at, now, heartbeatFresh,
@@ -736,6 +715,58 @@ export async function performNeedsInputCheck(
     declaredStatus: conv.thread_state_status ?? null,
     sessionBoundary: boundary,
   });
+  return { state, agentStatus, activity, isIdle, awaitingInput, hasPending, lastMsg, boundary };
+}
+
+// ── Needs-input push ─────────────────────────────────────────────────────────
+//
+// Pushes "this session is waiting on you" when a session TRANSITIONS into the
+// inbox's needs-input bucket — the same classification that drives the web
+// inbox grouping and its idle sound (classifyWorkState server-side;
+// isSessionWaitingForInput / waitingSoundKey are the client mirrors). The
+// daemon can't own this: it only reports raw agent_status, and "needs input"
+// is a composite verdict (status + idle grace + queued messages + open polls)
+// that can settle 45s AFTER the last write. So the write sites SCHEDULE a
+// re-check — managedSessions.updateAgentStatus / heartbeat on a status change,
+// messages.addMessages on an AskUserQuestion arrival — and this mutation
+// recomputes the verdict at fire time. Deduped per (message_count, kind), the
+// idle sound's exact key: one waiting episode pushes once, each new turn can
+// push again.
+//
+// Exported as a plain function so the fake-db tests can drive the real logic
+// (same pattern as pendingMessages).
+export async function performNeedsInputCheck(
+  ctx: any,
+  args: { conversation_id: any; status_ts?: number },
+): Promise<{ notified: boolean; reason?: string }> {
+  const conv = await ctx.db.get(args.conversation_id);
+  if (!conv || !conv.message_count) return { notified: false, reason: "no_content" };
+  // A killed row is retired for good — the teardown is deliberate, and its
+  // frozen flags never resurface anything.
+  if (conv.inbox_killed_at) return { notified: false, reason: "killed" };
+  // Hidden rows (stashed, or a folded run carrying the legacy dismissed stamp)
+  // do NOT return yet: the stall rule below needs the same derivation this
+  // push uses. "Stash hides work, not stalls" — a hidden session may be quiet,
+  // never quietly stuck, so a HARD block (open question, permission prompt,
+  // dead process) clears the hide and the row surfaces in Needs Input. The
+  // push-etiquette guards (pinned, subagents, spawned fleets, schedule runs)
+  // apply to the CHIME only and move below the stall block: a folded schedule
+  // run stalled on a permission prompt is exactly the invisible-stall trap.
+  const hidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
+
+  const session = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+    .first();
+  // Scheduled off a specific status change: if the status has moved since, the
+  // newer write has its own check in flight — this one is stale.
+  if (args.status_ts !== undefined && session?.agent_status_updated_at !== args.status_ts) {
+    return { notified: false, reason: "superseded" };
+  }
+
+  const now = Date.now();
+  const { state, agentStatus, activity, awaitingInput, hasPending, lastMsg, boundary } =
+    await deriveConversationVerdict(ctx, conv, session, now);
 
   // A SESSION BOUNDARY — a resume, a clear, or a manual /compact landing the
   // pane at an idle prompt — settles the row with no turn behind it. Nothing
@@ -750,6 +781,22 @@ export async function performNeedsInputCheck(
   // unreachable; a check scheduled by another path (the AskUserQuestion
   // recheck in messages.ts) can still land on one.
   if (boundary) return { notified: false, reason: "session_boundary" };
+
+  // A hand (a session that reports to a role) that is HARD blocked wakes its
+  // role at once (org-roles-standing.md T3): the role, not the person, is the
+  // first reader of a stalled hand. Dedupe on the waiting episode the same
+  // way the chime does, through the outbox row's client-side cause.
+  if (conv.org_role_id && state === "needs_input") {
+    const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
+    const hard = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";
+    if (hard) {
+      await enqueueRoleEvent(ctx, conv.org_role_id, {
+        kind: "immediate",
+        cause: `hand ${conv.short_id ?? String(conv._id).slice(0, 7)} "${(conv.title ?? "").slice(0, 60)}" needs input (${kind ?? "waiting"})`,
+        ref: { table: "conversations", id: String(conv._id), short_id: conv.short_id },
+      });
+    }
+  }
 
   // ── The stall rule ─────────────────────────────────────────────────────────
   // Only the HARD kinds count as a stall: the machine cannot proceed (open
@@ -868,7 +915,7 @@ function isMachineStartedTurn(content: string | undefined | null): boolean {
   return c.startsWith("<session-message") || c.startsWith("<scheduled-task");
 }
 
-function notifPreview(text: string | undefined | null, max = 200): string | null {
+export function notifPreview(text: string | undefined | null, max = 200): string | null {
   const cleaned = (text || "").replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
   return cleaned.length > max ? cleaned.slice(0, max - 1) + "…" : cleaned;
@@ -877,7 +924,7 @@ function notifPreview(text: string | undefined | null, max = 200): string | null
 // The first question of an open AskUserQuestion poll — the most useful push
 // body for "Claude is asking you something". tool_calls[].input is a JSON
 // string (messages schema).
-function auqQuestionPreview(lastMsg: any): string | null {
+export function auqQuestionPreview(lastMsg: any): string | null {
   const tc = lastMsg?.tool_calls?.find((t: any) => t.name === "AskUserQuestion");
   if (!tc) return null;
   try {

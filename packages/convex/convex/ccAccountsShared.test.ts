@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields,
   profileHasToken,
+  profileHasSetupToken,
   tokenBackedProfile,
   activeTokenProfile,
 } from "./ccAccountsShared";
@@ -180,6 +181,18 @@ describe("per-session account tokens", () => {
     expect(tokenBackedProfile(accounts, { profile: "c" }, now)).toBeUndefined();
     expect(tokenBackedProfile(accounts, { profile: "nope" }, now)).toBeUndefined();
     expect(tokenBackedProfile(undefined, { profile: "a" }, now)).toBeUndefined();
+  });
+
+  test("a minted setup-token carries sessions too, even for a dead saved login", () => {
+    const minted = { name: "d", email: "d@x.com", login_expired_at: 5, setup_token: { stored_at: 1, expires_at: now + 1 } };
+    const mintedExpired = { name: "e", email: "e@x.com", setup_token: { stored_at: 1, expires_at: now } };
+    expect(profileHasSetupToken(minted, now)).toBe(true);
+    expect(profileHasSetupToken(mintedExpired, now)).toBe(false);
+    expect(profileHasSetupToken({ ...accounts.profiles[0], setup_token: undefined }, now)).toBe(false);
+    expect(profileHasToken(minted, now)).toBe(true);
+    expect(profileHasToken(mintedExpired, now)).toBe(false);
+    const withMinted = { ...accounts, profiles: [...accounts.profiles, minted] };
+    expect(tokenBackedProfile(withMinted, { profile: "d" }, now)).toBe("d");
   });
 
   test("a new session pins to the active login's profile, or nowhere", () => {

@@ -1,3 +1,6 @@
+import { queuedMessagesFromPending } from "./pendingMessageJournal";
+import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
+export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
 import {
@@ -191,6 +194,7 @@ export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLi
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
+import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, sameInboxView, type InboxViewSnapshot } from "../lib/inboxViewHistory";
@@ -204,6 +208,7 @@ import {
   selectChannelReadMarker,
   type ChatSliceState,
 } from "./chatSlice";
+import { createOrgSlice, ORG_SYNC_REGISTRY, type OrgSliceState } from "./orgSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -247,7 +252,7 @@ export type { ThreadCardOpenEntry } from "./threadTypes";
 // is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
 // synchronously, a pinned split renders as a split immediately instead of
 // flashing a peek overlay until the server clientState arrives.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace", "nav_sections"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -494,6 +499,8 @@ export type InboxSession = {
   // Per-session stable-context launch override and feed exclusions. These are
   // local-only while a new-session stub is pending, then ride create/reconfigure.
   stable_mode?: string;
+  /** Blank session: the agent definition it launches as (compose "as" pill). */
+  agent_definition?: string;
   stable_exclude?: string[];
   message_count: number;
   idle_summary?: string;
@@ -749,6 +756,9 @@ export type Message = {
   _isQueued?: true;
   _clientId?: string;
   _isFailed?: true;
+  _isSettledControl?: true;
+  _isLocalQueue?: true;
+  _queuePosition?: number;
   // The exact content the durable send dispatched for this row (mention
   // expansion appends context the bubble's raw `content` doesn't have). The
   // server fingerprints command args by client id, so every redrive/resend must
@@ -1381,6 +1391,12 @@ export type ClientUI = {
   theme?: "light" | "dark";
   visual_style?: "classic" | "minimal";
   sidebar_collapsed?: boolean;
+  // The sidebar sections the chevrons pin open (true) or closed (false), by
+  // section key. A section the user never touched is absent and follows the
+  // route ("you are on /tasks, so Tasks is open"); a pin is the user saying
+  // otherwise, so it outlives the route — and the reload. Unstamped: the
+  // sidebar's shape is a per-device layout preference like the rest.
+  nav_sections?: Record<string, boolean>;
   zen_mode?: boolean;
   sticky_headers_disabled?: boolean;
   diff_panel_open?: boolean;
@@ -1691,31 +1707,6 @@ export type ClientState = {
 type Draft = InboxStoreState;
 
 // -- Helpers --
-
-export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">): boolean {
-  return !!s.inbox_dismissed_at;
-}
-
-// Retired: the agent was torn down. A distinct field from inbox_dismissed_at,
-// not a synonym. Most kills write both — a hide patch carries
-// inbox_dismissed_at and applyHideTransition stamps the marker on top, which
-// covers the web's kill action AND `cast kill` (cliSetSessionVisibility patches
-// inbox_dismissed_at, then forces the kill transition). The exception is the
-// killSession MUTATION (conversations.ts), which stamps inbox_killed_at ALONE:
-// that's the path behind the web's convCommand("killSession") — the /sessions
-// kill button and the panel's kill-and-complete. Anything asking "is this
-// killed?" must read this field or it silently misses those.
-export function isSessionKilled(s: Pick<InboxSession, "inbox_killed_at">): boolean {
-  return !!s.inbox_killed_at;
-}
-
-export function isSessionStashed(
-  s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at">,
-): boolean {
-  // Dismiss wins: a stashed session that later gets dismissed renders in the
-  // Dismissed bucket, never both.
-  return !!s.inbox_stashed_at && !s.inbox_dismissed_at;
-}
 
 // Out of the active inbox buckets for either reason (dismissed or stashed).
 // Hidden sessions are viewed through the peek path (viewingDismissedId) so
@@ -2274,115 +2265,55 @@ export function showsBlockedBadge(
   return !(reviveRequestedAt != null && now - reviveRequestedAt < BLOCKED_REVIVE_TTL_MS);
 }
 
-// A pending optimistic send is "consumed" once the daemon proves it acted on it:
-// the agent picked it up (status went active) or the session is dead (stopped,
-// won't ever pick it up). At that point the optimistic entry is stale and must be
-// dropped — otherwise it shows a phantom "pending" pill and pins an idle session
-// in Working forever. This is the durable, view-independent prune that the
-// echo-based prune in setMessages can't do: setMessages only runs for the
-// conversation currently open AND only matches messages the server echoes back as
-// user-message rows — slash commands like /model never echo, so without this they
-// linger indefinitely.
 export function pendingSendConsumed(
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
   sentBaselineTs?: number,
 ): boolean {
-  if (!session) return false;
+  if (!session || session.has_pending || sentBaselineTs == null || (session.updated_at ?? 0) <= sentBaselineTs) return false;
   const status = session.agent_status;
-  // Definitive positive signal: the daemon is provably acting on our send right
-  // now, so the optimistic stand-in has served its purpose. A stale "working" from
-  // a prior turn is harmless here — the card stays in Working either way.
-  if (status && ACTIVE_AGENT_STATUSES.has(status)) return true;
-  // Everything below is an ABSENCE signal ("nothing is happening") — and a stale
-  // snapshot that predates our send looks identical. Only trust it once the server
-  // has provably advanced PAST the send: the conversation's server-stamped
-  // updated_at (bumped when the backend accepted the message) moved beyond the
-  // baseline we captured at send time. Until then keep the pending pill — a
-  // just-sent message must never disappear before the server has even seen it.
-  const serverAdvanced = sentBaselineTs != null && (session.updated_at ?? 0) > sentBaselineTs;
-  if (!serverAdvanced) return false;
-  // The session is dead (stopped) and the server has caught up past our send, so
-  // it was delivered-then-stopped rather than queued-against-a-live-daemon.
-  if (status && DEAD_AGENT_STATUSES.has(status)) return true;
-  // Server-authoritative leftover check: the backend is idle with nothing queued
-  // (has_pending false) AS OF a snapshot newer than our send, so any lingering
-  // client optimistic is stale — the message was delivered-and-answered, or was a
-  // control command like /model that never echoes back as a user-message row. A
-  // genuinely in-flight send shows has_pending true until delivered, so this can't
-  // prune a real pending send.
-  return !!session.is_idle && !session.has_pending;
+  return !!session.is_idle || !!(status && (ACTIVE_AGENT_STATUSES.has(status) || DEAD_AGENT_STATUSES.has(status)));
 }
 
-// Grace window before any consumed/absence prune may fire for a send. The
-// dispatch retry ladder needs several seconds to conclude a send permanently
-// failed (and mark it _isFailed, which exempts it below) — pruning inside that
-// window can destroy the ONLY copy of a message whose send is still in flight:
-// a send into a busy foreign session reads "consumed" via the active-status
-// fast path on the very next sync tick, before the server ever rejected it.
 export const PENDING_SEND_PRUNE_GRACE_MS = 15_000;
 
-// Echo hard cap. The session claiming a send consumed does NOT mean the local
-// message window holds the echoed server row yet — the window back-fills via an
-// async fetch (bgSyncMessages) that the same sync tick merely kicks off. Pruning
-// on the claim alone makes the message vanish from a stale cached window until
-// that fetch lands (~a second) when the user returns to the thread. So a consumed
-// send with a warm local window is kept until its echo is visible there — but only
-// up to this cap, because some sends never echo as a user-message row at all
-// (control commands like /model) and a phantom pending pill would otherwise pin
-// an idle session in Working forever.
-export const PENDING_SEND_ECHO_CAP_MS = 60_000;
-
-// True when the pending send's server row is already visible in the local
-// message window (matched by client_id echo or direct _id).
 function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
-  return localMessages.some(
-    (m) => m._id === msg._id || (!!msg._clientId && m.client_id === msg._clientId),
-  );
+  return localMessages.some((m) => {
+    if (m.role !== "user" || m._isOptimistic || m._isQueued || m._isFailed) return false;
+    if (msg._clientId) return m.client_id === msg._clientId;
+    if (m._id === msg._id) return true;
+    return isInterruptControlMessage(msg.content)
+      ? isInterruptControlMessage(m.content) && m.timestamp > (msg._sentBaselineTs ?? msg.timestamp - 120_000)
+      : stripImageRef(m.content || "") === stripImageRef(msg.content || "") && Math.abs(m.timestamp - msg.timestamp) < 120_000;
+  });
 }
 
-// Prune consumed/stale optimistic sends for a synced session. The conversation
-// currently being viewed is left to setMessages (echo-based prune) so a just-sent
-// message stays visible in the open thread until its real row syncs in. Failed
-// sends are kept (the user may retry them). Returns true if anything changed.
 export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
-  focusedConvId: string | null,
-  // The conversation's locally cached message window, when one exists. Gates the
-  // prune on the echoed server row being visible there (see PENDING_SEND_ECHO_CAP_MS).
+  _focusedConvId: string | null,
   localMessages?: Message[],
 ): boolean {
-  if (convId === focusedConvId) return false;
   const pending = pendingMessages[convId];
   if (!pending?.length) return false;
-  // Protect the LATEST send: don't prune until the server has advanced past it.
-  // Legacy entries (persisted before _sentBaselineTs existed) fall back to their
-  // own client timestamp.
-  let baseline = 0;
-  let newestSentAt = 0;
-  for (const m of pending) {
-    if (m._isFailed) continue;
-    baseline = Math.max(baseline, m._sentBaselineTs ?? m.timestamp);
-    newestSentAt = Math.max(newestSentAt, m.timestamp);
+  let changed = false;
+  const kept = pending.filter((m) => m._isLocalQueue || !pendingSendEchoed(m, localMessages ?? []));
+  for (const message of kept) {
+    if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
+    if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
+    if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
+    if (!pendingSendConsumed(session, message._sentBaselineTs ?? message.timestamp)) continue;
+    message._isSettledControl = true;
+    delete message._isOptimistic;
+    delete message._isQueued;
+    changed = true;
   }
-  if (newestSentAt && Date.now() - newestSentAt < PENDING_SEND_PRUNE_GRACE_MS) return false;
-  if (!pendingSendConsumed(session, baseline)) return false;
-  const kept = pending.filter((m) => {
-    if (m._isFailed) return true;
-    // Echo gate: with a warm local window, hold the send until its server row
-    // is visible there (or the cap passes) so a return to the thread never
-    // renders a stale window with the message missing.
-    return (
-      !!localMessages?.length &&
-      Date.now() - m.timestamp < PENDING_SEND_ECHO_CAP_MS &&
-      !pendingSendEchoed(m, localMessages)
-    );
-  });
-  if (kept.length === pending.length) return false;
-  if (kept.length === 0) delete pendingMessages[convId];
-  else pendingMessages[convId] = kept;
-  return true;
+  if (kept.length !== pending.length) {
+    if (kept.length) pendingMessages[convId] = kept;
+    else delete pendingMessages[convId];
+    changed = true;
+  }
+  return changed;
 }
 
 // The (waiting, rest, idle) verdict a surface outside the chokepoint reads
@@ -2698,6 +2629,26 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
   counts: Record<InboxSectionKey, number>;
+}
+
+// The number a section header claims, for every surface that renders those
+// sections (the web panel and the mobile inbox both call this).
+//
+// `counts` is every row PLACED in the bucket — the flat cards plus the members
+// nested under a same-bucket lead. That is the honest number only while those
+// nested rows are on screen. With the subagent toggle off they render nowhere,
+// so the header claimed rows the reader could neither see nor reach: prod on
+// 2026-09-10 showed NEEDS INPUT (121) above 33 cards, while the sidebar badge
+// (flat cards only) said 34. A chip filter narrows a section the same way, so a
+// filtered section always reports the cards it shows.
+export function sectionHeaderCount(
+  shown: readonly InboxSession[],
+  full: readonly InboxSession[],
+  placedCount: number,
+  showSubagents: boolean,
+): number | undefined {
+  if (shown.length !== full.length) return undefined;
+  return showSubagents ? placedCount : shown.length;
 }
 
 // The store-state subset the chokepoint reads. Structural (never the store
@@ -4359,7 +4310,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -4539,12 +4490,16 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
 
   // -- Inline review (quote / comment on assistant message blocks) --
   // Ephemeral UI state: which message is in keyboard/inline-review mode, the
-  // highlighted block within it, and the batch of pending comments per
-  // conversation. Never synced or persisted — survives session switches in
-  // memory, resets on reload (the right lifetime for an in-progress batch).
+  // highlighted block within it, and which note editor is open. Never synced
+  // or persisted.
   reviewMessageId: string | null;
   reviewActiveBlock: number;
   reviewEditingId: string | null;
+  // The batch of pending quotes + notes per conversation (or `doc:<id>`). A
+  // note is a draft of the user's next message, so it persists exactly like
+  // `drafts` (registered as a local IDB meta key, written through sync()):
+  // navigation and reload never lose it. Cleared only when the batch is taken
+  // into a message or the user removes the quote.
   reviewComments: Record<string, PendingComment[]>;
   setReviewTarget: (messageId: string | null, blockIndex?: number) => void;
   setReviewActiveBlock: (blockIndex: number) => void;
@@ -4695,7 +4650,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -4831,6 +4786,8 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   setSessionTargetDevice: (id: string, deviceId: string | null) => void;
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
   setConversationAgent: (id: string, agentType: string) => void;
+  /** Blank session: the definition it launches as (compose "as" pill). */
+  setConversationAgentDefinition: (id: string, name: string | null) => void;
   switchAgent: (currentId: string, targetAgentType: string) => string;
   // Local-only optimistic model/effort stamp (header picker / new-session
   // picker). The durable value arrives via the server: rollup echo for
@@ -4888,6 +4845,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Queued messages --
   getQueuedMessages: (id: string) => string[];
   setQueuedMessagesFor: (id: string, list: string[]) => void;
+  takeQueuedMessage: (id: string) => { content: string; clientId: string } | undefined;
 
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
@@ -5109,6 +5067,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
   resolveTeamStub: (stubId: string, teamId: string) => void;
   discardTeamStub: (stubId: string, previousActiveTeamId: string | undefined) => void;
+  deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
+  dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined) => Promise<unknown>;
+  restoreTeamRow: (team: any, previousActiveTeamId: string | undefined) => void;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
@@ -5285,6 +5246,12 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   updateIssueSyncSource: (id: string, fields: { status?: "active" | "paused"; delegate_label?: string; delegate_assignee?: string; auto_spawn?: boolean; push_new_tasks?: boolean }) => void;
   removeIssueSyncSource: (id: string) => void;
 
+  // -- Agent definitions and chains (settings > Agent library; cast agent) --
+  upsertAgentDefinition: (fields: Partial<AgentDefinitionSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
+  removeAgentDefinition: (id: string) => void;
+  upsertAgentChain: (fields: Partial<AgentChainSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
+  removeAgentChain: (id: string) => void;
+
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
@@ -5436,18 +5403,7 @@ function messageReplayKey(message: Message): string | null {
 function prunePendingEchoes(draft: any, convId: string, incoming: Message[]) {
   const pending = draft.pendingMessages[convId] || [];
   if (pending.length === 0) return;
-  const serverUserMsgs = incoming.filter((m: Message) => m.role === "user");
-  const kept = pending.filter((m: Message) => {
-    if (m._clientId) {
-      return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
-    }
-    const stripped = stripImageRef(m.content || "");
-    return !serverUserMsgs.some((s: Message) =>
-      isInterruptControlMessage(m.content)
-        ? isInterruptControlMessage(s.content) && s.timestamp > (m._sentBaselineTs ?? m.timestamp - 120_000)
-        : stripImageRef(s.content || "") === stripped && Math.abs(s.timestamp - m.timestamp) < 120_000
-    );
-  });
+  const kept = pending.filter((m: Message) => m._isLocalQueue || !pendingSendEchoed(m, incoming));
   if (kept.length !== pending.length) {
     draft.pendingMessages[convId] = kept;
   }
@@ -5836,8 +5792,6 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     transform(draft, table, incoming) {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
-        // Drop stale optimistic sends now that we have authoritative status —
-        // keeps phantom "pending" pills from pinning idle sessions in Working.
         reconcilePendingSendForSession(
           draft.pendingMessages,
           s._id,
@@ -5923,6 +5877,8 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // never prunes another's, and a thread's replies survive a channel sync. See
   // store/chatSlice.ts for why these collections carry no pending protection.
   ...CHAT_SYNC_REGISTRY,
+  // Org tree singleton (store/orgSlice.ts): strips generated_at before compare.
+  ...ORG_SYNC_REGISTRY,
   // capabilityState / capabilityBindings: registered on the collection.
   // Crosstalk graph: the server stamps generatedAt on every execution, which
   // would defeat the singleton's equality bail and wake subscribers on every
@@ -6189,7 +6145,7 @@ export function pendingRowSendArgs(message: Message): { content: string; imageId
 function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void {
   const store = useInboxStore.getState();
   for (const message of messages ?? store.pendingMessages[convexId] ?? []) {
-    if (message._isFailed) continue;
+    if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
     if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
@@ -6334,8 +6290,15 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     delete draft.messages[oldId];
   }
   if (draft.pendingMessages[oldId]) {
-    draft.pendingMessages[newId] = draft.pendingMessages[oldId];
+    const combined: Message[] = [...(draft.pendingMessages[newId] ?? []), ...draft.pendingMessages[oldId]];
+    const merged = [...new Map(combined.map((message) => [message._clientId || message._id, message])).values()];
+    draft.pendingMessages[newId] = merged;
     delete draft.pendingMessages[oldId];
+    const queued = merged.filter(message => message._isLocalQueue)
+      .sort((a, b) => (a._queuePosition ?? 0) - (b._queuePosition ?? 0))
+      .map(message => message.content ?? "");
+    if (queued.length) draft.queuedMessages[newId] = queued;
+    delete draft.queuedMessages[oldId];
   }
   if (draft.pagination[oldId]) {
     draft.pagination[newId] = draft.pagination[oldId];
@@ -6348,6 +6311,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   if (draft.clientState.drafts?.[oldId]) {
     draft.clientState.drafts[newId] = draft.clientState.drafts[oldId];
     draft.clientState.drafts[oldId] = null;
+  }
+  if (draft.reviewComments[oldId]) {
+    draft.reviewComments[newId] = draft.reviewComments[oldId];
+    delete draft.reviewComments[oldId];
   }
   if (draft.conversations[oldId]) {
     draft.conversations[newId] = { ...draft.conversations[oldId], _id: newId };
@@ -6607,7 +6574,6 @@ function hideSessionInDraft(
       delete draft.sessions[sid];
       delete draft.conversations[sid];
       delete draft.messages[sid];
-      delete draft.pendingMessages[sid];
       forgotten.push(sid);
       continue;
     }
@@ -7312,53 +7278,42 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ reviewMessageId: messageId, reviewActiveBlock: messageId ? blockIndex : 0 }),
   setReviewActiveBlock: (blockIndex: number) => set({ reviewActiveBlock: blockIndex }),
   setReviewEditingId: (id: string | null) => set({ reviewEditingId: id }),
-  addReviewComment: (conversationId: string, comment: PendingComment) =>
-    set((s: any) => ({
-      reviewComments: {
-        ...s.reviewComments,
-        [conversationId]: [...(s.reviewComments[conversationId] ?? []), comment],
-      },
-    })),
+  // The writers below are sync(): a mutative draft + IDB write-through, no
+  // server dispatch — the same path the composer's drafts take. A raw set()
+  // here would keep the batch in memory only and lose every note on reload.
+  addReviewComment: sync(function (this: Draft, conversationId: string, comment: PendingComment) {
+    (this.reviewComments[conversationId] ??= []).push(comment);
+  }),
   // Set a comment's note (may be empty → stays a bare quote). This is what the
-  // note editor's "Save" does.
-  commitReviewComment: (conversationId: string, id: string, body: string) =>
-    set((s: any) => ({
-      reviewComments: {
-        ...s.reviewComments,
-        [conversationId]: (s.reviewComments[conversationId] ?? []).map((c: PendingComment) =>
-          c.id === id ? { ...c, body } : c,
-        ),
-      },
-    })),
-  removeReviewComment: (conversationId: string, id: string) =>
-    set((s: any) => {
-      const list: PendingComment[] = s.reviewComments[conversationId] ?? [];
-      const removed = list.find((c) => c.id === id);
-      const next = list.filter((c: PendingComment) => c.id !== id);
-      const map = { ...s.reviewComments };
-      if (next.length) map[conversationId] = next;
-      else delete map[conversationId];
-      const patch: any = { reviewComments: map };
-      // If the removed comment's editor was open, close it.
-      if (s.reviewEditingId === id) patch.reviewEditingId = null;
-      // When the review-target message has no quotes left, drop the target so its
-      // active-block highlight overlay stops painting (handles both the last quote
-      // overall and the last quote on the target message of a multi-message batch).
-      const targetMsg = s.reviewMessageId;
-      if (targetMsg && removed?.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
-        patch.reviewMessageId = null;
-        patch.reviewActiveBlock = 0;
-        patch.reviewEditingId = null;
-      }
-      return patch;
-    }),
-  clearReviewComments: (conversationId: string) =>
-    set((s: any) => {
-      if (!s.reviewComments[conversationId]) return {};
-      const map = { ...s.reviewComments };
-      delete map[conversationId];
-      return { reviewComments: map };
-    }),
+  // note editor's "Save" does, and what it does while you type.
+  commitReviewComment: sync(function (this: Draft, conversationId: string, id: string, body: string) {
+    const c = this.reviewComments[conversationId]?.find((c) => c.id === id);
+    if (!c || c.body === body) return;
+    c.body = body;
+  }),
+  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string) {
+    const list = this.reviewComments[conversationId] ?? [];
+    const removed = list.find((c) => c.id === id);
+    if (!removed) return;
+    const next = list.filter((c) => c.id !== id);
+    if (next.length) this.reviewComments[conversationId] = next;
+    else delete this.reviewComments[conversationId];
+    // If the removed comment's editor was open, close it.
+    if (this.reviewEditingId === id) this.reviewEditingId = null;
+    // When the review-target message has no quotes left, drop the target so its
+    // active-block highlight overlay stops painting (handles both the last quote
+    // overall and the last quote on the target message of a multi-message batch).
+    const targetMsg = this.reviewMessageId;
+    if (targetMsg && removed.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
+      this.reviewMessageId = null;
+      this.reviewActiveBlock = 0;
+      this.reviewEditingId = null;
+    }
+  }),
+  clearReviewComments: sync(function (this: Draft, conversationId: string) {
+    if (!this.reviewComments[conversationId]) return;
+    delete this.reviewComments[conversationId];
+  }),
   getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
@@ -8528,7 +8483,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -8559,6 +8514,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(normalizedModel ? { model: normalizedModel } : {}),
       ...(opts.effort || existing?.effort ? { effort: opts.effort ?? existing?.effort } : {}),
       ...(opts.stable_mode || existing?.stable_mode ? { stable_mode: opts.stable_mode ?? existing?.stable_mode } : {}),
+      ...(opts.agent_definition || existing?.agent_definition ? { agent_definition: opts.agent_definition ?? existing?.agent_definition } : {}),
       ...(opts.stable_exclude?.length || existing?.stable_exclude?.length
         ? { stable_exclude: opts.stable_exclude ?? existing?.stable_exclude }
         : {}),
@@ -8638,6 +8594,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // picker (setStableContextPrefs) — same lifecycle as model/effort.
       ...(cur?.stable_mode ? { stable_mode: cur.stable_mode } : {}),
       ...(cur?.stable_exclude?.length ? { stable_exclude: cur.stable_exclude } : {}),
+      ...(cur?.agent_definition ? { agent_definition: cur.agent_definition } : {}),
     });
   },
 
@@ -9470,6 +9427,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  setConversationAgentDefinition: action(function (this: Draft, id: string, name: string | null) {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
+      if (!row) continue;
+      row.agent_definition = name ?? undefined;
+    }
+  }),
+
   setConversationModel: action(function (this: Draft, id: string, opts: { model?: string | null; effort?: string | null }) {
     for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
       if (!row) continue;
@@ -9844,11 +9808,41 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   setQueuedMessagesFor: sync(function (this: Draft, id: string, list: string[]) {
-    if (!list || list.length === 0) {
-      delete this.queuedMessages[id];
-    } else {
-      this.queuedMessages[id] = list;
+    const previous = (this.pendingMessages[id] ?? []).filter(message => message._isLocalQueue);
+    const kept = new Set<string>();
+    for (const [position, content] of list.entries()) {
+      const existing = previous.find(message => message.content === content && !kept.has(message._id));
+      const clientId = existing?._id ?? appendOptimisticMessage(this, id, content);
+      const row = this.pendingMessages[id].find(message => message._id === clientId)!;
+      row._isLocalQueue = true;
+      row._queuePosition = position;
+      kept.add(clientId);
     }
+    if (this.pendingMessages[id]) {
+      this.pendingMessages[id] = this.pendingMessages[id].filter(message => !message._isLocalQueue || kept.has(message._id));
+      if (!this.pendingMessages[id].length) delete this.pendingMessages[id];
+    }
+    if (list.length) this.queuedMessages[id] = list;
+    else delete this.queuedMessages[id];
+  }),
+
+  takeQueuedMessage: sync(function (this: Draft, id: string) {
+    const content = this.queuedMessages[id]?.[0];
+    if (content == null) return;
+    let row = this.pendingMessages[id]?.find(message => message._isLocalQueue && message.content === content);
+    if (!row) {
+      const clientId = appendOptimisticMessage(this, id, content);
+      row = this.pendingMessages[id].find(message => message._id === clientId)!;
+    }
+    delete row._isLocalQueue;
+    delete row._queuePosition;
+    row._isOptimistic = true;
+    row.timestamp = Date.now();
+    row._sentBaselineTs = this.sessions[id]?.updated_at;
+    const remaining = this.queuedMessages[id].slice(1);
+    if (remaining.length) this.queuedMessages[id] = remaining;
+    else delete this.queuedMessages[id];
+    return { content, clientId: row._clientId || row._id };
   }),
 
   // =====================
@@ -10050,6 +10044,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!isConvexId(realId)) return null;
     const pending = get().pendingMessages[realId] || [];
     for (const m of pending as any[]) {
+      if (m._isLocalQueue || m._isSettledControl || m.images?.some((image: any) => image.uploading)) continue;
       // Prefer the recorded dispatch bytes (see redrivePendingMessagesFor) —
       // a row that already sent once must replay identically to dedupe.
       const content = m._dispatchContent || m.content || "";
@@ -10067,7 +10062,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const [convId, messages] of Object.entries(get().pendingMessages) as [string, Message[]][]) {
       if (!isConvexId(convId)) continue;
       for (const message of messages) {
-        if (message._isFailed) continue;
+        if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const state = get();
         if (state.currentUser?._id !== userId) return;
@@ -10342,6 +10337,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.issueSyncSources as any)[id];
   }),
 
+  // Agent definitions and chains. An upsert with an _id patches the row in
+  // place; without one it writes a stub keyed by a client_key the server
+  // echoes back, so the stub supersedes onto the real row (registry altKey).
+  upsertAgentDefinition: asyncAction(function (this: Draft, fields: any) {
+    return upsertAgentLibraryRow(this, "agentDefinitions", "ad", fields);
+  }),
+  removeAgentDefinition: action(function (this: Draft, id: string) {
+    delete (this.agentDefinitions as any)[id];
+  }),
+  upsertAgentChain: asyncAction(function (this: Draft, fields: any) {
+    return upsertAgentLibraryRow(this, "agentChains", "ac", fields);
+  }),
+  removeAgentChain: action(function (this: Draft, id: string) {
+    delete (this.agentChains as any)[id];
+  }),
+
   // Local-first create: an optimistic stub renders the row instantly (the
   // quick-add loop on task detail fires several per second). The stub carries a
   // minted client_key and is keyed by `temp_task_<key>`; when the server row
@@ -10547,6 +10558,40 @@ const inboxStoreConfig = (set: any, get: any) => ({
   discardTeamStub: sync(function (this: Draft, stubId: string, previousActiveTeamId: string | undefined) {
     this.teams = (this.teams ?? []).filter((t: any) => t?._id !== stubId);
     if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = previousActiveTeamId;
+  }),
+
+  // Local-first delete, the mirror of createTeam: the row leaves the list and
+  // the workspace pointer moves in one draft, so the switcher, the sidebar and
+  // the settings panel re-scope in the same tick. The fallback is the caller's
+  // oldest remaining team, the same rule the server applies when it repoints
+  // users.active_team_id (teams.endMembership), so the mirror and the canonical
+  // pointer agree once the echo lands. A refused delete (not an admin, name
+  // mismatch) puts the row and the pointer back.
+  deleteTeam: async (teamId: string, confirmName: string) => {
+    const team = (get().teams ?? []).find((t: any) => t?._id === teamId);
+    if (!team) throw new Error("Team not found");
+    const previousActiveTeamId = get().clientState.ui?.active_team_id;
+    const fallback = (get().teams ?? [])
+      .filter((t: any) => t?._id !== teamId && isConvexId(String(t?._id)))
+      .sort((a: any, b: any) => (a?.joined_at ?? 0) - (b?.joined_at ?? 0))[0];
+    try {
+      await get().dispatchDeleteTeam(teamId, confirmName, fallback?._id);
+    } catch (error) {
+      if (!isParkedDispatchError(error)) get().restoreTeamRow(team, previousActiveTeamId);
+      throw error;
+    }
+  },
+
+  dispatchDeleteTeam: asyncAction(function (this: Draft, teamId: string, _confirmName: string, fallbackTeamId: string | undefined) {
+    this.teams = (this.teams ?? []).filter((t: any) => t?._id !== teamId);
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    if (this.clientState.ui.active_team_id === teamId) this.clientState.ui.active_team_id = fallbackTeamId;
+  }),
+
+  restoreTeamRow: sync(function (this: Draft, team: any, previousActiveTeamId: string | undefined) {
+    if (!(this.teams ?? []).some((t: any) => t?._id === team?._id)) this.teams = [...(this.teams ?? []), team];
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.active_team_id = previousActiveTeamId;
   }),
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
@@ -11125,6 +11170,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.clientState.ui.zen_mode = zen;
       writeCriticalUiPrefs({ zen_mode: zen });
     }
+    // The sidebar's pinned sections ride along with the panes. Assigned whole,
+    // including with nothing: a layout saved with no pins (or an older save,
+    // from before this field) hands every section back to its route default.
+    const sections = snap.navSections ?? {};
+    if (JSON.stringify(this.clientState.ui.nav_sections ?? {}) !== JSON.stringify(sections)) {
+      this.clientState.ui.nav_sections = { ...sections };
+      writeCriticalUiPrefs({ nav_sections: this.clientState.ui.nav_sections });
+    }
     // The chip rides along with the panes. Both axes are assigned together
     // rather than through the single-axis setters, whose "don't clobber the
     // other axis's exclude" guards exist for one-chip clicks; here the whole
@@ -11157,6 +11210,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       zen: st.clientState.ui?.zen_mode ?? false,
       path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
   },
@@ -11170,6 +11224,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // update from a different page shouldn't silently retarget the switch.
       path: path ?? prev?.path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     st.updateSavedView(id, { prefs: snap });
   },
@@ -11536,6 +11591,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the middleware wraps every action exactly as if it were written inline.
   ...createChatSlice(set, get),
 
+  // Org tree singleton + reshaping actions (store/orgSlice.ts), same spread rule.
+  ...createOrgSlice(),
+
 });
 
 function createInboxStore() {
@@ -11577,6 +11635,34 @@ const hotSwapCapable = process.env.NODE_ENV !== "production" && typeof document 
 const survivingInboxStore: ReturnType<typeof createInboxStore> | undefined = hotSwapCapable
   ? (globalThis as any).__codecastInboxStore
   : undefined;
+
+
+/** Shared draft write for the agent library: patch by _id, else stub a new
+ *  row in the active workspace. Returns the client_key the dispatch sends so
+ *  the server row answers to the same key. */
+function upsertAgentLibraryRow(draft: any, key: "agentDefinitions" | "agentChains", prefix: string, fields: any): { client_key: string; id?: string } {
+  const now = Date.now();
+  const { _id, ...rest } = fields;
+  if (_id && draft[key][_id]) {
+    Object.assign(draft[key][_id], rest, { updated_at: now });
+    return { client_key: draft[key][_id].client_key ?? `${prefix}_${_id}`, id: _id };
+  }
+  const client_key = `${prefix}_${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const teamId = draft.clientState.ui?.active_team_id;
+  const userId = draft.currentUser?._id ? String(draft.currentUser._id) : null;
+  draft[key][client_key] = {
+    _id: client_key,
+    short_id: `${prefix}-${now.toString(36)}`,
+    client_key,
+    team_id: teamId,
+    workspace: activeWorkspaceKey(teamId, userId) ?? undefined,
+    user_id: userId ?? undefined,
+    created_at: now,
+    updated_at: now,
+    ...rest,
+  };
+  return { client_key };
+}
 
 export const useInboxStore = survivingInboxStore ?? createInboxStore();
 
@@ -11806,6 +11892,14 @@ export function hydrateMergeValue(
   val: unknown,
   cur: unknown,
 ): { apply: boolean; value?: unknown } {
+  if (key === "pendingMessages" && val && typeof val === "object") {
+    const merged = { ...(val as Record<string, Message[]>) };
+    for (const [convId, rows] of Object.entries((cur ?? {}) as Record<string, Message[]>)) {
+      const combined = [...(merged[convId] ?? []), ...rows];
+      merged[convId] = [...new Map(combined.map(message => [message._clientId || message._id, message])).values()];
+    }
+    return { apply: true, value: merged };
+  }
   if (hydrationMergeStrategy(key) === "fill") {
     return cur == null ? { apply: true, value: val } : { apply: false };
   }
@@ -11987,6 +12081,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
         const merge = hydrateMergeValue(key, val, cur);
         if (merge.apply) updates[key] = merge.value;
       }
+      if (updates.pendingMessages) updates.queuedMessages = queuedMessagesFromPending(updates.pendingMessages);
       if (Object.keys(updates).length > 0) {
         useInboxStore.setState(updates);
       }

@@ -3318,16 +3318,16 @@ pre[class*="language-"] {
   gap: 4px;
 }
 
-.minimal-style [data-cc-topbar-actions] > div > button,
-.minimal-style [data-cc-topbar-actions] > button {
+.minimal-style [data-cc-topbar-group] > div > button,
+.minimal-style [data-cc-topbar-group] > button {
   min-height: 28px;
   background: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
 }
 
-.minimal-style [data-cc-topbar-actions] > div > button:hover,
-.minimal-style [data-cc-topbar-actions] > button:hover {
+.minimal-style [data-cc-topbar-group] > div > button:hover,
+.minimal-style [data-cc-topbar-group] > button:hover {
   background: var(--sol-bg-highlight) !important;
 }
 
@@ -3857,10 +3857,6 @@ pre[class*="language-"] {
   background: transparent;
 }
 
-.minimal-style [data-sv-rail] [data-sv-controls] > .w-px {
-  display: none;
-}
-
 .minimal-style [data-sv-rail] [data-sv-controls] button {
   border-radius: 6px;
   box-shadow: none;
@@ -4037,4 +4033,81 @@ pre[class*="language-"] {
   .visual-style-options {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* /org: the phone bottom sheet and the reparent confirm popover slide in once. */
+@keyframes org-sheet-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes org-pop-in { from { transform: translateY(-4px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+.org-sheet-in { animation: org-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.org-pop-in { animation: org-pop-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.org-flow .react-flow__node { transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.org-flow .react-flow__node.dragging { transition: none; }
+.org-flow .react-flow__edge-path { transition: d 260ms; }
+.org-flow .react-flow__controls { background: var(--sol-card); }
+.org-flow .react-flow__controls-button { background: var(--sol-card); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent); color: var(--sol-text-muted); fill: var(--sol-text-muted); }
+.org-flow .react-flow__controls-button:hover { background: var(--sol-bg-highlight); }
+.org-flow .react-flow__controls-button svg { fill: currentColor; }
+@media (prefers-reduced-motion: reduce) { .org-sheet-in, .org-pop-in, .org-flow .react-flow__node { animation: none; transition: none; } }
+
+/* ---------------------------------------------------------------------------
+   The inline reveal (components/ObjectReveal): an object reference opens its
+   full page as a band across the whole scrolling surface. Width, left pull
+   and height are measured inline by the component; the ground is a
+   crosshatch so the band reads as a cutout in the conversation, not as one
+   more card in it.
+   --------------------------------------------------------------------------- */
+.object-reveal {
+  --reveal-hatch: color-mix(in srgb, var(--sol-text) 7%, transparent);
+  position: relative;
+  box-sizing: border-box;
+  margin: 12px 0;
+  padding: 14px 18px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
+  background-color: var(--sol-bg-alt);
+  background-image:
+    repeating-linear-gradient(45deg, var(--reveal-hatch) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(-45deg, var(--reveal-hatch) 0 1px, transparent 1px 9px);
+  cursor: auto;
+  text-align: left;
+  font-size: 1rem;
+  line-height: 1.5;
+  animation: object-reveal-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.dark .object-reveal {
+  --reveal-hatch: color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
+.object-reveal__frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--sol-border);
+  border-radius: 8px;
+  background: var(--sol-bg);
+  box-shadow: 0 12px 32px -16px color-mix(in srgb, var(--sol-text) 25%, transparent);
+}
+.object-reveal__strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--cc-panel-rule, var(--sol-border));
+  background: var(--cc-panel-head-bg, var(--sol-bg));
+  user-select: none;
+}
+.object-reveal__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+@keyframes object-reveal-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .object-reveal { animation: none; }
 }

@@ -20,7 +20,9 @@ export type NodeType =
   | "parallel_fanout"
   | "parallel_fanin";
 
-export type AgentBackend = "builtin" | "claude" | "codex" | "tmux";
+// "session": a codecast session started through /cli/spawn (inbox visible,
+// unattended, waited on until it settles); the client comes from `agent`.
+export type AgentBackend = "builtin" | "claude" | "codex" | "tmux" | "session";
 
 export interface WorkflowNode {
   id: string;
@@ -32,6 +34,13 @@ export interface WorkflowNode {
   reasoning_effort?: string;
   model?: string;
   backend?: AgentBackend;
+  // Session nodes: the agent client (claude, codex, ...) and whether the
+  // session gets its own worktree (named after the graph and the bound task).
+  agent?: string;
+  isolated?: boolean;
+  // A named agent definition (cast agent ls): client, model, effort, tools
+  // and prompt. Node-level agent/model/reasoning_effort override its parts.
+  definition?: string;
   temperature?: number;
   // Command nodes
   script?: string;

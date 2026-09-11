@@ -1,3 +1,4 @@
+import { StatusDot } from "./StatusDot";
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
@@ -35,13 +36,7 @@ function DaemonHealthPill({ view, prefix }: { view: DaemonHealthCopy; prefix?: s
           boxShadow: `0 0 10px color-mix(in srgb, ${color} 12%, transparent)`,
         }}
       >
-        <span className="relative flex h-2 w-2">
-          <span
-            className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40"
-            style={{ background: color, animationDuration: "2s" }}
-          />
-          <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: color }} />
-        </span>
+        <StatusDot color={color} ping />
         <span className="text-[11px] font-mono font-bold whitespace-nowrap" style={{ color }}>
           {copied ? "copied!" : prefix ? `${prefix}: ${view.label}` : view.label}
         </span>

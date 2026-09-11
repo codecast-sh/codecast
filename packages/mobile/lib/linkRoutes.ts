@@ -98,7 +98,11 @@ export function mobileRouteForUrl(url: string): string | null {
       ? `/share/${share.token}`
       : `/share/${share.kind}/${share.token}`;
   }
-  // Team invites are completed on the web; the team tab is the nearest screen.
-  if (path.startsWith('/join/')) return '/(tabs)/team';
+  // Team invites are completed on the web; the Chat tab (where the team
+  // lives on the phone) is the nearest screen. The web's chat and calls
+  // pages land there too.
+  if (path.startsWith('/join/') || path === '/chat' || path.startsWith('/chat/') || path === '/calls') {
+    return '/(tabs)/chat';
+  }
   return null;
 }

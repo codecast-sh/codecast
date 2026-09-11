@@ -55,6 +55,7 @@ describe("denylist", () => {
   test.each([
     ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl", ".claude/projects/x/y.jsonl", ".claude/sessions/a",
     ".claude/session-env/a", ".claude/shell-snapshots/a", ".claude/file-history/a", ".claude/backups/a", ".claude/cache/a",
+    ".claude/plugins/marketplaces/catalog/plugins/tool/README.md", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
     ".codex/auth.json", ".codex/state_5.sqlite", ".codex/logs_2.sqlite-wal", ".codex/sessions/a", ".codex/cache/a", ".codex/tmp/a",
     ".codex/models_cache.json", ".codex/installation_id",
     ".gemini/oauth_creds.json", ".config/gh/hosts.yml", ".config/gcloud/x", ".ssh/id_ed25519", ".aws/credentials", ".gnupg/x",
@@ -65,7 +66,7 @@ describe("denylist", () => {
   });
 
   test.each([
-    ".claude/CLAUDE.md", ".claude/skills/x/SKILL.md", ".codex/config.toml", ".claude/plugins/known_marketplaces.json", ".claude/hooks/mine.sh",
+    ".claude/CLAUDE.md", ".claude/skills/x/SKILL.md", ".codex/config.toml", ".claude/plugins/cache/tool/1.0/skills/x/SKILL.md", ".claude/hooks/mine.sh",
     // Name globs (`id_*`, `*.pem`, `credentials*.json`) name files, never a directory on the way.
     ".claude/skills/id_generator/SKILL.md", ".claude/commands/id_utils/run.md", ".claude/skills/certs.pem/README.md", ".claude/skills/credentials-doc.json/x.md",
   ])("%s is allowed", (rel) => {
@@ -150,7 +151,7 @@ describe("collectMirrorFiles", () => {
       ".claude/CLAUDE.md": "claude-md", ".claude/settings.json": "claude-settings", ".claude/settings.local.json": "claude-settings",
       ".claude/keybindings.json": "json-remap", ".claude/agents/mine.md": "verbatim", ".claude/skills/mine/SKILL.md": "verbatim",
       ".claude/commands/c.md": "verbatim", ".claude/prompts/p.md": "verbatim", ".claude/output-styles/o.md": "verbatim",
-      ".claude/hooks/mine.sh": "verbatim", ".claude/statusline.sh": "verbatim", ".claude/plugins/known_marketplaces.json": "json-remap",
+      ".claude/hooks/mine.sh": "verbatim", ".claude/statusline.sh": "verbatim",
       ".codex/AGENTS.md": "agents-md", ".codex/AGENTS.override.md": "agents-md", ".codex/config.toml": "codex-toml", ".codex/hooks.json": "codex-hooks",
       ".codex/prompts/p.md": "verbatim", ".codex/rules/r.md": "verbatim", ".codex/skills/s/SKILL.md": "verbatim",
       ".grok/AGENTS.md": "agents-md", ".grok/config.toml": "toml-remap", ".grok/skills/g/SKILL.md": "verbatim", ".grok/hooks/h.json": "json-remap",

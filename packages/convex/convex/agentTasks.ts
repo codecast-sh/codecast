@@ -15,6 +15,7 @@ import { canAccessConversation } from "./lib/access";
 import { armedTriggerKindFor } from "./dormancy";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
+import { enqueueRoleEvent } from "./orgEvents";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -213,6 +214,7 @@ interface NewTaskArgs {
   project_path?: string;
   agent_type?: string;
   model?: string;
+  agent_definition?: string;
   created_device_id?: string;
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
@@ -256,6 +258,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     project_path: args.project_path,
     agent_type: args.agent_type || "claude",
     model: args.model || undefined,
+    agent_definition: args.agent_definition || undefined,
     created_device_id: args.created_device_id,
     schedule_type: args.schedule_type,
     run_at,
@@ -319,6 +322,7 @@ export const createTask = mutation({
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     model: v.optional(v.string()),
+    agent_definition: v.optional(v.string()),
     created_device_id: v.optional(v.string()),
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
     run_at: v.optional(v.number()),
@@ -568,11 +572,20 @@ export const dispatchCloudTriggers = internalMutation({
         : "";
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
       const updates = completedTaskRunFields(task, now, { conversation_id: conversation._id });
-      const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
-        content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`,
-        origin: "scheduler",
-        client_id: clientId,
-      });
+      // A routine on a role's standing session rides the wake rail: an
+      // immediate outbox row with the prompt as cause, so the frame carries
+      // it alongside everything else the role owes a look (T3).
+      const pendingMessageId = conversation.standing_role_id
+        ? await enqueueRoleEvent(ctx, conversation.standing_role_id, {
+          kind: "immediate",
+          cause: `routine "${task.title}" (${task.short_id ?? task._id}) fired:\n${task.prompt}`,
+          ref: { table: "agent_tasks", id: String(task._id), short_id: task.short_id ?? undefined },
+        })
+        : await enqueuePendingMessage(ctx, conversation, task.user_id, {
+          content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`,
+          origin: "scheduler",
+          client_id: clientId,
+        });
       await patchTask(ctx, task, updates);
       dispatched++;
       console.info("cloud_trigger_dispatched", {
@@ -1514,6 +1527,7 @@ export const webCreate = mutation({
     mode: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     model: v.optional(v.string()),
+    agent_definition: v.optional(v.string()),
     project_path: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
     precheck: v.optional(v.string()),
@@ -1594,6 +1608,7 @@ type TaskUpdateArgs = {
   mode?: string;
   agent_type?: string;
   model?: string;
+  agent_definition?: string;
   project_path?: string;
   max_runtime_ms?: number;
   precheck?: string;
@@ -1612,6 +1627,7 @@ const EDITABLE_FIELDS = [
   "mode",
   "agent_type",
   "model",
+  "agent_definition",
   "project_path",
   "max_runtime_ms",
   "precheck",
@@ -1628,6 +1644,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     mode: task.mode,
     agent_type: task.agent_type,
     model: task.model,
+    agent_definition: task.agent_definition,
     project_path: task.project_path,
     max_runtime_ms: task.max_runtime_ms,
     precheck: task.precheck,
@@ -1663,6 +1680,7 @@ export async function applyTaskUpdate(
   if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
   // "" or "default" clears the pin — the run goes back to the agent's saved default.
   if (args.model !== undefined) patch.model = args.model && args.model !== "default" ? args.model : undefined;
+  if (args.agent_definition !== undefined) patch.agent_definition = args.agent_definition || undefined;
   if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
   // "" removes the gate — `cast trigger update tr-42 --precheck ""`.
@@ -1737,6 +1755,7 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   mode: v.optional(v.string()),
   agent_type: v.optional(v.string()),
   model: v.optional(v.string()),
+  agent_definition: v.optional(v.string()),
   project_path: v.optional(v.string()),
   max_runtime_ms: v.optional(v.number()),
   precheck: v.optional(v.string()),

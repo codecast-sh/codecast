@@ -214,6 +214,12 @@ http.route({
           installed_by_user_id: bound.user_id as any,
         });
 
+        // The pull requests that already exist on the account arrive now, not
+        // one webhook at a time as people happen to touch them.
+        await ctx.scheduler.runAfter(0, internal.githubApp.backfillInstallationPulls, {
+          installation_id: installationDetails.installation_id,
+        });
+
         const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?success=true`;
         return new Response(null, {
           status: 302,
@@ -330,11 +336,19 @@ http.route({
 
     if (eventType === "installation_repositories") {
       const installationId = payload.installation?.id;
-      if (installationId && payload.repositories_added) {
-        const existing = await ctx.runQuery(internal.githubApp.getCachedToken, {
+      if (installationId) {
+        const repo = (r: any) => ({ id: r.id, name: r.name, full_name: r.full_name });
+        const applied = await ctx.runMutation(internal.githubApp.applyInstallationRepositoriesEvent, {
           installation_id: installationId,
+          repository_selection: payload.repository_selection,
+          added: (payload.repositories_added ?? []).map(repo),
+          removed: (payload.repositories_removed ?? []).map(repo),
         });
-        if (existing) {
+        if (applied.team_id && applied.added.length > 0) {
+          await ctx.scheduler.runAfter(0, internal.githubApp.backfillInstallationPulls, {
+            installation_id: installationId,
+            repositories: applied.added,
+          });
         }
       }
 
@@ -1529,7 +1543,7 @@ http.route({
             headers: { "Content-Type": "application/json", ...corsHeaders },
           });
         }
-        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id });
+        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id, stack: body.stack, task: body.task });
       } else if (action === "edit" || action === "cancel") {
         if (!body.decision_id) {
           return new Response(JSON.stringify({ error: "Missing decision_id" }), {
@@ -1568,6 +1582,14 @@ http.route({
           report_slug,
           blocking,
           default_option,
+          // W2: kind, category, document, form, task and station, stack.
+          kind: body.kind,
+          category: body.category,
+          doc_md: body.doc_md,
+          form: body.form,
+          task: body.task,
+          station: body.station,
+          stack: body.stack,
         });
       }
 
@@ -1608,6 +1630,89 @@ http.route({
     });
   }),
 });
+
+// The race verbs (docs/architecture/decisions-as-documents.md D2, D6): a role
+// on the ladder recommends or escalates from its session; a person in the
+// decision's people set, or the holder role under a grant, answers. Each
+// body carries api_token and decision_id (an `sd-N` or a raw id) plus the
+// verb's fields; the mutations answer { error } for a refusal.
+cliRoute("/cli/decide/recommend", (ctx, body) =>
+  ctx.runMutation(api.sessionDecisions.recommend, {
+    api_token: body.api_token,
+    decision_id: body.decision_id,
+    session_id: body.session_id,
+    recommendation: body.recommendation,
+    note: body.note,
+  }),
+);
+cliRoute("/cli/decide/answer", (ctx, body) =>
+  ctx.runMutation(api.sessionDecisions.answer, {
+    api_token: body.api_token,
+    decision_id: body.decision_id,
+    session_id: body.session_id,
+    answer_index: body.answer_index,
+    answer_json: body.answer_json,
+    answer_text: body.answer_text,
+  }),
+);
+cliRoute("/cli/decide/escalate", (ctx, body) =>
+  ctx.runMutation(api.sessionDecisions.escalate, {
+    api_token: body.api_token,
+    decision_id: body.decision_id,
+    session_id: body.session_id,
+    note: body.note,
+  }),
+);
+cliRoute("/cli/decide/show", (ctx, body) =>
+  ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
+);
+cliRoute("/cli/decide/grant", (ctx, body) =>
+  ctx.runMutation(api.sessionDecisions.grant, {
+    api_token: body.api_token,
+    role_id: body.role_id,
+    category: body.category,
+    scope_key: body.scope_key,
+    from_decision_id: body.from_decision_id,
+    force: body.force,
+  }),
+);
+
+// Stacks (D5): create | ls | show | add | remove | reorder | policy. Delegation
+// rides create and policy (`delegate: "@handle"`).
+cliRoute("/cli/stack/create", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.createStack, {
+    api_token: body.api_token,
+    title: body.title,
+    session_id: body.session_id,
+    team_id: body.team_id,
+    policy: body.policy,
+    delegate: body.delegate,
+  }),
+);
+cliRoute("/cli/stack/ls", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.listStacksForCli, { api_token: body.api_token, include_done: body.include_done }),
+);
+cliRoute("/cli/stack/show", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.getStackForCli, { api_token: body.api_token, stack: body.stack }),
+);
+cliRoute("/cli/stack/add", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.addToStack, { api_token: body.api_token, stack: body.stack, decision: body.decision }),
+);
+cliRoute("/cli/stack/remove", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.removeFromStack, { api_token: body.api_token, stack: body.stack, decision: body.decision }),
+);
+cliRoute("/cli/stack/reorder", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.reorderStack, { api_token: body.api_token, stack: body.stack, decision_ids: body.decision_ids }),
+);
+cliRoute("/cli/stack/policy", (ctx, body) =>
+  ctx.runMutation(api.decisionStacks.setStackPolicy, {
+    api_token: body.api_token,
+    stack: body.stack,
+    auto_default_after_ms: body.auto_default_after_ms,
+    clear_auto_default: body.clear_auto_default,
+    delegate: body.delegate,
+  }),
+);
 
 http.route({
   path: "/cli/patterns",
@@ -3931,6 +4036,71 @@ cliRoute("/cli/anchor/say-chat", async (ctx, body) => {
   return await ctx.runMutation(api.chat.sendAsAnchor, body);
 });
 
+// Org roles and the org tree (docs/architecture/org-roles.md S5, S7).
+// Agent definitions and chains (cast agent): the named client+model+effort+
+// prompt objects every launch surface resolves with --as. body carries
+// api_token plus the function's own args.
+cliRoute("/cli/agents/list", async (ctx, body) => ctx.runQuery((api as any).agentDefinitions.list, body));
+cliRoute("/cli/agents/get", async (ctx, body) => ctx.runQuery((api as any).agentDefinitions.get, body));
+cliRoute("/cli/agents/resolve", async (ctx, body) => ctx.runQuery((api as any).agentDefinitions.resolve, body));
+cliRoute("/cli/agents/upsert", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.upsert, body));
+cliRoute("/cli/agents/remove", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.remove, body));
+cliRoute("/cli/chains/list", async (ctx, body) => ctx.runQuery((api as any).agentDefinitions.listChains, body));
+cliRoute("/cli/chains/get", async (ctx, body) => ctx.runQuery((api as any).agentDefinitions.getChain, body));
+cliRoute("/cli/chains/resolve", async (ctx, body) => ctx.runQuery((api as any).agentDefinitions.resolveChain, body));
+cliRoute("/cli/chains/upsert", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.upsertChain, body));
+cliRoute("/cli/chains/remove", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.removeChain, body));
+
+cliRoute("/cli/org/tree", async (ctx, body) => {
+  return await ctx.runQuery(api.org.tree, body);
+});
+cliRoute("/cli/org/sessions-under", async (ctx, body) => {
+  return await ctx.runQuery(api.org.sessionsUnder, body);
+});
+cliRoute("/cli/org/create", async (ctx, body) => {
+  return await ctx.runMutation(api.orgRoles.create, body);
+});
+cliRoute("/cli/org/update", async (ctx, body) => {
+  return await ctx.runMutation(api.orgRoles.update, body);
+});
+cliRoute("/cli/org/reparent", async (ctx, body) => {
+  return await ctx.runMutation(api.orgRoles.reparent, body);
+});
+cliRoute("/cli/org/retire", async (ctx, body) => {
+  return await ctx.runMutation(api.orgRoles.retire, body);
+});
+cliRoute("/cli/org/reparent-session", async (ctx, body) => {
+  return await ctx.runMutation(api.orgRoles.reparentSession, body);
+});
+
+// Standing roles (docs/architecture/org-roles-standing.md T5): the role as a
+// live agent. Create + provision, the lifecycle verbs, the wake log, the
+// brief. `/cli/role/follow` and `/unfollow` (agent channels) sit with chat.
+cliRoute("/cli/role/create", async (ctx, body) => ctx.runMutation(api.orgRoles.create, body));
+cliRoute("/cli/role/update", async (ctx, body) => ctx.runMutation(api.orgRoles.update, body));
+cliRoute("/cli/role/provision", async (ctx, body) => ctx.runMutation(api.orgRoles.provision, body));
+cliRoute("/cli/role/wake", async (ctx, body) => ctx.runMutation(api.orgRoles.wake, body));
+cliRoute("/cli/role/pause", async (ctx, body) => ctx.runMutation(api.orgRoles.pause, body));
+cliRoute("/cli/role/resume", async (ctx, body) => ctx.runMutation(api.orgRoles.resume, body));
+cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.retire, body));
+cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
+cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
+cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
+cliRoute("/cli/role/wakes", async (ctx, body) => ctx.runQuery(api.orgRoles.wakes, body));
+cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
+cliRoute("/cli/brief/get", async (ctx, body) => ctx.runQuery(api.org.brief, body));
+cliRoute("/cli/brief/edit", async (ctx, body) => ctx.runMutation(api.orgRoles.briefEdit, body));
+// Scopes and the scope feed (docs/architecture/scopes-and-feed.md F1, F2).
+cliRoute("/cli/org/scope", async (ctx, body) => {
+  return await ctx.runMutation(api.orgRoles.setScope, body);
+});
+cliRoute("/cli/org/scope-feed", async (ctx, body) => {
+  return await ctx.runQuery(api.org.scopeFeed, body);
+});
+cliRoute("/cli/org/scope-summary", async (ctx, body) => {
+  return await ctx.runQuery(api.org.scopeSummary, body);
+});
+
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the
 // mutation. body: { api_token, conversation_id }.
@@ -3988,6 +4158,20 @@ cliRoute("/cli/chat/stop", async (ctx, body) => {
 // Archive (or restore) a channel. body: { api_token, channel_id, archived }.
 cliRoute("/cli/chat/archive", async (ctx, body) => {
   return await ctx.runMutation(api.chat.archiveChannel, body);
+});
+// What landed in some channels after a stamp, one short line each (a role's
+// wake frame and `cast chat read --since`). body: { channel_ids, since, limit? }.
+cliRoute("/cli/chat/lines-since", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.linesSince, body);
+});
+
+// Org roles following chat channels (agent-channels.md C1). body: { role, channel }
+// where role is "or-N" or a handle and channel is an id or "#name".
+cliRoute("/cli/role/follow", async (ctx, body) => {
+  return await ctx.runMutation(api.orgChannels.follow, body);
+});
+cliRoute("/cli/role/unfollow", async (ctx, body) => {
+  return await ctx.runMutation(api.orgChannels.unfollow, body);
 });
 
 // Tasks

@@ -1,0 +1,67 @@
+# Postgres 17 on the migration host (pl-592). Built from infra/pg-replica: the
+# same image and entrypoint as the Railway backup standby, so it starts life as
+# a streaming standby of the Railway primary and becomes the primary at
+# cutover by promotion. Deploy: copy this directory's parent layout to
+# /srv/postgres on the host (build/ = infra/pg-replica, certs/ = the client
+# certificate minted on the primary, data/ = PGDATA volume) and run
+# `docker compose up -d --build` there.
+#
+# Port 5432 is published on loopback only; the AWS security group keeps it
+# closed inbound as well. The backend reaches it over the `codecast` network.
+services:
+  postgres:
+    build: ./build
+    image: codecast/postgres:17
+    container_name: postgres
+    restart: unless-stopped
+    stop_grace_period: 180s
+    shm_size: 4g
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - codecast
+    volumes:
+      - /srv/postgres/data:/var/lib/postgresql/data
+      - /srv/postgres/certs:/certs-client:ro
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # Where the base backup and the WAL stream come from until cutover.
+      PRIMARY_HOST: hopper.proxy.rlwy.net
+      PRIMARY_PORT: "14404"
+      REPLICATION_USER: replicator_migrate
+      REPLICATION_SLOT: pg_migrate
+      REPLICA_APPLICATION_NAME: pg-migrate
+      # Certificate auth: the primary cannot restrict this host by address
+      # (Railway's TCP proxy hides it), so the certificate is the identity.
+      REPLICATION_SSLCERT: /certs-client/replicator_migrate.crt
+      REPLICATION_SSLKEY: /certs-client/replicator_migrate.key
+      REPLICATION_SSLROOTCERT: /certs-client/primary-root.crt
+      # The base backup reads the whole primary once; take it in the quiet
+      # window after the 09:00Z dump, never during US working hours.
+      BOOTSTRAP_AFTER: "2026-09-13T10:30:00Z"
+      # Sizing for 123 GB of RAM shared with the Convex backend (~64 GB).
+      REPLICA_SHARED_BUFFERS: 32GB
+      REPLICA_EFFECTIVE_CACHE_SIZE: 80GB
+      PG_EXTRA_CONF: |
+        # host tuning (pl-592 / ct-50394): NVMe gp3 at 6000 IOPS, 16 vCPU
+        max_wal_size = '16GB'
+        min_wal_size = '2GB'
+        checkpoint_completion_target = 0.9
+        wal_compression = 'lz4'
+        wal_buffers = '64MB'
+        random_page_cost = 1.1
+        effective_io_concurrency = 256
+        maintenance_io_concurrency = 256
+        work_mem = '64MB'
+        maintenance_work_mem = '2GB'
+        max_worker_processes = 16
+        max_parallel_workers = 12
+        max_parallel_workers_per_gather = 4
+        max_parallel_maintenance_workers = 4
+        log_min_duration_statement = 2000
+        log_checkpoints = on
+        log_lock_waits = on
+        track_io_timing = on
+networks:
+  codecast:
+    name: codecast

@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
+import { countersFor } from "./orgEvents";
 import { linkLocalCommitToConversation } from "./gitActivity";
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -10,7 +11,7 @@ import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } fro
 import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
-import { maybeRecordUserSend } from "./lib/userSend";
+import { scheduleUserSend } from "./lib/userSend";
 import { validateCommandId } from "./localFirstCommands";
 import {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -85,6 +86,7 @@ export function buildExistingMessagePatch(
     tool_calls?: unknown;
     tool_results?: unknown;
     images?: unknown;
+    files?: unknown;
     subtype?: string;
     model?: string;
   },
@@ -95,6 +97,7 @@ export function buildExistingMessagePatch(
     tool_calls?: unknown;
     tool_results?: unknown;
     images?: unknown;
+    files?: unknown;
     subtype?: string;
     model?: string;
   },
@@ -125,6 +128,13 @@ export function buildExistingMessagePatch(
 
   if (incoming.images && JSON.stringify(incoming.images) !== JSON.stringify(existing.images ?? null)) {
     patch.images = incoming.images;
+  }
+
+  // A re-synced turn carries its sent files again, now with storage ids. The
+  // first sync of a live turn can land before the upload finishes, so this is
+  // what fills the card in rather than leaving it stuck on "preparing".
+  if (incoming.files && JSON.stringify(incoming.files) !== JSON.stringify(existing.files ?? null)) {
+    patch.files = incoming.files;
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
@@ -1174,6 +1184,48 @@ export function findEchoedPendingMessage<
     ?? recentlyDeliveredMatch();
 }
 
+
+// ── Usage rollup (org-roles-standing.md T4) ──
+// Claude's JSONL assistant records carry `message.usage`; the CLI parser
+// forwards it per message and this folds it into conversations.usage_totals.
+// A conversation that is a role's standing session or one of its hands also
+// bumps the role's daily token counter, which is what the caps read.
+type UsageIn = { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
+export async function rollUpUsage(
+  ctx: { db: any },
+  conversation: any,
+  usages: UsageIn[],
+  convPatch: Record<string, unknown>,
+  now: number,
+): Promise<void> {
+  let input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+  for (const u of usages) {
+    if (!u) continue;
+    input += u.input_tokens || 0;
+    output += u.output_tokens || 0;
+    cacheRead += u.cache_read_input_tokens || 0;
+    cacheWrite += u.cache_creation_input_tokens || 0;
+  }
+  const total = input + output + cacheRead + cacheWrite;
+  if (total === 0) return;
+  const prev = conversation.usage_totals ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, updated_at: 0 };
+  convPatch.usage_totals = {
+    input: prev.input + input,
+    output: prev.output + output,
+    cache_read: prev.cache_read + cacheRead,
+    cache_write: prev.cache_write + cacheWrite,
+    updated_at: now,
+  };
+  const roleId = conversation.standing_role_id ?? conversation.org_role_id;
+  if (roleId) {
+    const role = await ctx.db.get(roleId);
+    if (role) {
+      const counters = countersFor(role, now);
+      await ctx.db.patch(role._id, { counters: { ...counters, tokens: counters.tokens + input + output } });
+    }
+  }
+}
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1202,9 +1254,25 @@ export const addMessage = mutation({
       storage_id: v.optional(v.id("_storage")),
       tool_use_id: v.optional(v.string()),
     }))),
+    files: v.optional(v.array(v.object({
+      name: v.string(),
+      media_type: v.string(),
+      size: v.optional(v.number()),
+      storage_id: v.optional(v.id("_storage")),
+      tool_use_id: v.optional(v.string()),
+      caption: v.optional(v.string()),
+      display: v.optional(v.string()),
+      error: v.optional(v.string()),
+    }))),
     subtype: v.optional(v.string()),
     model: v.optional(v.string()),
     timestamp: v.optional(v.number()),
+    usage: v.optional(v.object({
+      input_tokens: v.number(),
+      output_tokens: v.number(),
+      cache_creation_input_tokens: v.optional(v.number()),
+      cache_read_input_tokens: v.optional(v.number()),
+    })),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1253,6 +1321,7 @@ export const addMessage = mutation({
           tool_calls: safeToolCalls,
           tool_results: safeToolResults,
           images: args.images,
+          files: args.files,
           subtype: args.subtype,
           model: args.model,
         });
@@ -1336,8 +1405,10 @@ export const addMessage = mutation({
       tool_calls: safeToolCalls,
       tool_results: safeToolResults,
       images,
+      files: args.files,
       subtype: args.subtype,
       model: args.model,
+      usage: args.usage,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
@@ -1346,7 +1417,7 @@ export const addMessage = mutation({
       // (the delivered-tier match in findEchoedPendingMessage keys off this).
       await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
     }
-    await maybeRecordUserSend(ctx, conversation, { role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore }, msgTimestamp);
+    await scheduleUserSend(ctx, conversation, { role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore }, msgTimestamp);
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     const newMessageCount = conversation.message_count + 1;
@@ -1380,6 +1451,7 @@ export const addMessage = mutation({
       updated_at: now,
       last_message_role: args.role,
     };
+    await rollUpUsage(ctx, conversation, [args.usage], convPatch, now);
     const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, content: contentToStore, timestamp: msgTimestamp }]);
     if (msgModel && msgModel !== conversation.model) {
       convPatch.model = msgModel;
@@ -1578,9 +1650,25 @@ const messageValidator = v.object({
     storage_id: v.optional(v.id("_storage")),
     tool_use_id: v.optional(v.string()),
   }))),
+  files: v.optional(v.array(v.object({
+    name: v.string(),
+    media_type: v.string(),
+    size: v.optional(v.number()),
+    storage_id: v.optional(v.id("_storage")),
+    tool_use_id: v.optional(v.string()),
+    caption: v.optional(v.string()),
+    display: v.optional(v.string()),
+    error: v.optional(v.string()),
+  }))),
   subtype: v.optional(v.string()),
   model: v.optional(v.string()),
   timestamp: v.optional(v.number()),
+  usage: v.optional(v.object({
+    input_tokens: v.number(),
+    output_tokens: v.number(),
+    cache_creation_input_tokens: v.optional(v.number()),
+    cache_read_input_tokens: v.optional(v.number()),
+  })),
 });
 
 export type AddMessagesAgentStatusProjection = {
@@ -1756,6 +1844,7 @@ export const addMessages = mutation({
             tool_calls: safeToolCalls,
             tool_results: safeToolResults,
             images: msg.images,
+            files: msg.files,
             subtype: msg.subtype,
             model: msg.model,
           });
@@ -1869,8 +1958,10 @@ export const addMessages = mutation({
         tool_calls: safeToolCalls,
         tool_results: safeToolResults,
         images,
+        files: msg.files,
         subtype: msg.subtype,
         model: msg.model,
+        usage: msg.usage,
         client_id: clientIdToStore,
         timestamp: msgTimestamp,
       });
@@ -1881,7 +1972,7 @@ export const addMessages = mutation({
       }
       ids.push(messageId);
       insertedCount++;
-      await maybeRecordUserSend(ctx, conversation, { role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id }, msgTimestamp);
+      await scheduleUserSend(ctx, conversation, { role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id }, msgTimestamp);
       await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
       await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
       if (msg.role === "user") lastUserContentStored = contentToStore;
@@ -1929,6 +2020,7 @@ export const addMessages = mutation({
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
+      await rollUpUsage(ctx, conversation, args.messages.map((m: any) => m.usage), convPatch, Date.now());
       if (oldRowEdits > 0) {
         convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;
       }

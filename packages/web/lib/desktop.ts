@@ -931,6 +931,28 @@ export function setFacesWindowDragging(on: boolean): void {
  * /people, say — so the caller can navigate itself rather than swallow the
  * click and look broken.
  */
+/**
+ * A window you STAND in rather than browse: the people window and the voice
+ * window (the call panel, in every shape from the burst strip to the stage).
+ * Any link in one of them belongs to the main window. Navigating the
+ * satellite itself boots the whole app inside a strip the size of a button,
+ * and takes the microphone with it.
+ */
+export function isSatelliteWindow(): boolean {
+  return isPeopleWindow() || isCallPanelWindow();
+}
+
+/**
+ * Follow a path from wherever the gesture happened: a satellite hands it to
+ * the main window and stays as it was; anywhere else `here` moves this window.
+ * The one rule for every "open the chat" button, so a new surface cannot
+ * get it wrong by forgetting which window it is drawn in.
+ */
+export function navigateFromHere(path: string, here: (path: string) => void): void {
+  if (isSatelliteWindow() && navigateMainWindow(path)) return;
+  here(path);
+}
+
 export function navigateMainWindow(path: string): boolean {
   const send = bridge("paletteNavigate");
   if (send) {
