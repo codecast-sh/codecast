@@ -9,6 +9,7 @@ import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
   isActiveTask,
+  isTerminalTaskStatus,
   isHumanOrigin,
   subtaskProgressOf,
   teamTaskStatuses,
@@ -3346,6 +3347,9 @@ export const webCreate = mutation({
       task_type: (args.task_type || "task") as any,
       status: (statusWrite.status || "open") as any,
       status_id: statusWrite.statusId.set ? statusWrite.statusId.value : undefined,
+      // Created directly in done/dropped (the modal offers every status):
+      // terminal rows always carry closed_at, same as a close would stamp.
+      closed_at: isTerminalTaskStatus(statusWrite.status) ? now : undefined,
       priority: (args.priority || "medium") as any,
       labels: args.labels,
       assignee: resolvedAssignee,
