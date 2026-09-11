@@ -27,7 +27,7 @@ import { Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessCommit, canAccessConversation, canAccessPullRequest, canAccessTask, isTeamMember } from "./lib/access";
 import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
-import { installationCoversRepo } from "./githubApp";
+import { installationCoversRepo, routingTeamForInstallation } from "./githubApp";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { applyCommitFilesTo } from "./commits";
@@ -83,12 +83,12 @@ async function installationForUser(
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
   for (const candidate of await installationsForOwner(ctx, repository)) {
     if (!installationCoversRepo(candidate, repository)) continue;
-    // Browsing stamps every cached row with the team it belongs to, so a
-    // personal installation (no team) cannot admit a viewer here; it serves
-    // issue sync and task pushes, where the work names its own workspace.
-    if (!candidate.team_id) continue;
-    if (!(await isTeamMember(ctx, userId, candidate.team_id))) continue;
-    return { team_id: candidate.team_id, installation_id: candidate.installation_id };
+    // Browsing stamps every cached row with a team, so an installation admits
+    // a viewer through the team it routes to (githubApp.routingTeamForInstallation):
+    // its own team, or for a personal install the owner's current team.
+    const team = await routingTeamForInstallation(ctx, candidate);
+    if (!team || !(await isTeamMember(ctx, userId, team))) continue;
+    return { team_id: team, installation_id: candidate.installation_id };
   }
   return null;
 }
@@ -115,8 +115,9 @@ async function installationForRepository(
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
   for (const candidate of await installationsForOwner(ctx, repository)) {
     if (!installationCoversRepo(candidate, repository)) continue;
-    if (!candidate.team_id) continue;
-    return { team_id: candidate.team_id, installation_id: candidate.installation_id };
+    const team = await routingTeamForInstallation(ctx, candidate);
+    if (!team) continue;
+    return { team_id: team, installation_id: candidate.installation_id };
   }
   return null;
 }
@@ -169,20 +170,30 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
     .collect();
 
   const found = new Map<string, { repository: string; team_id: Id<"teams">; installed: boolean }>();
+  const addInstallation = (installation: any, teamId: Id<"teams">) => {
+    if (installation.suspended_at) return;
+    // Keyed by the canonical spelling so a display-case entry and the rows
+    // activity wrote are one repository; the display name is what is shown.
+    for (const repo of installation.repositories ?? []) {
+      found.set(normalizeRepository(repo.full_name), { repository: repo.full_name, team_id: teamId, installed: true });
+    }
+  };
+  // The viewer's personal installs list under the team they route to.
+  const personal = await ctx.db
+    .query("github_app_installations")
+    .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
+    .collect();
+  for (const installation of personal) {
+    const team = await routingTeamForInstallation(ctx, installation);
+    if (team) addInstallation(installation, team);
+  }
   for (const membership of memberships) {
     const installations = await ctx.db
       .query("github_app_installations")
       .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
       .collect();
 
-    for (const installation of installations) {
-      if (installation.suspended_at) continue;
-      // Keyed by the canonical spelling so a display-case entry and the rows
-      // activity wrote are one repository; the display name is what is shown.
-      for (const repo of installation.repositories ?? []) {
-        found.set(normalizeRepository(repo.full_name), { repository: repo.full_name, team_id: membership.team_id, installed: true });
-      }
-    }
+    for (const installation of installations) addInstallation(installation, membership.team_id);
 
     // Repositories teammates publish from their own checkouts need no
     // installation at all; they are browsable from the cache the daemon fills.

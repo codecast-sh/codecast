@@ -88,9 +88,10 @@ export const getImageUrls = query({
     if (!conversation) return null;
     if ((await checkConversationAccess(ctx, null, conversation, args.share_token)) === "denied") return null;
     // Resolve only ids that verifiably belong to the shared conversation —
-    // membership is proven by scanning its messages' inline image attachments
-    // (the only place storage-backed transcript images live). Early exit once
-    // every requested id is found; typical transcripts have few image rows.
+    // membership is proven by scanning its messages' storage-backed
+    // attachments: inline images, and the files an agent sent the reader.
+    // Early exit once every requested id is found; typical transcripts have
+    // few attachment rows.
     const wanted = new Set<string>(args.storageIds.map((id) => id.toString()));
     const verified = new Set<string>();
     let scanned = 0;
@@ -100,9 +101,9 @@ export const getImageUrls = query({
         q.eq("conversation_id", args.conversation_id!)
       )) {
       if (++scanned > GUEST_IMAGE_SCAN_CAP) break;
-      for (const img of msg.images ?? []) {
-        if (img.storage_id && wanted.has(img.storage_id.toString())) {
-          verified.add(img.storage_id.toString());
+      for (const attachment of [...(msg.images ?? []), ...(msg.files ?? [])]) {
+        if (attachment.storage_id && wanted.has(attachment.storage_id.toString())) {
+          verified.add(attachment.storage_id.toString());
         }
       }
       if (verified.size === wanted.size) break;

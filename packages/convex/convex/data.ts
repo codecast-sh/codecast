@@ -295,7 +295,8 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
 // team reference must be checked against the row before it is treated as an
 // access boundary. Missing team = the reference is debris, not a denial.
 async function teamExists(ctx: { db: any }, teamId: Id<"teams">): Promise<boolean> {
-  return !!(await ctx.db.get(teamId));
+  const team = await ctx.db.get(teamId);
+  return !!team && !team.deleted_at;
 }
 
 async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promise<Workspace> {

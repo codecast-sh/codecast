@@ -3,6 +3,9 @@ import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
+import { useDaemonHealth } from "../hooks/useDaemonHealth";
+import { useAppOffline } from "../hooks/useAppOffline";
+import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 // A healthy cold-open sync settles in a few seconds, and a catch-up after
@@ -169,6 +172,9 @@ export function SyncStatusChip() {
   // slot itself always renders, so the header never reflows around it.
   const [mounted, setMounted] = useState(false);
   useMountEffect(() => setMounted(true));
+  const daemonHealth = useDaemonHealth();
+  const { offline } = useAppOffline();
+  const daemonIssue = mounted && !offline ? describeDaemonHealth(daemonHealth) : null;
 
   // Arm a timer when sync starts; trip the slow state if it's still going past
   // the threshold. Reset the moment sync settles (the timer is cleared too).
@@ -184,10 +190,12 @@ export function SyncStatusChip() {
   // A fixed 20px slot in every state. The LED never carries text, so nothing
   // next to it shifts when sync starts, ticks through scopes, or settles: the
   // only thing that changes is the color and its pulse ring.
-  const active = mounted && (coldLoad || stalled);
+  const active = mounted && (coldLoad || stalled || !!daemonIssue);
   const color = !mounted
     ? "var(--sol-text-dim)"
-    : stalled
+    : daemonIssue
+      ? `var(${daemonIssue.colorVar})`
+      : stalled
       ? "var(--sol-yellow)"
       : active
         ? "var(--sol-cyan)"
@@ -199,7 +207,7 @@ export function SyncStatusChip() {
           <button
             type="button"
             className="relative hidden md:flex h-7 w-5 flex-shrink-0 items-center justify-center rounded cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
-            aria-label={`Sync status: ${!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing"}`}
+            aria-label={`Sync status: ${daemonIssue?.label ?? (!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing")}`}
           >
             <span aria-hidden="true" className="relative flex h-2 w-2">
               {active && (
@@ -216,7 +224,7 @@ export function SyncStatusChip() {
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom" align="end" sideOffset={6} collisionPadding={8} className="w-[280px] max-w-[calc(100vw-16px)] overflow-hidden border bg-popover p-0 text-popover-foreground shadow-md">
-          {mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} />}
+          {mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} daemonIssue={daemonIssue} />}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -226,7 +234,7 @@ export function SyncStatusChip() {
 // Hover detail: the only consumer of the churning `liveLoading` / `syncProgress`
 // objects. Mounted solely while the pill is hovered, so their per-page identity
 // churn costs nothing the rest of the time.
-function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalled: boolean; color: string }) {
+function SyncDetailPanel({ syncing, stalled, color, daemonIssue }: { syncing: boolean; stalled: boolean; color: string; daemonIssue: DaemonHealthCopy | null }) {
   const liveLoading = useInboxStore((s) => s.liveLoading);
   const settled = useInboxStore((s) => selectSyncSummary(s).settled);
   const total = useInboxStore((s) => selectSyncSummary(s).total);
@@ -241,8 +249,8 @@ function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalle
   const crawls = Object.entries(syncProgress)
     .filter(([, p]) => p.loading)
     .sort(([a], [b]) => knownScopeRank(a) - knownScopeRank(b) || a.localeCompare(b));
-  const headline = !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing the latest data";
-  const hasBody = !syncing || applyStats.direct > 0 || applyStats.refetch > 0 || behind.length > 0 || scopes.length > 0;
+  const headline = daemonIssue?.label ?? (!syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing the latest data");
+  const hasBody = !!daemonIssue || !syncing || applyStats.direct > 0 || applyStats.refetch > 0 || behind.length > 0 || scopes.length > 0;
   return (
     <div className="min-w-0">
       <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">Sync status</div>
@@ -257,7 +265,10 @@ function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalle
       </div>
       {hasBody && (
         <div className="space-y-1.5 px-3 py-2">
-          {!syncing && <p className="text-xs leading-snug text-sol-text-dim">New changes arrive automatically.</p>}
+          {daemonIssue ? <div className="space-y-1.5 text-xs leading-snug text-sol-text-dim">
+            <p>{daemonIssue.detail}</p>
+            <p>Check the affected machine with <code>{daemonIssue.command}</code>.</p>
+          </div> : !syncing && <p className="text-xs leading-snug text-sol-text-dim">New changes arrive automatically.</p>}
           {(applyStats.direct > 0 || applyStats.refetch > 0) && (
             <p className="text-[11px] leading-snug tabular-nums text-sol-text-dim">
               {applyStats.direct.toLocaleString()} applied

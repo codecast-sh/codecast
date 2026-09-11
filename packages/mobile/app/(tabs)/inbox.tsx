@@ -14,7 +14,7 @@ import {
   useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, placeInboxRows,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
-  sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig,
+  sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
@@ -1459,8 +1459,10 @@ export default function InboxScreen() {
     // anything else, pinned or not — same order as the web panel.
     sections.push(renderSection("Questions", filteredQuestions, Theme.violet, "questions"));
     // The header number is the section COUNT while no chip narrows the list
-    // (a filter that removed nothing leaves the full count in force).
-    const countOf = (shown: InboxSession[], full: InboxSession[], n: number) => (shown.length === full.length ? n : undefined);
+    // and the nested rows are on screen; shared sectionHeaderCount, so this
+    // inbox and the web panel can't drift.
+    const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
+      sectionHeaderCount(shown, full, n, showSubagents);
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
     sections.push(renderSection("New", filteredNew, Theme.blue, undefined, countOf(filteredNew, newSessions, placed.counts.newSessions)));
     // Top-down "who acts next": you (Needs Input, Done to review), the agent

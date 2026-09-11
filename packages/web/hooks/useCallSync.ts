@@ -115,14 +115,18 @@ export function useCallSync(): void {
     enabled && seatedRoomKey ? { room_key: seatedRoomKey, tail: 1 } : "skip",
   );
   const scribeActive = useSyncExternalStore(subscribeScribe, () => getScribeStatus().active, () => false);
+  const scribeStartedAt = useSyncExternalStore(subscribeScribe, () => getScribeStatus().startedAt, () => null);
   const roster = useTrackedStore([
     (st: any) => (seatedRoomKey ? (st.callOccupancy[seatedRoomKey] ?? []) : []).map((m: any) => String(m.user_id)).sort().join("|"),
     (st: any) => !!(st.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off,
+    (st: any) => (st.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off_at ?? null,
   ]);
   const rosterSig = seatedRoomKey
     ? (roster.callOccupancy[seatedRoomKey] ?? []).map((m: any) => String(m.user_id)).sort().join("|")
     : "";
-  const transcribeOff = !!(roster.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off;
+  const liveRoomRow = (roster.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey);
+  const transcribeOff = !!liveRoomRow?.transcribe_off;
+  const transcribeOffAt: number | null = liveRoomRow?.transcribe_off_at ?? null;
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
   const liveStartedBy = liveTranscript === undefined ? undefined : liveTranscript ? String(liveTranscript.started_by) : null;
   useWatchEffect(() => {
@@ -131,6 +135,8 @@ export function useCallSync(): void {
       connected: !!seatedRoomKey,
       deliberate: isDeliberateRoom(seatedRoomKey),
       transcribeOff,
+      transcribeOffAt,
+      scribeStartedAt,
       rosterIds: rosterSig ? rosterSig.split("|") : [],
       meId,
       live: liveStartedBy === undefined ? undefined : liveStartedBy === null ? null : { startedBy: liveStartedBy },
@@ -138,7 +144,8 @@ export function useCallSync(): void {
     });
     if (verdict === "start" && seatedRoomKey) autoScribe(seatedRoomKey);
     else if (verdict === "yield") void stopScribe({ keepLive: true });
-  }, [seatedRoomKey, transcribeOff, rosterSig, meId, liveStartedBy, scribeActive]);
+    else if (verdict === "stop") void stopScribe();
+  }, [seatedRoomKey, transcribeOff, transcribeOffAt, scribeStartedAt, rosterSig, meId, liveStartedBy, scribeActive]);
 
   useConvexSync(seatedRoomKey ? knocks : NO_KNOCKS, useCallback((d: any) => {
     // The sound belongs to the knock ARRIVING, not to a surface being

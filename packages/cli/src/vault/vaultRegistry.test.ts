@@ -8,6 +8,7 @@ import {
   findVault,
   homeForConfigDir,
   listVaults,
+  locateVault,
   projectVaults,
   registeredVaults,
   removeVault,
@@ -278,5 +279,41 @@ describe("config healing", () => {
     expect(listed).toHaveLength(1);
     expect(listed[0]!.name).toBe("dupe");
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  });
+});
+
+describe("locateVault", () => {
+  test("a path inside a registered vault resolves to it, longest root winning", () => {
+    addVault(configDir, base, "Base");
+    const notes = addVault(configDir, notesDir, "Notes");
+    fs.writeFileSync(path.join(notesDir, "a.md"), "a\n");
+    expect(locateVault(configDir, path.join(notesDir, "a.md"))).toEqual({ vault: notes, rel: "a.md" });
+    expect(locateVault(configDir, notesDir)).toEqual({ vault: notes, rel: "" });
+    expect(locateVault(configDir, path.join(base, "x.md"))).toBeNull(); // does not exist
+  });
+
+  test("a path no vault holds registers the directory it sits in", () => {
+    const loose = path.join(base, "tmp", "tiles");
+    fs.mkdirSync(loose, { recursive: true });
+    fs.writeFileSync(path.join(loose, "pic.png"), "png");
+    const located = locateVault(configDir, path.join(loose, "pic.png"));
+    expect(located).toMatchObject({ vault: { root: loose, name: "tiles" }, rel: "pic.png" });
+    expect(registeredVaults(configDir).map((v) => v.root)).toEqual([loose]);
+    // Second time round it is an ordinary registered vault.
+    expect(locateVault(configDir, path.join(loose, "pic.png"))?.vault.id).toBe(located!.vault.id);
+    expect(registeredVaults(configDir)).toHaveLength(1);
+  });
+
+  test("inside a git checkout the checkout root is the vault", () => {
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "deep", "er"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "deep", "er", "note.md"), "n\n");
+    const located = locateVault(configDir, path.join(repo, "deep", "er", "note.md"));
+    expect(located).toMatchObject({ vault: { root: repo }, rel: "deep/er/note.md" });
+  });
+
+  test("refuses a path directly under the filesystem root", () => {
+    expect(locateVault(configDir, path.parse(base).root)).toBeNull();
   });
 });

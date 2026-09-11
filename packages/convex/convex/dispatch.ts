@@ -1236,6 +1236,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
     return teamId;
   },
+  // Local-first team delete (inboxStore.deleteTeam). The mutation repoints the
+  // canonical users.active_team_id when it named the team; the ui mirror
+  // already moved to the client's fallback, so re-stamp it with the server's
+  // answer in the same transaction. Both apply the oldest-membership rule.
+  dispatchDeleteTeam: async (ctx, userId, [teamId, confirmName]: [string, string, string | undefined]) => {
+    const result = await (ctx as any).runMutation(api.teams.deleteTeam, {
+      team_id: teamId,
+      confirm_name: confirmName,
+    });
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { active_team_id: result?.active_team_id ?? undefined } } },
+    });
+    return result;
+  },
   createSavedView: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
   },
