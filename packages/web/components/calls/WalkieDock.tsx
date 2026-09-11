@@ -37,7 +37,6 @@
 // half that knows where those props come from.
 import { useCallback, useSyncExternalStore, type ReactNode, type RefCallback } from "react";
 import { BellOff, Maximize2, MessageSquare, MicOff, PictureInPicture2, Square, X } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
@@ -60,6 +59,7 @@ import {
   walkieStripState,
   type WalkieStage,
 } from "../../hooks/useWalkie";
+import { useOpenChatPath } from "../../hooks/useChatSync";
 import { useChatMessageRow } from "../../hooks/useChatSync";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -105,7 +105,7 @@ export function WalkieBanner({
   onShape?: (size: CallWindowSize) => void;
 } = {}) {
   const status = useWalkieStatus();
-  const router = useRouter();
+  const openChat = useOpenChatPath();
   const incoming = status.incoming;
   const sending = status.sending;
   // During the linger there is no burst to read the room off, so the walkie's
@@ -253,7 +253,7 @@ export function WalkieBanner({
       onOpen={onShape ? () => onShape("panel") : undefined}
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
       onSnooze={snoozeWalkie}
-      onOpenDm={() => router.push(`/chat/${target.channelId}`)}
+      onOpenDm={() => openChat(`/chat/${target.channelId}`)}
       onLeave={() => void endWalkie()}
       replyKey={
         <WalkiePttButton

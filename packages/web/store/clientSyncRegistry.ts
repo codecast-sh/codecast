@@ -674,6 +674,12 @@ export const CLIENT_SYNC_REGISTRY = {
   queuedMessages: {
     persistence: { kind: "meta", key: "queuedMessages" },
   },
+  // Inline-review quotes and their notes, per conversation (or `doc:<id>`).
+  // A note the user typed is a draft of their next message: persisted like
+  // `drafts` so a reload or a navigation never loses it.
+  reviewComments: {
+    persistence: { kind: "meta", key: "reviewComments" },
+  },
   recentProjects: {
     persistence: { kind: "meta", key: "recentProjects" },
     hydration: { phase: "deferred" },
@@ -981,6 +987,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pending: "local",
   drafts: "local",
   queuedMessages: "local",
+  reviewComments: "local",
   pendingMessages: "local",
   blockedReviveRequestedAt: "local",
   lastFocusedConversationId: "local",

@@ -88,9 +88,12 @@ export function tabNavigate(path: string, mode: "push" | "replace" = "push", fro
   if (mode === "push" && path !== current) {
     window.history.pushState(state, "", path);
     // Real (pushed) page navigations feed the recently-visited rail.
-    // Conversations are recorded as sessions by recordSessionView instead.
+    // Conversations are recorded as sessions by recordSessionView instead, and
+    // the inbox is only ever a session's container: opening a session from
+    // another surface pushes /inbox right after selecting it (useOpenSession),
+    // which was filing an "Inbox" visit on top of the session's own.
     const clean = path.split("#")[0];
-    if (!clean.startsWith("/conversation/")) {
+    if (!clean.startsWith("/conversation/") && clean.split("?")[0] !== "/inbox") {
       store.recordRecentVisit({ kind: "page", key: `page:${clean}`, path: clean, label: pathLabel(clean) });
     }
   } else {

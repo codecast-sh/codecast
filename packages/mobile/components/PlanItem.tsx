@@ -1,7 +1,7 @@
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { PlanItem as PlanItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
 
@@ -25,6 +25,7 @@ export function PlanItemRow({
   plan: PlanItemType;
   onPress: () => void;
 }) {
+  const Theme = useTheme();
   const status = PLAN_STATUS_CONFIG[plan.status as PlanStatus] ?? PLAN_STATUS_CONFIG.draft;
   const progress = plan.progress;
   const donePct = progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
@@ -72,7 +73,7 @@ export function PlanItemRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   row: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
@@ -159,4 +160,4 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     fontVariant: ["tabular-nums"],
   },
-});
+}));

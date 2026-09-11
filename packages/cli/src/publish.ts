@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "./proc.js";
+import { findChromeBinary, keychainArgs } from "./workspace/chrome.js";
 import { stdinText } from "./sendBody.js";
 import type { Command } from "commander";
 import open from "open";
@@ -58,27 +59,25 @@ export function walkBundleDir(dir: string): string[] {
 
 // ── thumbnail capture ────────────────────────────────────────────────────────
 
-export function findChrome(): string | null {
-  const absolute = [
-    process.env.CHROME_PATH,
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ].filter((p): p is string => !!p);
-  for (const candidate of absolute) {
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch {}
-  }
-  for (const name of ["google-chrome", "chromium", "chromium-browser"]) {
-    try {
-      const found = spawnSync("which", [name], { encoding: "utf-8" }).stdout?.trim();
-      if (found) return found;
-    } catch {}
-  }
-  return null;
+/** The same Chrome discovery every launcher uses (CHROME_PATH, app bundles, PATH). */
+export const findChrome = findChromeBinary;
+
+/** The headless command line for one thumbnail. Pure, so the flag set is
+ * testable without spawning a browser. The throwaway profile dir keeps the
+ * capture off the human's real profile (which a running Chrome holds locked)
+ * and, with the keychain flag, off the macOS keychain when the home has none. */
+export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string): string[] {
+  return [
+    "--headless=new",
+    `--screenshot=${outPng}`,
+    `--user-data-dir=${profileDir}`,
+    "--window-size=1200,630",
+    "--hide-scrollbars",
+    "--disable-gpu",
+    "--no-first-run",
+    ...keychainArgs(),
+    `file://${entryHtmlAbsPath}`,
+  ];
 }
 
 /** Headless-Chrome 1200x630 screenshot of a local html file → base64 png.
@@ -91,19 +90,10 @@ export function captureThumb(entryHtmlAbsPath: string): string | null {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-thumb-"));
     const outPng = path.join(tmpDir, "thumb.png");
     try {
-      const run = spawnSync(
-        chrome,
-        [
-          "--headless=new",
-          `--screenshot=${outPng}`,
-          "--window-size=1200,630",
-          "--hide-scrollbars",
-          "--disable-gpu",
-          "--no-first-run",
-          `file://${entryHtmlAbsPath}`,
-        ],
-        { timeout: THUMB_TIMEOUT_MS, stdio: "ignore" },
-      );
+      const run = spawnSync(chrome, thumbArgs(entryHtmlAbsPath, outPng, path.join(tmpDir, "profile")), {
+        timeout: THUMB_TIMEOUT_MS,
+        stdio: "ignore",
+      });
       if (run.status !== 0 || !fs.existsSync(outPng)) return null;
       return fs.readFileSync(outPng).toString("base64");
     } finally {

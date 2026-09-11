@@ -1,4 +1,5 @@
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { reportSignupConversion } from "../../../lib/googleAds";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState, Suspense, useRef } from "react";
@@ -50,6 +51,14 @@ function CliAuthContent() {
       );
       return;
     }
+
+    // The sign in is real as soon as the token exists: the server records
+    // `cli_authed` inside createToken, and a mint whose hand off to the CLI
+    // later fails is still counted there. Reporting here — before the delivery
+    // branches below — keeps the ads number and the product metric describing
+    // the same event, and covers the desktop path too. No-ops unless the ads
+    // tag is configured.
+    reportSignupConversion();
 
     if (!isDesktopMode) {
       // Target 127.0.0.1 explicitly (not "localhost"): on macOS "localhost"

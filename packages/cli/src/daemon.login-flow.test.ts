@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { buildLoginFlowCommand, buildMintFlowCommand, summarizeLoginPaneTail } from "./daemon.js";
+import { buildLoginFlowCommand, summarizeLoginPaneTail } from "./daemon.js";
 
 const daemonSource = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 
@@ -55,22 +55,34 @@ describe("buildLoginFlowCommand", () => {
   });
 });
 
-describe("buildMintFlowCommand", () => {
-  test("runs setup-token with $BROWSER pointed at the URL hook, PATH carried, grace sleep appended", () => {
-    const cmd = buildMintFlowCommand("/Users/me/.codecast/mint-browser-hook.sh");
-    expect(cmd).toMatch(/^PATH='[^']+' BROWSER='\/Users\/me\/\.codecast\/mint-browser-hook\.sh' claude setup-token; sleep 4$/);
+// A profile sign-in must land in that profile's own credential store, so the
+// machine's keychain login is untouched by a repair of one saved account.
+
+describe("buildLoginFlowCommand into a profile store", () => {
+  test("exports CLAUDE_SECURESTORAGE_CONFIG_DIR for the login process only", () => {
+    const cmd = buildLoginFlowCommand("a@b.com", "/Users/me/.codecast/cc-store/work");
+    expect(cmd).toMatch(/^PATH='[^']+' CLAUDE_SECURESTORAGE_CONFIG_DIR='\/Users\/me\/\.codecast\/cc-store\/work' claude auth login --claudeai --email 'a@b.com'; sleep 4$/);
   });
 
-  test("a hook path with a quote cannot break out of the shell word", () => {
-    const cmd = buildMintFlowCommand("/tmp/it's/hook.sh");
-    expect(cmd).toContain("BROWSER='/tmp/it'\\''s/hook.sh' claude setup-token");
+  test("shell-escapes the store dir", () => {
+    const cmd = buildLoginFlowCommand(undefined, "/tmp/it's/store");
+    expect(cmd).toContain("CLAUDE_SECURESTORAGE_CONFIG_DIR='/tmp/it'\\''s/store' claude auth login");
   });
 });
 
-describe("automatic session tokens", () => {
-  test("checks the active account on every heartbeat without a settings gate", () => {
+// Per-session credentials are provisioned from the saved snapshots on every
+// beat, offline. Nothing in the daemon may hand an OAuth page to the human's
+// browser on its own: the only browser opening is a sign-in a person clicked.
+
+describe("per-profile credential stores", () => {
+  test("provisions stores on every heartbeat without a settings gate", () => {
     expect(daemonSource).not.toContain("sessionTokensEnabled");
-    expect(daemonSource).toContain("if (isRemoteDevice() || mintFlowActive) return;");
-    expect(daemonSource).toMatch(/async function sendHeartbeat[\s\S]*?maybeAutoMintToken\(\);/);
+    expect(daemonSource).toMatch(/async function sendHeartbeat[\s\S]*?void ensureProfileStores\("heartbeat"\);/);
+  });
+
+  test("never opens a browser unattended", () => {
+    expect(daemonSource).not.toContain("setup-token");
+    expect(daemonSource).not.toContain("approveMintInBrowser");
+    expect(daemonSource).not.toMatch(/spawn\(process\.platform === "darwin" \? "open" : "xdg-open", \[url\]/);
   });
 });

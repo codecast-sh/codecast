@@ -25,6 +25,7 @@ export * from "./providerKeys";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
 export * from "./agentSwitch";
+export * from "./forkSeed";
 export * from "./teamFeatures";
 export * from "./stableContext";
 export * from "./vaultProtocol";

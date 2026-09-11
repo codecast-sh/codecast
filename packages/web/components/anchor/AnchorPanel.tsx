@@ -274,7 +274,7 @@ export function AnchorChip() {
         aria-label={label}
         aria-pressed={open}
         className={`relative hidden md:flex items-center p-1.5 rounded-md transition-colors ${
-          open ? "text-sol-cyan bg-sol-cyan/10" : "text-sol-text-dim/60 hover:text-sol-text-muted"
+          open ? "text-sol-cyan bg-sol-cyan/10" : "text-sol-text-muted hover:text-sol-text"
         }`}
       >
         <AnchorGlyph className="w-[18px] h-[18px]" />

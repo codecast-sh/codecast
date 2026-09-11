@@ -200,6 +200,27 @@ describe("GET /vault/roots and /vault/scan", () => {
     expect((await api("/vault/scan?vault=deadbeef")).status).toBe(404);
   });
 
+  test("GET /vault/locate names the vault for a local path, registering one when none holds it", async () => {
+    const inside = await api(`/vault/locate?path=${encodeURIComponent(path.join(root, "notes", "one.md"))}`);
+    expect(inside.status).toBe(200);
+    expect(await inside.json()).toMatchObject({ vault: { id: vaultId }, rel: "notes/one.md" });
+
+    const loose = path.join(base, "loose");
+    fs.mkdirSync(loose, { recursive: true });
+    fs.writeFileSync(path.join(loose, "pic.png"), "png");
+    const outside = await api(`/vault/locate?path=${encodeURIComponent(path.join(loose, "pic.png"))}`);
+    expect(outside.status).toBe(200);
+    const body = await outside.json();
+    expect(body).toMatchObject({ vault: { root: loose }, rel: "pic.png" });
+    // The registered vault serves the file like any other.
+    const served = await api(`/vault/file?vault=${body.vault.id}&path=pic.png`);
+    expect(served.status).toBe(200);
+    expect((await api("/vault/roots").then((r) => r.json())).vaults.some((v: any) => v.id === body.vault.id)).toBe(true);
+
+    expect((await api(`/vault/locate?path=${encodeURIComponent(path.join(base, "nope.md"))}`)).status).toBe(404);
+    expect((await api("/vault/locate?path=relative/nope.md")).status).toBe(404);
+  });
+
   test("?ignored=1 lists a repo's hidden paths flagged, readable but not writable", async () => {
     // Turn the fixture into a repo: a .git entry is the whole test.
     fs.mkdirSync(path.join(root, ".git"), { recursive: true });

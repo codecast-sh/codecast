@@ -3857,10 +3857,6 @@ pre[class*="language-"] {
   background: transparent;
 }
 
-.minimal-style [data-sv-rail] [data-sv-controls] > .w-px {
-  display: none;
-}
-
 .minimal-style [data-sv-rail] [data-sv-controls] button {
   border-radius: 6px;
   box-shadow: none;

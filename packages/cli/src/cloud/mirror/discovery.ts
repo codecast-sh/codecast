@@ -9,6 +9,9 @@ import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, por
 export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode"] as const;
 export const CONTEXT_SIZE_CAP = 256 * 1024 * 1024;
 export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i;
+export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
+  ".claude/plugins/marketplaces", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
+];
 export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl",
   ".claude/sessions", ".claude/session-env", ".claude/shell-snapshots", ".claude/file-history",
@@ -17,6 +20,7 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/jobs", ".claude/paste-cache", ".claude/tasks", ".claude/teams", ".claude/telemetry", ".claude/worktrees",
   ".claude/daemon-auth-status.json", ".claude/daemon-auth-cooldown", ".claude/stats-cache.json",
   ".claude/.last-cleanup", ".claude/.last-update-result.json", ".claude/commands.zip",
+  ...CLAUDE_RUNTIME_ROOTS,
   ".codex/auth.json", ".codex/sessions", ".codex/archived_sessions", ".codex/cache", ".codex/tmp", ".codex/.tmp",
   ".codex/shell_snapshots", ".codex/thread-writer-locks", ".codex/models_cache.json", ".codex/installation_id",
   ".codex/browser", ".codex/computer-use", ".codex/dictation-history", ".codex/history", ".codex/ipc",
