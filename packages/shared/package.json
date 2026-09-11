@@ -18,6 +18,7 @@
     "./render": "./render/index.ts",
     "./tasks": "./tasks/index.ts",
     "./docs": "./docs/index.ts",
+    "./files": "./files/index.ts",
     "./time": "./time/index.ts",
     "./vault": "./vault/index.ts",
     "./chat": "./chat/index.ts",

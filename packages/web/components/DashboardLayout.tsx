@@ -71,7 +71,8 @@ import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { tabTitle } from "../lib/tabTitle";
-import { pathLabel } from "../lib/pathLabel";
+import { pathLabel, poppedTabPath } from "../lib/pathLabel";
+import { leavesOf } from "../store/stageSplit";
 import { TabContent } from "./TabContent";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -769,17 +770,21 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           if (v.mode && v.mode !== store.inboxViewMode()) store.setInboxViewMode(v.mode);
         });
       }
-      if (popped.inboxId) return;
       if (isNonTabRoute(window.location.pathname)) return;
       // A detached tab window navigates via React Router only — the shared
       // tabs its store hydrates belong to the main window, so mirroring this
       // window's URL into the "active tab" would rewrite someone else's tab.
       if (isDetachedTabWindow()) return;
       const store = useInboxStore.getState();
-      const id = store.activeTabId;
-      if (!id) return;
-      const full = window.location.pathname + window.location.search;
-      store.updateTab(id, { path: full, title: pathLabel(full) });
+      const tab = store.tabs.find((t) => t.id === store.activeTabId);
+      if (!tab) return;
+      // A session-select entry is the inbox pane's to reconcile while that
+      // pane is mounted; once the tab shows another page, the pane is gone
+      // and the tab itself must return to the inbox (poppedTabPath).
+      const panePaths = tab.layout ? leavesOf(tab.layout).map((l) => l.path) : [tab.path];
+      const full = poppedTabPath(popped, window.location.pathname, window.location.search, panePaths);
+      if (full === null) return;
+      store.updateTab(tab.id, { path: full, title: pathLabel(full) });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1034,7 +1039,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
               <button
                 onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
-                className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+                className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-muted hover:text-sol-text transition-colors"
               >
                 <PanelLeft className="w-[18px] h-[18px]" />
               </button>
@@ -1121,7 +1126,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                   openCompose();
                   tipActions.whisper('session.create', e);
                 }}
-                className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
+                className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-border bg-sol-bg-alt text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text hover:border-sol-text-muted transition-colors"
               >
                 <Plus className="w-[18px] h-[18px]" />
               </button>
@@ -1137,7 +1142,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
                 <button
                   onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
-                  className={`flex items-center p-1.5 rounded-md transition-colors ${commentRailOpen ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-muted"}`}
+                  className={`flex items-center p-1.5 rounded-md transition-colors ${commentRailOpen ? "text-sol-cyan" : "text-sol-text-muted hover:text-sol-text"}`}
                 >
                   <MessageSquare className="w-[18px] h-[18px]" />
                 </button>
@@ -1147,7 +1152,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
                 <button
                   onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
-                  className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+                  className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-muted hover:text-sol-text transition-colors"
                   aria-label="Toggle terminal panel"
                 >
                   <SquareTerminal className="w-[18px] h-[18px]" />
@@ -1160,7 +1165,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
               <button
                 onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
-                className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+                className="flex items-center p-1.5 rounded-md text-sol-text-muted hover:text-sol-text transition-colors"
               >
                 <PanelRight className="w-[18px] h-[18px]" />
               </button>
@@ -1342,7 +1347,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           vanished" with no way back (Jason, 2026-08-24). The fallback is a
           floating chip where the dock lived: retry re-renders, hang up also
           frees the seat, and the ErrorBoundary toast still carries the trace. */}
-      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt shadow-xl">
         <ErrorBoundary
           name="Call window"
           fallback={({ retry }) => (
@@ -1371,7 +1376,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           without a word left the main window looking as though no call were
           running at all — and the first thing that invites is starting a second
           one. It sits where the dock would, and says only where to look. */}
-      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-xl">
         <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
       </div>
       {/* A recording in progress, wherever the person has wandered to. It

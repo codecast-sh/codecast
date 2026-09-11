@@ -7,8 +7,9 @@
 // pins, closes and drags before every task.
 //
 // A workbench is a snapshot of the ENTIRE chrome: every slot's occupant kind,
-// presentation and size, plus zen mode, the session panel's chip filter and
-// (optionally) the surface it belongs on. Applying one restores all of it
+// presentation and size, plus zen mode, the session panel's chip filter, the
+// sidebar sections pinned open or closed, and (optionally) the surface it
+// belongs on. Applying one restores all of it
 // atomically. Contents stay re-derived — the same rule the ambient workspace
 // persistence follows: a snapshot records that the context edge shows comments,
 // never WHICH conversation's comments.
@@ -75,6 +76,12 @@ export type WorkbenchSnapshot = {
    *  without a filter clears whatever chip is up — including for the older
    *  saves that predate this field. */
   filter?: WorkbenchFilter;
+  /** The sidebar sections the user pinned open or closed (the chevrons), by
+   *  section key. A pin outranks the route default, so it is part of the
+   *  arrangement like a rail's width. Absent = nothing pinned; applying such a
+   *  snapshot drops the live pins and hands every section back to its route
+   *  default, the same rule the chip follows. */
+  navSections?: Record<string, boolean>;
   slots: Partial<Record<SlotId, WorkbenchSlot>>;
 };
 
@@ -100,14 +107,22 @@ function occupantOf(pane: Pane | null): WorkbenchOccupant {
 /** The current chrome, in full — every slot, zen, the surface and the chip. */
 export function captureWorkbench(
   ws: WorkspaceState,
-  opts?: { zen?: boolean; path?: string; filter?: WorkbenchFilter },
+  opts?: { zen?: boolean; path?: string; filter?: WorkbenchFilter; navSections?: Record<string, boolean> },
 ): WorkbenchSnapshot {
   const slots: Partial<Record<SlotId, WorkbenchSlot>> = {};
   for (const id of SLOT_IDS) {
     const s = ws[id];
     slots[id] = { pane: occupantOf(s.pane), presentation: s.presentation, size: s.size };
   }
-  return { path: opts?.path, zen: opts?.zen ?? false, filter: opts?.filter, slots };
+  const navSections = opts?.navSections;
+  return {
+    path: opts?.path,
+    zen: opts?.zen ?? false,
+    filter: opts?.filter,
+    // An empty pin bag is the same as none — don't grow every snapshot a {}.
+    navSections: navSections && Object.keys(navSections).length ? { ...navSections } : undefined,
+    slots,
+  };
 }
 
 /** The chip row's single live filter in snapshot form, or undefined when no
@@ -212,9 +227,9 @@ export function applyWorkbench(
 
 /**
  * Is the live chrome still arranged the way this snapshot says? Compares what
- * occupies each slot, how it presents, and the chip filter; sizes and subjects
- * are ignored — a pixel of drag or a different conversation doesn't deselect
- * the activity.
+ * occupies each slot, how it presents, and the chip filter; sizes, sidebar
+ * section pins and subjects are ignored — a pixel of drag, a chevron, or a
+ * different conversation doesn't deselect the activity.
  */
 export function matchesWorkbench(
   ws: WorkspaceState,

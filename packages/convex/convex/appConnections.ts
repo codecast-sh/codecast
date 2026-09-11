@@ -23,6 +23,7 @@ import { v } from "convex/values";
 import { query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { canRevokeInstallation } from "./githubApp";
+import { activeTeamMembershipFor } from "./lib/access";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
@@ -181,22 +182,12 @@ export const listConnections = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { apps: [], team: null };
 
-    const user = await ctx.db.get(userId);
-    // The routing fallback every workspace resolver here uses (slack.ts
-    // callerAnchor, privacy.ts): the team you are looking at, else your home
-    // team. The user row can keep pointing at a team after membership lapses,
-    // so the pointer only counts with a live membership row behind it —
-    // otherwise a former member could keep reading who connected what.
-    let teamId: Id<"teams"> | undefined = user?.active_team_id ?? user?.team_id ?? undefined;
-    let isTeamAdmin = false;
-    if (teamId) {
-      const member = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
-        .first();
-      if (!member) teamId = undefined;
-      else isTeamAdmin = member.role === "admin";
-    }
+    // The team you are looking at, else your home team, only with a live
+    // membership behind it — otherwise a former member could keep reading
+    // who connected what (lib/access.activeTeamMembershipFor).
+    const active = await activeTeamMembershipFor(ctx, userId);
+    const teamId = active?.teamId;
+    const isTeamAdmin = active?.membership?.role === "admin";
     const teamRow = teamId ? await ctx.db.get(teamId) : null;
 
     const lenses: Lens[] = [

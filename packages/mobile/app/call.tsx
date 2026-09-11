@@ -20,7 +20,9 @@ const VideoTrack: any = livekit?.VideoTrack ?? (() => null);
 import { Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Text } from "@/components/Themed";
-import { Theme } from "@/constants/Theme";
+// The call stage is always dark (Solarized base03), whatever the app scheme:
+// its `Theme.bgAlt` reads are light-on-dark contrast, so pin the light palette.
+import { SolarizedLight as Theme } from "@/constants/Theme";
 import {
   flipCamera,
   getCallSnapshot,

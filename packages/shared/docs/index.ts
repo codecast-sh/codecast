@@ -61,9 +61,9 @@ export function isHumanDocOrigin(doc: { source?: string | null }): boolean {
 /**
  * The human's shelf: what a person expects to see in the docs list without
  * asking for agent output. A doc is on it when a person wrote it (human
- * origin) or when someone pinned it — pinning a machine-made doc is the
- * deliberate "this one matters" gesture, the docs analog of promoting a task
- * onto the board.
+ * origin) or when someone starred it — the star (stored as `pinned`) on a
+ * machine-made doc is the deliberate "this one matters" gesture, the docs
+ * analog of promoting a task onto the board.
  */
 export function isOnHumanShelf(doc: {
   source?: string | null;

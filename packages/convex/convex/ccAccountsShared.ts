@@ -78,8 +78,11 @@ export const ccAccountsValidator = v.object({
       tier: v.optional(v.string()),
       subscription: v.optional(v.string()),
       usage: v.optional(ccUsageValidator),
-      // A `claude setup-token` on file for this profile (per-session launch
-      // credential, see cli/ccAccounts.ts). Metadata only — never the token.
+      // The profile's per-session launch credential (its own Claude Code
+      // credential store, see cli/ccAccounts.ts "Per-profile credential
+      // stores"): when it was provisioned and how long its grant lasts.
+      // Metadata only — never a token. Absent when the profile cannot carry
+      // a session (no store yet, or a login the endpoint refused).
       token: v.optional(v.object({ stored_at: v.number(), expires_at: v.number() })),
       // The daemon's token refresh was refused for this saved login
       // (invalid_grant): dead until the account signs in again. Never a
@@ -89,10 +92,8 @@ export const ccAccountsValidator = v.object({
   ),
 });
 
-// The setup-token mint round trip (web toggle / "mint now" → daemon runs
-// `claude setup-token`, drives the browser approval, proves the token belongs
-// to the machine's login, stores it → outcome). Same state-channel contract as
-// cc_login_flow: the web watches this field reactively.
+// Retired: the setup-token mint round trip. Kept only so device rows that
+// still carry a cc_mint_flow value validate; nothing writes or reads it.
 export const ccMintFlowValidator = v.object({
   status: v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected")),
   profile: v.optional(v.string()), // the profile the token is for
@@ -101,11 +102,8 @@ export const ccMintFlowValidator = v.object({
   started_at: v.number(),
   finished_at: v.optional(v.number()),
 });
-// A pending mint older than this means the daemon died mid-flow (its own
-// watcher gives up at 5 min) — treat as no-flow, same as LOGIN_FLOW_STALE_MS.
-export const MINT_FLOW_STALE_MS = 6 * 60 * 1000;
-
-/** A profile's token is live when it exists and its one-year lifetime is not up. */
+/** A profile can carry sessions when its launch credential exists and its
+ *  grant is not past its lifetime. */
 export function profileHasToken(
   profile: { token?: { expires_at: number } } | undefined | null,
   now: number,
@@ -115,7 +113,7 @@ export function profileHasToken(
 
 /** The device-local profile name a session should be PINNED to (its
  * `cc_account`): the account resolved on that device, only when that profile
- * has a live setup-token there. Undefined = don't pin; the session follows
+ * has a launch credential there. Undefined = don't pin; the session follows
  * the machine's keychain login. */
 export function tokenBackedProfile(
   accounts: { profiles: Array<{ name: string; email?: string; token?: { expires_at: number } }> } | undefined | null,
@@ -128,7 +126,7 @@ export function tokenBackedProfile(
 }
 
 /** The pin for a NEW session: the profile covering the machine's current
- * login, if it has a live token. */
+ * login, if it has a launch credential. */
 export function activeTokenProfile(
   accounts:
     | { active_email?: string; profiles: Array<{ name: string; email?: string; token?: { expires_at: number } }> }
@@ -146,8 +144,8 @@ type ContinueDevice = {
 
 /** The pin a session continued "on this account" (no switch) must carry on
  * this device: the profile covering the machine's current login when it has a
- * live token, otherwise none (the session follows the keychain). Remotes run a
- * pushed credential and never pin. */
+ * launch credential, otherwise none (the session follows the keychain).
+ * Remotes run a pushed credential and never pin. */
 export function continueTargetPin(device: ContinueDevice | undefined, now: number): string | undefined {
   if (!device || device.is_remote === true) return undefined;
   return activeTokenProfile(device.cc_accounts, now);
@@ -156,11 +154,11 @@ export function continueTargetPin(device: ContinueDevice | undefined, now: numbe
 /** Whether a plain "continue" can reach a blocked session, or the session
  * must be killed and resumed first. A message retries the process as it is;
  * it cannot change the account that process is bound to. Two bindings are
- * fixed at launch: an expired login (auth banner) and a per-session
- * setup-token (`cc_account`, read from the env at process start). A session
- * pinned to any account other than the one this device pins to now would
- * re-source the wrong token on a plain continue, and again on every resume
- * until the pin is corrected. */
+ * fixed at launch: an expired login (auth banner) and a per-session account
+ * (`cc_account`: the profile's credential store, read from the env at process
+ * start). A session pinned to any account other than the one this device pins
+ * to now would re-source the wrong store on a plain continue, and again on
+ * every resume until the pin is corrected. */
 export function continueNeedsRestart(
   conv: { pending_api_error_kind?: string | null; cc_account?: string | null },
   device: ContinueDevice | undefined,
@@ -173,7 +171,7 @@ export function continueNeedsRestart(
 
 /** Whether a parked session's banner says anything about the device's ACTIVE
  * login. A session pinned to a profile with another identity ran on THAT
- * account's setup-token: its limit is that account's limit. The active
+ * account's credential store: its limit is that account's limit. The active
  * login may have all the headroom in the world and the recovery loop must
  * not wait on its windows for a park it never caused — the restart that
  * corrects the pin (continueNeedsRestart) un-parks the session at once. A
@@ -303,6 +301,9 @@ export const ccLoginFlowValidator = v.object({
   // pending: the account we asked the user to sign into (pre-filled in the
   // browser). confirmed: the account that actually signed in.
   email: v.optional(v.string()),
+  // Set when the sign-in repairs one saved profile's own credential store
+  // (Settings "sign in again"); absent for the machine-login sign-in.
+  profile: v.optional(v.string()),
   reason: v.optional(v.string()), // rejected: why (timeout, CLI error tail)
   started_at: v.number(),
   finished_at: v.optional(v.number()),

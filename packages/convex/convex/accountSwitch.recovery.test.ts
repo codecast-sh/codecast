@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autoSwitchCheck, onFreshApiErrorPark, reclassifyParkedApiErrorFlags, reviveAuthBlockedOnRemotes, throttleContinueCheck } from "./accountSwitch";
+import { autoSwitchCheck, onFreshApiErrorPark, reclassifyParkedApiErrorFlags, requestAccountSwitch, reviveAuthBlockedOnRemotes, throttleContinueCheck } from "./accountSwitch";
 import { AUTO_SWITCH_CODEX_CONTINUE_KEY, AUTO_SWITCH_CONTINUE_KEY, authRestartAttemptKey, resetCreditAttemptKey } from "./ccAccountsShared";
 import { blockedKindsForAgent } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner } from "./inboxFilters";
@@ -470,5 +470,41 @@ describe("reclassifyParkedApiErrorFlags", () => {
     // of autoSwitchCheck.
     expect(blockedKindsForAgent("codex").has("error")).toBe(false);
     expect(blockedKindsForAgent("codex").has("limit")).toBe(true);
+  });
+});
+
+// A session's own card acts on itself: the revive is scoped to the named
+// conversation, and the rest of the blocked fleet — including workers the
+// fleet banner would dismiss on the same click — is left exactly as it was.
+describe("requestAccountSwitch scoped to conversation ids", () => {
+  const auth = { async getUserIdentity() { return { subject: "users_owner|session" }; } };
+  test("continues only the named session and dismisses nothing else", async () => {
+    const f = fixture();
+    const target = f.conversation("conversations_target", "limit");
+    const other = f.conversation("conversations_other", "limit");
+    const worker = f.conversation("conversations_worker", "limit", { is_subagent: true });
+    f.tables.conversations.push(target, other, worker);
+    const res = await (requestAccountSwitch as any)._handler({ db: f.db, auth }, {
+      conversation_ids: [target._id],
+      continue_client_ids: { [target._id]: "acct-revive-x-conversations_target" },
+    });
+    expect(res.conversations).toBe(1);
+    expect(res.dismissed_subagents).toBe(0);
+    expect(f.tables.daemon_commands).toHaveLength(1);
+    expect(JSON.parse(f.tables.daemon_commands[0].args)).toMatchObject({
+      conversation_ids: [target._id], client_ids: { [target._id]: "acct-revive-x-conversations_target" },
+    });
+    // Untouched: the other park keeps its flag, the worker was not dismissed.
+    expect(other.pending_api_error).toBe(true);
+    expect(worker.pending_api_error).toBe(true);
+  });
+  test("a named worker is acted on, an unblocked id is ignored", async () => {
+    const f = fixture();
+    const worker = f.conversation("conversations_worker", "limit", { is_subagent: true });
+    const healthy = f.conversation("conversations_healthy", "limit", { pending_api_error: false });
+    f.tables.conversations.push(worker, healthy);
+    const res = await (requestAccountSwitch as any)._handler({ db: f.db, auth }, { conversation_ids: [worker._id, healthy._id] });
+    expect(res.conversations).toBe(1);
+    expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual([worker._id]);
   });
 });

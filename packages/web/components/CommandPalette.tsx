@@ -1941,7 +1941,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (actionKey === "pin" && targetType === "doc") {
       const doc = target as DocItem;
       pinDoc(doc._id, !doc.pinned);
-      toast.success(doc.pinned ? "Unpinned" : "Pinned");
+      toast.success(doc.pinned ? "Unstarred" : "Starred");
       closePalette();
       return;
     }
