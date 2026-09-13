@@ -9,6 +9,8 @@ import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
 import { launchTokenLedger } from "./launchToken.js";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.js";
+import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
+import { resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { describeTriggerPrecheckFailure, triggerPrecheckPassed } from "@codecast/shared/contracts";
 
@@ -20,35 +22,8 @@ const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_CONCURRENCY = 2;
 
-// Schedules run permissive by default (`mode: "apply"`); safe mode
-// (`cast trigger add --safe`, stored as mode: "propose") is the exception, so
-// its fence has to be real rather than advisory. ONE mandate string, used both
-// as the agent's system prompt and as a line in the run prompt.
-const SAFE_MODE_MANDATE =
-  "This is a SAFE-mode scheduled run: strictly read-only. Investigate and report. Never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.";
-
-// Shell commands a safe-mode run may never execute. Deny rules bind
-// MECHANICALLY — Claude Code honors them even under the --dangerously-skip-permissions
-// that headless runs require (verified) — so unlike the mandate above these are a
-// wall, not a request. Scoped to the subcommand, so reads through the same
-// binaries still work (`git log`, `gh pr view`), as does the run's own
-// `cast trigger complete` self-report.
-// Accepted residual gap: a write smuggled through shell redirection
-// (`echo x > f`) or an interpreter (`node -e`) is not prefix-matchable, so the
-// mandate — not this list — is what covers those.
-const SAFE_MODE_DENY_RULES = [
-  // Repository state and history
-  "Bash(git push:*)", "Bash(git commit:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
-  "Bash(git reset:*)", "Bash(git checkout:*)", "Bash(git restore:*)", "Bash(git clean:*)",
-  "Bash(git stash:*)", "Bash(git apply:*)", "Bash(git tag:*)",
-  // Destructive filesystem
-  "Bash(rm:*)", "Bash(mv:*)", "Bash(dd:*)", "Bash(truncate:*)", "Bash(tee:*)",
-  "Bash(chmod:*)", "Bash(chown:*)",
-  // Deploy and publish
-  "Bash(npm publish:*)", "Bash(convex deploy:*)", "Bash(npx convex deploy:*)",
-  // Remote repo writes
-  "Bash(gh pr merge:*)", "Bash(gh pr create:*)", "Bash(gh release:*)",
-];
+// SAFE_MODE_MANDATE and SAFE_MODE_DENY_RULES live in agentLaunch.ts so a
+// read only agent definition and a --safe trigger share one fence.
 
 interface RunningTask {
   taskId: string;
@@ -73,8 +48,16 @@ interface TaskSchedulerConfig {
 export function buildRunLaunch(
   task: any,
   config: Config,
+  definition?: AgentDefinitionSpec,
 ): { agentBin: string; extraAgentArgs: string[]; runSessionUuid?: string } {
-  const agentType = task.agent_type || "claude";
+  // `cast trigger add --as`: the definition picks the client, model and effort
+  // unless the trigger pinned them; its tool policy and prompt are appended
+  // below through the same flags safe mode uses.
+  const launch = resolveAgentLaunch(definition, {
+    agent: task.agent_type === "codex" ? "codex" : task.agent_type ? "claude" : undefined,
+    model: task.model || undefined,
+  }, "claude");
+  const agentType = launch.agent === "codex" ? "codex" : "claude";
   // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
   let extraAgentArgs: string[] = [];
   let agentBin: string;
@@ -104,6 +87,14 @@ export function buildRunLaunch(
       extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit", ...SAFE_MODE_DENY_RULES);
       extraAgentArgs.push("--append-system-prompt", SAFE_MODE_MANDATE);
     }
+    if (definition) {
+      const flags = definitionLaunchFlags(launch, "claude");
+      extraAgentArgs.push(...flags.args);
+      if (flags.systemPrompt) extraAgentArgs.push("--system-prompt", flags.systemPrompt);
+      else if (flags.appendSystemPrompt && (task.mode === "apply" || flags.appendSystemPrompt !== SAFE_MODE_MANDATE)) {
+        extraAgentArgs.push("--append-system-prompt", flags.appendSystemPrompt);
+      }
+    }
     const extraArgs = getAgentArgs(config, "claude");
     if (extraArgs) {
       const skip = new Set(["--dangerously-skip-permissions"]);
@@ -125,7 +116,8 @@ export function buildRunLaunch(
   const launchClient = agentType === "codex" ? "codex" : "claude";
   appendModelEffortFlags(extraAgentArgs, {
     agentType: launchClient,
-    modelAlias: resolvePrintModelAlias(launchClient, task.model),
+    modelAlias: resolvePrintModelAlias(launchClient, launch.model),
+    requestedEffort: launch.effort,
   });
   return { agentBin, extraAgentArgs, runSessionUuid };
 }
@@ -301,7 +293,12 @@ export class TaskScheduler {
     const promptFile = `/tmp/codecast-task-${shortId}.txt`;
     fs.writeFileSync(promptFile, prompt);
 
-    const { agentBin, extraAgentArgs, runSessionUuid } = buildRunLaunch(task, this.config);
+    let definition: AgentDefinitionSpec | undefined;
+    if (task.agent_definition) {
+      definition = (await this.syncService.resolveAgentDefinition(task.agent_definition)) ?? undefined;
+      if (!definition) this.log(`agent definition "${task.agent_definition}" not found; running task "${task.title}" without it`, "warn");
+    }
+    const { agentBin, extraAgentArgs, runSessionUuid } = buildRunLaunch(task, this.config, definition);
 
     // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
     // rather than relying on the outer exec shell to expand $(cat ...). This avoids issues
