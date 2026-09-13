@@ -6,9 +6,12 @@ import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { resolveDefinitionFor } from "./agentDefinitions";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
+import { roleOfConversation } from "./lib/actor";
+import { capsFor, countersFor, trustOf } from "./orgEvents";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -100,6 +103,10 @@ export async function spawnSessionCore(
     spawnerConversationId?: Id<"conversations">;
     subagentFields?: { parent_conversation_id: Id<"conversations">; is_subagent: true } | null;
     prompt?: string;
+    // A resolved agent definition (`cast spawn --as`): the daemon applies its
+    // tool policy and system prompt at launch; agent/model/effort were folded
+    // into the fields above by resolveSpawnDefinition.
+    definition?: AgentDefinitionSpec;
   },
 ): Promise<{ conversationId: Id<"conversations">; shortId: string }> {
   const now = Date.now();
@@ -151,6 +158,7 @@ export async function spawnSessionCore(
     ccAccount: opts.ccAccount,
     createdAt: now,
     targetDeviceId: opts.targetDeviceId ?? null,
+    definition: opts.definition,
   });
 
   // Seed the first turn as a plain user message (raw, not wrapped as a
@@ -164,6 +172,37 @@ export async function spawnSessionCore(
   }
 
   return { conversationId, shortId };
+}
+
+
+/** `--as <name>`: fold a definition into a spawn's agent/model/effort (explicit
+ *  values win) and hand the rest (tools, prompt, mode, worktree) to the daemon.
+ *  Clients with no system prompt flag get the prompt prefixed to the seeded
+ *  first turn instead, so the role is never silently dropped. */
+export async function resolveSpawnDefinition(
+  ctx: any,
+  userId: Id<"users">,
+  name: string | undefined,
+  explicit: { agentType?: string; model?: string; effort?: string; prompt?: string; isolated?: boolean },
+): Promise<{ agentType?: any; model?: string; effort?: string; prompt?: string; isolated?: boolean; definition?: AgentDefinitionSpec }> {
+  if (!name) return explicit;
+  const def = await resolveDefinitionFor(ctx, userId, name);
+  if (!def) throw new Error(`No agent definition named "${name}"`);
+  const explicitAgent = explicit.agentType ? fromConvexAgentType(explicit.agentType) : undefined;
+  const launch = resolveAgentLaunch(def, { agent: explicitAgent, model: explicit.model, effort: explicit.effort }, "claude");
+  const promptViaFlag = launch.agent === "claude" || launch.agent === "pi";
+  let prompt = explicit.prompt;
+  if (!promptViaFlag && def.system_prompt?.trim()) {
+    prompt = `${def.system_prompt.trim()}\n\n---\n\n${explicit.prompt ?? ""}`.trim();
+  }
+  return {
+    agentType: toConvexAgentType(launch.agent),
+    model: launch.model,
+    effort: launch.effort,
+    prompt,
+    isolated: explicit.isolated || launch.isolated || undefined,
+    definition: def,
+  };
 }
 
 // createSessionFromCli — start a fresh, inbox-visible session and optionally
@@ -215,12 +254,21 @@ export const createSessionFromCli = mutation({
     // nested under it (see resolveSpawnParent).
     parent_session: v.optional(v.string()),
     spawner_session: v.optional(v.string()),
+    // `cast spawn --as <name>`: a definition in the caller's workspace.
+    definition: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) {
       throw new Error("Authentication failed: invalid token or session");
     }
+    const asDef = await resolveSpawnDefinition(ctx, userId, args.definition, {
+      agentType: args.agent_type,
+      model: args.model,
+      effort: args.effort,
+      prompt: args.prompt,
+      isolated: args.isolated,
+    });
 
     let targetDeviceId: string | null = null;
     if (args.device) {
@@ -238,15 +286,19 @@ export const createSessionFromCli = mutation({
     const spawner = args.spawner_session
       ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
       : null;
+    // A role's standing session, or one of its hands, starting a hand: the
+    // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
+    const roleGate = await gateHandStart(ctx, spawner);
 
     const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
-      agentType: args.agent_type,
+      agentType: asDef.agentType ?? args.agent_type,
       projectPath: args.project_path,
       gitRoot: args.git_root,
-      model: args.model,
-      effort: args.effort,
+      model: asDef.model,
+      effort: asDef.effort,
       ccAccount: args.cc_account,
-      isolated: args.isolated,
+      isolated: asDef.isolated,
+      definition: asDef.definition,
       worktreeName: args.worktree_name,
       worktree: args.worktree_path && args.worktree_name
         ? { name: args.worktree_name, branch: args.worktree_branch, path: args.worktree_path }
@@ -255,8 +307,9 @@ export const createSessionFromCli = mutation({
       targetDeviceId,
       subagentFields,
       spawnerConversationId: spawner?._id,
-      prompt: args.prompt,
+      prompt: asDef.prompt,
     });
+    if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
 
     return {
       conversation_id: conversationId,
@@ -267,3 +320,38 @@ export const createSessionFromCli = mutation({
     };
   },
 });
+
+// ── Hands under a role (org-roles-standing.md T4) ────────────────────────────
+//
+// The spawner's row says who is starting the session. A standing session or a
+// hand acts for its role: the role must be active, at trust "direct", and
+// under its daily hand cap. The new session is filed under the role (it
+// reports to it and shows under it on the org page) and the cap counter
+// advances. A person spawning from a plain terminal is unaffected.
+export async function gateHandStart(ctx: { db: any }, spawner: any | null): Promise<any | null> {
+  const role = spawner ? await roleOfConversation(ctx, spawner) : null;
+  if (!role) return null;
+  if (role.status === "paused") throw new Error(`${role.name} (@${role.handle}) is paused: no new hands until a person resumes it`);
+  if (role.status === "retired") throw new Error(`${role.name} (@${role.handle}) is retired`);
+  const trust = trustOf(role);
+  if (trust !== "direct") {
+    throw new Error(`${role.name} (@${role.handle}) is at the ${trust} stage and may not start hands; a person can raise its trust with cast role trust @${role.handle} direct`);
+  }
+  const now = Date.now();
+  const caps = capsFor(role);
+  const counters = countersFor(role, now);
+  if (counters.hands >= caps.hands_per_day) {
+    throw new Error(`${role.name} (@${role.handle}) reached its cap of ${caps.hands_per_day} hands today; say so in the brief and wait for the next day, or ask a person to raise the cap`);
+  }
+  if (counters.tokens >= caps.tokens_per_day) {
+    throw new Error(`${role.name} (@${role.handle}) reached its cap of ${caps.tokens_per_day} tokens today; no new hands until it resets`);
+  }
+  return role;
+}
+
+export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">): Promise<void> {
+  const now = Date.now();
+  const counters = countersFor(role, now);
+  await ctx.db.patch(role._id, { counters: { ...counters, hands: counters.hands + 1 }, updated_at: now });
+  await ctx.db.patch(conversationId, { org_role_id: role._id });
+}

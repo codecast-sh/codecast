@@ -1,7 +1,7 @@
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import type { AgentClientId } from "@codecast/shared/contracts";
+import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { canAccessConversation } from "./lib/access";
@@ -166,6 +166,10 @@ export async function enqueueStartSession(
     // drop specific feed cards. Same ride-along contract as model/effort.
     stableMode?: string;
     stableExclude?: string[];
+    // A resolved agent definition: tool policy, system prompt, mode and
+    // worktree, applied by the daemon after the argv allowlist (the prompt
+    // rides a file). Same ride-along contract: old daemons ignore it.
+    definition?: AgentDefinitionSpec;
   },
 ): Promise<Id<"daemon_commands">> {
   const conv = await ctx.db.get(opts.conversationId);
@@ -250,6 +254,7 @@ export async function enqueueStartSession(
   if (ccAccount) args.cc_account = ccAccount;
   if (opts.stableMode) args.stable_mode = opts.stableMode;
   if (opts.stableExclude?.length) args.stable_exclude = opts.stableExclude;
+  if (opts.definition) args.definition = opts.definition;
 
   return await ctx.db.insert("daemon_commands", {
     user_id: userId,

@@ -21,6 +21,7 @@ import {
 import { makeChangeTrackedDb } from "./changeLog";
 import { makePrincipalViewTrackedDb } from "./principalViewRevisions";
 import { makeSyncAckCollector, type SyncAckPosition } from "./syncLog";
+import { attachOrgWriteCollector, flushOrgWrites, makeOrgWriteTrackedDb } from "./orgEvents";
 
 const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
 
@@ -33,9 +34,21 @@ function withChangeLog(ctx: any): any {
   // dispatch returns them to an opting-in client as its write acknowledgement
   // (syncAckPositions below).
   const collector = makeSyncAckCollector();
-  const wrapped = { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector)) };
+  const wrapped: any = { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector)) };
   wrapped[SYNC_ACK] = collector;
+  // The org wake rail's fold source (orgEvents): every task or plan write in
+  // this transaction is recorded, and once the handler returns the roles whose
+  // scope holds the row get their outbox rows. Outermost so it sees the final
+  // domain write, like the principal-view wrapper.
+  wrapped.db = makeOrgWriteTrackedDb(wrapped.db, attachOrgWriteCollector(wrapped));
   return wrapped;
+}
+
+// Run the handler, then the post write hook, inside the same transaction.
+async function runWithHooks(ctx: any, handler: () => Promise<any>): Promise<any> {
+  const result = await handler();
+  await flushOrgWrites(ctx);
+  return result;
 }
 
 // The sync-log positions appended so far in this mutation's transaction. Empty
@@ -46,9 +59,18 @@ export function syncAckPositions(ctx: any): SyncAckPosition[] {
 
 function wrapDefinition(def: any): any {
   if (typeof def === "function") {
-    return (ctx: any, args: any) => def(withChangeLog(ctx), args);
+    return (ctx: any, args: any) => {
+      const wrapped = withChangeLog(ctx);
+      return runWithHooks(wrapped, () => def(wrapped, args));
+    };
   }
-  return { ...def, handler: (ctx: any, args: any) => def.handler(withChangeLog(ctx), args) };
+  return {
+    ...def,
+    handler: (ctx: any, args: any) => {
+      const wrapped = withChangeLog(ctx);
+      return runWithHooks(wrapped, () => def.handler(wrapped, args));
+    },
+  };
 }
 
 // Same call signatures as the generated builders (cast preserves the rich
