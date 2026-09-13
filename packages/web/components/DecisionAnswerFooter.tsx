@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronDown, ChevronRight, CornerUpLeft } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, ChevronRight, CornerUpLeft } from "lucide-react";
+import Link from "next/link";
 import { pickAnsweredDecision, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
@@ -9,6 +10,8 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
+import { DecisionRecordedAnswer } from "./decisions/DecisionAnswerControls";
+import { decisionHref } from "./decisions/DecisionCompactCard";
 
 // The strip under a decision answer bubble: which question this answered, a
 // way back to the `cast decide` call, and (unfolded) the options with the
@@ -44,9 +47,18 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
   const question = row?.question ?? decision.question ?? "";
   const jump = useJumpToDecisionAsk(conversationId, decision.id || row?._id, question);
   const loading = !row && ((open && isConvexId(decision.id) && fetchedById === undefined) || (legacyLookup && fetchedByAnswer === undefined));
-  const chosen = row
-    ? row.answer_index ?? row.options.findIndex((o) => o.label === decision.answer)
-    : -1;
+  // Which options the answer names: one for a single, several for a multi or
+  // a rank (answer_json, in order), none for a typed or form answer.
+  const chosenList: number[] = !row
+    ? []
+    : Array.isArray(row.answer_json)
+      ? row.answer_json
+      : row.answer_index !== undefined
+        ? [row.answer_index]
+        : [row.options.findIndex((o) => o.label === decision.answer)].filter((i) => i >= 0);
+  const chosenSet = new Set(chosenList);
+  const isRank = row?.kind === "rank";
+  const isForm = row?.kind === "form";
 
   return (
     <div className="ml-8 mt-2 rounded-md border border-sol-border/70 bg-sol-bg-alt/40 text-[12px] max-w-[42rem]">
@@ -77,14 +89,17 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
       </div>
       {open && (
         <div className="px-2.5 pb-2.5 pt-2 space-y-2.5 border-t border-sol-border/60">
-          {row ? (
+          {row && isForm ? (
+            <DecisionRecordedAnswer decision={row} />
+          ) : row ? (
             <ol className="space-y-1">
               {row.options.map((opt, i) => {
-                const picked = i === chosen;
+                const picked = chosenSet.has(i);
+                const rank = isRank && picked ? chosenList.indexOf(i) + 1 : 0;
                 return (
                   <li key={i} className={`flex items-start gap-2 ${picked ? "text-sol-text" : "text-sol-text-dim"}`}>
                     <span className="w-3.5 h-3.5 mt-0.5 shrink-0 flex items-center justify-center">
-                      {picked ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <span className="text-[10px]">{i + 1}</span>}
+                      {rank ? <span className="text-[10px] text-sol-green">{rank}</span> : picked ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <span className="text-[10px]">{i + 1}</span>}
                     </span>
                     <span className="min-w-0">
                       <span className={picked ? "font-medium" : ""}>{opt.label}</span>
@@ -93,7 +108,7 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
                   </li>
                 );
               })}
-              {chosen < 0 && (
+              {chosenList.length === 0 && (
                 <li className="flex items-start gap-2 text-sol-text">
                   <Check className="w-3.5 h-3.5 mt-0.5 shrink-0 text-sol-green" />
                   <span className="font-medium">{decision.answer}</span>
@@ -109,6 +124,11 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
             </div>
           )}
           {row?.report_slug && <PublishedPageEmbed slug={row.report_slug} />}
+          {row && (
+            <Link href={decisionHref(row)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text hover:underline">
+              the decision page <ArrowUpRight className="w-3 h-3" />
+            </Link>
+          )}
         </div>
       )}
     </div>

@@ -1,0 +1,31 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "incremental": false, "composite": false },
+  "include": [],
+  "files": [
+    "app/decisions/[id]/page.tsx",
+    "app/decisions/stacks/[id]/page.tsx",
+    "app/questions/QuestionsPageClient.tsx",
+    "app/tasks/[id]/page.tsx",
+    "app/tasks/page.tsx",
+    "components/decisions/DecisionAnswerControls.tsx",
+    "components/decisions/DecisionCompactCard.tsx",
+    "components/decisions/DecisionDocument.tsx",
+    "components/decisions/DecisionQueueList.tsx",
+    "components/decisions/StackChecklist.tsx",
+    "components/decisions/StackPage.tsx",
+    "components/decisions/TaskDecisions.tsx",
+    "components/DecisionAnswerFooter.tsx",
+    "components/CommandPalette.tsx",
+    "components/RoutePane.tsx",
+    "hooks/useSyncDecisionDetail.ts",
+    "hooks/useSyncDecisionStacks.ts",
+    "hooks/useSyncHandledDecisions.ts",
+    "lib/decisionGroups.ts",
+    "lib/pageLayout.tsx",
+    "store/clientSyncRegistry.ts",
+    "store/idbCache.ts",
+    "src/App.tsx",
+    "src/routes.manifest.ts"
+  ]
+}
