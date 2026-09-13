@@ -17,6 +17,7 @@
     "update:production": "eas update --branch production"
   },
   "dependencies": {
+    "@bacons/apple-targets": "5.0.0",
     "@codecast/convex": "workspace:*",
     "@codecast/shared": "workspace:*",
     "@codecast/web": "workspace:*",
