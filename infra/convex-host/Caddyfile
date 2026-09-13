@@ -1,0 +1,48 @@
+# Route split, matching the Railway proxy: the SITE origin (3211) serves HTTP
+# actions and anything the CLI or a browser calls by path; the BACKEND origin
+# (3210) serves the Convex API and file storage. Getting this split wrong fails
+# silently — the request reaches a port that answers, just not the one that
+# knows the route.
+#
+# TLS: convex.codecast.sh is DNS-only in Cloudflare, NOT proxied (verified
+# 2026-09-13: no cf-ray, server: railway-hikari). Clients therefore talk to this
+# origin directly and need a PUBLICLY TRUSTED certificate — a Cloudflare Origin
+# CA certificate would be rejected, because only Cloudflare's proxy trusts those
+# and there is no proxy in the path.
+#
+# The certificate must exist BEFORE cutover, and an HTTP challenge cannot supply
+# it: HTTP-01 requires the hostname to already point here, which is only true
+# after the switch. So this uses a DNS challenge, which proves control through a
+# DNS record instead. That needs a Cloudflare API token with DNS:Edit on the
+# codecast.sh zone in CLOUDFLARE_API_TOKEN, and a Caddy binary built with the
+# caddy-dns/cloudflare module — the stock binary does not include it.
+{
+	admin off
+	acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}
+
+convex.codecast.sh {
+	handle /.well-known/* {
+		reverse_proxy 127.0.0.1:3211
+	}
+	handle /api/auth/* {
+		reverse_proxy 127.0.0.1:3211
+	}
+	handle /api/github-app/* {
+		reverse_proxy 127.0.0.1:3211
+	}
+	handle /api/webhooks/* {
+		reverse_proxy 127.0.0.1:3211
+	}
+	handle /cli/* {
+		reverse_proxy 127.0.0.1:3211
+	}
+	handle /api/storage/* {
+		reverse_proxy 127.0.0.1:3210 {
+			header_down Cache-Control "public, max-age=31536000, immutable"
+		}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3210
+	}
+}

@@ -1,0 +1,27 @@
+# Brings the Convex stack up on boot and keeps it up.
+#
+# Docker's own restart policy (unless-stopped, set in the compose file) handles
+# a crashed CONTAINER. This unit handles the case that policy cannot: the HOST
+# rebooting, or the docker daemon itself being restarted. Railway did both for
+# us implicitly; a bare host does neither unless asked.
+[Unit]
+Description=Codecast Convex backend
+Requires=docker.service
+After=docker.service network-online.target
+# The data volume is a separate EBS device. Starting the backend before /srv is
+# mounted would point it at an empty directory on the root disk and it would
+# bootstrap as if the instance were new, which is worse than not starting.
+RequiresMountsFor=/srv
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/convex
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=600
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
