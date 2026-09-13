@@ -1,5 +1,7 @@
 import { v } from "convex/values";
-import { mutation, query } from "./functions";
+import { resolveActor } from "./lib/actor";
+import { markOrgActor } from "./orgEvents";
+import { mutation, query, internalMutation } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -529,6 +531,11 @@ export const addComment = mutation({
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
+    // A role's standing session signs its entries as the role (lib/actor),
+    // and names itself as the actor for the wake rail's loop rules.
+    const callerConv = args.session_id ? await resolveSessionConversation(ctx, auth.userId, args.session_id) : null;
+    const actor = await resolveActor(ctx, auth.userId, callerConv);
+    markOrgActor(ctx, callerConv);
     const entries = (plan as any).entries || [];
     const entry: Record<string, any> = {
       type: args.type || "progress",
@@ -537,6 +544,7 @@ export const addComment = mutation({
     };
     if (args.session_id) entry.session_id = args.session_id;
     if (args.author) entry.author = args.author;
+    else if (actor.kind === "role" && actor.name) entry.author = actor.name;
     if (args.rationale) entry.rationale = args.rationale;
     if (args.path_or_url) entry.path_or_url = args.path_or_url;
 
@@ -1872,5 +1880,45 @@ export const getShared = query({
       comments,
       user: user ? { name: user.name, image: user.image } : null,
     };
+  },
+});
+
+// Restamp for plans the CLI filed as "human" when it only failed to detect a
+// session (found 2026-09-11: `cast plan create` fell back to an explicit
+// "human" stamp on a miss, so agent plans from the Mac mini landed on the
+// human shelf and the plans board's human filter). A plan the CLI created
+// carries `project_path` (stamped from the create's working directory); a
+// plan a person made in the web UI has none. Every CLI-born "human" plan is
+// therefore either a missed session or a person at a terminal, and plans
+// here are overwhelmingly agent-created, so the plan and its body doc flip
+// to "agent"; the star (docs.pinned) is the rescue for one a person wants
+// on the shelf. Web-made plans are untouched. New writes stamp by evidence
+// (workOriginStamp in the CLI). Paged — call repeatedly with the returned
+// cursor until isDone. Does not bump updated_at: clients re-read rows fresh.
+export const restampCliPlanOrigins = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("plans")
+      .paginate({ numItems: args.numItems ?? 100, cursor: args.cursor ?? null });
+    let scanned = 0;
+    let plansRestamped = 0;
+    let docsRestamped = 0;
+    for (const p of page.page) {
+      scanned++;
+      if (p.source !== "human" || !p.project_path) continue;
+      plansRestamped++;
+      if (!args.dryRun) await ctx.db.patch(p._id, { source: "agent" });
+      const doc = p.doc_id ? await ctx.db.get(p.doc_id) : null;
+      if (doc && doc.source === "human") {
+        docsRestamped++;
+        if (!args.dryRun) await ctx.db.patch(doc._id, { source: "agent" });
+      }
+    }
+    return { scanned, plansRestamped, docsRestamped, isDone: page.isDone, continueCursor: page.continueCursor };
   },
 });
