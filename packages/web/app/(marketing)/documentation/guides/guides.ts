@@ -67,6 +67,12 @@ export const GUIDES: Guide[] = [
     category: "Collaboration",
   },
   {
+    slug: "share-a-session",
+    title: "How to share a Claude Code session with your team",
+    dek: "Three different asks hide behind that sentence: read a finished conversation, watch a running one, or make every session visible by default. What Anthropic ships, what Lore does, and where codecast fits.",
+    category: "Collaboration",
+  },
+  {
     slug: "thread-state",
     title: "Pinned thread state",
     dek: "cast state keeps one agent-written line saying where a thread stands, pinned above the composer and on the inbox card, with its staleness on show.",
