@@ -137,12 +137,10 @@ async function prepareDelivery(
     const newParts: string[] = JSON.parse(generation);
     let oldPaneGone = !!prior.terminalExited || (oldParts[1] === newParts[1] && oldParts[0] !== newParts[0]);
     if (!oldPaneGone && oldParts[1] === newParts[1]) {
-      try {
-        oldPaneGone = await generationFor(oldParts[2], exec) !== prior.generation;
-      } catch (error) {
-        if (/can't find pane|no such pane/i.test(String(error))) oldPaneGone = true;
-        else throw error;
-      }
+      const { stdout } = await exec(["list-panes", "-a", "-F", "#{pane_id}"]);
+      const panes = stdout.trim().split("\n");
+      if (!panes.includes(newParts[2])) throw new TmuxDeliveryUncertainError("terminal inventory could not be verified");
+      oldPaneGone = !panes.includes(oldParts[2]) || await generationFor(oldParts[2], exec) !== prior.generation;
     }
     if (oldPaneGone) {
       journal.abandonUnsubmitted(identity.messageId);
