@@ -32,6 +32,8 @@ import {
 
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import type { BrowserRowState } from "../castCommand";
+import { BROWSER_ROW_PILL, BrowserTabActionLabel, useBrowserTabActions } from "./BrowserTabPill";
 const DEFAULT_HEIGHT = 320;
 const MIN_HEIGHT = 120;
 
@@ -74,7 +76,11 @@ export function toggleBrowserWatch(convKey: string): void {
 type Status =
   | { kind: "connecting" }
   | { kind: "live" }
-  | { kind: "failed"; message: string; canRetry: boolean };
+  /** `tabGone`: the stream failed for want of a tab, so a reopen would help. */
+  | { kind: "failed"; message: string; canRetry: boolean; tabGone?: boolean };
+
+const GONE_EXITS = new Set(["tab-closed", "browser-closed"]);
+const GONE_ERRORS = new Set(["no-tab", "no-browser"]);
 
 function exitMessage(reason: string): string {
   switch (reason) {
@@ -106,15 +112,19 @@ export function BrowserWatchSplit({
   convKey,
   sessionUuid,
   tmuxSession,
+  lastPage,
 }: {
   convKey: string;
   sessionUuid?: string | null;
   tmuxSession?: string | null;
+  /** The page and tab the transcript last named, for the reopen offer and
+   *  the open-tab pill before the stream has said which tab it is on. */
+  lastPage?: BrowserRowState | null;
 }) {
   useSyncExternalStore(subscribe, getVersion, getVersion);
   const split = splits.get(convKey);
   if (!split) return null;
-  return <SplitBody convKey={convKey} split={split} sessionUuid={sessionUuid ?? null} tmuxSession={tmuxSession ?? null} />;
+  return <SplitBody convKey={convKey} split={split} sessionUuid={sessionUuid ?? null} tmuxSession={tmuxSession ?? null} lastPage={lastPage ?? null} />;
 }
 
 function SplitBody({
@@ -122,11 +132,13 @@ function SplitBody({
   split,
   sessionUuid,
   tmuxSession,
+  lastPage,
 }: {
   convKey: string;
   split: SplitState;
   sessionUuid: string | null;
   tmuxSession: string | null;
+  lastPage: BrowserRowState | null;
 }) {
   const convex = useConvex();
   const [status, setStatus] = useState<Status>({ kind: "connecting" });
@@ -195,10 +207,10 @@ function SplitBody({
             if (!cancelled) setTab(t);
           },
           onError(code, message) {
-            if (!cancelled) setStatus({ kind: "failed", message: errorMessage(code, message), canRetry: true });
+            if (!cancelled) setStatus({ kind: "failed", message: errorMessage(code, message), canRetry: true, tabGone: GONE_ERRORS.has(code) });
           },
           onExit(reason) {
-            if (!cancelled) setStatus({ kind: "failed", message: exitMessage(reason), canRetry: true });
+            if (!cancelled) setStatus({ kind: "failed", message: exitMessage(reason), canRetry: true, tabGone: GONE_EXITS.has(reason) });
           },
         },
       );
@@ -213,6 +225,15 @@ function SplitBody({
 
   const reconnect = useCallback(() => setAttempt((n) => n + 1), []);
   const close = () => toggleBrowserWatch(convKey);
+  // The same focus/reopen the row pill has: raise the streamed tab in Chrome,
+  // and when the stream failed for want of a tab, bring the last page back —
+  // the stream then redials onto the reopened tab.
+  const tabActions = useBrowserTabActions(
+    { tabId: tab?.id || lastPage?.tabId || null, url: tab?.url || lastPage?.url || null },
+    { sessionUuid, tmuxSession },
+    reconnect,
+  );
+  const reopenOffered = status.kind === "failed" && !!status.tabGone && !!(tab?.url || lastPage?.url) && !!(sessionUuid || tmuxSession);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   const onHandlePointerDown = (e: React.PointerEvent) => {
@@ -266,6 +287,19 @@ function SplitBody({
             )}
           </>
         )}
+        {tabActions.tabId && (
+          <button
+            type="button"
+            onClick={tabActions.state.kind === "offer" ? tabActions.reopen : tabActions.focus}
+            title={`Focus tab ${tabActions.tabId.slice(0, 8)} in the agent's browser`}
+            className={`${BROWSER_ROW_PILL} ${
+              tabActions.state.kind === "busy" ? "text-sol-cyan border-sol-cyan/40" : tabActions.state.kind === "note" ? "text-sol-red/80 border-sol-red/30" : ""
+            }`}
+            aria-busy={tabActions.state.kind === "busy"}
+          >
+            <BrowserTabActionLabel state={tabActions.state} idle={<span>open tab</span>} />
+          </button>
+        )}
         <span className="flex-1" />
         {live && controlAvailable && (
           <button
@@ -317,14 +351,27 @@ function SplitBody({
         {status.kind === "failed" ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[11px] font-mono text-center px-6 bg-sol-bg/80">
             <span className="text-sol-text-dim">{status.message}</span>
-            {status.canRetry && (
-              <button
-                onClick={reconnect}
-                className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
-              >
-                Reconnect
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {reopenOffered && (
+                <button
+                  onClick={tabActions.reopen}
+                  disabled={tabActions.state.kind === "busy"}
+                  title={`Reopen ${tab?.url || lastPage?.url} in the cast browser, as this session, then stream it here`}
+                  className="px-2 py-0.5 rounded border border-sol-yellow/50 text-sol-yellow hover:border-sol-yellow transition-colors disabled:opacity-60"
+                >
+                  {tabActions.state.kind === "busy" ? "Reopening…" : "Reopen in cast browser"}
+                </button>
+              )}
+              {status.canRetry && (
+                <button
+                  onClick={reconnect}
+                  className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
+                >
+                  Reconnect
+                </button>
+              )}
+            </div>
+            {tabActions.state.kind === "note" && <span className="text-sol-red/80">{tabActions.state.text}</span>}
           </div>
         ) : status.kind === "connecting" && !frame ? (
           <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-sol-text-dim">

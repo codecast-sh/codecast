@@ -11,6 +11,8 @@ import type { TerminalEndpoint } from "./terminal/endpoint";
 export interface WatchTabInfo {
   title: string;
   url: string;
+  /** The CDP target id (full); the row pills hold its 8-char prefix. */
+  id: string;
 }
 
 export interface WatchHandlers {
@@ -109,13 +111,13 @@ export function connectBrowserWatch(
     }
     switch (msg.type) {
       case "ready":
-        handlers.onReady({ title: msg.title ?? "", url: msg.url ?? "" }, msg.control === true);
+        handlers.onReady({ title: msg.title ?? "", url: msg.url ?? "", id: msg.targetId ?? "" }, msg.control === true);
         break;
       case "frame":
         handlers.onFrame(`data:image/jpeg;base64,${msg.data}`, msg.w ?? 0, msg.h ?? 0);
         break;
       case "tab":
-        handlers.onTab({ title: msg.title ?? "", url: msg.url ?? "" });
+        handlers.onTab({ title: msg.title ?? "", url: msg.url ?? "", id: msg.targetId ?? "" });
         break;
       case "error":
         done = true;
