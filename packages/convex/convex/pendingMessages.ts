@@ -25,6 +25,7 @@ import {
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
+import { enqueueRoleEvent } from "./orgEvents";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -386,6 +387,8 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
+    // The wake rail's own frame (orgWakes.deliver): never re-enters the rail.
+    role_wake?: boolean;
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -461,6 +464,30 @@ export async function enqueuePendingMessage(
     ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? clearedThreadStateFields() : {}),
   });
+
+  // A standing role's session (org-roles-standing.md T3): a person's message,
+  // another session's send, or a routine firing is an immediate wake. The row
+  // stays queued as written; the flush folds its frame into it.
+  if (
+    conversation.standing_role_id && !fields.role_wake &&
+    (fields.human === true || fields.from_conversation_id || fields.origin === "scheduler")
+  ) {
+    const sender = await ctx.db.get(fromUserId);
+    const who = sender?.name || sender?.github_username || sender?.email?.split("@")[0] || "someone";
+    const from = fields.from_conversation_id ? await ctx.db.get(fields.from_conversation_id) : null;
+    const label = fields.origin === "scheduler"
+      ? "a routine fired"
+      : from
+        ? `session ${from.short_id ?? String(from._id).slice(0, 7)} (${who}) sent instructions`
+        : `${who} wrote`;
+    await enqueueRoleEvent(ctx, conversation.standing_role_id, {
+      kind: "immediate",
+      cause: `${label}:\n${fields.content}`,
+      ref: { table: "pending_messages", id: String(messageId) },
+      actorConversationId: fields.from_conversation_id ?? null,
+      pendingMessageId: messageId,
+    });
+  }
 
   return messageId;
 }
@@ -685,9 +712,15 @@ export async function performSessionSend(
   // session is read-only by default — injecting a turn is a stronger right than reading — UNLESS
   // its owner has granted this user explicit send access for it (collab_grants), the one approved
   // path for a link recipient to run commands in someone else's session.
-  const target = await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
-    return await canSendProductMessage(ctx, authUserId, conversation);
-  });
+  // `cast send @handle` addresses a role's standing session (org-roles-standing.md
+  // T3): the handle resolves in the caller's boundaries, then the row below
+  // is the session; the same access rule applies to it.
+  const roleTarget = await standingSessionForHandle(ctx, authUserId, args.to);
+  const target = roleTarget
+    ? ((await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null)
+    : await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
+      return await canSendProductMessage(ctx, authUserId, conversation);
+    });
   if (!target) {
     throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, or sessions whose owner granted you send access)`);
   }
@@ -784,6 +817,25 @@ export async function performSessionSend(
     target_live: targetLive,
     auto_owned: autoOwned,
   };
+}
+
+// "@handle" → the standing session of the live role with that handle in the
+// caller's personal space or any of their teams; null for any other ref.
+async function standingSessionForHandle(ctx: { db: any }, userId: Id<"users">, ref: string): Promise<any | null> {
+  if (!ref.startsWith("@")) return null;
+  const handle = ref.slice(1).trim().toLowerCase();
+  if (!handle) return null;
+  const candidates: any[] = await ctx.db.query("org_roles")
+    .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", userId).eq("handle", handle)).collect();
+  const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  for (const m of memberships) {
+    candidates.push(...await ctx.db.query("org_roles")
+      .withIndex("by_team_handle", (q: any) => q.eq("team_id", m.team_id).eq("handle", handle)).collect());
+  }
+  const role = candidates.find((r) => r.status !== "retired" && r.anchor_id);
+  if (!role) return null;
+  const anchor = await ctx.db.get(role.anchor_id);
+  return anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
 }
 
 export const sendSessionMessage = mutation({
@@ -1523,6 +1575,10 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
       if (!safetyBlocked.has(conversationId)) {
         const conversation = await ctx.db.get(msg.conversation_id);
         safetyBlocked.set(conversationId, !!conversation && isConversationSafetyBlocked(conversation));
+        if (!conversation) {
+          ready.delete(conversationId);
+          live.delete(conversationId);
+        }
       }
       if (safetyBlocked.get(conversationId)) {
         waiting++;
