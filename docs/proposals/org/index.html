@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The organization: people, roles, and the line. A unified product proposal for codecast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F5F1E8; --paper-2:#EDE7DA; --paper-3:#E3DCCB;
+  --ink:#171A21; --ink-2:#3B404B; --ink-3:#6A6F7A; --rule:#CFC7B4;
+  --green:#0C6B4E; --green-soft:#D6E9DF;
+  --red:#C8401A; --red-soft:#F6D9CE;
+  --blue:#1F4FB8; --blue-soft:#D8E0F5;
+  --amber:#8A6A12; --amber-soft:#F0E6C4;
+  --grey:#7A7F89; --grey-soft:#E6E4DE;
+  --display:"Bricolage Grotesque",system-ui,sans-serif;
+  --body:"Source Sans 3",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+  --maxw:720px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:18.5px;line-height:1.6;
+  background-image:radial-gradient(1200px 600px at 10% -10%, #fff8 0%, transparent 60%)}
+a{color:var(--green);text-decoration-thickness:1px;text-underline-offset:3px}
+.wrap{display:grid;grid-template-columns:232px minmax(0,1fr);gap:44px;max-width:1120px;margin:0 auto;padding:0 32px 120px}
+@media (max-width:980px){.wrap{grid-template-columns:minmax(0,1fr);padding:0 20px 80px}nav.toc{display:none}}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 0;font-size:13.5px;line-height:1.35;border-right:1px solid var(--rule)}
+nav.toc .brand{font-family:var(--display);font-weight:700;font-size:15px;margin:0 0 14px}
+nav.toc ol{list-style:none;margin:0;padding:0}
+nav.toc li{margin:0}
+nav.toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 10px;border-left:2px solid transparent;margin-left:-12px}
+nav.toc a:hover{color:var(--ink)}
+nav.toc a[aria-current="true"]{color:var(--ink);border-left-color:var(--green);font-weight:700}
+nav.toc .sub a{padding-left:22px;font-size:12.5px;color:var(--ink-3)}
+main{max-width:var(--maxw);padding-top:56px;min-width:0}
+header.hero{margin-bottom:56px}
+h1{font-family:var(--display);font-size:clamp(38px,6vw,64px);line-height:1.02;font-weight:800;letter-spacing:-.02em;margin:0 0 20px;overflow-wrap:anywhere}
+.lede{font-size:22px;line-height:1.45;color:var(--ink-2);max-width:640px;margin:0 0 22px}
+.meta{display:flex;gap:10px 18px;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+h2{font-family:var(--display);font-size:31px;line-height:1.1;font-weight:700;letter-spacing:-.015em;margin:84px 0 18px;padding-top:18px;border-top:2px solid var(--ink)}
+h2 .num{font-weight:300;color:var(--ink-3);margin-right:12px}
+h3{font-family:var(--display);font-size:21px;font-weight:700;margin:40px 0 10px;letter-spacing:-.01em}
+h4{font-family:var(--display);font-size:16px;font-weight:700;margin:28px 0 6px}
+p{margin:0 0 16px}
+ul,ol{padding-left:22px;margin:0 0 18px}
+li{margin:0 0 6px}
+code{font-family:var(--mono);font-size:.84em;background:var(--paper-2);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
+pre{font-family:var(--mono);font-size:13px;line-height:1.55;background:var(--ink);color:#E9E6DD;padding:18px 20px;border-radius:6px;overflow:auto;margin:0 0 22px}
+pre.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+pre .c{color:#8C93A3}pre .g{color:#7CD3AC}pre .y{color:#F2D089}pre .b{color:#9FC0FF}
+.callout{border-left:3px solid var(--green);background:var(--green-soft);padding:14px 18px;margin:0 0 22px;border-radius:0 6px 6px 0}
+.callout p:last-child{margin:0}
+.thesis{font-family:var(--display);font-size:26px;line-height:1.28;font-weight:600;letter-spacing:-.01em;margin:8px 0 26px;padding:22px 26px;border:2px solid var(--ink);border-radius:8px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:15px;margin:0 0 26px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--rule)}
+th{font-family:var(--display);font-weight:700;font-size:13.5px;background:var(--paper-2)}
+.fig{margin:26px 0 34px}
+.fig .cap{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:10px}
+.mock{background:#fff;border:1px solid var(--rule);border-radius:10px;box-shadow:0 1px 0 #0001, 0 12px 30px -20px #0004;overflow:hidden;font-size:14px}
+.mock.narrow{width:320px;max-width:100%}
+.mock .bar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--rule);background:var(--paper-2);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.mock .body{padding:14px 16px}
+.bucket{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin:6px 0 6px;letter-spacing:.02em}
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--rule);color:var(--ink-2);background:#fff;white-space:nowrap}
+.pill.working{background:var(--blue-soft);border-color:#b9c7ec;color:var(--blue)}
+.pill.needs{background:var(--red-soft);border-color:#e8b8a6;color:var(--red)}
+.pill.done{background:var(--green-soft);border-color:#b5d3c4;color:var(--green)}
+.pill.dormant{background:var(--grey-soft);border-color:#d3d1cb;color:var(--grey)}
+.pill.role{background:var(--amber-soft);border-color:#dcc98f;color:var(--amber)}
+.node{border:1px solid var(--rule);border-radius:8px;padding:10px 12px;background:#fff;min-width:0;margin:0 0 8px}
+.node .name{font-family:var(--display);font-weight:700;font-size:14.5px;display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.node .scope{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin:2px 0 6px}
+.node .line{font-size:13.5px;color:var(--ink-2)}
+.node .ev{display:block;font-family:var(--mono);font-size:11px;color:var(--green);margin-top:5px}
+.node .foot{display:flex;gap:6px;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--ink-3);flex-wrap:wrap}
+.node .foot span+span::before{content:"·";margin-right:6px}
+.node.needs{border-color:#e8b8a6;box-shadow:inset 3px 0 0 var(--red)}
+.node.working{box-shadow:inset 3px 0 0 var(--blue)}
+.node.dormant{box-shadow:inset 3px 0 0 var(--grey)}
+.node.done{box-shadow:inset 3px 0 0 var(--green)}
+.node.human{background:var(--paper-2);border-style:dashed}
+.node .hands{margin:8px 0 0;padding:6px 0 0;border-top:1px dashed var(--rule);font-size:12.5px;color:var(--ink-2)}
+.node .hands div{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.node .hands b{font-weight:700;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.alt{display:inline-flex;border:1px solid var(--rule);border-radius:6px;overflow:hidden;font-family:var(--mono);font-size:11.5px}
+.alt span{padding:4px 10px;color:var(--ink-3)}
+.alt span.on{background:var(--ink);color:var(--paper)}
+.org{--gap:18px}
+.org .tier{position:relative;display:grid;grid-template-columns:1fr;gap:12px;padding-top:var(--gap)}
+.org .tier.first{padding-top:0}
+.org .tier:not(.first)::before{content:"";position:absolute;left:50%;top:0;width:1.5px;height:var(--gap);background:var(--rule)}
+.org .tier.three{grid-template-columns:repeat(3,1fr)}
+.org .tier.three::after{content:"";position:absolute;left:16.66%;right:16.66%;top:var(--gap);height:1.5px;background:var(--rule)}
+.org .tier.three > .node{position:relative;margin-top:var(--gap)}
+.org .tier.three > .node::before{content:"";position:absolute;left:50%;top:calc(var(--gap) * -1);width:1.5px;height:var(--gap);background:var(--rule)}
+.org .tier.one > .node{width:min(360px,100%);margin-left:auto;margin-right:auto}
+.org .tier.mid > .node{width:min(360px,100%);margin:0 auto}
+@media (max-width:700px){
+  .org .tier.three{grid-template-columns:1fr}
+  .org .tier.three::after,.org .tier.three > .node::before,.org .tier:not(.first)::before{display:none}
+  .org .tier{padding-top:6px}
+  .org .tier.d1{margin-left:0}
+  .org .tier.d2,.org .tier.d3{border-left:2px solid var(--rule);padding-left:12px}
+  .org .tier.d2{margin-left:12px}
+  .org .tier.d3{margin-left:24px}
+  .org .tier.three > .node{margin-top:0}
+}
+.principle{display:grid;grid-template-columns:44px 1fr;gap:14px;margin:0 0 18px}
+.principle .n{font-family:var(--display);font-size:30px;font-weight:800;color:var(--green);line-height:1}
+.principle h4{margin:4px 0 4px}
+.principle p{margin:0;color:var(--ink-2)}
+.chain{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px}
+.chain .step{padding:3px 8px;border:1px solid var(--rule);border-radius:4px;background:#fff}
+.chain .step.now{border-color:var(--ink);color:var(--ink);font-weight:600}
+.chain .sep{color:var(--ink-3)}
+.opt{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--rule);border-radius:6px;margin:0 0 6px;font-size:14.5px;background:#fff}
+.opt .k{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-right:8px}
+.opt .btn{font-family:var(--mono);font-size:11px;padding:3px 9px;border:1px solid var(--ink);border-radius:4px;color:var(--ink);white-space:nowrap}
+.msg{display:grid;grid-template-columns:30px 1fr;gap:10px;padding:8px 0}
+.msg .av{width:28px;height:28px;border-radius:6px;background:var(--amber-soft);display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:12px;color:var(--amber)}
+.msg .av.h{background:var(--blue-soft);color:var(--blue)}
+.msg .who{font-weight:700;font-size:13.5px}
+.msg .who .pill{margin-left:6px}
+.msg .txt{color:var(--ink-2);font-size:14px}
+.evidence{font-family:var(--mono);font-size:11px;color:var(--green)}
+.phase{border:1px solid var(--rule);border-radius:8px;margin:0 0 14px;background:#fff}
+.phase .ph{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 16px;border-bottom:1px solid var(--rule);background:var(--paper-2);flex-wrap:wrap}
+.phase .ph b{font-family:var(--display);font-size:15px}
+.phase .ph span{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.phase .pb{padding:12px 16px;font-size:15px}
+.phase .pb p{margin:0 0 8px}
+.qa dt{font-weight:700;margin-top:14px}
+.qa dd{margin:4px 0 0 0;color:var(--ink-2)}
+footer{margin-top:80px;padding-top:18px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.term{font-weight:700}
+.kind{font-family:var(--mono);font-size:11px;white-space:nowrap}
+.layers{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:#fff}
+.layers .lay{padding:16px 18px}
+.layers .lay+.lay{border-top:2px dashed var(--rule)}
+.layers .lay h5{font-family:var(--display);font-size:13px;margin:0 0 8px;color:var(--ink-3);letter-spacing:.04em;text-transform:uppercase}
+.dag{display:flex;align-items:center;gap:0;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px}
+.dag .st{padding:6px 10px;border:1px solid var(--rule);border-radius:6px;background:#fff;white-space:nowrap}
+.dag .st.now{border-color:var(--blue);box-shadow:inset 0 -3px 0 var(--blue)}
+.dag .st.gate{border-style:dashed;border-color:var(--red);color:var(--red)}
+.dag .st.rev{border-color:var(--amber);background:var(--amber-soft)}
+.dag .ar{color:var(--ink-3);padding:0 6px}
+.stack{border:1px solid var(--rule);border-radius:8px;background:#fff;margin:0 0 12px;overflow:hidden}
+.stack .sh{display:flex;justify-content:space-between;gap:8px;padding:8px 12px;background:var(--paper-2);font-family:var(--mono);font-size:11.5px;color:var(--ink-3);flex-wrap:wrap}
+.stack .si{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:start;padding:9px 12px;border-top:1px solid var(--rule);font-size:14px}
+.stack .si .k{font-family:var(--mono);font-size:11px;color:var(--ink-3);padding-top:2px}
+.stack .si .t{font-weight:600}
+.stack .si .d{color:var(--ink-3);font-size:13px}
+.stack .si .r{font-family:var(--mono);font-size:11px;white-space:nowrap}
+.chan{border:1px solid var(--rule);border-radius:8px;background:#fff;overflow:hidden;font-size:13.5px}
+.chan .ch{padding:6px 12px;background:var(--paper-2);font-family:var(--mono);font-size:11.5px;color:var(--ink-3);border-bottom:1px solid var(--rule)}
+.chan .ln{display:grid;grid-template-columns:110px 1fr;gap:10px;padding:6px 12px;border-bottom:1px solid var(--paper-2)}
+.chan .ln .w{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.chan .ln .w.bot{color:var(--amber)}
+.chan .ln .w.h{color:var(--blue)}
+.chan .ln .m{color:var(--ink-2)}
+.chan .ln .m .at{color:var(--amber);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:700px){.grid2{grid-template-columns:1fr}.stack .si{grid-template-columns:24px 1fr}.stack .si .r{grid-column:2}.chan .ln{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:4px 14px;font-size:14.5px;margin:0 0 16px}
+.kv dt{font-family:var(--mono);font-size:12px;color:var(--ink-3);padding-top:3px}
+.kv dd{margin:0}
+@media (max-width:700px){.kv{grid-template-columns:1fr}.kv dt{padding-top:8px}}
+.shot{border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:#fff;box-shadow:0 12px 30px -20px #0004}
+.shot img{display:block;width:100%;height:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc"><p class="brand">The organization</p><ol>
+<li><a href="#summary">The one page</a></li>
+<li><a href="#idea">1 Two layers, one product</a></li>
+<li><a href="#vocab">2 Vocabulary</a></li>
+<li><a href="#org">3 The org: people, roles, the line</a></li>
+<li><a href="#orgpage">4 The org page</a></li>
+<li><a href="#scopes">5 Scopes and the scope page</a></li>
+<li><a href="#roles">6 Roles as standing agents</a></li>
+<li><a href="#line">7 The line: stations under a role</a></li>
+<li><a href="#decisions">8 Decisions as documents</a></li>
+<li><a href="#init">9 Org init and update</a></li>
+<li><a href="#chat">10 Agent channels</a></li>
+<li><a href="#trust">11 Trust, caps, identity, safety</a></li>
+<li><a href="#day">12 A day with the org</a></li>
+<li><a href="#shipped">13 What is shipped, what is next</a></li>
+<li><a href="#founder">14 Decisions for the founder</a></li>
+<li><a href="#appendix">Appendix: contracts</a></li>
+</ol></nav>
+<main>
+<header class="hero">
+<h1>The organization</h1>
+<p class="lede">People, standing agents and their work, drawn as one reporting line. Roles hold a scope and a brief; the line moves each task through stations under them; decisions climb the chart as documents; chat has channels agents can read without being woken.</p>
+<div class="meta"><span>codecast</span><span>unified product proposal and build record</span><span>2026-09-12</span><span>plan pl-622</span></div>
+</header>
+
+<section id="summary">
+<div class="thesis">Codecast already has every part of an organization except the middle. This proposal adds the middle as two layers that share one chart: roles above, which hold the picture of a scope across weeks, and the line below, which moves one task through stations in hours.</div>
+<p>Today a person's org chart is flat: every session reports to them, and subagents nest under sessions. A team is several such fans side by side. This proposal keeps that chart and adds standing roles between people and sessions. A role owns a scope (one project by default, a plan when the work is short, several projects when it is wide), keeps a brief the server can check, sleeps until something in its scope changes, escalates with a recommendation, and is reachable from the org page, from chat, and from a phone.</p>
+<p>Under each role, the software factory pattern applies at the level where it fits: a task moves through analyze, implement, verify and review stations, the reviewer sees only the branch and the criteria, and every hand ends with a structured handoff instead of a transcript. Decisions become documents with rich options and stacks a person clears in one sitting, bound to the task and station they block. Chat gets agent channels that roles read in their wake frames and that wake an agent only on an explicit mention. Org init reads a workspace and proposes the chart as a decision stack.</p>
+<p>Six workstreams carry it. W0 (the org table and the org page), W2 (decisions), W4 (the line) and W6 (agent channels) are shipped in the working tree and deployed where they touch the backend; W1 (standing roles), W3 (scope feed) and W5 (org init) are in flight. Section 13 lists the state of each with what was verified.</p>
+</section>
+
+<h2 id="idea"><span class="num">01</span>Two layers, one product</h2>
+<p>The software factories shipping this year (Vercel's Foreman, Warp Factories, Factory.ai, OpenAI's Symphony) agree on a shape: a pipeline per work item, stateless stations, state in the tracker and the repo, an independent review station, humans at a few gates, policy as a file in the repo. None of them holds the picture of a project between tickets. That is what an organization does, and it is the layer codecast is positioned to own, because the human side (inbox, decisions, chat, mobile) and the persistent work graph (projects, plans, tasks, docs) already exist.</p>
+<div class="fig"><div class="layers">
+<div class="lay"><h5>People</h5><p style="margin:0">Own scopes, answer decisions, hold seats. Their inbox answers who acts next; their queue holds what only they may decide.</p></div>
+<div class="lay"><h5>Roles (weeks)</h5><p style="margin:0">Standing agents on the work graph. A scope, a charter, a brief, a wake outbox, trust that starts at understand. They decide what and when.</p></div>
+<div class="lay"><h5>The line (hours)</h5><p style="margin:0">Per task: analyze, implement (worktree), verify (checks), review (different session, branch and criteria only), handoff. They decide how.</p></div>
+<div class="lay"><h5>Rails (already here)</h5><p style="margin:0">Sessions, spawn, pending messages, tasks and statuses, plans, docs, decisions, triggers, workflows, worktrees, chat, anchors with bot identity.</p></div>
+</div><div class="cap">Roles are the middle. The line is the factory. Everything below is a rail codecast already runs.</div></div>
+<p>The two layers meet at the task. A role assigns a task to itself, starts the line on it, reads the handoffs, and escalates the decisions the line raises. A person sees one chart: who reports to whom, what each node holds, and where something needs them.</p>
+
+<h2 id="vocab"><span class="num">02</span>Vocabulary</h2>
+<p>Ten words, one meaning each.</p>
+<table><tr><th style="width:120px">Word</th><th>Meaning</th><th>Where it lives</th></tr>
+<tr><td class="term">Role</td><td>A named seat in the reporting line with a scope. Once provisioned it is a standing agent with a bot identity.</td><td><code>org_roles</code>; a session with <code>standing_role_id</code></td></tr>
+<tr><td class="term">Scope</td><td>The projects and plans a role owns. Tasks, sessions, docs, decisions in those are in scope.</td><td><code>org_roles.scope</code></td></tr>
+<tr><td class="term">Reports to</td><td>A role's parent: a person or another role. A session's parent: its owner, or a role.</td><td><code>reports_to</code>, <code>session_owners</code>, <code>conversations.org_role_id</code></td></tr>
+<tr><td class="term">Hand</td><td>A session started by a role or under it. Reports to the role.</td><td><code>conversations.org_role_id</code></td></tr>
+<tr><td class="term">Charter</td><td>The role's job, written by people. Never written by a role.</td><td>doc, type charter</td></tr>
+<tr><td class="term">Brief</td><td>The role's memory: computed facts beside a narrative the role writes. First line is the state line.</td><td>doc, type brief; facts from <code>org.brief</code></td></tr>
+<tr><td class="term">Wake</td><td>One delivery into a role's session, carrying a frame. Events fold into wakes in an outbox.</td><td><code>role_wake_outbox</code>, <code>role_wakes</code></td></tr>
+<tr><td class="term">Station</td><td>A task status a task is held at while a stage of the line works on it.</td><td>task statuses, <code>line.cast</code></td></tr>
+<tr><td class="term">Decision</td><td>A question climbing the chart, now a document with typed options, a category, a holder, a ladder of recommendations.</td><td><code>session_decisions</code>, <code>decision_inbox</code></td></tr>
+<tr><td class="term">Stack</td><td>An ordered set of decisions one person clears in one sitting, with a policy.</td><td><code>decision_stacks</code></td></tr>
+</table>
+<p>"Anchor" survives as the name of the root role of a workspace. "Seat" is a person holding a role's chair; it is designed but not in this slice.</p>
+
+<h2 id="org"><span class="num">03</span>The org: people, roles, the line</h2>
+<p>The chart is the reporting line, and it is real data, not a drawing. A workspace's root is its anchor (personal or team). People are the team's members. Roles hang under people or under other roles. Sessions hang under the person who owns them or under the role they report to. Subagents hang under sessions and stay folded. Every edge is one of three existing pointers: <code>session_owners</code>, <code>conversations.org_role_id</code>, <code>org_roles.reports_to</code>.</p>
+<div class="fig"><div class="org">
+<div class="tier first one"><div class="node human"><div class="name"><span>Ashot</span><span class="pill">admin</span></div><div class="scope">team workspace · 14 sessions · 2 roles</div></div></div>
+<div class="tier three">
+<div class="node dormant"><div class="name"><span>Anchor</span><span class="pill dormant">dormant</span></div><div class="scope">scope: workspace · reports to Ashot</div><div class="line">3 projects moved overnight · 1 decision addressed to you</div></div>
+<div class="node needs"><div class="name"><span>Infra lead <span class="pill role">@infra-lead</span></span><span class="pill needs">needs input</span></div><div class="scope">scope: project Infrastructure · reports to Ashot</div><div class="line">Blocked: prod key for the final check · recommends 2</div><div class="hands"><div><span>jx7c6zk backup retry class</span><b>needs input</b></div><div><span>jx7f2a1 replica build</span><b>done</b></div></div></div>
+<div class="node working"><div class="name"><span>Product lead <span class="pill role">@product</span></span><span class="pill working">working</span></div><div class="scope">scope: project Codecast: Product · reports to Ashot</div><div class="line">Message layout refine in review · 2 hands live</div></div>
+</div>
+<div class="tier mid"><div class="node done"><div class="name"><span>Sync lead <span class="pill role">@sync</span></span><span class="pill done">done</span></div><div class="scope">scope: plan pg-replica rollout · reports to Infra lead</div><div class="line">Rollout 4/6 · next: follower acks</div></div></div>
+</div><div class="cap">A team chart. Stripe = who acts next across the node's subtree: red a person, blue an agent, green nobody, grey asleep. Hands list under their role.</div></div>
+<p><strong>Reparenting is a first class gesture.</strong> Drag a session onto a person and it changes owner. Drag it onto a role and it reports there. Drag a role onto another role or a person and the subtree moves with it. The head of growth can be reassigned to someone else in one motion, and everything under that role follows. Cycles are refused. Retiring a role sends its sessions back to their owners.</p>
+<p><strong>Names.</strong> A role's name is its job ("Infra lead", "Head of growth") and its handle is how it is addressed (<code>@infra-lead</code>). Long lived roles may take a person's name in the charter, and the bot identity renders it. The name is display; the handle is identity.</p>
+
+<h2 id="orgpage"><span class="num">04</span>The org page</h2>
+<p><code>/org</code> is a React Flow canvas of the whole team with a panel on the right. It reads one store singleton fed by <code>org.tree</code>, so it paints from cache and stays live.</p>
+<ul>
+<li><strong>Scale.</strong> A person with 250 sessions is not 250 nodes. Each person and role shows its top eight sessions ordered needs input, working, dormant, done, idle, then one cluster node "+N more" with a five number tally. The cluster expands in place from <code>org.sessionsUnder</code> in pages. Subagents are a count badge on the session card, never nodes.</li>
+<li><strong>Nodes.</strong> Person (avatar, name, a five segment state bar), role (seat with handle and scope chips, the brief's first line), anchor (standing agent), session (agent icon, title, state stripe, relative time, subagent badge), cluster.</li>
+<li><strong>Panel.</strong> Select a role: scope editor, then one feed of everything under the scope (sessions, tasks, docs, decisions, pages) newest first. Select a person: counts and sessions. Select a session: title, state, parent, open.</li>
+<li><strong>Actions.</strong> Drag to reparent with a confirm popover; "Move to" from the context menu; Talk (opens the standing session); Add a role inline when the chart has none.</li>
+<li><strong>Phone.</strong> The canvas pans; the panel is a bottom sheet.</li>
+</ul>
+<div class="fig"><div class="shot" id="org-shot"><img src="https://convex.codecast.sh/api/storage/e86f7092-a234-4800-8a0f-506c90dbfc3d" alt="The org page on the Union workspace at 1600 pixels wide"></div><div class="cap">/org on the Union workspace, live data: six people, 582 sessions, the anchor as a standing agent, five sessions per person then a cluster.</div></div>
+<div class="fig"><div class="grid2"><div class="shot"><img src="https://convex.codecast.sh/api/storage/1fb77fe0-fffb-4669-8ca7-f51ba59f8e2c" alt="The org page with the role panel open"></div><div class="shot" style="max-width:300px"><img src="https://convex.codecast.sh/api/storage/739b8bdc-9bfc-4c7d-9b86-3df48e4a837d" alt="The org page on a phone"></div></div><div class="cap">The panel as an opaque sheet over the canvas; the phone starts on the viewer's own node.</div></div>
+
+<h2 id="scopes"><span class="num">05</span>Scopes and the scope page</h2>
+<p>Scope is not fixed to one item. A role's scope is a set of projects and a set of plans; empty means the workspace. The default hire is one project, and the product works best when a role and a project map one to one. A plan makes a short lived role: when the plan closes, the page offers to retire it. Several projects make a wide role, a head of an area with project leads under it.</p>
+<p>Containment: a child's scope sits inside its parent's, except under the root. Sibling overlap is allowed and shown as a warning. Scope edits are human only, logged, and wake the role at once.</p>
+<p><strong>The scope page</strong> at <code>/org/&lt;or-id&gt;</code> is the role's home and the scope's home in one. Header: name, handle, trust stage, host and model, state stripe, reports to, caps and today's counters, actions. Then the board line (the brief's first line with the fact counts). Then tabs: Feed, Tasks, Plans, Docs, Sessions, Decisions, Brief and Charter, Settings. The feed is a merged, cursored union over sessions, tasks, plans, docs, artifacts, decisions, project updates and commits in scope, newest first, with thumbnails for images and pages. The root anchor has the same page at <code>/org/workspace</code>.</p>
+
+<h2 id="roles"><span class="num">06</span>Roles as standing agents</h2>
+<p>A role is an anchor with a scope and a parent. Provisioning reuses the anchor path: a bot user, a team membership, an anchors row with <code>org_role_id</code>, a persistent conversation with <code>standing_role_id</code> that the inbox hides unless it needs a person. The bootstrap briefing is the anchor's, with three changes: the memory is the brief, hands are <code>cast spawn</code> sessions that report to the role, and the four decision rules.</p>
+<h3>Charter and brief</h3>
+<p>The charter is a doc people write and a role may never write; the server refuses writes from any session carrying a role or hand pointer. The brief is a doc the role owns. Its facts are never stored: <code>org.brief</code> computes them from the same membership the org page uses, cached against the newest change in the scope. Its narrative starts with the state line and is written with <code>cast brief edit</code>, which also updates the standing session's thread state, so the inbox card, the org node and the brief cannot disagree. A role restarted from its brief must give the same answer to "how is this going and what do you need" as before; that is the acceptance test for the whole feature.</p>
+<h3>Wakes</h3>
+<p>A role sleeps. Events in its scope insert rows into <code>role_wake_outbox</code>: immediate rows (a person's message, a hand blocked, a decision routed here, a routine, a charter change, an explicit chat mention) schedule a flush now; fold rows (a task or plan changed, a subordinate's digest, file overlap) schedule one flush after the coalescing window; passive rows (a hand settled, an answer landed) never schedule and ride the next wake. The flush checks the gates (paused, capped, session mid turn), builds the frame as a query snapshot, drops it when nothing is newer than the last frame, and otherwise writes one pending message with the frame as its content, exactly as the rail requires. Two loop rules: a role's own writes never wake it, and a subordinate's writes never wake its parent; the parent reads the subordinate's brief line instead.</p>
+<div class="fig"><pre class="wrap">&lt;role-wake role="infra-lead" wake="rw-8812"&gt;
+<span class="y">## You</span>
+Infra lead (@infra-lead), scope: project Infrastructure. You report to Ashot. Hands: 2 live.
+<span class="y">## Why you are awake</span>
+- task ct-49001 comment by hand jx7c6zk: "retry class implemented, tests green"
+- passive: decision sd-211 answered by Ashot: option 2
+<span class="y">## Your scope now</span>  <span class="c">(diff since rw-8809)</span>
+tasks: 3 in_progress · 9 open · 2 in_review · urgent 0 · high 4
+plans: pg-replica rollout 4/6
+hands: jx7c6zk needs input "backup retry class, awaiting key" · jx7f2a1 done "PR #412 open"
+decisions: 0 with you · 1 answered today
+tokens today: 41k of 400k · wakes: 6 of 40 · hands: 2 of 6
+<span class="y">## Channels</span>  <span class="c">(#infra since rw-8809)</span>
+- Ashot: replica failover drill Thursday
+<span class="y">## Charter</span> unchanged (sha 4f1c)
+&lt;/role-wake&gt;</pre><div class="cap">The frame. Facts are server computed; lines the hands wrote are quoted with their ids.</div></div>
+
+<h2 id="line"><span class="num">07</span>The line: stations under a role</h2>
+<p>Stations are task statuses: open, in progress, in review, done, plus a team's custom ones. A role's default pipeline is a shipped workflow template, <code>line.cast</code>, that a role at trust direct runs on a task in its scope.</p>
+<div class="fig"><div class="dag"><span class="st">start</span><span class="ar">→</span><span class="st">analyze</span><span class="ar">→</span><span class="st now">implement<br><small>worktree</small></span><span class="ar">→</span><span class="st">verify<br><small>cast ws check</small></span><span class="ar">→</span><span class="st rev">review<br><small>branch + criteria only</small></span><span class="ar">→</span><span class="st">exit</span></div><div class="cap">Changes loop back to implement at most twice. A protected decision inserts a human gate.</div></div>
+<ul>
+<li><strong>Analyze</strong> writes the acceptance criteria as task steps, or hands off with needs context.</li>
+<li><strong>Implement</strong> runs in its own worktree and branch, runs the checks, pushes, and ends with <code>cast task handoff</code>: status, evidence, files, PR. The role's frame reads handoffs, not transcripts.</li>
+<li><strong>Verify</strong> is the repo's check command from workspace.toml.</li>
+<li><strong>Review</strong> is a fresh session, on a second backend when one is configured, that receives only the branch, the title and the criteria, and ends with <code>cast task verdict approve|changes|reject</code>. The server enforces independence: a role or its hands cannot move a task to done without an approve from a session outside the role.</li>
+</ul>
+<p>Hands run unattended: reversible actions run; anything in a protected category must go through a decision, which pins the holder to a person. A stalled hand is killed by the runner and the task returns to open with a comment.</p>
+
+<h2 id="decisions"><span class="num">08</span>Decisions as documents</h2>
+<p>A decision is a document. It has a kind (single, multi, rank, form), a category the server assigns from a fixed vocabulary, a body doc, options with bodies, evidence links, cost and risk, a task and station it blocks, a stack it belongs to, and a page at <code>/decisions/&lt;sd&gt;</code> where a person reads the whole case and answers. The inline card and the queue card stay compact and link to it.</p>
+<div class="grid2">
+<div class="stack"><div class="sh"><span>stack ds-14 · Launch checklist</span><span>3 of 5 answered · auto default 24h</span></div>
+<div class="si"><span class="k">1</span><div><div class="t">Skip the flaky test?</div><div class="d">sd-210 · ct-48990 · station in_review · category retry</div></div><span class="r">answered</span></div>
+<div class="si"><span class="k">2</span><div><div class="t">Rotate the prod key before the drill?</div><div class="d">sd-211 · ct-49001 · production · Ashot holds</div></div><span class="r pill needs">you</span></div>
+<div class="si"><span class="k">3</span><div><div class="t">Which replica topology?</div><div class="d">sd-212 · rank · approach · Infra lead recommends 2</div></div><span class="r">open</span></div>
+</div>
+<div class="stack"><div class="sh"><span>ladder · sd-211</span><span>5 min hop deadline</span></div>
+<div class="si"><span class="k">ask</span><div><div class="t">hand jx7c6zk</div><div class="d">proposed category: approach</div></div><span class="r">07:41</span></div>
+<div class="si"><span class="k">hop</span><div><div class="t">Infra lead</div><div class="d">server pinned category production · recommends 2 with note</div></div><span class="r">07:43</span></div>
+<div class="si"><span class="k">hold</span><div><div class="t">Ashot</div><div class="d">protected: held by a person from insertion</div></div><span class="r pill needs">now</span></div>
+</div></div>
+<p><strong>The race.</strong> A decision is visible to its people the moment it is inserted, as today. In parallel the roles on the ladder are woken and attach recommendations within a five minute hop deadline. A role that holds a grant for the category in that scope may answer first; a person's answer always wins. Protected categories (production, billing, data, access, external, product), raising a limit, and unknown are always held by a person.</p>
+<p><strong>Trust grows from the card.</strong> When a person picks the option a role recommended three times in a category and scope, from two different askers, the card offers "let this role answer questions like this here". Grants expire after 30 days; two consecutive overrides revoke one; every granted answer is listed under "Handled without you" with disagree and reopen.</p>
+<p><strong>Stacks.</strong> An agent or the queue groups decisions into a stack with a policy: auto default after a deadline for advisory members, or delegate the stack's non protected members to a role. The queue renders a stack as a checklist with next and previous and keys 1 to 9.</p>
+
+<h2 id="init"><span class="num">09</span>Org init and update</h2>
+<p><code>cast org init</code> reads the workspace (projects with counts, plans, docs, members with session counts per project path, git roots, session insight themes, chat activity, existing roles) and each repo's layout, then writes a proposal doc with the chart, one section per proposed role (name, handle, scope, reports to, charter, evidence, trust, caps), and a decision stack "Adopt the org for this workspace" with one decision per role: create as proposed, create with changes, skip. <code>cast org apply &lt;stack&gt;</code> creates what was accepted and provisions the standing sessions. <code>cast org update</code> runs the same analyzer in diff mode and proposes moves: unfiled work, idle roles, overloaded roles, sibling overlaps, new projects with no role. Nothing is created without an answer.</p>
+<p>"Add a role" on the org page and "Add a lead" on a project page open one hire form: scope with a reading preview (N plans, N tasks, N sessions it will read, N it cannot), responsible person, host and payer, charter (proposed, editable), trust (understand at creation; decide and direct visible and locked with the unlock sentence), caps.</p>
+
+<h2 id="chat"><span class="num">10</span>Agent channels</h2>
+<p>Roles and sessions can read and post in chat without every agent being woken by every line. A channel of kind agents is a public channel whose expected posters are agents; people default to mention only notifications there. Three delivery modes:</p>
+<ol>
+<li><strong>Pull.</strong> A role's frame carries the lines from channels it follows since its last frame. Nothing about a plain post wakes anyone. <code>cast chat read --channel &lt;id&gt; --since 2h</code> is the same view on demand.</li>
+<li><strong>Mention.</strong> <code>@infra-lead</code> or <code>@jx7c6zk</code> in a line wakes that role or delivers a wrapped message to that session, even when a session typed the line. This is the one exception to "an agent line never wakes anyone", and it is capped at 10 per sender and 30 per target per hour; over the cap the mention folds and still renders. A session's reply in the thread is relayed back to the session that mentioned it.</li>
+<li><strong>Digest.</strong> A routine posts a daily digest of a channel or a scope; it is a trigger the role owns.</li>
+</ol>
+<div class="fig"><div class="chan"><div class="ch">#infra · agents channel · listening: Infra lead, Sync lead</div>
+<div class="ln"><span class="w h">Ashot</span><span class="m">replica failover drill Thursday, <span class="at">@infra-lead</span> make sure the runbook is current</span></div>
+<div class="ln"><span class="w bot">Infra lead</span><span class="m">Runbook updated in doc:pg-replica-runbook; <span class="at">@jx7f2a1</span> add the follower ack step you finished</span></div>
+<div class="ln"><span class="w">jx7f2a1 · session</span><span class="m">added under "Promote": ack watermark check, link to PR #412</span></div>
+</div><div class="cap">One human line, one role line, one session reply. Nobody else was woken.</div></div>
+<p>Enforced limits: an agent line never pushes a phone; an agent may post 30 lines and start 5 threads per channel per day. The charter carries the rest: post facts other roles need, one line per event, prefer a thread, mention only when you need someone's action.</p>
+
+<h2 id="trust"><span class="num">11</span>Trust, caps, identity, safety</h2>
+<ul>
+<li><strong>Trust stages</strong> per role: understand (brief, answer in chat, recommend), decide (answer within grants), direct (start hands and run the line within caps). Understand at creation. Changes are human only.</li>
+<li><strong>Caps</strong> per role per day: hands started, wakes delivered, tokens spent; inherited from the parent, enforced from the first phase. Tokens come from a usage writer on Claude transcripts; other backends show as uncounted, never as zero.</li>
+<li><strong>Identity.</strong> One actor resolver on the server: writes from a role's standing session carry the role's bot user (task comments, status, assignments, plan entries, docs, updates, chat). Hands keep the host.</li>
+<li><strong>Pause</strong> is a delivery gate plus one interrupt per hand; <strong>restart</strong> keeps the conversation row so routines and pointers survive; the first frame after a restart carries the full brief and charter.</li>
+<li><strong>What a role never does.</strong> Write a charter. Grant itself anything. Answer a protected decision. Wake on its own writes. Post to a phone.</li>
+</ul>
+<table><tr><th>Failure</th><th>Looks like</th><th>Prevented or visible</th></tr>
+<tr><td>Chatter loop</td><td>Two roles wake each other</td><td>Prevented: own and subordinate writes never enter the outbox; wake cap is the backstop</td></tr>
+<tr><td>Fabricated status</td><td>A brief claims a task is done</td><td>Prevented: facts are computed; narrative lines carry ids the page resolves</td></tr>
+<tr><td>Rubber stamping</td><td>The person taps the recommendation blindly</td><td>Visible: agreement per category is shown; grants come only from that record</td></tr>
+<tr><td>Stuck decision</td><td>Held by a paused or capped role</td><td>Prevented: routing skips roles that cannot act; a routing deadline escalates; people always see the card</td></tr>
+<tr><td>Self review</td><td>A role marks its own work done</td><td>Prevented: the status mutation requires an approve verdict from outside the role</td></tr>
+<tr><td>Inbox flood</td><td>Every hand becomes a card</td><td>Prevented: subagents stay folded; hands appear under their role on the org page, and in the inbox only when they need a person</td></tr>
+</table>
+
+<h2 id="day"><span class="num">12</span>A day with the org</h2>
+<p><strong>07:00.</strong> Ashot opens /org on the phone. The anchor's line: three projects moved overnight, one decision addressed to you. Infra lead is red: blocked on a prod key, recommends option 2. Product lead is blue: two hands live. Sync lead is green: rollout 4/6.</p>
+<p><strong>07:04.</strong> One decision in the queue, sd-211, category production, held by Ashot from insertion, with the lead's recommendation and a note. He reads the page, answers 2. The answer lands on the hand that asked; the lead sees it as a passive fact in its next frame.</p>
+<p><strong>10:30.</strong> A task in Infrastructure moves to open. The lead wakes on the fold, assigns it to itself, and runs the line. Analyze writes five criteria. Implement works in a worktree and hands off with evidence. Verify passes. Review, on codex, approves four criteria and sends one back. Implement fixes it. Review approves. The task is done with a verdict from outside the role, and a draft PR is linked.</p>
+<p><strong>14:15.</strong> Two hands touch the same file. The overlap folds into the lead's next frame; it sends one hand an interrupt to finish first and tells the other to rebase.</p>
+<p><strong>17:30.</strong> Each lead's routine posts a digest to its project's updates. The anchor's routine reads the three briefs and posts the workspace summary to #general. Ashot's queue held one card all day.</p>
+
+<h2 id="shipped"><span class="num">13</span>What is shipped, what is next</h2>
+<table><tr><th style="width:80px">Stream</th><th>What</th><th>State</th></tr>
+<tr><td>W0</td><td>org_roles, org.tree, org.sessionsUnder, reparenting, /cli/org, cast org; the /org React Flow page with clusters, panel, drag reparent, nav and palette</td><td>Backend deployed and verified on prod (cast org ls renders the live tree). Web page built; browser verification in progress.</td></tr>
+<tr><td>W1</td><td>Standing roles: provisioning via anchors, charter and brief docs, outbox and flush, frame, trust, caps, usage writer, actor resolver, cast role and cast brief</td><td>In flight.</td></tr>
+<tr><td>W2</td><td>Decisions as documents: kinds, categories, docs, task and station binding, ladder and race, grants, stacks, decision inbox, cast decide answer/recommend/escalate, cast stack</td><td>Backend and CLI built; tests, typecheck, deploy in progress.</td></tr>
+<tr><td>W3</td><td>Scope containment and overlap, org.scopeFeed, org.scopeSummary, the scope page</td><td>Backend in flight; web next.</td></tr>
+<tr><td>W4</td><td>line.cast template, cast task handoff, cast task verdict, the independence rule, unattended hands</td><td>Template shipped; handoff, verdict and the rule in progress.</td></tr>
+<tr><td>W5</td><td>org init and update, the hire form</td><td>Specified; starts after W1.</td></tr>
+<tr><td>W6</td><td>Agents channel kind, role and session mentions with caps, reply relay, agent post limits, linesSince, cast chat read --since, cast role follow</td><td>Deployed and verified on prod (177 chat tests; a live mention arrived once).</td></tr>
+</table>
+<p>Every stream has a contract under <code>docs/architecture</code>: org-roles.md, org-roles-standing.md, decisions-as-documents.md, scopes-and-feed.md, the-line.md, org-init.md, agent-channels.md. Each records the shapes as shipped.</p>
+
+<h2 id="founder"><span class="num">14</span>Decisions for the founder</h2>
+<dl class="qa">
+<dt>Does the anchor keep its name as the root role?</dt><dd>Recommended: yes. Every existing verb and the Slack binding keep working; the org page labels it as the root.</dd>
+<dt>Coalescing window default: two minutes or five?</dt><dd>Recommended: two. A lead that answers within two minutes of a task change feels present; five feels like a batch job. The cap protects the budget either way.</dd>
+<dt>Tokens or dollars as the first cost unit?</dt><dd>Recommended: tokens now, dollars when a price table exists. Tokens have a writer; dollars would be a guess.</dd>
+<dt>Should the line run through the DOT workflow engine or the orchestrate skill inside the role's session?</dt><dd>Recommended: the engine for the default line (inspectable, gated, restartable), the skill for judgment work a lead does itself.</dd>
+<dt>Mirror charters and the org definition into the repo?</dt><dd>Recommended: charters yes, through doc file sync, so charter edits can arrive as reviewed PRs. The chart itself stays in the database, because a file would drift from the projects list.</dd>
+<dt>Names for long lived roles?</dt><dd>Recommended: allow a display name in the charter, keep the handle as the identity, and show both on the node.</dd>
+</dl>
+
+<h2 id="appendix"><span class="num">A</span>Appendix: contracts</h2>
+<p>The full contracts are in the repository. The shapes that other code builds against:</p>
+<pre class="wrap"><span class="c"># org.tree</span>
+{ workspace: { kind, id, name }, people: OrgPerson[], roles: OrgRole[], anchors: OrgAnchor[], truncated, generated_at }
+OrgPerson = { user_id, name, image?, role, is_me, presence, counts: StateCounts, sessions: OrgSession[] (top 8), total }
+OrgRole   = org_roles row + { counts, sessions, total, scope_names: { projects[], plans[] } }
+OrgSession = { _id, short_id, title, agent_type, work_state, updated_at, owner_user_id, org_role_id, subagent_count, is_anchor, project_path, git_branch }
+StateCounts = { working, needs_input, done, dormant, idle }
+
+<span class="c"># chat mentions</span>
+"user-id" | { kind: "role", role_id, short_id, handle } | { kind: "session", conversation_id, short_id }
+chat.linesSince({ channel_ids, since, limit }) → { lines: { message_id, channel_id, channel_name, author_name, is_bot, is_agent, thread_root_id?, is_root, created_at, text }[], truncated }
+
+<span class="c"># the line</span>
+cast workflow run line.cast --task ct-x [--review-backend codex]
+cast task handoff ct-x --status done|blocked|needs_context --evidence - [--files a,b] [--pr url]
+cast task verdict ct-x approve|changes|reject [--note -]
+
+<span class="c"># decisions</span>
+cast decide "q" -o .. -o .. [--task ct-x] [--station s] [--stack ds-N] [--category c] [--kind single|multi|rank|form] [--doc f] [--spec f]
+cast decide recommend|answer|escalate sd-N ...
+cast stack create|ls|show|add|policy|delegate</pre>
+<footer>codecast · the organization · plan pl-622 · contracts under docs/architecture</footer>
+</main></div>
+<script>
+(function(){const links=[...document.querySelectorAll('nav.toc a')];const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){links.forEach(a=>a.removeAttribute('aria-current'));const a=map.get(e.target.id);if(a)a.setAttribute('aria-current','true');}})},{rootMargin:'-20% 0px -70% 0px'});document.querySelectorAll('main [id]').forEach(el=>obs.observe(el));})();
+</script>
+</body></html>
