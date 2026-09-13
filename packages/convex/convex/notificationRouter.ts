@@ -224,6 +224,9 @@ export const emit = internalMutation({
     // messaging app: title = who, subtitle = where, body = the words alone.
     push_subtitle: v.optional(v.string()),
     push_body: v.optional(v.string()),
+    // false = bell row only, no phone push. A line a machine wrote in chat
+    // rings the bell and never buzzes a pocket (agent-channels.md C3).
+    push: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -315,7 +318,7 @@ export const emit = internalMutation({
 
       created++;
 
-      if (recipient.push_token && recipient.notifications_enabled) {
+      if (args.push !== false && recipient.push_token && recipient.notifications_enabled) {
         await enqueuePush(ctx, {
           user: recipient,
           notification_id: notifId,

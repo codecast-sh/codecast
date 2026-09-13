@@ -8,10 +8,17 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { MAX_MENTIONS, botHandle, extractMentionHandles } from "@codecast/shared/chat";
+import {
+  MAX_MENTIONS,
+  SESSION_SHORT_ID_RE,
+  botHandle,
+  extractMentionHandles,
+  type ChatMentionRef,
+} from "@codecast/shared/chat";
 import { entityMentionRegex } from "@codecast/shared/entities";
 import { emailLocalHandle } from "../chatText";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
+import { canSendProductMessage } from "../pendingMessages";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
@@ -76,6 +83,81 @@ export async function resolveMentions(
   return resolved;
 }
 
+/** Everything one chat line names: people (the roster rule above), org roles
+ *  (`@<handle>`: the team's roles, then the sender's personal roles) and
+ *  sessions (`@<7-char short id>`, only ones the sender may send into). A
+ *  handle resolves to ONE thing. A human's login or email outranks a role so
+ *  an existing mention never silently changes addressee. A role outranks a
+ *  BOT whose name slugs to the same handle: a role's standing agent is a bot
+ *  user named after the role, so without this rule `@growth` would resolve
+ *  to that bot (a plain user mention that wakes nothing) and never to the
+ *  role. Retired roles are not addressable; a paused one resolves (its wake
+ *  rail holds it). */
+export type ChatMentions = {
+  users: Id<"users">[];
+  roles: Doc<"org_roles">[];
+  sessions: Doc<"conversations">[];
+  /** The stored shape (chat_messages.mentions). */
+  refs: ChatMentionRef[];
+};
+
+export async function resolveChatMentions(
+  ctx: ReadCtx,
+  teamId: Id<"teams">,
+  content: string,
+  senderId: Id<"users">,
+): Promise<ChatMentions> {
+  const empty: ChatMentions = { users: [], roles: [], sessions: [], refs: [] };
+  const handles = extractMentionHandles(content);
+  if (handles.length === 0) return empty;
+  let users = await resolveMentions(ctx, teamId, content, senderId);
+  const roster = await teamRoster(ctx, teamId);
+  const roles: Doc<"org_roles">[] = [];
+  const sessions: Doc<"conversations">[] = [];
+  const seen = new Set<string>();
+  const roleByHandle = async (handle: string): Promise<Doc<"org_roles"> | null> =>
+    (await ctx.db
+      .query("org_roles")
+      .withIndex("by_team_handle", (q: any) => q.eq("team_id", teamId).eq("handle", handle))
+      .first())
+    ?? (await ctx.db
+      .query("org_roles")
+      .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", senderId).eq("handle", handle))
+      .first());
+  for (const handle of handles) {
+    const person = matchHandle(roster, handle);
+    if (person && !person.is_bot) continue;
+    if (SESSION_SHORT_ID_RE.test(handle)) {
+      const conversation = await findConversationByAnyRefWhere(
+        ctx as any,
+        handle,
+        (candidate) => canSendProductMessage(ctx as any, senderId, candidate),
+      );
+      if (conversation && !seen.has(String(conversation._id))) {
+        seen.add(String(conversation._id));
+        sessions.push(conversation as Doc<"conversations">);
+      }
+      continue;
+    }
+    const role = await roleByHandle(handle);
+    if (!role || role.status === "retired") continue;
+    // The role wins over its own bot: one handle names one party.
+    if (person) users = users.filter((id) => id.toString() !== person._id.toString());
+    if (seen.has(String(role._id))) continue;
+    seen.add(String(role._id));
+    roles.push(role);
+  }
+  const refs: ChatMentionRef[] = [
+    ...users.map((id) => id.toString()),
+    ...roles.map((r) => ({ kind: "role" as const, role_id: r._id.toString(), short_id: r.short_id, handle: r.handle })),
+    ...sessions.map((c) => ({
+      kind: "session" as const,
+      conversation_id: c._id.toString(),
+      short_id: (c as any).short_id ?? c._id.toString().slice(0, 7),
+    })),
+  ].slice(0, MAX_MENTIONS);
+  return { users, roles, sessions, refs };
+}
 
 /** The ids inside `@[Title id]` mentions that name a session: a short id
  *  (`jx…`) or a raw conversation id. Tasks, plans and docs are left alone. */
