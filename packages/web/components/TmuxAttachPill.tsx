@@ -135,10 +135,9 @@ export function TmuxAttachPill({
               that tooltip is the entire explanation for why nothing copies. */}
           <button
             data-simple-hide
-            className="cq-sq1"
             onClick={copyAttach}
             aria-disabled={!attach}
-            className={`inline-flex items-center pl-1 pr-1.5 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
+            className={`cq-sq1 inline-flex items-center pl-1 pr-1.5 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
             aria-label="Copy tmux attach command"
           >
             <Copy className="w-2.5 h-2.5" />
