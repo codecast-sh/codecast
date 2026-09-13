@@ -33,6 +33,42 @@ describe("decideAutoScribe", () => {
     expect(decideAutoScribe({ ...base, transcribeOff: true })).toBe("hold");
   });
 
+  test("an opt-out switched on after this window's run began ends it", () => {
+    expect(
+      decideAutoScribe({
+        ...base,
+        transcribeOff: true,
+        transcribeOffAt: 10_000,
+        scribeActive: true,
+        scribeStartedAt: 5_000,
+        live: { startedBy: "me" },
+      }),
+    ).toBe("stop");
+  });
+
+  test("an opt-out older than this window's run is a stale flag, not a stop", () => {
+    expect(
+      decideAutoScribe({
+        ...base,
+        transcribeOff: true,
+        transcribeOffAt: 5_000,
+        scribeActive: true,
+        scribeStartedAt: 10_000,
+        live: { startedBy: "me" },
+      }),
+    ).toBe("hold");
+  });
+
+  test("a session's own room transcribes with one person in it", () => {
+    expect(decideAutoScribe({ ...base, roomKey: "session:conv1", rosterIds: ["me"] })).toBe("start");
+  });
+
+  test("a session's own room still honors the opt-out", () => {
+    expect(
+      decideAutoScribe({ ...base, roomKey: "session:conv1", rosterIds: ["me"], transcribeOff: true }),
+    ).toBe("hold");
+  });
+
   test("nothing is decided until the live transcript is known", () => {
     expect(decideAutoScribe({ ...base, live: undefined })).toBe("hold");
   });
