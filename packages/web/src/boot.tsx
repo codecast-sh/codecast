@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, reportRecoverableRenderError, setupErrorToasts } from "../lib/analytics";
+import { initGoogleAds } from "../lib/googleAds";
 import { armChunkReloadGuardReset } from "../lib/chunkReloadGuard";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
@@ -74,6 +75,14 @@ const idle: (cb: () => void) => void =
     : (cb) => setTimeout(cb, 1);
 
 idle(() => void initAnalytics().catch(() => {}));
+
+// NOT deferred like the line above. Google reads the ad click id off the
+// current URL when its script executes, so the fetch has to start while the
+// visitor is still on the landing URL — an idle callback can land after the
+// router has already replaced it. The script itself is async, so starting it
+// here costs a dataLayer push and an appended tag, nothing blocking. No-ops
+// entirely unless VITE_GOOGLE_ADS_SEND_TO is configured.
+initGoogleAds();
 
 // Install the offline app shell (service worker precache) once the app is
 // interactive. First visit installs it in the background; every later boot —
