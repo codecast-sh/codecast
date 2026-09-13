@@ -11,7 +11,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { copyToClipboard } from '@/lib/clipboard';
 import { openLink } from '@/lib/links';
-import { Theme, CHROME_FONT_CAP } from '@/constants/Theme';
+import { Theme, CHROME_FONT_CAP, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import { DOMPURIFY_SOURCE } from '@/lib/vendor/dompurifySource';
 import { CONVEX_ORIGIN } from '@/lib/convex';
 
@@ -268,6 +268,8 @@ function extractExcerpt(code: string): string {
 // fullscreen Modal, outside the transformed hierarchy. That also keeps the
 // virtualized list cheap when a conversation holds many canvases.
 export function CastCanvas({ code }: { code: string }) {
+  const Theme = useTheme();
+  const scheme = useActiveScheme();
   const [fullscreen, setFullscreen] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -275,8 +277,10 @@ export function CastCanvas({ code }: { code: string }) {
 
   const title = useMemo(() => extractCanvasTitle(code), [code]);
   const excerpt = useMemo(() => extractExcerpt(code), [code]);
-  // Build the document only when the modal opens.
-  const shell = useMemo(() => (fullscreen ? buildShell(code) : null), [fullscreen, code]);
+  // Build the document only when the modal opens; it bakes the palette's
+  // --sol-* tokens, so a scheme flip rebuilds it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shell = useMemo(() => (fullscreen ? buildShell(code) : null), [fullscreen, code, scheme]);
 
   if (!code.trim() || !WebViewComp) return null;
 
@@ -368,7 +372,7 @@ export function CastCanvas({ code }: { code: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -435,4 +439,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
   },
-});
+}));

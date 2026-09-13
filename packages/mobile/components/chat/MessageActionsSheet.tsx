@@ -2,7 +2,7 @@ import { StyleSheet, TouchableOpacity, View as RNView, Modal, Pressable, Platfor
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar, type MobileChatMessage } from './MessageRow';
 
 // Long-press on a message. One sheet on BOTH platforms — ActionSheetIOS left
@@ -34,6 +34,7 @@ export function MessageActionsSheet({
   onAction: (action: MessageAction) => void;
   onClose: () => void;
 }) {
+  const Theme = useTheme();
   if (!message) return null;
   const act = (action: MessageAction) => {
     if (Platform.OS === 'ios') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -89,6 +90,7 @@ function SheetRow({ icon, label, danger, onPress }: {
   danger?: boolean;
   onPress: () => void;
 }) {
+  const Theme = useTheme();
   return (
     <TouchableOpacity style={styles.row} onPress={onPress}>
       <FontAwesome name={icon} size={14} color={danger ? Theme.red : Theme.textMuted} style={styles.rowIcon} />
@@ -97,7 +99,7 @@ function SheetRow({ icon, label, danger, onPress }: {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: '#00000066',
@@ -152,4 +154,4 @@ const styles = StyleSheet.create({
   rowIcon: { width: 26 },
   rowLabel: { fontSize: 14.5, color: Theme.text },
   rowDanger: { color: Theme.red },
-});
+}));

@@ -9,7 +9,7 @@ import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 
 export type SessionData = {
   _id: string;
@@ -152,6 +152,7 @@ export function projectName(conv: { git_root?: string | null; project_path?: str
 }
 
 export function PulsingDot({ color }: { color: string }) {
+  const Theme = useTheme();
   const opacity = useRef(new RNAnimated.Value(1)).current;
   useEffect(() => {
     const animation = RNAnimated.loop(
@@ -167,6 +168,7 @@ export function PulsingDot({ color }: { color: string }) {
 }
 
 function StatusDot({ session }: { session: SessionData }) {
+  const Theme = useTheme();
   const color = statusColor(session);
   const isAnimated = session.agent_status === "working" || session.agent_status === "thinking" || session.has_pending;
   if (isAnimated) return <PulsingDot color={color} />;
@@ -174,6 +176,7 @@ function StatusDot({ session }: { session: SessionData }) {
 }
 
 export function SessionItem({ session, isUnread, onPress, onPin, onLongPress }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; onLongPress?: () => void }) {
+  const Theme = useTheme();
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
   const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
@@ -349,6 +352,7 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
   onPin?: () => void;
   onLongPress?: () => void;
 }) {
+  const Theme = useTheme();
   const translateX = useRef(new RNAnimated.Value(0)).current;
   const didSwipe = useRef(false);
 
@@ -475,7 +479,7 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
   );
 }
 
-export const styles = StyleSheet.create({
+export const styles = themedStyles((Theme) => StyleSheet.create({
   swipeContainer: {
     overflow: 'hidden',
   },
@@ -731,4 +735,4 @@ export const styles = StyleSheet.create({
     marginHorizontal: 4,
     fontSize: 12,
   },
-});
+}));

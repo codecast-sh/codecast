@@ -22,7 +22,7 @@ import { useRouter } from "expo-router";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { isOnHumanShelf } from "@codecast/shared/docs";
@@ -72,6 +72,7 @@ function CreateTaskModal({
   onClose: () => void;
   onCreate: (title: string, priority: string, description?: string) => void;
 }) {
+  const Theme = useTheme();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
@@ -170,6 +171,7 @@ function CreateTaskModal({
 }
 
 export default function TasksScreen() {
+  const Theme = useTheme();
   const [segment, setSegment] = useState<Segment>("tasks");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("");
   const [refreshing, setRefreshing] = useState(false);
@@ -803,7 +805,7 @@ export default function TasksScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: "row",
@@ -1038,9 +1040,9 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-});
+}));
 
-const modalStyles = StyleSheet.create({
+const modalStyles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: "row",
@@ -1106,4 +1108,4 @@ const modalStyles = StyleSheet.create({
     backgroundColor: Theme.accent,
   },
   submitBtnText: { fontSize: 15, fontWeight: "600", color: Theme.bg },
-});
+}));

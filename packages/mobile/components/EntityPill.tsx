@@ -7,7 +7,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { findEntityInStore } from '@codecast/web/lib/liveEntities';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
-import { Theme } from '@/constants/Theme';
+import { Theme, useTheme } from '@/constants/Theme';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 
@@ -86,6 +86,7 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
  * header rows. Tap navigates to the object's screen.
  */
 export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
+  const Theme = useTheme();
   const router = useRouter();
   const rawId = (idProp ?? shortId ?? '').trim();
   const looksConvex = isConvexId(rawId);

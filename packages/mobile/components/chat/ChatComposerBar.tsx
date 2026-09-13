@@ -8,7 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { useConvex, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import {
   pickImages, startUpload, settleAttachments,
@@ -55,6 +55,7 @@ export function ChatComposerBar({
   onSubmitEdit?: (messageId: string, content: string) => void;
   onSend: (content: string, attachments: ChatAttachmentArg[]) => void;
 }) {
+  const Theme = useTheme();
   const convex = useConvex();
   const [draft, setDraft] = useState('');
   const [images, setImages] = useState<PickedImage[]>([]);
@@ -222,7 +223,7 @@ export function ChatComposerBar({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   editBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -308,4 +309,4 @@ const styles = StyleSheet.create({
   },
   sendEdit: { backgroundColor: Theme.accent },
   sendDisabled: { backgroundColor: Theme.bgHighlight },
-});
+}));

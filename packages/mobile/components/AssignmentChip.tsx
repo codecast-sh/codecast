@@ -18,7 +18,7 @@ import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOwners, useOwnerCandidates, pickRoster } from '@codecast/web/hooks/useOwners';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { Theme, Spacing, chipText, CHROME_FONT_CAP, CHIP_HEIGHT } from '@/constants/Theme';
+import { Theme, Spacing, chipText, CHROME_FONT_CAP, CHIP_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
 import {
   useDevices,
   deviceDisplayName,
@@ -40,6 +40,7 @@ import {
  */
 
 function OwnerAvatar({ name, image, size = 18 }: { name: string; image?: string; size?: number }) {
+  const Theme = useTheme();
   if (image) {
     return <Image source={{ uri: image }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
   }
@@ -71,6 +72,7 @@ export function AssignmentChip({
   ownerDeviceId?: string | null;
   showToast: (msg: string) => void;
 }) {
+  const Theme = useTheme();
   const [sheetVisible, setSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { devices, byId, loaded } = useDevices();
@@ -278,6 +280,7 @@ export function AssignmentChip({
  * banner through the live listOwners query.
  */
 export function AssignedToYouBanner({ conversationId }: { conversationId: string | null | undefined }) {
+  const Theme = useTheme();
   // The banner only reads the viewer's own row off listOwners, so the roster
   // isn't needed — skip the team members query the chip pays for.
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -311,7 +314,7 @@ export function AssignedToYouBanner({ conversationId }: { conversationId: string
   );
 }
 
-const bannerStyles = StyleSheet.create({
+const bannerStyles = themedStyles((Theme) => StyleSheet.create({
   base: {
     marginHorizontal: Spacing.md,
     marginTop: 6,
@@ -361,9 +364,9 @@ const bannerStyles = StyleSheet.create({
     fontWeight: '600',
     color: Theme.violet,
   },
-});
+}));
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   // Segmented twin of the shared chipShell: same height/radius/border, but the
   // horizontal padding lives in the lobes so their tints meet edge to edge.
   chipShell: {
@@ -442,4 +445,4 @@ const styles = StyleSheet.create({
     color: Theme.textMuted,
     paddingVertical: 6,
   },
-});
+}));

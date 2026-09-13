@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 
 // The @-completion strip above the composer. Without it, mentioning someone on
@@ -42,6 +42,7 @@ export function MentionStrip({
   members: MentionCandidate[];
   onPick: (nextDraft: string) => void;
 }) {
+  const Theme = useTheme();
   const query = activeMentionQuery(draft);
   const matches = useMemo(() => {
     if (query === null) return [];
@@ -76,7 +77,7 @@ export function MentionStrip({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   strip: { maxHeight: 40 },
   stripContent: {
     gap: 6,
@@ -99,4 +100,4 @@ const styles = StyleSheet.create({
   chipAgent: { borderColor: Theme.violet + '77' },
   chipText: { fontSize: 12, fontWeight: '600', color: Theme.textSecondary },
   chipTextAgent: { color: Theme.violet },
-});
+}));

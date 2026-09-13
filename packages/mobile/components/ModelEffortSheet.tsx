@@ -1,4 +1,5 @@
 import { Modal, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { themedStyles, useTheme } from '@/constants/Theme';
 import { Text } from '@/components/Themed';
 import { FontAwesome } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -28,6 +29,7 @@ export function ModelEffortSheet({
   effortKey: string | null;
   onSelect: (sel: { model?: string; effort?: string }) => void;
 }) {
+  const Theme = useTheme();
   const insets = useSafeAreaInsets();
 
   const pick = (sel: { model?: string; effort?: string }) => {
@@ -94,7 +96,7 @@ export function ModelEffortSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   backdrop: {
     flex: 1,
     justifyContent: 'flex-end',
@@ -179,4 +181,4 @@ const styles = StyleSheet.create({
     color: Theme.cyan,
     fontWeight: '600',
   },
-});
+}));
