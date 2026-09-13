@@ -1244,7 +1244,7 @@ export async function probeSecureStorageSupport(
     const exec =
       opts.execImpl ??
       (async (bin: string, args: string[], e: NodeJS.ProcessEnv) => {
-        const { execFile } = await import("child_process");
+        const { execFile } = await import("./proc.js");
         // `auth status` exits non-zero when nobody is signed in — which is the
         // answer we are hoping for — so the output is the verdict, not the code.
         return new Promise<string>((resolve, reject) => {
