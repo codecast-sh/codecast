@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
+import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 
 describe("chatSendOrigin", () => {
   test.each([
@@ -26,5 +26,27 @@ describe("chatSendOrigin", () => {
       CODECAST_SESSION_ID: "wrapper-thread",
       CODECAST_MANAGED_SESSION: "managed-thread",
     })).toBe("current-thread");
+  });
+});
+
+describe("workOriginStamp", () => {
+  test("a detected session is agent work bound to that conversation, even with --human", () => {
+    expect(workOriginStamp({ sessionId: "sess-1", stdoutIsTTY: true, human: true })).toEqual({
+      source: "agent",
+      conversation_id: "sess-1",
+    });
+  });
+
+  test("a person at a terminal is human", () => {
+    expect(workOriginStamp({ sessionId: null, stdoutIsTTY: true })).toEqual({ source: "human" });
+  });
+
+  test("--human is positive evidence without a TTY", () => {
+    expect(workOriginStamp({ sessionId: null, stdoutIsTTY: false, human: true })).toEqual({ source: "human" });
+  });
+
+  test("a missed session with piped output stays off the shelf", () => {
+    expect(workOriginStamp({ sessionId: null, stdoutIsTTY: false })).toEqual({ source: "agent" });
+    expect(workOriginStamp({ sessionId: null })).toEqual({ source: "agent" });
   });
 });
