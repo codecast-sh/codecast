@@ -22,6 +22,7 @@ import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentio
 import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
+import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
 import { DocEditor } from "../../../components/editor/DocEditor";
 import "../../../components/editor/editor.css";
 import { toast } from "sonner";
@@ -1073,6 +1074,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               className="doc-editor-compact"
             />
           </div>
+
+          {/* Open decisions bound to this task (D3) */}
+          <TaskDecisions taskId={data._id} />
 
           {/* Workflow Progress */}
           {data.workflow_run_id && (
