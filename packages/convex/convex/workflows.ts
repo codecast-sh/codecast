@@ -16,6 +16,11 @@ const nodeV = v.object({
   max_retries: v.optional(v.number()),
   retry_target: v.optional(v.string()),
   goal_gate: v.optional(v.boolean()),
+  // The CLI pushes these three; a validator without them rejected every push
+  // that named a backend (the run then went unrendered in the web UI).
+  backend: v.optional(v.string()),
+  agent: v.optional(v.string()),
+  isolated: v.optional(v.boolean()),
 });
 
 const edgeV = v.object({

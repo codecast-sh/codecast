@@ -4,6 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
+import { findConversationByAnyRef } from "./conversationSessionLookup";
 
 export const create = mutation({
   args: {
@@ -121,6 +122,8 @@ export const createFromCli = mutation({
     plan_id: v.optional(v.string()),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    // Any ref to one of the caller's sessions (see findConversationByAnyRef).
+    spawner_session: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);
@@ -128,6 +131,7 @@ export const createFromCli = mutation({
     const userId = result.userId;
 
     const now = Date.now();
+    const spawner = args.spawner_session ? await findConversationByAnyRef(ctx, args.spawner_session, userId) : null;
 
     let taskDocId: any = undefined;
     if (args.task_id) {
@@ -156,6 +160,7 @@ export const createFromCli = mutation({
       workflow_id: workflowDocId || (undefined as any),
       task_id: taskDocId,
       plan_id: planDocId,
+      ...(spawner ? { spawner_conversation_id: spawner._id } : {}),
       status: "pending",
       node_statuses: [],
       goal_override: args.goal_override,
