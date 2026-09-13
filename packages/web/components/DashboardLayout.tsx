@@ -476,6 +476,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Browsing a repository: the index, its history, its source and its blame all
   // own the whole canvas.
   const isOnRepoPage = pathname === "/repo" || (pathname?.startsWith("/repo/") ?? false);
+  // The org tree and a scope page each own their canvas: graph plus panel, tabs plus feed.
+  const isOnOrgPage = pathname === "/org" || (pathname?.startsWith("/org/") ?? false);
   // Settings is a modal-like surface, not a working surface — selecting a session
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
@@ -483,7 +485,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isOnOrgPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
