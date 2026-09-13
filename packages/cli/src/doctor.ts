@@ -70,7 +70,7 @@ export interface DoctorDeps {
     /** Hang marker the daemon consumed at boot (see daemonMarkers.ts). */
     lastHang?: HangMarker;
   } | null;
-  getStuckSyncs: () => Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }>;
+  getStuckSyncs: () => Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }> | Promise<Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }>>;
 }
 
 export interface DoctorOptions {
@@ -433,8 +433,8 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
 
   passive.push({
     name: "sync backlog",
-    run: () => {
-      const stuck = deps.getStuckSyncs();
+    run: async () => {
+      const stuck = await deps.getStuckSyncs();
       let retryDepth = 0;
       try {
         const retry = JSON.parse(fs.readFileSync(path.join(deps.configDir, "retry-queue.json"), "utf-8"));
