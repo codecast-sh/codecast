@@ -17,7 +17,7 @@ import { pathToFileURL } from "node:url";
 import type { Command } from "commander";
 import { fmt, icons } from "../../colors.js";
 import { spawn } from "../../proc.js";
-import { findChromeBinary } from "../../workspace/chrome.js";
+import { findChromeBinary, keychainArgs } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import {
   bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
@@ -68,7 +68,7 @@ export function openInRealChrome(url: string): boolean {
     fs.mkdirSync(path.dirname(page), { recursive: true, mode: 0o700 });
     fs.rmSync(page, { force: true });
     fs.writeFileSync(page, bridgePairingPage(url), { mode: 0o600 });
-    const child = spawn(bin, [pathToFileURL(page).href], { stdio: "ignore", detached: true });
+    const child = spawn(bin, [...keychainArgs(), pathToFileURL(page).href], { stdio: "ignore", detached: true });
     child.on("error", () => {});
     child.unref();
     return !!child.pid;

@@ -263,6 +263,19 @@ describe("chromeLaunchArgs", () => {
     expect(args.some((a) => a.includes("fake"))).toBe(false);
   });
 
+  test("a home without a login keychain launches with the mock keychain", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-kc-home-"));
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const args = chromeLaunchArgs(base);
+      expect(args.includes("--use-mock-keychain")).toBe(process.platform === "darwin");
+    } finally {
+      process.env.HOME = saved;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("background tabs retain Chrome's timer throttling", () => {
     const args = chromeLaunchArgs(base);
     expect(args).toContain("--disable-backgrounding-occluded-windows");

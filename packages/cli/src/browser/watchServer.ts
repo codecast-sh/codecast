@@ -86,7 +86,7 @@ export async function ownerCandidates(
 
 // The hello runs on the daemon's loop, so the pane lookup is the async tmux
 // twin: a sync display-message held the loop for the whole spawn.
-async function tmuxPaneId(tmuxSession: string): Promise<string | null> {
+export async function tmuxPaneId(tmuxSession: string): Promise<string | null> {
   const r = await tmuxRunAsync(["display-message", "-p", "-t", tmuxSession, "-F", "#{pane_id}"]);
   if (r.status !== 0) return null;
   const pane = r.stdout.trim();

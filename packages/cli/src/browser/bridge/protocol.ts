@@ -96,6 +96,9 @@ export function bridgePairingPage(pairingUrl: string): string {
 /** WS close code the host uses for a bad or missing token. */
 export const CLOSE_BAD_TOKEN = 4401;
 
+/** WebSocket close code for a CDP client whose sessions the host dropped while their tabs live on (host.ts disconnect). */
+export const CLOSE_SESSIONS_DROPPED = 4410;
+
 // ---------------------------------------------------------------------------
 // Mutual authentication
 // ---------------------------------------------------------------------------

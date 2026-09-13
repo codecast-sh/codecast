@@ -20,7 +20,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isCdpAlive, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
 import { enablePageDomains, isReachable, TabUnresponsive, type EnablePatience } from "./recovery.js";
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
-import { findChromeBinary, chromeBinaryProbes, isPidAlive, ChromeNotFoundError } from "../workspace/chrome.js";
+import { findChromeBinary, chromeBinaryProbes, isPidAlive, keychainArgs, ChromeNotFoundError } from "../workspace/chrome.js";
 import { acquireFileLock } from "../lockFile.js";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 
@@ -241,6 +241,7 @@ export function chromeLaunchArgs(opts: LaunchOptions): string[] {
     // agent verification work, never a human's browsing).
     ...(opts.fakeMedia ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] : []),
     ...(opts.headless ? ["--headless=new"] : []),
+    ...keychainArgs(),
     "about:blank",
   ];
 }

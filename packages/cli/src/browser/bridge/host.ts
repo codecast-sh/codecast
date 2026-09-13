@@ -61,7 +61,7 @@ import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import type { CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, isNonce, randomNonce, secretMatches, tabIdOfTarget,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 
@@ -588,24 +588,46 @@ export function startBridgeHost(opts: {
     browserContextId: "cast-real-chrome",
   });
 
+  /**
+   * Close the sockets of clients whose sessions the host dropped while their
+   * tabs live on. An engine daemon (agent-browser) keeps the session id it
+   * attached with for the life of its socket, and a detachedFromTarget does
+   * not make it attach again, so a live socket would carry the dead id into
+   * every later command ("Session with given id not found") until the daemon
+   * died. A closed socket it recovers from: it reconnects and attaches afresh,
+   * the same path a host restart takes. The close waits one turn so a call
+   * that was in flight still receives its error first.
+   */
+  const disconnect = (stale: Iterable<Client>, reason: string): void => {
+    const sockets = [...stale].map((c) => c.ws);
+    setImmediate(() => {
+      for (const ws of sockets) ws.close(CLOSE_SESSIONS_DROPPED, reason.slice(0, 120));
+    });
+  };
+
   const failAllClients = (reason: string): void => {
-    for (const c of clients) {
+    const held = [...clients].filter((c) => c.sessions.size > 0);
+    for (const c of held) {
       for (const [sessionId, tabId] of c.sessions) {
         sendJson(c.ws, { method: "Target.detachedFromTarget", params: { sessionId, targetId: targetIdOfTab(tabId), reason } });
       }
       c.sessions.clear();
     }
+    disconnect(held, reason);
   };
 
-  /** Drop every session bound to a tab (it closed, or the user cancelled). */
-  const dropTab = (tabId: number, reason: string): void => {
+  /** Drop every session bound to a tab (it closed, or the user cancelled). Returns the clients that held one. */
+  const dropTab = (tabId: number, reason: string): Client[] => {
+    const held: Client[] = [];
     for (const c of clients) {
       for (const [sessionId, t] of [...c.sessions]) {
         if (t !== tabId) continue;
         c.sessions.delete(sessionId);
+        if (!held.includes(c)) held.push(c);
         sendJson(c.ws, { method: "Target.detachedFromTarget", params: { sessionId, targetId: targetIdOfTab(tabId), reason } });
       }
     }
+    return held;
   };
 
   const onExtMessage = (raw: string): void => {
@@ -650,9 +672,14 @@ export function startBridgeHost(opts: {
         }
         return;
       }
-      case "detached":
-        dropTab(msg.tabId, "the user cancelled the debugging banner in Chrome");
+      case "detached": {
+        // Chrome took the debugger off a tab that is still open (the banner's
+        // Cancel, DevTools, a crash). Its clients reconnect and attach again
+        // on their next command; the tab itself is gone only on "removed".
+        const reason = "Chrome detached the debugger from this tab";
+        disconnect(dropTab(msg.tabId, reason), reason);
         return;
+      }
     }
   };
 
