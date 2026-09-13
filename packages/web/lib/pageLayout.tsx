@@ -20,6 +20,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/inbox(\/|$)/,
   // The decision queue deletes layout by construction: one card, full width.
   /^\/questions(\/|$)/,
+  // A decision's document page and a stack own their reading column.
+  /^\/decisions(\/|$)/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
   // The Threads inbox: its own header and scroll region, chat-style.
@@ -35,6 +37,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/docs(\/|$)/,
   /^\/capabilities$/,
   /^\/crosstalk$/,
+  /^\/org$/,
   // /vault = pre-rename alias for /files; both stay full-width.
   /^\/files(\/|$)/,
   /^\/vault(\/|$)/,

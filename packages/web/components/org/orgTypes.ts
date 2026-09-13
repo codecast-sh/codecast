@@ -1,0 +1,122 @@
+// The org tree contract (docs/architecture/org-roles.md S3). The server query
+// `org.tree` returns this shape; the page paints it from the `orgTree` store
+// singleton. Types live here so the fixture, the layout, the cards and the
+// store slice all agree on one definition.
+import type { WorkState } from "@codecast/shared/contracts";
+
+export type StateCounts = Record<WorkState, number>;
+
+export type OrgSession = {
+  _id: string;
+  short_id: string;
+  title: string;
+  agent_type: string;
+  work_state: WorkState;
+  updated_at: number;
+  owner_user_id?: string;
+  org_role_id?: string;
+  subagent_count: number;
+  is_anchor: boolean;
+  project_path?: string;
+  git_branch?: string;
+};
+
+export type OrgPerson = {
+  user_id: string;
+  name: string;
+  image?: string;
+  role: "admin" | "member" | "owner";
+  is_me: boolean;
+  presence?: "online" | "away" | "offline";
+  counts: StateCounts;
+  sessions: OrgSession[];
+  total: number;
+};
+
+export type OrgReportsTo =
+  | { kind: "user"; user_id: string }
+  | { kind: "role"; role_id: string };
+
+export type OrgScope = { project_ids: string[]; plan_ids: string[] };
+
+export type OrgRole = {
+  _id: string;
+  short_id: string;
+  scope_type: "team" | "user";
+  team_id?: string;
+  scope_user_id?: string;
+  host_user_id: string;
+  name: string;
+  handle: string;
+  scope: OrgScope;
+  reports_to: OrgReportsTo;
+  status: "active" | "paused" | "retired";
+  charter?: string;
+  anchor_id?: string;
+  /** Chat channels whose lines ride the role's next wake frame
+   *  (docs/architecture/agent-channels.md C1). */
+  follow_channel_ids?: string[];
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+  counts: StateCounts;
+  sessions: OrgSession[];
+  total: number;
+  scope_names: {
+    projects: { id: string; title: string; short_id?: string }[];
+    plans: { id: string; title: string; short_id: string }[];
+  };
+};
+
+export type OrgAnchor = {
+  anchor_id: string;
+  name: string;
+  bot_user_id: string;
+  host_user_id: string;
+  scope_type: "team" | "user";
+  team_id?: string;
+  scope_user_id?: string;
+  conversation_id?: string;
+  short_id?: string;
+  work_state?: WorkState;
+  status: string;
+};
+
+export type OrgTree = {
+  workspace: { kind: "team" | "user"; id: string; name: string };
+  people: OrgPerson[];
+  roles: OrgRole[];
+  anchors: OrgAnchor[];
+  generated_at: number;
+  truncated?: boolean;
+};
+
+/** The server's per parent page size (S3 TOP_N). */
+export const ORG_TOP_N = 8;
+
+/** A parent a session or role can report to. */
+export type OrgParentRef = OrgReportsTo;
+
+export const EMPTY_COUNTS: StateCounts = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0 };
+
+/** The order sessions sort in under a parent (S3): who needs a human first. */
+export const ORG_STATE_ORDER: WorkState[] = ["needs_input", "working", "dormant", "done", "idle"];
+
+export function sortOrgSessions(list: OrgSession[]): OrgSession[] {
+  const rank = new Map(ORG_STATE_ORDER.map((s, i) => [s, i]));
+  return [...list].sort((a, b) => {
+    const d = (rank.get(a.work_state) ?? 9) - (rank.get(b.work_state) ?? 9);
+    return d !== 0 ? d : b.updated_at - a.updated_at;
+  });
+}
+
+export function countStates(list: OrgSession[]): StateCounts {
+  const out: StateCounts = { ...EMPTY_COUNTS };
+  for (const s of list) out[s.work_state] = (out[s.work_state] ?? 0) + 1;
+  return out;
+}
+
+export function sameParent(a: OrgParentRef | null | undefined, b: OrgParentRef | null | undefined): boolean {
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind === "user" ? a.user_id === (b as any).user_id : a.role_id === (b as any).role_id;
+}

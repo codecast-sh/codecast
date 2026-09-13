@@ -27,6 +27,8 @@ const ConversationDiff = lazyPage("@/app/conversation/[id]/diff/page", () => imp
 const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
 const Feed = lazyPage("@/app/feed/page", () => import("@/app/feed/page"));
 const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
+const Org = lazyPage("@/app/org/page", () => import("@/app/org/page"));
+const OrgScope = lazyPage("@/app/org/[id]/page", () => import("@/app/org/[id]/page"));
 const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
 const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
 const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
@@ -48,6 +50,8 @@ const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
 // The decision queue: one question at a time, full width.
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
+const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
+const DecisionStack = lazyPage("@/app/decisions/stacks/[id]/page", () => import("@/app/decisions/stacks/[id]/page"));
 // The Threads inbox: every conversation the viewer is in, one page.
 const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
 const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
@@ -86,6 +90,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
   { pattern: /^\/triggers\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
+  { pattern: /^\/decisions\/stacks\/([^/]+)$/, paramNames: ["id"], component: DecisionStack },
+  { pattern: /^\/decisions\/([^/]+)$/, paramNames: ["id"], component: DecisionDetail },
   { pattern: /^\/schedules\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
   // A task opened from inside a project keeps the project mounted, same trick
   // as /tasks/<id>: one component for both URLs, so selecting a task
@@ -119,6 +125,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
+  { pattern: /^\/org$/, paramNames: [], component: Org },
+  { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
   { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
   { pattern: /^\/chat$/, paramNames: [], component: Chat },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
