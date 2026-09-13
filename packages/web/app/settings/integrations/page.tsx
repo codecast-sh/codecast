@@ -35,6 +35,8 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
+import { TeamSwitcher } from "../../../components/TeamSwitcher";
+import { useInboxStore } from "../../../store/inboxStore";
 import {
   describeConnectorError,
   parseConnectorReturn,
@@ -56,6 +58,7 @@ function entriesAt(result: AppConnectionsResult | undefined, scope: AppConnectio
 export default function IntegrationsPage() {
   const connections = useSettingsData("connections");
   const { user } = useCurrentUser();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const confirmConnector = useAction(api.oauthConnectors.confirmConnection);
   const confirmGoogle = useAction(api.googleOAuth.confirmConnection);
   const [notice, setNotice] = useState<ConnectorReturn | null>(null);
@@ -119,9 +122,14 @@ export default function IntegrationsPage() {
       )}
 
       <SettingsSection
-        title={team ? `Team connections · ${team.name}` : "Team connections"}
+        title="Team connections"
         icon={Users}
-        description="Shared by everyone on the team, for work inside it. Tokens stay server-side — an agent asks the backend to act, it never holds the credential."
+        // The picker names the team the cards below belong to and switches the
+        // workspace to another. The client's own pointer leads while a switch
+        // is in flight; the server's answer stands in when the client is on
+        // Personal, since the ledger then falls back to the home team.
+        actions={<TeamSwitcher teamsOnly value={activeTeamId ?? team?.id ?? null} />}
+        description="Shared by everyone on the team picked here, for work inside it. Tokens stay server-side — an agent asks the backend to act, it never holds the credential."
       >
         {errorCallout}
         {teamKnown && !team ? (

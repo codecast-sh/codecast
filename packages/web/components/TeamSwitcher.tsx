@@ -17,7 +17,21 @@ import { TeamCrest } from "./team/TeamCrest";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
-export function TeamSwitcher() {
+/**
+ * The workspace picker. It switches the whole workspace (`useSwitchWorkspace`)
+ * and by default shows the workspace the client is on. A surface whose data
+ * answers for a team the server resolved (the integrations ledger, which falls
+ * back to the home team when the client is on Personal) passes `value` so the
+ * label names the team its content belongs to, and `teamsOnly` when Personal
+ * is not a meaningful choice there.
+ */
+export function TeamSwitcher({
+  value,
+  teamsOnly = false,
+}: {
+  value?: string | null;
+  teamsOnly?: boolean;
+} = {}) {
   const router = useRouter();
   const { user } = useCurrentUser();
   const teams = useInboxStore((s) => s.teams);
@@ -29,7 +43,8 @@ export function TeamSwitcher() {
     return null;
   }
 
-  const activeTeam = teams?.find(t => t?._id === activeTeamId);
+  const shownTeamId = value === undefined ? activeTeamId : (value ?? undefined);
+  const activeTeam = teams?.find(t => t?._id === shownTeamId);
   // Invite targets the ACTIVE team; only its admins see the item.
   // A just-created team carries an optimistic stub id until the server row
   // lands; inviting against it would 404 (or fall back to the previous team).
@@ -61,24 +76,28 @@ export function TeamSwitcher() {
             <User className="w-4 h-4 text-sol-base1" />
           )}
           <span className="text-sol-text font-medium max-w-[120px] truncate">
-            {activeTeam?.name || "Personal"}
+            {activeTeam?.name || (teamsOnly ? "Choose a team" : "Personal")}
           </span>
           <ChevronDown className="w-3.5 h-3.5 text-sol-base1" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56 bg-sol-bg border-sol-border">
-        <DropdownMenuLabel className="text-sol-base1 text-xs">Workspace</DropdownMenuLabel>
-        <DropdownMenuItem
-          onClick={() => handleTeamChange(null)}
-          className="flex items-center justify-between cursor-pointer text-sol-text hover:bg-sol-base02/50"
-        >
-          <div className="flex items-center gap-2">
-            <User className="w-4 h-4 text-sol-base1" />
-            <span>Personal</span>
-          </div>
-          {!activeTeamId && <Check className="w-4 h-4 text-sol-cyan" />}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator className="bg-sol-border" />
+        <DropdownMenuLabel className="text-sol-base1 text-xs">{teamsOnly ? "Team" : "Workspace"}</DropdownMenuLabel>
+        {!teamsOnly && (
+          <>
+            <DropdownMenuItem
+              onClick={() => handleTeamChange(null)}
+              className="flex items-center justify-between cursor-pointer text-sol-text hover:bg-sol-base02/50"
+            >
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-sol-base1" />
+                <span>Personal</span>
+              </div>
+              {!shownTeamId && <Check className="w-4 h-4 text-sol-cyan" />}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-sol-border" />
+          </>
+        )}
         {teams.map((team) => {
           if (!team) return null;
           return (
@@ -91,7 +110,7 @@ export function TeamSwitcher() {
                 <TeamCrest icon={team.icon} color={team.icon_color} size="sm" />
                 <span>{team.name}</span>
               </div>
-              {activeTeamId === team._id && <Check className="w-4 h-4 text-sol-cyan" />}
+              {shownTeamId === team._id && <Check className="w-4 h-4 text-sol-cyan" />}
             </DropdownMenuItem>
           );
         })}

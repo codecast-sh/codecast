@@ -8,8 +8,6 @@
 // colour and a monospace ledger line, never from a nested box. Both themes are
 // tokens only.
 
-import { useState } from "react";
-import { ChevronDown } from "lucide-react";
 import type { AppConnectionScope, AppConnectionStatus, AppDescriptor } from "@codecast/shared/contracts";
 import { APP_LOOK, ISSUE_SYNC_APPS, useAppConnection } from "../../lib/integrations";
 import type { GithubInstallUser } from "../../lib/githubAppInstall";
@@ -58,7 +56,6 @@ export function IntegrationCard({
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
   const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, me, scope);
-  const [showDetail, setShowDetail] = useState(false);
 
   const connected = connection?.status === "connected" ? connection : null;
   const comingSoon = descriptor.connectKind === "coming-soon" || connection?.status === "coming_soon";
@@ -149,16 +146,13 @@ export function IntegrationCard({
                 busyLabel="Disconnecting"
               />
             )}
+            {/* One GitHub App install covers one account. A second org or a
+                personal account is another install through the same flow, so
+                the button stays while connected. */}
             {descriptor.id === "github" && (
-              <button
-                type="button"
-                onClick={() => setShowDetail((v) => !v)}
-                aria-expanded={showDetail}
-                className="inline-flex items-center gap-1 text-[11px] text-sol-text-muted hover:text-sol-text"
-              >
-                <ChevronDown className={`h-3 w-3 transition-transform ${showDetail ? "" : "-rotate-90"}`} />
-                Installed accounts and repositories
-              </button>
+              <QuietButton onClick={connect} busy={busy}>
+                Install on another account or organization
+              </QuietButton>
             )}
           </>
         ) : (
@@ -175,8 +169,16 @@ export function IntegrationCard({
         )}
       </div>
 
-      {descriptor.id === "github" && showDetail && (
-        <GithubInstallDetail scope={scope} teamId={me ? githubAppInstallTeam(me) : undefined} />
+      {descriptor.id === "github" && !comingSoon && (
+        <>
+          <GithubInstallDetail scope={scope} teamId={me ? githubAppInstallTeam(me) : undefined} />
+          <p className="mt-1.5 text-[11px] leading-relaxed text-sol-text-dim">
+            Installing opens GitHub, which asks for the account or organization and the repositories.
+            If GitHub sends you to an existing install instead of asking, the App is set to install
+            only on its own account; change that under the App&apos;s settings on GitHub, Advanced, Make
+            public.
+          </p>
+        </>
       )}
 
       {hasSources && (

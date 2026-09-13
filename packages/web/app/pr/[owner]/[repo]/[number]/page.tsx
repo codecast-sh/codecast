@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useRef, useState, type RefCallback } from "react";
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { codeThreadRootKey } from "@codecast/shared/comments";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { GitPullRequest, FileDiff, ListChecks, MessagesSquare } from "lucide-react";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
@@ -16,6 +17,7 @@ import { PRRail } from "../../../../../components/pr/PRRail";
 import { PRTimeline } from "../../../../../components/pr/PRTimeline";
 import { useCurrentUser } from "../../../../../hooks/useCurrentUser";
 import { useEventListener } from "../../../../../hooks/useEventListener";
+import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { useLinkedSessions } from "../../../../../hooks/useLinkedSessions";
 import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { useSyncPRExternalEvents, useExternalEvents } from "../../../../../hooks/useSyncExternalEvents";
@@ -58,9 +60,17 @@ function PRNotFound({ repository, number }: { repository: string; number: number
     <div className="h-full flex flex-col items-center justify-center text-sol-text-muted">
       <GitPullRequest className="w-10 h-10 mb-3 opacity-30" />
       <h2 className="text-base font-medium mb-1">Pull request not found</h2>
-      <p className="text-[13px] mb-4">
+      <p className="text-[13px] mb-2">
         #{number} in <code className="font-mono text-sol-violet">{repository}</code> is not in this
         workspace.
+      </p>
+      <p className="text-[12px] mb-4 max-w-md text-center leading-relaxed">
+        A repository is here once the GitHub App is installed on{" "}
+        <code className="font-mono">{repository.split("/")[0]}</code> for one of your teams.{" "}
+        <Link href="/settings/integrations" className="text-sol-cyan hover:underline">
+          Open integrations
+        </Link>{" "}
+        to install it there, or to add this repository to an install that exists.
       </p>
       <a
         href={`https://github.com/${repository}/pull/${number}`}
@@ -90,6 +100,18 @@ function PRContent({
   const prFeed = useSyncPullRequest({ repository, number });
   const pr = usePullRequest(repository, number);
   const prId = pr?._id as string | undefined;
+
+  // A pull request the install's backfill window did not reach (an old closed
+  // one) is asked from GitHub once, through the team's install; the store row
+  // then arrives on the feed above. Only after that ask has answered does the
+  // page say "not found".
+  const fetchPull = useAction(api.githubApp.fetchPull);
+  const [lookup, setLookup] = useState<"idle" | "pending" | "done">("idle");
+  useWatchEffect(() => {
+    if (pr || lookup !== "idle" || !prFeed.ready || !isAuthenticated) return;
+    setLookup("pending");
+    void fetchPull({ repository, number }).catch(() => null).finally(() => setLookup("done"));
+  }, [pr, lookup, prFeed.ready, isAuthenticated, repository, number]);
 
   useSyncPRExternalEvents(prId);
   useSyncPRCodeComments(prId);
@@ -227,7 +249,7 @@ function PRContent({
   });
 
   if (!pr) {
-    if (!prFeed.ready && !prFeed.error) return <LoadingSkeleton />;
+    if ((!prFeed.ready && !prFeed.error) || lookup !== "done") return <LoadingSkeleton />;
     return <PRNotFound repository={repository} number={number} />;
   }
 
