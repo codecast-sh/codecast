@@ -295,13 +295,13 @@ export function DocMenuItems({
       />
       {single && (
         <CtxItem
-          icon={Pin}
+          icon={Star}
           onSelect={() => {
             useInboxStore.getState().pinDoc(single._id, !(single as any).pinned);
-            toast.success((single as any).pinned ? "Unpinned" : "Pinned");
+            toast.success((single as any).pinned ? "Unstarred" : "Starred");
           }}
         >
-          {(single as any).pinned ? "Unpin document" : "Pin document"}
+          {(single as any).pinned ? "Unstar document" : "Star document"}
         </CtxItem>
       )}
       <CtxItem icon={Tag} onSelect={() => openPaletteMode(docs, "doc", "labels")}>Labels…</CtxItem>

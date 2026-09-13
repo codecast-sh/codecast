@@ -21,7 +21,7 @@ import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
 import {
-  Pin,
+  Star,
   Archive,
   Circle,
   CircleDot,
@@ -244,7 +244,7 @@ function DocDetailContent() {
           topBarLeft={
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
-              {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow" />}
+              {doc.pinned && <Star className="w-3 h-3 text-sol-yellow fill-current" />}
               <WatchButton entityType="doc" entityId={doc._id} />
               <DocDates doc={doc} variant="full" className="text-xs text-sol-text-dim" />
             </>
@@ -265,9 +265,9 @@ function DocDetailContent() {
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}
-                title={doc.pinned ? "Unpin" : "Pin"}
+                title={doc.pinned ? "Unstar" : "Star (keeps it on your shelf)"}
               >
-                <Pin className="w-3.5 h-3.5" />
+                <Star className={`w-3.5 h-3.5 ${doc.pinned ? "fill-current" : ""}`} />
               </button>
               <button
                 onClick={handleArchive}
