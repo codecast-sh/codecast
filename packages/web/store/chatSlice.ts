@@ -39,7 +39,7 @@
 
 import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { dmKeyFor, dmOtherIds, isLiveVoiceRow, type ChatVoiceStatus } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds, isLiveVoiceRow, mentionUserIds, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
@@ -70,8 +70,10 @@ export type ChatChannelRow = {
   team_id?: string;
   name: string;
   /** Absent = public. Private channels and DMs gate on membership server-side;
-   *  the client only shapes the surface (icon, naming, what the menu offers). */
-  kind?: "public" | "private" | "dm";
+   *  the client only shapes the surface (icon, naming, what the menu offers).
+   *  "agents" is a public room whose expected posters are roles and sessions
+   *  (docs/architecture/agent-channels.md C1). */
+  kind?: "public" | "private" | "dm" | "agents";
   /** ACCESS stamp (workspaceKey-shaped); the client never branches on it. */
   workspace?: string;
   /** `<teamId>:<sorted member ids>` — a DM's identity, and the client's source
@@ -95,8 +97,13 @@ export type ChatMessageRow = {
   user_id: string;
   author_kind?: "user" | "agent";
   content: string;
-  mentions?: string[];
+  /** People (bare user ids), roles and sessions the line names — the shared
+   *  shape (@codecast/shared/chat mentions.ts). Read through its helpers. */
+  mentions?: ChatMentionRef[];
   mention_scope?: "here";
+  /** A role or session mention on this line was over its hourly cap and was
+   *  not woken; the party reads the line on its next ordinary wake. */
+  mention_folded?: boolean;
   attachments?: ChatAttachment[];
   // Push-to-talk. Present only on a walkie burst; the recording itself rides
   // `attachments` like any other file, so playback is an attachment concern.
@@ -197,6 +204,20 @@ export type ChatRailRow = {
 // altKey supersede rekeys it onto the real row when the echo lands.
 
 export const CHAT_CHANNEL_STUB_PREFIX = "chatstub-";
+
+// The DM opens still on their way to the server, by the stub id the surface
+// was handed. `openDmChannel` answers synchronously with that stub; the burst
+// that starts on it needs the real id the server answers with, and a failed
+// open needs to be a failure now, not a row that never arrives.
+const dmOpensInFlight = new Map<string, Promise<string | null>>();
+
+/** The server's answer to the DM open behind a stub id, while it is still
+ *  in flight: the real channel id, or a rejection carrying the reason. Null
+ *  once it has landed (the row is in the store by then) or for an id that
+ *  was never a stub of this window's. */
+export function dmOpenInFlight(stubId: string): Promise<string | null> | null {
+  return dmOpensInFlight.get(stubId) ?? null;
+}
 export const CHAT_MESSAGE_STUB_PREFIX = "chatmsgstub-";
 export const CHAT_READ_STUB_PREFIX = "chatreadstub-";
 export const CHAT_REACTION_STUB_PREFIX = "chatreactstub-";
@@ -307,6 +328,17 @@ export type ChatSendOptions = {
   /** Set by an agent session posting through the web client. Only ever takes
    *  privilege away (chat.ts refuses to wake an anchor for a machine's line). */
   origin?: "agent";
+  /** Hears the server's answer to THIS send — which roles and sessions the
+   *  line woke (`mention_wakes`) — so the surface can say so. Never journaled:
+   *  it is stripped before the args reach the outbox, and a re-driven send
+   *  (reload, retry) answers nobody. */
+  onSent?: (result: ChatSendResult | undefined) => void;
+};
+
+/** chat.sendMessage's answer, the part a surface acts on. */
+export type ChatSendResult = {
+  message_id?: string;
+  mention_wakes?: { roles: number; sessions: number; folded: number; skipped: string[] };
 };
 
 export type ChatSliceActions = {
@@ -315,7 +347,7 @@ export type ChatSliceActions = {
   sendChatMessage: (channelId: string, content: string, opts?: ChatSendOptions) => string;
   /** The durable half of a send. Called by sendChatMessage and by retry; never
    *  call it directly — the client id has to exist first. */
-  dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => void;
+  dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => Promise<any>;
   retryChatSend: (rowId: string) => void;
   markChatSendFailed: (rowId: string, reason?: string) => void;
   discardChatSend: (rowId: string) => void;
@@ -420,13 +452,14 @@ export type ChatSliceState = ChatSliceData & ChatSliceActions;
 // a promise; the function BODY returns nothing. The slice is written against the
 // body's signature, the store interface against the caller's.
 type ChatSliceImpl = ChatSliceData &
-  Omit<ChatSliceActions, "dispatchCreateChatChannel" | "dispatchOpenDm"> & {
+  Omit<ChatSliceActions, "dispatchCreateChatChannel" | "dispatchOpenDm" | "dispatchChatSend"> & {
     dispatchCreateChatChannel: (
       clientId: string,
       name: string,
       opts?: ChatCreateChannelOptions,
     ) => void;
     dispatchOpenDm: (clientId: string, memberIds: string[], teamId?: string) => void;
+    dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => void;
   };
 
 // What a chat action may touch on the draft. Deliberately narrow: chat writes
@@ -502,7 +535,17 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
 
     sendChatMessage: (channelId: string, content: string, opts?: ChatSendOptions) => {
       const clientId = newChatMessageClientId();
-      get().dispatchChatSend(channelId, content, clientId, opts);
+      const { onSent, ...journaled } = opts ?? {};
+      const sent = get().dispatchChatSend(channelId, content, clientId, opts ? journaled : undefined) as
+        | Promise<ChatSendResult | undefined>
+        | undefined;
+      // (The impl type says void because the BODY returns nothing; the
+      // middleware wraps an asyncAction to resolve with the dispatch result.)
+      if (onSent && sent && typeof sent.then === "function") {
+        // Delivery is the outbox's problem (a failed send marks the row); the
+        // callback only ever hears a success.
+        sent.then((res) => onSent(res && typeof res === "object" ? res : undefined), () => {});
+      }
       return clientId;
     },
 
@@ -510,7 +553,11 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     // durable enqueue happen in one action: a reload between the two would
     // otherwise leave a message on screen with nothing to deliver it, or a
     // delivery with nothing on screen.
-    dispatchChatSend: action(function (
+    //
+    // asyncAction, not action: same durable outbox entry, same MUST_DELIVER
+    // re-drive, but the caller also hears the server's answer — which roles
+    // and sessions the line woke — the way dispatchOpenDm hears its room id.
+    dispatchChatSend: asyncAction(function (
       this: ChatDraft,
       channelId: string,
       content: string,
@@ -944,9 +991,21 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const existing = findDmChannelId(state.chatChannels, dmKey);
       if (existing) return existing;
       const clientId = newChatChannelClientId();
-      void (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).catch(() => {
-        // Delivery is the outbox's problem; see createChatChannel.
-      });
+      const created = (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).then(
+        // The server names the room it opened or found. Kept beside the stub
+        // so a caller holding only the stub id (the walkie, mid-burst) can
+        // learn the real id from the answer itself rather than waiting for
+        // the row to come back through the channel sync.
+        (res: any) => (typeof res?.channel_id === "string" ? String(res.channel_id) : null),
+      );
+      dmOpensInFlight.set(clientId, created);
+      created
+        .catch(() => {
+          // Delivery is the outbox's problem; see createChatChannel.
+        })
+        .finally(() => {
+          dmOpensInFlight.delete(clientId);
+        });
       return clientId;
     },
 
@@ -1272,7 +1331,7 @@ export function selectChatRail(
           // In a DM every line is addressed to the viewer — the local tally
           // mirrors the server's rail rule exactly.
           mentionsViewer:
-            isDm || m.mention_scope === "here" || !!m.mentions?.includes(viewer),
+            isDm || m.mention_scope === "here" || mentionUserIds(m.mentions).includes(viewer),
           deletedAt: m.deleted_at,
           // Engages the server-mirrored rule: replies do not tick the channel
           // number; mentions count wherever they live.
