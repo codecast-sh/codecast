@@ -1,3 +1,4 @@
+import { queuedMessagesFromPending } from "./pendingMessageJournal";
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
 import {
@@ -749,6 +750,9 @@ export type Message = {
   _isQueued?: true;
   _clientId?: string;
   _isFailed?: true;
+  _isSettledControl?: true;
+  _isLocalQueue?: true;
+  _queuePosition?: number;
   // The exact content the durable send dispatched for this row (mention
   // expansion appends context the bubble's raw `content` doesn't have). The
   // server fingerprints command args by client id, so every redrive/resend must
@@ -2274,115 +2278,55 @@ export function showsBlockedBadge(
   return !(reviveRequestedAt != null && now - reviveRequestedAt < BLOCKED_REVIVE_TTL_MS);
 }
 
-// A pending optimistic send is "consumed" once the daemon proves it acted on it:
-// the agent picked it up (status went active) or the session is dead (stopped,
-// won't ever pick it up). At that point the optimistic entry is stale and must be
-// dropped — otherwise it shows a phantom "pending" pill and pins an idle session
-// in Working forever. This is the durable, view-independent prune that the
-// echo-based prune in setMessages can't do: setMessages only runs for the
-// conversation currently open AND only matches messages the server echoes back as
-// user-message rows — slash commands like /model never echo, so without this they
-// linger indefinitely.
 export function pendingSendConsumed(
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
   sentBaselineTs?: number,
 ): boolean {
-  if (!session) return false;
+  if (!session || session.has_pending || sentBaselineTs == null || (session.updated_at ?? 0) <= sentBaselineTs) return false;
   const status = session.agent_status;
-  // Definitive positive signal: the daemon is provably acting on our send right
-  // now, so the optimistic stand-in has served its purpose. A stale "working" from
-  // a prior turn is harmless here — the card stays in Working either way.
-  if (status && ACTIVE_AGENT_STATUSES.has(status)) return true;
-  // Everything below is an ABSENCE signal ("nothing is happening") — and a stale
-  // snapshot that predates our send looks identical. Only trust it once the server
-  // has provably advanced PAST the send: the conversation's server-stamped
-  // updated_at (bumped when the backend accepted the message) moved beyond the
-  // baseline we captured at send time. Until then keep the pending pill — a
-  // just-sent message must never disappear before the server has even seen it.
-  const serverAdvanced = sentBaselineTs != null && (session.updated_at ?? 0) > sentBaselineTs;
-  if (!serverAdvanced) return false;
-  // The session is dead (stopped) and the server has caught up past our send, so
-  // it was delivered-then-stopped rather than queued-against-a-live-daemon.
-  if (status && DEAD_AGENT_STATUSES.has(status)) return true;
-  // Server-authoritative leftover check: the backend is idle with nothing queued
-  // (has_pending false) AS OF a snapshot newer than our send, so any lingering
-  // client optimistic is stale — the message was delivered-and-answered, or was a
-  // control command like /model that never echoes back as a user-message row. A
-  // genuinely in-flight send shows has_pending true until delivered, so this can't
-  // prune a real pending send.
-  return !!session.is_idle && !session.has_pending;
+  return !!session.is_idle || !!(status && (ACTIVE_AGENT_STATUSES.has(status) || DEAD_AGENT_STATUSES.has(status)));
 }
 
-// Grace window before any consumed/absence prune may fire for a send. The
-// dispatch retry ladder needs several seconds to conclude a send permanently
-// failed (and mark it _isFailed, which exempts it below) — pruning inside that
-// window can destroy the ONLY copy of a message whose send is still in flight:
-// a send into a busy foreign session reads "consumed" via the active-status
-// fast path on the very next sync tick, before the server ever rejected it.
 export const PENDING_SEND_PRUNE_GRACE_MS = 15_000;
 
-// Echo hard cap. The session claiming a send consumed does NOT mean the local
-// message window holds the echoed server row yet — the window back-fills via an
-// async fetch (bgSyncMessages) that the same sync tick merely kicks off. Pruning
-// on the claim alone makes the message vanish from a stale cached window until
-// that fetch lands (~a second) when the user returns to the thread. So a consumed
-// send with a warm local window is kept until its echo is visible there — but only
-// up to this cap, because some sends never echo as a user-message row at all
-// (control commands like /model) and a phantom pending pill would otherwise pin
-// an idle session in Working forever.
-export const PENDING_SEND_ECHO_CAP_MS = 60_000;
-
-// True when the pending send's server row is already visible in the local
-// message window (matched by client_id echo or direct _id).
 function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
-  return localMessages.some(
-    (m) => m._id === msg._id || (!!msg._clientId && m.client_id === msg._clientId),
-  );
+  return localMessages.some((m) => {
+    if (m.role !== "user" || m._isOptimistic || m._isQueued || m._isFailed) return false;
+    if (msg._clientId) return m.client_id === msg._clientId;
+    if (m._id === msg._id) return true;
+    return isInterruptControlMessage(msg.content)
+      ? isInterruptControlMessage(m.content) && m.timestamp > (msg._sentBaselineTs ?? msg.timestamp - 120_000)
+      : stripImageRef(m.content || "") === stripImageRef(msg.content || "") && Math.abs(m.timestamp - msg.timestamp) < 120_000;
+  });
 }
 
-// Prune consumed/stale optimistic sends for a synced session. The conversation
-// currently being viewed is left to setMessages (echo-based prune) so a just-sent
-// message stays visible in the open thread until its real row syncs in. Failed
-// sends are kept (the user may retry them). Returns true if anything changed.
 export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
-  focusedConvId: string | null,
-  // The conversation's locally cached message window, when one exists. Gates the
-  // prune on the echoed server row being visible there (see PENDING_SEND_ECHO_CAP_MS).
+  _focusedConvId: string | null,
   localMessages?: Message[],
 ): boolean {
-  if (convId === focusedConvId) return false;
   const pending = pendingMessages[convId];
   if (!pending?.length) return false;
-  // Protect the LATEST send: don't prune until the server has advanced past it.
-  // Legacy entries (persisted before _sentBaselineTs existed) fall back to their
-  // own client timestamp.
-  let baseline = 0;
-  let newestSentAt = 0;
-  for (const m of pending) {
-    if (m._isFailed) continue;
-    baseline = Math.max(baseline, m._sentBaselineTs ?? m.timestamp);
-    newestSentAt = Math.max(newestSentAt, m.timestamp);
+  let changed = false;
+  const kept = pending.filter((m) => m._isLocalQueue || !pendingSendEchoed(m, localMessages ?? []));
+  for (const message of kept) {
+    if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
+    if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
+    if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
+    if (!pendingSendConsumed(session, message._sentBaselineTs ?? message.timestamp)) continue;
+    message._isSettledControl = true;
+    delete message._isOptimistic;
+    delete message._isQueued;
+    changed = true;
   }
-  if (newestSentAt && Date.now() - newestSentAt < PENDING_SEND_PRUNE_GRACE_MS) return false;
-  if (!pendingSendConsumed(session, baseline)) return false;
-  const kept = pending.filter((m) => {
-    if (m._isFailed) return true;
-    // Echo gate: with a warm local window, hold the send until its server row
-    // is visible there (or the cap passes) so a return to the thread never
-    // renders a stale window with the message missing.
-    return (
-      !!localMessages?.length &&
-      Date.now() - m.timestamp < PENDING_SEND_ECHO_CAP_MS &&
-      !pendingSendEchoed(m, localMessages)
-    );
-  });
-  if (kept.length === pending.length) return false;
-  if (kept.length === 0) delete pendingMessages[convId];
-  else pendingMessages[convId] = kept;
-  return true;
+  if (kept.length !== pending.length) {
+    if (kept.length) pendingMessages[convId] = kept;
+    else delete pendingMessages[convId];
+    changed = true;
+  }
+  return changed;
 }
 
 // The (waiting, rest, idle) verdict a surface outside the chokepoint reads
@@ -4888,6 +4832,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Queued messages --
   getQueuedMessages: (id: string) => string[];
   setQueuedMessagesFor: (id: string, list: string[]) => void;
+  takeQueuedMessage: (id: string) => { content: string; clientId: string } | undefined;
 
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
@@ -5436,18 +5381,7 @@ function messageReplayKey(message: Message): string | null {
 function prunePendingEchoes(draft: any, convId: string, incoming: Message[]) {
   const pending = draft.pendingMessages[convId] || [];
   if (pending.length === 0) return;
-  const serverUserMsgs = incoming.filter((m: Message) => m.role === "user");
-  const kept = pending.filter((m: Message) => {
-    if (m._clientId) {
-      return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
-    }
-    const stripped = stripImageRef(m.content || "");
-    return !serverUserMsgs.some((s: Message) =>
-      isInterruptControlMessage(m.content)
-        ? isInterruptControlMessage(s.content) && s.timestamp > (m._sentBaselineTs ?? m.timestamp - 120_000)
-        : stripImageRef(s.content || "") === stripped && Math.abs(s.timestamp - m.timestamp) < 120_000
-    );
-  });
+  const kept = pending.filter((m: Message) => m._isLocalQueue || !pendingSendEchoed(m, incoming));
   if (kept.length !== pending.length) {
     draft.pendingMessages[convId] = kept;
   }
@@ -5836,8 +5770,6 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     transform(draft, table, incoming) {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
-        // Drop stale optimistic sends now that we have authoritative status —
-        // keeps phantom "pending" pills from pinning idle sessions in Working.
         reconcilePendingSendForSession(
           draft.pendingMessages,
           s._id,
@@ -6189,7 +6121,7 @@ export function pendingRowSendArgs(message: Message): { content: string; imageId
 function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void {
   const store = useInboxStore.getState();
   for (const message of messages ?? store.pendingMessages[convexId] ?? []) {
-    if (message._isFailed) continue;
+    if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
     if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
@@ -6334,8 +6266,15 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     delete draft.messages[oldId];
   }
   if (draft.pendingMessages[oldId]) {
-    draft.pendingMessages[newId] = draft.pendingMessages[oldId];
+    const combined: Message[] = [...(draft.pendingMessages[newId] ?? []), ...draft.pendingMessages[oldId]];
+    const merged = [...new Map(combined.map((message) => [message._clientId || message._id, message])).values()];
+    draft.pendingMessages[newId] = merged;
     delete draft.pendingMessages[oldId];
+    const queued = merged.filter(message => message._isLocalQueue)
+      .sort((a, b) => (a._queuePosition ?? 0) - (b._queuePosition ?? 0))
+      .map(message => message.content ?? "");
+    if (queued.length) draft.queuedMessages[newId] = queued;
+    delete draft.queuedMessages[oldId];
   }
   if (draft.pagination[oldId]) {
     draft.pagination[newId] = draft.pagination[oldId];
@@ -6607,7 +6546,6 @@ function hideSessionInDraft(
       delete draft.sessions[sid];
       delete draft.conversations[sid];
       delete draft.messages[sid];
-      delete draft.pendingMessages[sid];
       forgotten.push(sid);
       continue;
     }
@@ -9844,11 +9782,41 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   setQueuedMessagesFor: sync(function (this: Draft, id: string, list: string[]) {
-    if (!list || list.length === 0) {
-      delete this.queuedMessages[id];
-    } else {
-      this.queuedMessages[id] = list;
+    const previous = (this.pendingMessages[id] ?? []).filter(message => message._isLocalQueue);
+    const kept = new Set<string>();
+    for (const [position, content] of list.entries()) {
+      const existing = previous.find(message => message.content === content && !kept.has(message._id));
+      const clientId = existing?._id ?? appendOptimisticMessage(this, id, content);
+      const row = this.pendingMessages[id].find(message => message._id === clientId)!;
+      row._isLocalQueue = true;
+      row._queuePosition = position;
+      kept.add(clientId);
     }
+    if (this.pendingMessages[id]) {
+      this.pendingMessages[id] = this.pendingMessages[id].filter(message => !message._isLocalQueue || kept.has(message._id));
+      if (!this.pendingMessages[id].length) delete this.pendingMessages[id];
+    }
+    if (list.length) this.queuedMessages[id] = list;
+    else delete this.queuedMessages[id];
+  }),
+
+  takeQueuedMessage: sync(function (this: Draft, id: string) {
+    const content = this.queuedMessages[id]?.[0];
+    if (content == null) return;
+    let row = this.pendingMessages[id]?.find(message => message._isLocalQueue && message.content === content);
+    if (!row) {
+      const clientId = appendOptimisticMessage(this, id, content);
+      row = this.pendingMessages[id].find(message => message._id === clientId)!;
+    }
+    delete row._isLocalQueue;
+    delete row._queuePosition;
+    row._isOptimistic = true;
+    row.timestamp = Date.now();
+    row._sentBaselineTs = this.sessions[id]?.updated_at;
+    const remaining = this.queuedMessages[id].slice(1);
+    if (remaining.length) this.queuedMessages[id] = remaining;
+    else delete this.queuedMessages[id];
+    return { content, clientId: row._clientId || row._id };
   }),
 
   // =====================
@@ -10050,6 +10018,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!isConvexId(realId)) return null;
     const pending = get().pendingMessages[realId] || [];
     for (const m of pending as any[]) {
+      if (m._isLocalQueue || m._isSettledControl || m.images?.some((image: any) => image.uploading)) continue;
       // Prefer the recorded dispatch bytes (see redrivePendingMessagesFor) —
       // a row that already sent once must replay identically to dedupe.
       const content = m._dispatchContent || m.content || "";
@@ -10067,7 +10036,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const [convId, messages] of Object.entries(get().pendingMessages) as [string, Message[]][]) {
       if (!isConvexId(convId)) continue;
       for (const message of messages) {
-        if (message._isFailed) continue;
+        if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const state = get();
         if (state.currentUser?._id !== userId) return;
@@ -11806,6 +11775,14 @@ export function hydrateMergeValue(
   val: unknown,
   cur: unknown,
 ): { apply: boolean; value?: unknown } {
+  if (key === "pendingMessages" && val && typeof val === "object") {
+    const merged = { ...(val as Record<string, Message[]>) };
+    for (const [convId, rows] of Object.entries((cur ?? {}) as Record<string, Message[]>)) {
+      const combined = [...(merged[convId] ?? []), ...rows];
+      merged[convId] = [...new Map(combined.map(message => [message._clientId || message._id, message])).values()];
+    }
+    return { apply: true, value: merged };
+  }
   if (hydrationMergeStrategy(key) === "fill") {
     return cur == null ? { apply: true, value: val } : { apply: false };
   }
@@ -11987,6 +11964,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
         const merge = hydrateMergeValue(key, val, cur);
         if (merge.apply) updates[key] = merge.value;
       }
+      if (updates.pendingMessages) updates.queuedMessages = queuedMessagesFromPending(updates.pendingMessages);
       if (Object.keys(updates).length > 0) {
         useInboxStore.setState(updates);
       }

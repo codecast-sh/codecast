@@ -1,3 +1,4 @@
+import { captureError } from '@/lib/analytics';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type TextInput as NativeTextInput, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
@@ -3171,7 +3172,14 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     const storageIds = selectedImages.filter(img => img.storageId).map(img => img.storageId!);
     const content = trimmedMessage || (storageIds.length > 0 ? '[image]' : '');
 
-    // Clear the input immediately so the screen never feels blocked.
+    try {
+      dispatchSend(content, storageIds);
+    } catch (error) {
+      captureError(error instanceof Error ? error : new Error(String(error)));
+      setError(error instanceof Error ? error.message : 'Could not save your message. Please try again.');
+      return;
+    }
+
     clearTimeout(draftPatchTimerRef.current);
     setMessage('');
     draftRef.current = '';
@@ -3194,7 +3202,6 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     setExpanded(false);
     Keyboard.dismiss();
 
-    dispatchSend(content, storageIds);
   };
 
   const canSend = !!message.trim() || selectedImages.length > 0;
