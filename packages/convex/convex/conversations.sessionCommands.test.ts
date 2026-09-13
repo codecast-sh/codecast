@@ -209,7 +209,7 @@ describe("killSession vs applyHideTransition: one anchor, one answer", () => {
     const tables = anchorTables();
     const db = makeFakeDb(tables);
     await (killSession as any)._handler(
-      { db, auth: { getUserIdentity: async () => ({ subject: `${RUNNER}|session` }) } },
+      { db, scheduler: { runAfter: async () => {} }, auth: { getUserIdentity: async () => ({ subject: `${RUNNER}|session` }) } },
       { conversation_id: ANCHOR, mark_completed: true },
     );
     expectAnchorIntact(tables);
