@@ -54,6 +54,15 @@ export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<
 
 export type TmuxRunResult = { status: number | null; stdout: string; stderr: string; code?: string; signal?: string | null; killed?: boolean };
 
+export function isTmuxSessionMissingError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: unknown; status?: unknown; signal?: unknown; killed?: unknown; stderr?: unknown };
+  if (e.killed || e.signal || typeof e.code === "string") return false;
+  if (e.code !== 1 && e.status !== 1) return false;
+  return typeof e.stderr === "string" &&
+    /can't find session|no such session|session not found|no server running on |error connecting to .+ \(No such file or directory\)/i.test(e.stderr);
+}
+
 // The promise twin of tmuxRun for callers on the daemon's event loop (the
 // loopback HTTP and WebSocket paths): same contract, never throws, status
 // null on a timeout kill. Node hands a non zero exit back as an error whose

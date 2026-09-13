@@ -105,33 +105,24 @@ describe("awaitTmuxComposerPayload", () => {
     expect(rePastes).toBe(0);
   });
 
-  test("live empty prompt (dropped paste) re-pastes without typing into it (ct-49750)", async () => {
-    // The pane changed since the paste (so it is not frozen) but the prompt
-    // stays empty: either the TUI woke and dropped the buffered paste, or it is
-    // repainting a spinner while its input handler is still blocked. The two
-    // look identical on screen, so the clearing keys that used to precede this
-    // re-paste were sent into a composer that could not act on them and stored
-    // them as message text instead — six C-a/C-k pairs in front of the payload.
-    // The re-paste still happens; a doubled result is caught by the count below
-    // rather than pre-empted by keys.
+  test("a repainting empty prompt times out without another paste", async () => {
     const prePaste = BOX("");
-    let composer = ""; // pane differs from prePaste via a spinner line below
-    const LIVE = (c: string) => BOX(c).replace("bypass permissions on", "bypass permissions on ⠋");
     const sends: string[] = [];
     let rePastes = 0;
+    let polls = 0;
     const exec = async (args: Args): Promise<{ stdout: string }> => {
-      if (args[0] === "capture-pane") return { stdout: LIVE(composer) };
+      if (args[0] === "capture-pane") return { stdout: `${prePaste} ${++polls}` };
       if (args[0] === "send-keys") sends.push(args[args.length - 1]);
       return { stdout: "" };
     };
-    const out = await awaitTmuxComposerPayload("t:0.0", PAYLOAD, {
+    await expect(awaitTmuxComposerPayload("t:0.0", PAYLOAD, {
       prePaste,
-      rePaste: async () => { rePastes++; composer = PAYLOAD; },
+      rePaste: async () => { rePastes++; },
+      budgetMs: 900,
       exec: exec as any,
-    });
-    expect(out).toBe("matched");
-    expect(rePastes).toBe(1);
-    expect(sends).toEqual([]); // nothing typed into a composer that shows nothing
+    })).rejects.toThrow("AGENT_STDIN_NOT_READY");
+    expect(rePastes).toBe(0);
+    expect(sends).toEqual([]);
   });
 
   test("two copies at the prompt are refused, cleared and re-pasted (ct-49753)", async () => {

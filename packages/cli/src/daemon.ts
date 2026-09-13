@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
+import { prepareTmuxDelivery, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -223,7 +224,7 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler } from "./taskScheduler.js";
-import { hasTmux } from "./tmux.js";
+import { hasTmux, isTmuxSessionMissingError } from "./tmux.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
 import { collectScan, visitScan, scanCanFallback } from "./workers/scanClient.js";
 import { ScanCancelled, yieldScanBatch } from "./scanBatch.js";
@@ -329,6 +330,7 @@ import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.j
 import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { findTmuxSessionsById } from "./tmuxSessionLookup.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -392,11 +394,6 @@ async function setTmuxSessionOption(sessionName: string, optionName: string, val
 
 export function isTmuxSessionMetadataMatch(storedSessionId: string | null | undefined, sessionId: string): boolean {
   return typeof storedSessionId === "string" && storedSessionId === sessionId;
-}
-
-async function tmuxSessionMatchesFullSessionId(sessionName: string, sessionId: string): Promise<boolean> {
-  const stored = await getTmuxSessionOption(sessionName, "@codecast_session_id");
-  return isTmuxSessionMetadataMatch(stored, sessionId);
 }
 
 // Map a (possibly foreign) recorded path to a local checkout by convention.
@@ -4469,9 +4466,7 @@ export async function killLocalPanesForConversation(
   clearSessionTrackingForKill(sessionId);
   if (sessionId) {
     try {
-      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-      for (const tmuxName of tmuxList.trim().split("\n")) {
-        if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
+      for (const tmuxName of await findTmuxSessionsById(sessionId, tmuxExec)) {
         if (!validateTmuxTarget(tmuxName)) continue;
         stopTracking(sessionId);
         await killTmuxSessionAndTree(tmuxName);
@@ -5972,7 +5967,9 @@ async function executeRemoteCommand(
           }
         }
 
-        const releaseAccountSwitch = await accountLifecycleGate.acquireSwitch();
+        const releaseAccountSwitch = profile
+          ? await accountLifecycleGate.acquireSwitch()
+          : await accountLifecycleGate.acquireResume("claude");
         try {
           let switched: string | null = null;
           if (profile) {
@@ -12075,9 +12072,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
 
     // Strategy B: Scan tmux sessions named cc-resume-* or codecast-*
     try {
-      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-      for (const tmuxName of tmuxList.trim().split("\n")) {
-        if (!(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
+      for (const tmuxName of await findTmuxSessionsById(sessionId, tmuxExec)) {
         // Get the pane TTY for this tmux session
         try {
           const { stdout: paneInfo } = await tmuxExec(["list-panes", "-t", tmuxName, "-F", "#{pane_tty} #{pane_pid}"]);
@@ -14483,9 +14478,7 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
       if ([...hibernationInFlight.values()].some(park => park.done === tmuxTargetLocks.get(baseTarget))) {
         throw new Error("Hibernation still owns this tmux target");
       }
-      log(`tmux lock for ${baseTarget} held >${Math.round(elapsed / 1000)}s, forcing release and proceeding`);
-      tmuxTargetLocks.delete(baseTarget);
-      break;
+      throw new Error(`AGENT_STDIN_NOT_READY: earlier delivery still owns ${baseTarget}`);
     }
     const existing = tmuxTargetLocks.get(baseTarget);
     if (!existing) break;
@@ -15155,6 +15148,7 @@ function recordTmuxSubmitVerdict(sessionId: string, verdict: TmuxSubmitVerdict):
 }
 
 export type TmuxSubmitVerifyOpts = {
+  payloadObserved?: boolean;
   prePaste: string;
   pasteConfirmed: boolean;
   contentPrefix: string;
@@ -15206,13 +15200,11 @@ async function runTmuxSubmitVerify(
   // Likewise for the title: a marker the pane already carried (claude writes
   // "_ Claude Code" from boot) can never be news about our paste.
   const titleWorkingBefore = !!opts.paneTitleBefore && PANE_TITLE_WORKING.test(opts.paneTitleBefore);
-  let rePasted = false;
-  let pasteSeen = false; // we watched our text sit in the input box
+  let pasteSeen = opts.payloadObserved ?? false; // we watched our text sit in the input box
   let payloadSeen = false; // any trace of our text: in the box, or as transcript
   let idleEnters = 0;
-  let liveNoTextTicks = 0;
   const settle = (outcome: TmuxSubmitOutcome, evidence: TmuxSubmitEvidence | null = null): TmuxSubmitVerifyResult =>
-    ({ outcome, evidence, rePasted, payloadSeen, payloadCheckable });
+    ({ outcome, evidence, rePasted: false, payloadSeen, payloadCheckable });
   for (let elapsed = 0; elapsed < deadlineMs; elapsed += TICK) {
     await io.sleep(TICK);
     let pane: string;
@@ -15351,22 +15343,6 @@ async function runTmuxSubmitVerify(
       io.log("paste confirmed but not visible at prompt, pressing Enter");
       await io.sendEnter();
       continue;
-    }
-
-    // Live pane, empty prompt, our text nowhere: the paste was likely dropped.
-    // Require a few consecutive live observations first — the box can render a
-    // beat before the pty buffer drains, and a premature re-paste doubles the
-    // message once it does.
-    liveNoTextTicks++;
-    if (!rePasted && liveNoTextTicks >= 3) {
-      const promptLine = lastLines.split("\n").find((l) => /[❯›]/.test(l));
-      const m = promptLine?.match(/[❯›]/);
-      const afterPrompt = promptLine && m ? promptLine.slice(m.index! + 1).trim() : "";
-      if (afterPrompt) return settle("agent_prompt_stalled"); // someone else's text at the prompt — don't stomp it
-      io.log("paste likely dropped (live empty prompt), re-pasting once");
-      await io.rePaste();
-      rePasted = true;
-      liveNoTextTicks = 0;
     }
   }
   return settle("agent_prompt_stalled");
@@ -15566,6 +15542,7 @@ export async function awaitTmuxComposerPayload(
     multiline?: boolean;
     prePaste?: string;
     rePaste: () => Promise<void>;
+    allowRePaste?: boolean;
     budgetMs?: number;
     exec?: typeof tmuxExec;
   },
@@ -15577,13 +15554,12 @@ export async function awaitTmuxComposerPayload(
   const tick = () => new Promise(resolve => setTimeout(resolve, 150));
 
   let glyphlessTicks = 0;
-  let liveEmptyTicks = 0;
   let foreignTicks = 0;
   let rePastes = 0;
   const drainAndRePaste = async (why: string) => {
+    if (opts.allowRePaste === false) throw new TmuxDeliveryUncertainError("the original paste has not appeared intact");
     log(`${why} in ${target}, draining and re-pasting`);
     rePastes++;
-    liveEmptyTicks = 0;
     foreignTicks = 0;
     // Why: clearing keys sent into a composer showing nothing are stored and
     // submitted as message text (ct-49750). The count above stops the double.
@@ -15623,16 +15599,7 @@ export async function awaitTmuxComposerPayload(
     if (matched) return "matched";
 
     if (!glyphLine.trim()) {
-      // Empty prompt. A frozen pane (identical to the pre-paste capture)
-      // means the paste is still pty-buffered — wait, never re-paste: a
-      // second copy would flush right behind the first. A LIVE empty prompt
-      // held for a few ticks means the paste was dropped.
       foreignTicks = 0;
-      if (opts.prePaste !== undefined && pane === opts.prePaste) {
-        liveEmptyTicks = 0;
-      } else if (++liveEmptyTicks >= 3 && rePastes < 2) {
-        await drainAndRePaste("composer still empty after paste");
-      }
       await tick();
       continue;
     }
@@ -15640,7 +15607,6 @@ export async function awaitTmuxComposerPayload(
     // Foreign text at the prompt: a stale draft, probe-era residue, or a
     // render still mid-flush. Give it a few ticks to converge into a match,
     // then clear and re-paste.
-    liveEmptyTicks = 0;
     if (++foreignTicks >= 3 && rePastes < 2) {
       await drainAndRePaste("composer holds foreign text");
     }
@@ -15649,11 +15615,18 @@ export async function awaitTmuxComposerPayload(
   throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
-export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId): Promise<void> {
-  return withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType));
+type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number };
+
+export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
+  try {
+    return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
+  } catch (error) {
+    if (!opts?.delivery || error instanceof MachineInputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
+    throw new TmuxDeliveryUncertainError(String(error));
+  }
 }
 
-async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId): Promise<void> {
+async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   // Does this client's TUI bracket a paste? Decides whether newlines in the
   // payload survive as composer newlines or get flattened to spaces — see
   // prepareInjectedContent. Applies to poll free-text answers too: those are
@@ -15675,7 +15648,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
         return;
       }
       log(`Interactive menu no longer on screen in ${target}; delivering poll answer as plain text`);
-      return injectViaTmuxInner(target, fallbackText, agentType);
+      return injectViaTmuxInner(target, fallbackText, agentType, opts);
     }
     // A free-text answer can't be entered into Claude Code's AUQ menu — decline the whole
     // menu once (Escape) and type the answer at the prompt. See pollDeclineText for why.
@@ -15736,6 +15709,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // -p` only emits the markers for a program that asked for the mode) — see
   // prepareInjectedContent and the bracketedPaste capability.
   const sanitized = prepareInjectedContent(content, { bracketed });
+  const delivery = opts?.delivery ? await prepareTmuxDelivery(
+    target, opts.delivery, tmuxExec,
+    async id => (await syncServiceRef?.getPendingMessageStatus(id)) === "delivered",
+    opts.journal,
+  ) : null;
+  if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
+  if (delivery?.prior?.phase === "verified") return;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const beforeInput = machineInputGuard(content, async () =>
@@ -15747,11 +15727,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
-  // Never sends a key without first proving which modal it'll act against — that's
-  // the invariant that prevents Escape-at-idle from spuriously opening the Rewind
-  // dialog. `busy` = agent mid-turn with a live type-ahead box; we paste into its
-  // native queue rather than waiting for the turn to finish.
-  const { busy } = await ensureTmuxReady(target, agentType, beforeInput ? assertMachinePromptAbsent : undefined, beforeInput ? captureLines : undefined);
+  await ensureTmuxReady(target, agentType, beforeInput ? assertMachinePromptAbsent : undefined, beforeInput ? captureLines : undefined);
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text
@@ -15796,7 +15772,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // clock is both the knowable one and the strict one. An older turn mark is
   // someone else's either way.
   const paneTitleBefore = await paneTitleOf();
-  const pasteAt = Date.now();
+  const pasteAt = delivery?.prior?.pasteAt ?? Date.now();
 
   // The pane before the paste, for the post-submit verifier's before/after
   // comparison; empty when nothing was pasted, which is honest — every frame it
@@ -15805,22 +15781,25 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let gate: "matched" | "unwatchable" = "matched";
 
   if (alreadyAtPrompt) {
+    delivery?.journal.begin(opts!.delivery!, delivery.generation, sanitized);
     log(`Composer in ${target} already holds this payload from an earlier attempt; submitting it instead of pasting again`);
+  } else if (delivery?.prior) {
+    if (delivery.prior.phase === "paste") {
+      gate = await awaitTmuxComposerPayload(target, sanitized, {
+        multiline: bracketed && sanitized.includes("\n"),
+        rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
+        allowRePaste: false,
+        budgetMs: opts?.gateBudgetMs,
+        exec,
+      });
+      if (gate !== "matched") throw new TmuxDeliveryUncertainError("the earlier paste is not visible");
+    }
   } else {
     // Clear any stale input before pasting to prevent draft text from being
     // prepended to the injected message or submitted by the trailing Enter —
     // see drainTmuxComposer for why C-a/C-k cycles, and why an empty composer
     // gets no keys at all. The drain is best-effort: the Enter gate below
     // refuses to submit over anything it missed.
-    //
-    // Escape is the one key here that doubles as "interrupt the current turn", so
-    // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
-    // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
-    // pasted message then rides Claude Code's native queue until the turn ends.
-    if (!busy && agentType !== "codex") {
-      await exec(["send-keys", "-t", target, "Escape"]);
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
     await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
 
     try {
@@ -15829,6 +15808,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     } catch {}
 
     // Paste once
+    delivery?.journal.begin(opts!.delivery!, delivery.generation, sanitized);
     await doPaste();
 
     // The payload is its own readiness probe: Enter is only sent once the
@@ -15838,13 +15818,22 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     gate = await awaitTmuxComposerPayload(target, sanitized, {
       multiline: bracketed && sanitized.includes("\n"),
       prePaste,
-      rePaste: doPaste,
+      rePaste: delivery ? async () => { throw new TmuxDeliveryUncertainError("the paste has not appeared intact"); } : doPaste,
+      allowRePaste: !delivery,
+      budgetMs: opts?.gateBudgetMs,
       exec,
     });
   }
+  const retryingSubmit = delivery?.prior?.phase === "submit" && !alreadyAtPrompt;
   let pasteConfirmed = gate === "matched";
-  if (gate === "matched") {
+  const sendEnter = async () => {
+    delivery?.journal.advance(opts!.delivery!.messageId, "submit");
     await exec(["send-keys", "-t", target, "Enter"]);
+  };
+  if (retryingSubmit) {
+    pasteConfirmed = false;
+  } else if (gate === "matched") {
+    await sendEnter();
   } else {
     // Unwatchable pane (glyphless client, blank payload): legacy timing.
     // Brief confirmation — did the pane change? (4 checks, 100ms apart.)
@@ -15865,7 +15854,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // Adaptive delay so tmux paste-buffer flushes before Enter; the same
     // pty-stream ordering that makes the gate sound keeps this safe too.
     await new Promise(resolve => setTimeout(resolve, enterDelay));
-    await exec(["send-keys", "-t", target, "Enter"]);
+    await sendEnter();
   }
 
   // Post-submit: verify the agent started processing — see
@@ -15892,10 +15881,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     {
       capture: async () =>
         (await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
-      sendEnter: async () => {
-        await exec(["send-keys", "-t", target, "Enter"]);
-      },
+      sendEnter,
       rePaste: async () => {
+        if (delivery) throw new TmuxDeliveryUncertainError("a submitted paste cannot be repeated");
         await exec(["send-keys", "-t", target, "C-u"]);
         await new Promise(resolve => setTimeout(resolve, 200));
         await doPaste();
@@ -15913,6 +15901,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     {
       prePaste,
       pasteConfirmed,
+      payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
       multiline: sanitized.includes("\n"),
       pasteAt,
@@ -15920,7 +15909,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       sessionId: (await resolvePaneSessionId()) ?? undefined,
     },
   );
+  if (verify.outcome === "delivered") delivery?.journal.advance(opts!.delivery!.messageId, "verified");
   if (verify.outcome === "exited") {
+    delivery?.journal.recordTerminalExit(opts!.delivery!.messageId);
     // Propagates to deliverMessage's transient-failure backoff (the old
     // in-loop throw was swallowed by its own catch and never reached anyone).
     throw new Error("SESSION_EXITED: message was pasted into a bare shell");
@@ -17309,9 +17300,7 @@ async function stopLocalSessionBackends(conversationId: string, sessionId: strin
   resumeInFlight.delete(sessionId);
   resumeInFlightStarted.delete(sessionId);
   try {
-    const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-    for (const tmuxName of tmuxList.trim().split("\n")) {
-      if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
+    for (const tmuxName of await findTmuxSessionsById(sessionId, tmuxExec)) {
       if (!validateTmuxTarget(tmuxName)) continue;
       await killTmuxSessionAndTree(tmuxName).catch(() => {});
     }
@@ -19902,7 +19891,11 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
   // agent the user wants alive.
   try {
     await tmuxExec(["has-session", "-t", tmux], { timeout: 3000, killSignal: "SIGKILL" });
-  } catch {
+  } catch (error) {
+    if (!isTmuxSessionMissingError(error)) {
+      log(`[HEARTBEAT-HEALTH] Inconclusive tmux probe for ${sessionId.slice(0, 8)}, preserving session: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     log(`[HEARTBEAT-HEALTH] tmux session ${tmux} gone for ${sessionId.slice(0, 8)}, triggering reconstitution`);
     await handleDeadSession(sessionId, tmux);
     return;
@@ -19982,6 +19975,7 @@ export type ResumeOptions = {
    * writes it.
    */
   forkFromSessionId?: string;
+  delivery?: TmuxDeliveryIdentity;
   model?: string;
   effort?: string;
 };
@@ -20498,7 +20492,7 @@ function dropSupersededProcessCacheEntry(sessionId: string): boolean {
 // icon) re-registers exactly once per name change.
 const registeredTmuxBySession = new Map<string, string>();
 
-function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTarget?: string): void {
+export function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTarget?: string): void {
   sessionProcessCache.set(sessionId, {
     pid: info.pid,
     tty: info.tty,
@@ -20529,7 +20523,7 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
   }
 }
 
-async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
+export async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
   // Supersession outranks the TTL: a registry hook claim newer than this
   // mapping proves it stale however recently the pid checked out as alive.
   if (dropSupersededProcessCacheEntry(sessionId)) return null;
@@ -20544,6 +20538,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
     }
     cached.lastVerified = Date.now();
   }
+  if (!cached.tty) cached.tty = await ttyOfPid(cached.pid);
   return { pid: cached.pid, tty: cached.tty, sessionId, termProgram: cached.termProgram };
 }
 
@@ -20688,7 +20683,7 @@ const LIVENESS_RECONCILE_INTERVAL_MS = 120_000; // 2 min — conservative; daemo
 //
 // Cheap by construction: one Convex query + one `tmux list-panes -a`, then a
 // bounded process-tree walk only for rows whose tmux session is actually live.
-async function reconcileSessionLiveness(): Promise<void> {
+export async function reconcileSessionLiveness(): Promise<void> {
   if (process.platform !== "darwin") return;
   if (!syncServiceRef) return;
   if (isInWakeGrace()) return;
@@ -20697,17 +20692,17 @@ async function reconcileSessionLiveness(): Promise<void> {
   if (!catalog || catalog.length === 0) return;
 
   // session_name -> pane_pid for every live pane, in one call.
-  const paneByTmux = new Map<string, number>();
+  const paneByTmux = new Map<string, { pid: number; tty: string }>();
   if (hasTmux()) {
     try {
       const { stdout } = await tmuxExec(
-        ["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"],
+        ["list-panes", "-a", "-F", "#{session_name} #{pane_pid} #{pane_tty}"],
         { timeout: 5000, killSignal: "SIGKILL" },
       );
       for (const line of stdout.trim().split("\n")) {
-        const [name, pid] = line.trim().split(/\s+/);
+        const [name, pid, tty] = line.trim().split(/\s+/);
         const n = parseInt(pid, 10);
-        if (name && !isNaN(n) && !paneByTmux.has(name)) paneByTmux.set(name, n);
+        if (name && !isNaN(n) && !paneByTmux.has(name)) paneByTmux.set(name, { pid: n, tty: tty ? normalizeTty(tty) : "" });
       }
     } catch {}
   }
@@ -20726,13 +20721,16 @@ async function reconcileSessionLiveness(): Promise<void> {
     await Promise.all(batch.map(async (row) => {
       let agentPid: number | null = null;
       let tty = "";
-      const panePid = row.tmux_session ? paneByTmux.get(row.tmux_session) : undefined;
-      if (panePid !== undefined) {
+      const pane = row.tmux_session ? paneByTmux.get(row.tmux_session) : undefined;
+      if (pane !== undefined) {
         // The row's tmux name is where the session was PUT; the pane says what
         // runs there now. One long-lived resume tmux carried six sessions' rows
         // on 2026-09-07 and this sweep seeded all six with its one agent pid.
-        const found = await findAgentPidInTree(panePid);
-        if (found !== null && !(await rejectsForeignProcess(row.session_id, found, `liveness tmux ${row.tmux_session}`))) agentPid = found;
+        const found = await findAgentPidInTree(pane.pid);
+        if (found !== null && !(await rejectsForeignProcess(row.session_id, found, `liveness tmux ${row.tmux_session}`))) {
+          agentPid = found;
+          tty = pane.tty;
+        }
       } else if (row.agent_pid && isProcessRunning(row.agent_pid) && (await isAgentProcess(row.agent_pid))) {
         // A bare pid off the server row carries no stamp, so a reused pid can't
         // be told from the real one by age, and "agent-shaped" admits any bun or
@@ -20864,7 +20862,7 @@ interface ResolvedLiveSession {
  * whose agent has died). Both deliverMessage and autoResumeSession route through this
  * so the two delivery paths can never disagree about whether a session is already live.
  */
-async function resolveLiveTmuxTarget(
+export async function resolveLiveTmuxTarget(
   conversationId: string | undefined,
   sessionId: string,
   agentType: AgentClientId,
@@ -20981,7 +20979,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
         if (result !== null) {
           if (result && content) {
             const tmuxSession = resumeSessionCache.get(sessionId);
-            if (tmuxSession) await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint);
+            if (tmuxSession) await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint, { delivery: opts?.delivery });
           }
           return result;
         }
@@ -21288,7 +21286,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     logDelivery(`Session ${resumeShortId(sessionId)} already alive in tmux=${live.tmuxTarget} (${live.source}), reusing`);
     resumeSessionCache.set(sessionId, bareName);
     if (content) {
-      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content, liveAgentType);
+      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content, liveAgentType, { delivery: opts?.delivery });
     }
     // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
     if (syncServiceRef && conversationId && !managedHeartbeatSessions.has(sessionId)) {
@@ -21315,7 +21313,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
     } catch (err) {
-      if (err instanceof MachineInputBlockedError) throw err;
+      if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -21767,7 +21765,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             break;
           }
       } catch (err) {
-        if (err instanceof MachineInputBlockedError) throw err;
+        if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       }
     }
     if (!ready) {
@@ -21815,13 +21813,13 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           }
         }
       } catch (err) {
-        if (err instanceof MachineInputBlockedError) throw err;
+        if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       }
     }
 
     // Inject the message (skip if empty — resume-only mode)
     if (content) {
-      await injectViaTmux(tmuxSession + ":0.0", content, agentType);
+      await injectViaTmux(tmuxSession + ":0.0", content, agentType, { delivery: opts?.delivery });
       log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     } else {
       log(`Auto-resumed ${agentType} session ${shortId} (no message to inject)`);
@@ -21829,7 +21827,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     return true;
   } catch (err) {
-    if (err instanceof MachineInputBlockedError) throw err;
+    if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
     logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
@@ -22041,6 +22039,7 @@ async function repairAndResumeSession(
           return true;
         }
       } catch (err) {
+        if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(err instanceof Error ? err.message : String(err))) throw err;
         log(`Convex regeneration failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
       }
 
@@ -22140,7 +22139,7 @@ async function postDeliveryHealthCheck(
   } catch {
     log(`Health check: tmux session ${tmuxSession} is dead after delivery for ${sessionId.slice(0, 8)}`);
 
-    const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
+    const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, undefined, { delivery: { messageId, conversationId } });
     if (repaired) {
       log(`Health check: repaired and re-delivered message for ${sessionId.slice(0, 8)}`);
       try { await syncService.setSessionError(conversationId); } catch {}
@@ -22197,17 +22196,11 @@ async function findLiveTmuxForConversation(
 ): Promise<StartedSessionInfo | null> {
   if (!hasTmux()) return null;
   try {
-    const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-    const names = stdout
-      .trim()
-      .split("\n")
-      .filter(isManagedTmuxName);
+    const names = (await findTmuxSessionsById(conversationId, tmuxExec, "conversation")).filter(isManagedTmuxName);
     const candidates: Array<{ tmuxSession: string; conversationId: string | null; alive: boolean }> = [];
     for (const name of names) {
-      const convId = await getTmuxSessionOption(name, "@codecast_conversation_id");
-      // Only pay for the liveness check on a conversation match.
-      const alive = convId === conversationId ? await isTmuxAgentAlive(name) : false;
-      candidates.push({ tmuxSession: name, conversationId: convId, alive });
+      const alive = await isTmuxAgentAlive(name);
+      candidates.push({ tmuxSession: name, conversationId, alive });
     }
     const match = pickReusableConversationTmux(candidates, conversationId);
     if (!match) return null;
@@ -22663,7 +22656,7 @@ async function deliverMessage(
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
         await admit();
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-        await injectViaTmux(startedTmuxTarget, content, entry.agentType);
+        await injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } });
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
@@ -22793,7 +22786,7 @@ async function deliverMessage(
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
       await admit();
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-      await injectViaTmux(injectTarget, content, detectedType);
+      await injectViaTmux(injectTarget, content, detectedType, { delivery: { messageId, conversationId } });
       // A process-discovered pane can go stale between scan and inject — verify the agent
       // survived and fall through to auto-resume if it crashed (the original optimistic path).
       if (live.source === "process" && !(await isTmuxAgentAlive(tmuxSessionName))) {
@@ -22908,7 +22901,7 @@ async function deliverMessage(
   // resume+inject — the same failure mode fixed on the live-tmux path above.
   await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-  const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
+  const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId, undefined, { delivery: { messageId, conversationId } });
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
@@ -22930,7 +22923,7 @@ async function deliverMessage(
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
   // Row is already marked "injected" from the auto-resume attempt above; repair+resume is a
   // second delivery path for the same message, so no re-mark needed.
-  const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
+  const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, undefined, { delivery: { messageId, conversationId } });
   if (repaired) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
@@ -27502,21 +27495,22 @@ async function main(): Promise<void> {
     retryCount: number,
     conversationId: string,
     messageContent: string,
+    holdReason?: string,
   ) {
     if (messageRetryTimers.has(messageId)) return;
-    if (retryCount >= 10) {
+    if (!holdReason && retryCount >= 10) {
       logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
       syncService.updateMessageStatus({ messageId, status: "undeliverable" }).catch(logConvexFailure);
       return;
     }
     const delays = [1000, 5000, 15000, 30000, 60000];
-    const delay = delays[Math.min(retryCount, delays.length - 1)];
+    const delay = holdReason ? 5000 : delays[Math.min(retryCount, delays.length - 1)];
     logDelivery(`Scheduling retry ${retryCount + 1}/10 for msg=${messageId.slice(0, 8)} in ${delay / 1000}s`);
     messageRetryTimers.add(messageId);
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
       try {
-        await syncService.retryMessage(messageId);
+        await syncService.retryMessage(messageId, holdReason ? { holdReason } : undefined);
         logDelivery(`Retry ${retryCount + 1} triggered for msg=${messageId.slice(0, 8)}`);
       } catch (err) {
         logDelivery(`Retry trigger failed for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
@@ -27740,6 +27734,9 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
+          } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
           } else if (err instanceof UndeliverableMessageError) {
             // Terminal by construction: cancel (a status the server never
             // re-pends) instead of burning the retry ladder.

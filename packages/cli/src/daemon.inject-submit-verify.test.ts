@@ -171,9 +171,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(actions).toEqual(["enter"]);
   });
 
-  test("genuinely dropped paste on a live pane re-pastes once after a grace period", async () => {
-    // Pane is alive (differs from prePaste — spinnerless idle box) but our
-    // text never appears anywhere.
+  test("a delayed paste on a repainting pane is submitted without another paste", async () => {
     const LIVE_EMPTY = BOOT_PANE.replace("Claude Max", "Claude Max ");
     const frames = [...Array(8).fill(LIVE_EMPTY), STUCK_PANE, WORKING_PANE];
     const { io, actions } = scriptedIO(frames);
@@ -183,9 +181,8 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       contentPrefix: PROMPT,
     });
     expect(res.outcome).toBe("delivered");
-    expect(res.rePasted).toBe(true);
-    expect(actions[0]).toBe("repaste"); // after 3 consecutive live-empty observations
-    expect(actions[actions.length - 1]).toBe("enter");
+    expect(res.rePasted).toBe(false);
+    expect(actions).toEqual(["enter"]);
   });
 
   test("agent exited: reports exited so the caller can throw SESSION_EXITED", async () => {
@@ -269,8 +266,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
   // turn's activity looks exactly like success, so the old loop acked the
   // delivery and the briefing was silently lost. Activity is only acceptable
   // evidence when the paste was confirmed or some trace of OUR payload was
-  // seen; otherwise the loop must keep working the pane (re-paste, then honest
-  // timeout for the caller to throw on).
+  // seen.
   const GARBAGE_TURN_PANE = `
 > 
 
@@ -281,9 +277,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
   ⏵⏵ bypass permissions on · esc to interrupt
 `;
 
-  test("garbage turn: activity without any payload trace is not accepted; re-paste recovers", async () => {
-    // 3 live ticks of a foreign turn (no payload anywhere) → one re-paste →
-    // payload renders in the box → discrete Enter → activity now counts.
+  test("garbage turn: waits for the buffered payload before submitting", async () => {
     const frames = [...Array(4).fill(GARBAGE_TURN_PANE), STUCK_PANE, WORKING_PANE];
     const { io, actions } = scriptedIO(frames);
     const res = await verifyTmuxSubmitAfterPaste(io, {
@@ -292,8 +286,8 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       contentPrefix: PROMPT,
     });
     expect(res.outcome).toBe("delivered");
-    expect(res.rePasted).toBe(true);
-    expect(actions).toEqual(["repaste", "enter"]);
+    expect(res.rePasted).toBe(false);
+    expect(actions).toEqual(["enter"]);
   });
 
   test("garbage turn with payload never appearing: honest timeout with payload flags for the caller's throw", async () => {
@@ -307,7 +301,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(res.outcome).toBe("agent_prompt_stalled");
     expect(res.payloadCheckable).toBe(true);
     expect(res.payloadSeen).toBe(false);
-    expect(actions).toEqual(["repaste"]); // tried recovery once, never a blind ack
+    expect(actions).toEqual([]);
   });
 
   test("redelivery ambiguity (prefix already on screen pre-paste) keeps the legacy activity accept", async () => {
@@ -732,8 +726,18 @@ describe("verifyTmuxSubmitAfterPaste — hook and title evidence", () => {
     });
     expect(res.outcome).toBe("agent_prompt_stalled");
     expect(res.evidence).toBeNull();
-    expect(actions).toEqual(["repaste"]); // recovery, never a blind ack
+    expect(actions).toEqual([]);
   });
+});
+
+test("a payload observed by the Enter gate can leave the composer before the verifier starts", async () => {
+  const { io, actions } = scriptedIO(["────────────\n❯ \n────────────\nbypass permissions on"]);
+  const result = await verifyTmuxSubmitAfterPaste(io, {
+    prePaste: SILENT_PRE, pasteConfirmed: true, payloadObserved: true, contentPrefix: PROMPT, deadlineMs: 4000,
+  });
+  expect(result.outcome).toBe("delivered");
+  expect(result.evidence).toBe("payload_gone");
+  expect(actions).toEqual([]);
 });
 
 describe("verifyTmuxSubmitAfterPaste — a dialog took the keyboard", () => {
