@@ -1,5 +1,8 @@
+import { Suspense, lazy } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { AppLoader } from "../../components/AppLoader";
+import { ShortcutProvider } from "../../shortcuts";
+import { useSyncMentionDocs } from "../../hooks/useSyncDocs";
 import { AuthGuard } from "../../components/AuthGuard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { CallPanel } from "../../components/calls/CallPanel";
@@ -14,6 +17,16 @@ import { useCallSync } from "../../hooks/useCallSync";
 import { useWalkieSync } from "../../hooks/useWalkieSync";
 import { isVoiceHost } from "../../lib/desktop";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+
+// The command palette in PICK mode is how the stage's transcript rail chooses
+// where the live words go ("+ feed": a session, a doc, a new agent). The
+// palette is a store surface (`palette.open`), and this window mounts none
+// of the shell that normally renders it, so without this the feed button set
+// a flag nobody painted. Loaded on first use: most of this window's life is
+// a strip or a few circles that never open it.
+const CommandPalette = lazy(() =>
+  import("../../components/CommandPalette").then((m) => ({ default: m.CommandPalette })),
+);
 
 /**
  * /call-panel — a huddle as a whole window, in whichever of its four sizes.
@@ -61,6 +74,7 @@ function CallPanelWindow() {
   // circles for most of its life: nothing at all is its honest first frame
   // too. It shows a loader only when it opened straight onto a stage.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const paletteOpen = useInboxStore((s) => s.palette.open);
   const small =
     typeof window !== "undefined" &&
     (/[?&]size=(circles|speaker|tiny)/.test(window.location.search) ||
@@ -77,6 +91,19 @@ function CallPanelWindow() {
       <ErrorBoundary name="Call panel" level="inline">
         <CallPanel />
       </ErrorBoundary>
+      {/* Over the stage (the palette's own z-index outranks it), and always
+          dark like the stage, whatever theme the app is in. */}
+      {paletteOpen && (
+        <div className="dark">
+          <ErrorBoundary name="CommandPalette" level="inline">
+            <ShortcutProvider>
+              <Suspense fallback={null}>
+                <CommandPalette />
+              </Suspense>
+            </ShortcutProvider>
+          </ErrorBoundary>
+        </div>
+      )}
     </>
   );
 }
@@ -98,6 +125,12 @@ function CallPanelSyncEffects() {
   // The call plane: occupancy, live rooms, the lock — and `bindConvex`, which
   // is what lets this window take the call over in the first place.
   useCallSync();
+  // What the feed picker lists: the sessions (also what names a fed agent in
+  // the chat rail) and the docs. The voice host mounted the sessions already
+  // for its idle faces; every shape of this window needs them once the
+  // transcript rail can point words at one.
+  useSyncInboxSessions();
+  useSyncMentionDocs();
   return (
     <>
       {isVoiceHost() && <VoiceHostSyncEffects />}
@@ -119,7 +152,6 @@ function CallPanelSyncEffects() {
  * line — the same pair /people and /faces mount.
  */
 function VoiceHostSyncEffects() {
-  useSyncInboxSessions();
   useSyncTeamInboxSessions();
   useWalkieSync();
   return null;

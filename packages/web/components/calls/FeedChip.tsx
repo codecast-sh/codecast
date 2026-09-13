@@ -2,6 +2,23 @@ import { useMemo } from "react";
 import { X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 
+// A session row in the store by any of the ids a route target can carry: the
+// conversation id, the agent's session id, or the short id. Shared by every
+// call surface that names a fed session (the feed chips, the chat rail's
+// participants strip) so they cannot disagree about which session a route is.
+export function findSessionRow(state: any, ref: string): any | null {
+  const direct = state.sessions?.[ref];
+  if (direct) return direct;
+  const rows = Object.values(state.sessions ?? {}) as any[];
+  return (
+    rows.find(
+      (x) =>
+        x &&
+        (String(x._id) === ref || String(x.session_id) === ref || String(x.short_id ?? "") === ref),
+    ) ?? null
+  );
+}
+
 // A live transcript route rendered as a chip: what kind, where, removable by
 // its adder. Shared by the call stage's transcript rail and the call page
 // header so a feed reads the same wherever it appears.
@@ -18,15 +35,7 @@ export function FeedChip({
     if (route.kind === "slack") return `#${route.target.slice(0, 12)}`;
     const st = useInboxStore.getState() as any;
     if (route.kind === "session") {
-      const rows = Object.values(st.sessions ?? {}) as any[];
-      const hit = rows.find(
-        (x) =>
-          x &&
-          (String(x._id) === route.target ||
-            String(x.session_id) === route.target ||
-            String(x.short_id ?? "") === route.target),
-      );
-      return (hit?.title || "session").slice(0, 26);
+      return (findSessionRow(st, route.target)?.title || "session").slice(0, 26);
     }
     const doc = (st.docs ?? {})[route.target];
     return (doc?.title || doc?.display_title || "doc").slice(0, 26);
