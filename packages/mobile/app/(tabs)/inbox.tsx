@@ -5,7 +5,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import {
   SessionData, SwipeableSessionItem, cleanTitle, agentLabel, agentColor,
   formatRelativeTime, projectName, styles as sessionStyles,
@@ -14,7 +14,7 @@ import {
   useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, placeInboxRows,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
-  sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig,
+  sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
@@ -42,6 +42,7 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
   onRestore: () => void;
   onKill?: () => void;
 }) {
+  const Theme = useTheme();
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
 
@@ -149,6 +150,7 @@ function CollapsibleSection({ label, summary, open, onToggle, disabled, children
   disabled?: boolean;
   children: ReactNode;
 }) {
+  const Theme = useTheme();
   return (
     <>
       <TouchableOpacity
@@ -172,6 +174,7 @@ function CollapsibleSection({ label, summary, open, onToggle, disabled, children
 }
 
 function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
+  const Theme = useTheme();
   const [agentId, setAgentId] = useState<AgentClientId>("claude");
   const [projectPath, setProjectPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -768,7 +771,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   );
 }
 
-const modalStyles = StyleSheet.create({
+const modalStyles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: "row",
@@ -944,7 +947,7 @@ const modalStyles = StyleSheet.create({
   submitContent: { flexDirection: "row", alignItems: "center", gap: 8 },
   submitBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
   disabledBtn: { opacity: 0.55 },
-});
+}));
 
 type SearchResult = {
   conversationId: string;
@@ -962,6 +965,7 @@ type SearchResult = {
 };
 
 function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
+  const Theme = useTheme();
   const firstMatch = result.matches[0];
   return (
     <TouchableOpacity onPress={onPress} style={styles.searchResultItem} activeOpacity={0.6}>
@@ -1016,6 +1020,7 @@ class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactN
 // Owns the search subscription so a server error surfaces inside the boundary
 // above instead of unmounting InboxScreen.
 function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
+  const Theme = useTheme();
   const searchResults = useQuery(api.conversations.searchConversations, { query, limit: 30, userOnly });
   const searchResultsList = useMemo(() => {
     if (!searchResults) return [];
@@ -1047,6 +1052,9 @@ function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnl
 }
 
 export default function InboxScreen() {
+  const Theme = useTheme();
+  // Both list memos below bake palette values into React nodes.
+  const scheme = useActiveScheme();
   const [showNewSession, setShowNewSession] = useState(false);
   const [showStashed, setShowStashed] = useState(false);
   const [showKilled, setShowKilled] = useState(false);
@@ -1459,8 +1467,10 @@ export default function InboxScreen() {
     // anything else, pinned or not — same order as the web panel.
     sections.push(renderSection("Questions", filteredQuestions, Theme.violet, "questions"));
     // The header number is the section COUNT while no chip narrows the list
-    // (a filter that removed nothing leaves the full count in force).
-    const countOf = (shown: InboxSession[], full: InboxSession[], n: number) => (shown.length === full.length ? n : undefined);
+    // and the nested rows are on screen; shared sectionHeaderCount, so this
+    // inbox and the web panel can't drift.
+    const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
+      sectionHeaderCount(shown, full, n, showSubagents);
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
     sections.push(renderSection("New", filteredNew, Theme.blue, undefined, countOf(filteredNew, newSessions, placed.counts.newSessions)));
     // Top-down "who acts next": you (Needs Input, Done to review), the agent
@@ -1471,7 +1481,7 @@ export default function InboxScreen() {
     sections.push(renderSection("Dormant", statusDormant, Theme.blue, undefined, countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -1550,7 +1560,7 @@ export default function InboxScreen() {
       )}
       <RNView style={{ height: 80 }} />
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed, scheme]);
 
   // View switcher — same options, names, and availability rules as web's
   // GlobalSessionPanel dropdown: label view appears once a label exists, plan
@@ -1742,7 +1752,7 @@ export default function InboxScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -2043,4 +2053,4 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 6,
   },
-});
+}));
