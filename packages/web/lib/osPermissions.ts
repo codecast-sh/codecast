@@ -81,14 +81,14 @@ export const OS_PERMISSIONS: Record<OsPermissionKind, OsPermissionInfo> = {
   computerAccessibility: {
     kind: "computerAccessibility",
     label: "Computer control",
-    why: "Lets an agent work in the other apps on this Mac for you: reading what a window shows and clicking in it. macOS calls this Accessibility. You grant it to a separate small app named codecast computer, so Codecast itself never holds it.",
+    why: "An agent can read what a window shows and click in it, in the other apps on this Mac. Granted to codecast computer under Accessibility.",
     required: false,
     offHint: "codecast computer is not turned on in the Accessibility list yet.",
   },
   computerScreen: {
     kind: "computerScreen",
     label: "Computer screenshots",
-    why: "Lets an agent see a picture of the window it is working in, which is how it checks that an action landed. macOS calls this Screen Recording, and it goes to the same codecast computer app, not to Codecast.",
+    why: "An agent can see the window it is working in, to check that an action landed. Granted to codecast computer under Screen Recording.",
     required: false,
     offHint: "codecast computer is not turned on in the Screen Recording list yet.",
   },

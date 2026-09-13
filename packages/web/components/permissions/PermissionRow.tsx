@@ -1,6 +1,17 @@
 import { useState } from "react";
-import { Bell, Camera, CheckCircle, Image, Mic, Monitor, MousePointerClick, type LucideIcon } from "lucide-react";
+import {
+  Bell,
+  Camera,
+  Check,
+  ExternalLink,
+  Image,
+  Mic,
+  Monitor,
+  MousePointerClick,
+  type LucideIcon,
+} from "lucide-react";
 import { SettingsRow } from "../settings/ui";
+import { Button } from "../ui/button";
 import { isElectron } from "../../lib/desktop";
 import {
   OS_PERMISSIONS,
@@ -25,6 +36,11 @@ const PERMISSION_ICONS: Record<OsPermissionKind, LucideIcon> = {
 // (or what is wrong), and the one gesture that fixes it. The same row serves
 // the first-run dialog, the desktop settings page and the notifications
 // page, so every surface says the same thing.
+//
+// The control carries the hierarchy. "Turn on" is filled: one click, the OS
+// asks right here. "Open System Settings" is outlined with an outward arrow:
+// it leaves the app, and the person finishes elsewhere. A granted row settles
+// into a quiet check so the eye goes to what is still open.
 //
 // Renders nothing for "n/a" (this surface has no persistent grant for it)
 // and "unknown" (we cannot tell here — an old desktop shell): a row that
@@ -53,6 +69,7 @@ export function PermissionRow({
   const action = permissionActionLabel(readiness);
   const hint = permissionHint(kind, readiness);
   const desktop = isElectron();
+  const leavesApp = readiness === "off";
 
   const handle = async () => {
     const outcome = await requestOsPermission(kind, readiness);
@@ -71,24 +88,54 @@ export function PermissionRow({
         // reason and the button.
         <>
           {info.why}
-          <span className="mt-0.5 block text-sol-orange">{hint}</span>
+          <span className="mt-1 flex items-start gap-1.5 text-sol-orange">
+            <span aria-hidden className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-sol-orange" />
+            {hint}
+          </span>
         </>
       )
       : info.why;
 
+  const Icon = PERMISSION_ICONS[kind];
+
   return (
-    <SettingsRow icon={granted ? CheckCircle : PERMISSION_ICONS[kind]} label={info.label} description={description} alignTop>
+    <SettingsRow
+      icon={Icon}
+      label={info.label}
+      description={description}
+      alignTop
+      className={granted ? "[&_svg]:text-sol-green" : undefined}
+    >
       {granted ? (
-        <span className="text-xs text-sol-green">On</span>
+        <span className="inline-flex h-7 items-center gap-1 rounded-full bg-sol-green/10 px-2.5 text-xs font-medium text-sol-green">
+          <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+          On
+        </span>
       ) : action && !awaitingPrompt ? (
-        <button
+        <Button
+          size="sm"
+          variant={leavesApp ? "outline" : "default"}
           onClick={handle}
-          className="whitespace-nowrap rounded-md bg-sol-blue px-2.5 py-1 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
+          className={
+            leavesApp
+              ? "h-7 border-sol-border bg-transparent px-2.5 text-xs text-sol-text shadow-none hover:bg-sol-bg-highlight/60 [&_svg]:size-3"
+              : "h-7 bg-sol-blue px-3 text-xs text-sol-bg shadow-none hover:bg-sol-blue/90"
+          }
         >
           {action}
-        </button>
+          {leavesApp && <ExternalLink aria-hidden />}
+        </Button>
       ) : (
-        <span className="text-xs text-sol-orange">{awaitingPrompt ? "Waiting" : "Blocked"}</span>
+        <span
+          className={
+            awaitingPrompt
+              ? "inline-flex h-7 items-center gap-1.5 text-xs text-sol-text-muted"
+              : "inline-flex h-7 items-center text-xs text-sol-orange"
+          }
+        >
+          {awaitingPrompt && <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-sol-blue" />}
+          {awaitingPrompt ? "Waiting" : "Blocked"}
+        </span>
       )}
     </SettingsRow>
   );

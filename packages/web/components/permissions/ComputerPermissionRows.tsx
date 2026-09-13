@@ -34,8 +34,19 @@ export function ComputerPermissionRows() {
     );
   }
 
+  if (!answered) return null;
+
+  // The helper is named once, above its two rows, so each row can stay
+  // short: what the grant lets an agent do, and which macOS list it is in.
   return (
     <>
+      <div className="px-4 pt-3 pb-1 sm:px-5">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">Agent computer use</div>
+        <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-sol-text-muted">
+          These two belong to codecast computer, a small helper app installed with Codecast, so Codecast itself
+          never holds them.
+        </p>
+      </div>
       {COMPUTER_PERMISSION_KINDS.map((kind) => (
         <PermissionRow key={kind} kind={kind} readiness={permissions[kind]} onChange={noReadOnClick} />
       ))}
