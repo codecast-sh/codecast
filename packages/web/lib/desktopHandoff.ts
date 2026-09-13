@@ -86,9 +86,11 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 
 // Paths that should never auto-hand-off to the desktop app — auth/oauth flows,
 // public share pages (often opened by people without the app), published
-// artifacts (/a/<slug>, same audience), the in-app palette popup, downloads,
+// artifacts (/a/<slug>, same audience), the standalone repository pages
+// (/r/<owner>/<name>/…: code links pasted into chat, guest readable, meant to
+// stay in the browser like a GitHub link), the in-app palette popup, downloads,
 // and API routes.
-const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/a\//, /^\/palette/, /^\/download/, /^\/api\//];
+const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/a\//, /^\/r(\/|$)/, /^\/palette/, /^\/download/, /^\/api\//];
 
 export function isHandoffEligiblePath(path: string): boolean {
   if (!path) return false;
