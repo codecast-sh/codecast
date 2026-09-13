@@ -13,7 +13,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "codecast",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "owner": "ashotp",
     "splash": {
@@ -24,6 +24,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.ashotp.codecast",
+      "appleTeamId": "WRG9THCK9Q",
       "usesAppleSignIn": true,
       "associatedDomains": [
         "applinks:codecast.sh",
@@ -39,7 +40,12 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Codecast uses the camera to share your live video with teammates when you turn your camera on during a team huddle (a live voice and video call).",
         "NSMicrophoneUsageDescription": "Codecast uses the microphone for two things you start yourself. In a team huddle (a live voice and video call) it transmits your voice to teammates. When you press record, it captures the meeting in the room so Codecast can write you a transcript and a summary; that recording is yours alone and no teammate can open it. Audio is never captured at any other time.",
-        "NSPhotoLibraryUsageDescription": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded."
+        "NSPhotoLibraryUsageDescription": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded.",
+        "NSSupportsLiveActivities": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": true
+      },
+      "entitlements": {
+        "com.apple.developer.usernotifications.time-sensitive": true
       }
     },
     "android": {
@@ -197,7 +203,8 @@
           "incomingCallTimeout": 45,
           "fulfillAnswerCallTimeout": 30
         }
-      ]
+      ],
+      "@bacons/apple-targets"
     ],
     "experiments": {
       "typedRoutes": true
