@@ -116,7 +116,6 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
-const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
@@ -263,9 +262,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "inbox", component: cast(Inbox), layout: "dashboardShell", tab: "/inbox", fullWidth: true },
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
   { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
-  // A web page as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS (like
-  // /chat), so no fullWidth flag here.
-  { path: "browser", component: cast(Browser), layout: "dashboardShell", tab: "/browser" },
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
