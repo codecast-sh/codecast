@@ -1,17 +1,25 @@
 import { useMemo } from 'react';
-import { StyleSheet, FlatList, TouchableOpacity, View as RNView } from 'react-native';
+import { StyleSheet, FlatList, TouchableOpacity, View as RNView, ActionSheetIOS, Alert, Platform } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { formatRelativeTime } from '@/components/SessionItem';
+import { MemberSkeleton } from '@/components/SkeletonLoader';
 import { dmOtherIds } from '@codecast/shared/chat';
+import { channelDisplayName } from '@codecast/web/lib/chatViews';
+import { dmRoomKey } from '@codecast/shared/contracts';
 import { ChatAvatar } from './MessageRow';
+import { LivePulse, LiveRoomCard, type LiveRoomRow } from '@/components/calls/LiveRooms';
+import { joinCall, startHuddle } from '@/lib/calls/callManager';
 
-// The channel list — the Chat segment of the Team tab.
+// The Chat tab's home list: live huddles first, then channels, then direct
+// messages, then the team's people. One FlatList, four kinds of row.
 //
 // Signal rules are the same as the web rail, deliberately: unread is carried by
 // WEIGHT (bold name, brighter preview), a muted channel with unread gets a dot,
@@ -33,188 +41,376 @@ export type ChannelRailRow = {
   unread_mentions: number;
   notify_level: 'all' | 'mentions' | 'none';
   joined: boolean;
+  member_ids?: string[];
 };
 
-export function useChatRail(teamId: Id<'teams'> | undefined) {
-  const data = useQuery(api.chat.listChannels, teamId ? { team_id: teamId } : 'skip');
+/** The channel rail for a team. `enabled` is the team's chat opt-in: the
+ *  server refuses listChannels for an off team, and a thrown query drops the
+ *  screen, so an off team never subscribes. */
+export function useChatRail(teamId: Id<'teams'> | undefined, enabled = true) {
+  const data = useQuery(api.chat.listChannels, teamId && enabled ? { team_id: teamId } : 'skip');
   return useMemo(() => {
+    if (!enabled) return { rows: [], mentionTotal: 0, channels: [], rail: [] as ChannelRailRow[] };
     if (!data) return undefined;
-    const railByChannel = new Map(
-      (data.rail as ChannelRailRow[]).map((r) => [String(r.channel_id), r]),
-    );
-    const rows = (data.channels as any[])
-      .filter((c) => !c.archived_at)
+    const rail = data.rail as ChannelRailRow[];
+    const railByChannel = new Map(rail.map((r) => [String(r.channel_id), r]));
+    const channels = (data.channels as any[]).filter((c) => !c.archived_at);
+    const rows = channels
       .map((c) => ({ channel: c, rail: railByChannel.get(String(c._id)) }))
       // Recency, like the web rail: the room where something just happened is
       // the room you are most likely opening the app for.
       .sort((a, b) => (b.rail?.sort_at ?? 0) - (a.rail?.sort_at ?? 0));
     const mentionTotal = rows.reduce((n, r) => n + (r.rail?.unread_mentions ?? 0), 0);
-    return { rows, mentionTotal };
-  }, [data]);
+    return { rows, mentionTotal, channels, rail };
+  }, [data, enabled]);
 }
 
-/** A 1:1 DM row wears the person's face with their presence dot pinned to its
- *  corner — who it is and whether they're there, in one glance. Group DMs keep
- *  a neutral glyph (three faces at 15pt read as noise). */
-function DmFace({ channel, viewerId, members }: { channel: any; viewerId: string; members?: any[] }) {
-  const others = dmOtherIds(channel.dm_key, viewerId);
-  const one = others.length === 1
-    ? (members ?? []).find((m) => String(m._id) === others[0])
-    : undefined;
-  if (!one) return <FontAwesome name={others.length > 1 ? 'users' : 'user'} size={13} color={Theme.textMuted0} />;
-  const presence = one.presence_state as string | undefined;
-  const dotColor = presence === 'active' ? Theme.green : presence === 'idle' ? Theme.accent : null;
+const PRESENCE_LINE: Record<string, string> = { active: 'Active now', idle: 'Idle', away: 'Away' };
+
+function presenceColor(state: string | undefined, Theme: any): string | null {
+  return state === 'active' ? Theme.green : state === 'idle' ? Theme.accent : null;
+}
+
+/** A face with the person's presence pinned to its corner — who it is and
+ *  whether they're there, in one glance. */
+function PresenceFace({ member, size }: { member: any; size: number }) {
+  const Theme = useTheme();
+  const dotColor = presenceColor(member.presence_state, Theme);
   return (
     <RNView>
       <ChatAvatar
-        author={{ id: String(one._id), name: one.name || 'Teammate', avatarUrl: one.github_avatar_url || one.image, isAgent: one.is_bot }}
-        size={20}
+        author={{ id: String(member._id), name: member.name || 'Teammate', avatarUrl: member.github_avatar_url || member.image, isAgent: member.is_bot }}
+        size={size}
       />
       {dotColor && <RNView style={[styles.presenceDot, { backgroundColor: dotColor }]} />}
     </RNView>
   );
 }
 
-type ListItem =
-  | { kind: 'header'; key: string; label: string; newMessage?: boolean }
-  | { kind: 'channel'; key: string; channel: any; rail?: ChannelRailRow };
-
-export function ChannelList({ teamId }: { teamId: Id<'teams'> | undefined }) {
-  const rail = useChatRail(teamId);
-  const router = useRouter();
-  // DM naming: the other side's names, resolved live from the roster — the
-  // same rule as every web surface (lib/chatViews.channelDisplayName).
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const teamMembers = useQuery(api.teams.getTeamMembers, teamId ? { team_id: teamId } : 'skip');
-  const memberName = (id: string): string => {
-    const m = (teamMembers as any[] | undefined)?.find((x) => String(x._id) === id);
-    return m?.name || m?.github_username || 'Teammate';
-  };
-  const displayName = (channel: any): string => {
-    if (channel.kind !== 'dm') return channel.name;
-    const others = dmOtherIds(channel.dm_key, String(currentUser?._id ?? ''));
-    if (others.length === 0) return 'Direct message';
-    const names = others.map(memberName);
-    return others.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
-  };
-
-  // Channels and direct messages are one list with two headers — a FlatList
-  // keeps the scroll simple and the row shape identical across sections.
-  const items = useMemo<ListItem[]>(() => {
-    if (!rail) return [];
-    const channels = rail.rows.filter((r) => r.channel.kind !== 'dm');
-    const dms = rail.rows.filter((r) => r.channel.kind === 'dm');
-    const out: ListItem[] = [];
-    if (channels.length) out.push({ kind: 'header', key: 'h-ch', label: 'Channels' });
-    for (const r of channels) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
-    out.push({ kind: 'header', key: 'h-dm', label: 'Direct messages', newMessage: true });
-    for (const r of dms) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
-    return out;
-  }, [rail]);
-
-  if (rail === undefined) {
+/** A 1:1 DM row wears the person's face; group DMs keep a neutral glyph (three
+ *  faces at 15pt read as noise). */
+function DmFace({ channel, viewerId, members }: { channel: any; viewerId: string; members?: any[] }) {
+  const Theme = useTheme();
+  const others = dmOtherIds(channel.dm_key, viewerId);
+  const one = others.length === 1
+    ? (members ?? []).find((m) => String(m._id) === others[0])
+    : undefined;
+  if (!one) {
     return (
-      <RNView style={styles.empty}>
-        <RNText style={styles.emptySub}>Loading channels…</RNText>
+      <RNView style={styles.glyphBox}>
+        <FontAwesome name={others.length > 1 ? 'users' : 'user'} size={14} color={Theme.textMuted} />
       </RNView>
     );
   }
+  return <PresenceFace member={one} size={36} />;
+}
+
+type ListItem =
+  | { kind: 'header'; key: string; label: string; live?: boolean; action?: 'compose' }
+  | { kind: 'live'; key: string; row: LiveRoomRow }
+  | { kind: 'channel'; key: string; channel: any; rail?: ChannelRailRow }
+  | { kind: 'member'; key: string; member: any; inRoom: LiveRoomRow | null }
+  | { kind: 'loading'; key: string }
+  | { kind: 'notice'; key: string; icon: 'comments-o' | 'hashtag'; title: string; body: string };
+
+export function ChatHomeList({
+  teamId,
+  teamName,
+  chatOn,
+  callsOn,
+  currentUser,
+  members,
+  liveRooms,
+  myRoomKey,
+}: {
+  teamId: Id<'teams'>;
+  teamName: string;
+  chatOn: boolean;
+  callsOn: boolean;
+  currentUser: any;
+  members: any[] | undefined;
+  liveRooms: LiveRoomRow[] | undefined;
+  myRoomKey: string | null;
+}) {
+  const Theme = useTheme();
+  const rail = useChatRail(teamId, chatOn);
+  const router = useRouter();
+  const openDm = useMutation(api.chat.openDm);
+  const markRead = useMutation(api.chat.markRead);
+  const setNotifyLevel = useMutation(api.chat.setNotifyLevel);
+  const viewerId = String(currentUser?._id ?? '');
+
+  // DM naming: the other side's names, resolved live from the roster — the
+  // web rail's own rule, so a departed member or an agent reads the same
+  // here as there.
+  const displayName = (channel: any): string =>
+    channelDisplayName(
+      { name: channel.name, kind: channel.kind, dmMemberIds: channel.kind === 'dm' ? dmOtherIds(channel.dm_key, viewerId) : undefined },
+      members,
+    );
+
+  const items = useMemo<ListItem[]>(() => {
+    const out: ListItem[] = [];
+    if (liveRooms && liveRooms.length > 0) {
+      out.push({ kind: 'header', key: 'h-live', label: 'Live now', live: true });
+      for (const row of liveRooms) out.push({ kind: 'live', key: `live-${row.roomKey}`, row });
+    }
+    if (chatOn) {
+      if (rail === undefined) {
+        out.push({ kind: 'header', key: 'h-ch', label: 'Channels' });
+        for (let i = 0; i < 4; i++) out.push({ kind: 'loading', key: `sk-${i}` });
+      } else {
+        const channels = rail.rows.filter((r) => r.channel.kind !== 'dm');
+        const dms = rail.rows.filter((r) => r.channel.kind === 'dm');
+        out.push({ kind: 'header', key: 'h-ch', label: 'Channels' });
+        if (channels.length === 0) {
+          out.push({ kind: 'notice', key: 'n-ch', icon: 'hashtag', title: 'No channels yet', body: `Create one from the web to give ${teamName} a room.` });
+        }
+        for (const r of channels) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
+        out.push({ kind: 'header', key: 'h-dm', label: 'Direct messages', action: 'compose' });
+        if (dms.length === 0) {
+          out.push({ kind: 'notice', key: 'n-dm', icon: 'comments-o', title: 'No direct messages yet', body: 'Tap a teammate below to start one.' });
+        }
+        for (const r of dms) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
+      }
+    } else {
+      out.push({
+        kind: 'notice', key: 'n-off', icon: 'comments-o', title: `Chat is off for ${teamName}`,
+        body: 'A team admin can turn it on from the team settings on the web. People and huddles still work here.',
+      });
+    }
+    // People: the roster, the present first. A person already sitting in a
+    // huddle says so, and the headset joins them instead of ringing.
+    const people = (members ?? [])
+      .filter((m) => m && !m.is_bot && String(m._id) !== viewerId)
+      .sort((a, b) => {
+        const rank = (m: any) => (m.presence_state === 'active' ? 0 : m.presence_state === 'idle' ? 1 : 2);
+        return rank(a) - rank(b) || (a.name ?? '').localeCompare(b.name ?? '');
+      });
+    out.push({ kind: 'header', key: 'h-people', label: `People${people.length ? ` · ${people.length}` : ''}` });
+    if (members === undefined) {
+      for (let i = 0; i < 3; i++) out.push({ kind: 'loading', key: `skp-${i}` });
+    }
+    for (const m of people) {
+      const inRoom = (liveRooms ?? []).find((r) => r.members.some((x) => String(x.user_id) === String(m._id))) ?? null;
+      out.push({ kind: 'member', key: `m-${m._id}`, member: m, inRoom });
+    }
+    return out;
+  }, [rail, liveRooms, chatOn, members, viewerId, teamName]);
+
+  const openChannel = (channel: any) =>
+    router.push({ pathname: '/chat/[id]', params: { id: String(channel._id) } } as never);
+
+  const openPerson = async (m: any) => {
+    if (!chatOn) return;
+    void Haptics.selectionAsync();
+    try {
+      const res = await openDm({ member_ids: [m._id] });
+      router.push({ pathname: '/chat/[id]', params: { id: String(res.channel_id) } } as never);
+    } catch {}
+  };
+
+  const huddleWith = (m: any, inRoom: LiveRoomRow | null) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (inRoom && (inRoom.canJoin || inRoom.mine)) {
+      void joinCall(inRoom.roomKey);
+    } else {
+      void startHuddle({ roomKey: dmRoomKey(viewerId, String(m._id)), toUserIds: [String(m._id)] });
+    }
+    router.push('/call');
+  };
+
+  // Hold a room for the things a swipe would hide: read it all, or change how
+  // loudly it reaches you. Same three levels as the web rail.
+  const channelActions = (channel: any, r?: ChannelRailRow) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const level = r?.notify_level ?? 'all';
+    const options = [
+      ...(r && r.unread > 0 ? ['Mark as read'] : []),
+      `${level === 'all' ? '✓ ' : ''}Notify for everything`,
+      `${level === 'mentions' ? '✓ ' : ''}Notify for mentions only`,
+      `${level === 'none' ? '✓ ' : ''}Mute`,
+      'Cancel',
+    ];
+    const run = (index: number) => {
+      const picked = options[index];
+      if (!picked || picked === 'Cancel') return;
+      if (picked === 'Mark as read') void markRead({ channel_id: channel._id });
+      else if (picked.endsWith('everything')) void setNotifyLevel({ channel_id: channel._id, notify_level: 'all' });
+      else if (picked.endsWith('mentions only')) void setNotifyLevel({ channel_id: channel._id, notify_level: 'mentions' });
+      else if (picked.endsWith('Mute')) void setNotifyLevel({ channel_id: channel._id, notify_level: 'none' });
+    };
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: options.length - 1, title: displayName(channel) },
+        run,
+      );
+    } else {
+      Alert.alert(displayName(channel), undefined, options.map((text, i) => ({
+        text, onPress: () => run(i), style: text === 'Cancel' ? ('cancel' as const) : undefined,
+      })));
+    }
+  };
 
   return (
     <FlatList
       data={items}
       keyExtractor={(item) => item.key}
+      contentContainerStyle={styles.listContent}
+      showsVerticalScrollIndicator={false}
       renderItem={({ item }) => {
-        if (item.kind === 'header') {
-          return (
-            <RNView style={styles.sectionHead}>
-              <RNText style={styles.sectionLabel}>{item.label}</RNText>
-              {item.newMessage && (
-                <TouchableOpacity
-                  hitSlop={8}
-                  onPress={() => router.push('/chat/new' as never)}
-                  style={styles.sectionAction}
-                >
-                  <FontAwesome name="pencil-square-o" size={15} color={Theme.blue} />
-                </TouchableOpacity>
-              )}
-            </RNView>
-          );
-        }
-        const { channel, rail: r } = item;
-        const unread = (r?.unread ?? 0) > 0;
-        const mentions = r?.unread_mentions ?? 0;
-        const muted = r?.notify_level === 'none';
-        return (
-          <TouchableOpacity
-            style={styles.row}
-            activeOpacity={0.7}
-            onPress={() => router.push({ pathname: '/chat/[id]', params: { id: String(channel._id) } } as never)}
-          >
-            <RNView style={styles.rowIcon}>
-              {channel.kind === 'dm' ? (
-                <DmFace channel={channel} viewerId={String(currentUser?._id ?? '')} members={teamMembers as any[] | undefined} />
-              ) : (
-                <FontAwesome
-                  name={channel.kind === 'private' || channel.is_private ? 'lock' : 'hashtag'}
-                  size={13}
-                  color={unread ? Theme.textMuted : Theme.textMuted0}
-                />
-              )}
-            </RNView>
-            <RNView style={styles.rowMain}>
-              <RNView style={styles.rowHead}>
-                <RNText
-                  style={[styles.name, unread && styles.nameUnread, muted && styles.nameMuted]}
-                  numberOfLines={1}
-                >
-                  {displayName(channel)}
-                </RNText>
-                {r?.last_message && (
-                  <RNText style={styles.time}>
-                    {formatRelativeTime(r.last_message.created_at)}
-                  </RNText>
+        switch (item.kind) {
+          case 'header':
+            return (
+              <RNView style={styles.sectionHead}>
+                {item.live && <LivePulse color={Theme.green} size={7} />}
+                <RNText style={[styles.sectionLabel, item.live && styles.sectionLabelLive]}>{item.label}</RNText>
+                {item.action === 'compose' && (
+                  <TouchableOpacity
+                    hitSlop={8}
+                    onPress={() => router.push('/chat/new' as never)}
+                    style={styles.sectionAction}
+                    accessibilityLabel="New message"
+                  >
+                    <FontAwesome name="pencil-square-o" size={15} color={Theme.blue} />
+                  </TouchableOpacity>
                 )}
               </RNView>
-              <RNText
-                style={[styles.preview, unread && !muted && styles.previewUnread]}
-                numberOfLines={1}
-              >
-                {r?.last_message
-                  ? (r.last_message.author_kind === 'agent' ? '⚑ ' : '') + r.last_message.preview
-                  : channel.topic || 'No messages yet'}
-              </RNText>
-            </RNView>
-            {mentions > 0 ? (
-              <RNView style={styles.badge}>
-                <RNText style={styles.badgeText}>{mentions > 99 ? '99+' : mentions}</RNText>
+            );
+          case 'live':
+            return <LiveRoomCard row={item.row} />;
+          case 'loading':
+            return <MemberSkeleton />;
+          case 'notice':
+            return (
+              <RNView style={styles.notice}>
+                <FontAwesome name={item.icon} size={16} color={Theme.textMuted0} />
+                <RNView style={{ flex: 1 }}>
+                  <RNText style={styles.noticeTitle}>{item.title}</RNText>
+                  <RNText style={styles.noticeBody}>{item.body}</RNText>
+                </RNView>
               </RNView>
-            ) : unread && muted ? (
-              <RNView style={styles.dot} />
-            ) : null}
-          </TouchableOpacity>
-        );
+            );
+          case 'member': {
+            const m = item.member;
+            const line = item.inRoom
+              ? `In a huddle${item.inRoom.redacted ? '' : ` · ${item.inRoom.label}`}`
+              : m.title || PRESENCE_LINE[m.presence_state as string] || 'Offline';
+            return (
+              <TouchableOpacity
+                style={styles.row}
+                activeOpacity={chatOn ? 0.7 : 1}
+                onPress={() => void openPerson(m)}
+                accessibilityLabel={chatOn ? `Message ${m.name || 'teammate'}` : m.name || 'Teammate'}
+              >
+                <PresenceFace member={m} size={36} />
+                <RNView style={styles.rowMain}>
+                  <RNText style={styles.name} numberOfLines={1}>{m.name || m.github_username || 'Teammate'}</RNText>
+                  <RNText style={[styles.preview, item.inRoom && { color: Theme.green }]} numberOfLines={1}>{line}</RNText>
+                </RNView>
+                {callsOn && (
+                  <TouchableOpacity
+                    style={[styles.huddleBtn, item.inRoom && styles.huddleBtnLive]}
+                    onPress={() => huddleWith(m, item.inRoom)}
+                    hitSlop={6}
+                    accessibilityLabel={item.inRoom ? `Join ${m.name || 'teammate'}'s huddle` : `Huddle with ${m.name || 'teammate'}`}
+                  >
+                    <Ionicons name={item.inRoom ? 'headset' : 'headset-outline'} size={17} color={item.inRoom ? Theme.green : Theme.violet} />
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            );
+          }
+          case 'channel': {
+            const { channel, rail: r } = item;
+            const unread = (r?.unread ?? 0) > 0;
+            const mentions = r?.unread_mentions ?? 0;
+            const muted = r?.notify_level === 'none';
+            const isDm = channel.kind === 'dm';
+            return (
+              <TouchableOpacity
+                style={styles.row}
+                activeOpacity={0.7}
+                onPress={() => openChannel(channel)}
+                onLongPress={() => channelActions(channel, r)}
+                delayLongPress={350}
+              >
+                {isDm ? (
+                  <DmFace channel={channel} viewerId={viewerId} members={members} />
+                ) : (
+                  <RNView style={[styles.glyphBox, unread && styles.glyphBoxUnread]}>
+                    <FontAwesome
+                      name={channel.kind === 'private' || channel.is_private ? 'lock' : 'hashtag'}
+                      size={14}
+                      color={unread ? Theme.text : Theme.textMuted}
+                    />
+                  </RNView>
+                )}
+                <RNView style={styles.rowMain}>
+                  <RNView style={styles.rowHead}>
+                    <RNText
+                      style={[styles.name, unread && styles.nameUnread, muted && styles.nameMuted]}
+                      numberOfLines={1}
+                    >
+                      {displayName(channel)}
+                    </RNText>
+                    {muted && <FontAwesome name="bell-slash-o" size={10} color={Theme.textMuted0} />}
+                    {r?.last_message && (
+                      <RNText style={styles.time}>
+                        {formatRelativeTime(r.last_message.created_at)}
+                      </RNText>
+                    )}
+                  </RNView>
+                  <RNText
+                    style={[styles.preview, unread && !muted && styles.previewUnread]}
+                    numberOfLines={1}
+                  >
+                    {r?.last_message
+                      ? (r.last_message.author_kind === 'agent' ? '⚑ ' : '') + r.last_message.preview
+                      : channel.topic || 'No messages yet'}
+                  </RNText>
+                </RNView>
+                {mentions > 0 ? (
+                  <RNView style={styles.badge}>
+                    <RNText style={styles.badgeText}>{mentions > 99 ? '99+' : mentions}</RNText>
+                  </RNView>
+                ) : unread ? (
+                  <RNView style={[styles.dot, muted && styles.dotMuted]} />
+                ) : null}
+              </TouchableOpacity>
+            );
+          }
+        }
       }}
     />
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
+  listContent: { paddingBottom: 24 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    gap: 10,
+    paddingVertical: 9,
+    gap: 12,
   },
-  rowIcon: { width: 20, alignItems: 'center' },
+  glyphBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: Theme.bgHighlight + '99',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glyphBoxUnread: { backgroundColor: Theme.bgHighlight },
   rowMain: { flex: 1, minWidth: 0 },
-  rowHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  name: { flex: 1, fontSize: 14, color: Theme.textMuted },
+  rowHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { flex: 1, fontSize: 14.5, color: Theme.textSecondary },
   nameUnread: { color: Theme.text, fontWeight: '600' },
-  nameMuted: { opacity: 0.5 },
-  time: { fontSize: 10, color: Theme.textMuted0 },
-  preview: { fontSize: 12, color: Theme.textMuted0, marginTop: 1 },
+  nameMuted: { color: Theme.textMuted },
+  time: { fontSize: 10.5, color: Theme.textMuted0 },
+  preview: { fontSize: 12, color: Theme.textMuted0, marginTop: 2 },
   previewUnread: { color: Theme.textMuted },
   badge: {
     minWidth: 20,
@@ -226,13 +422,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
   },
   badgeText: { fontSize: 10, fontWeight: '700', color: Theme.bg },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Theme.textMuted0 },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Theme.blue },
+  dotMuted: { backgroundColor: Theme.textMuted0 },
+  huddleBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Theme.violet + '16',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  huddleBtnLive: { backgroundColor: Theme.green + '1f' },
   sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
     paddingHorizontal: Spacing.md,
-    paddingTop: 14,
-    paddingBottom: 4,
+    paddingTop: 16,
+    paddingBottom: 6,
   },
   sectionLabel: {
     flex: 1,
@@ -242,18 +449,30 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: Theme.textMuted0,
   },
+  sectionLabelLive: { color: Theme.green },
   sectionAction: { padding: 2 },
   presenceDot: {
     position: 'absolute',
-    right: -2,
-    bottom: -2,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    borderWidth: 1.5,
+    right: -1,
+    bottom: -1,
+    width: 11,
+    height: 11,
+    borderRadius: 5.5,
+    borderWidth: 2,
     borderColor: Theme.bg,
   },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 32 },
-  emptyTitle: { fontSize: 14, fontWeight: '600', color: Theme.textSecondary },
-  emptySub: { fontSize: 12, color: Theme.textMuted0, textAlign: 'center', lineHeight: 18 },
-});
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginHorizontal: Spacing.md,
+    marginVertical: 4,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt + '80',
+  },
+  noticeTitle: { fontSize: 13, fontWeight: '600', color: Theme.textSecondary },
+  noticeBody: { fontSize: 12, color: Theme.textMuted, marginTop: 2, lineHeight: 17 },
+}));
