@@ -1,4 +1,5 @@
 import { StyleSheet } from 'react-native';
+import { useSyncExternalStore } from 'react';
 
 export const SolarizedLight = {
   bg: '#FBF5E2',
@@ -108,7 +109,82 @@ export const SolarizedDark = {
   footerBg: '#073642',
 };
 
-export const Theme = SolarizedLight;
+export type Palette = typeof SolarizedLight;
+export type ColorScheme = 'light' | 'dark';
+
+export const Palettes: Record<ColorScheme, Palette> = {
+  light: SolarizedLight,
+  dark: SolarizedDark,
+};
+
+// The active scheme is a tiny external store. The root layout publishes the
+// resolved preference (Settings choice, else the OS setting) into it, and
+// every screen subscribes through useTheme() so a flip re-renders the tree.
+let activeScheme: ColorScheme = 'light';
+const listeners = new Set<() => void>();
+
+export function getActiveScheme(): ColorScheme {
+  return activeScheme;
+}
+
+export function setActiveScheme(next: ColorScheme) {
+  if (next === activeScheme) return;
+  activeScheme = next;
+  listeners.forEach((listener) => listener());
+}
+
+function subscribeScheme(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+// A frozen view whose every property resolves against the current scheme at
+// read time. Module-scope code can hold a reference forever; the value it
+// reads is always the active palette's.
+function liveView<T extends object>(resolve: () => T, keys: (keyof T)[]): T {
+  const view = {} as T;
+  for (const key of keys) {
+    Object.defineProperty(view, key, {
+      enumerable: true,
+      get: () => resolve()[key],
+    });
+  }
+  return Object.freeze(view);
+}
+
+// Live palette: `Theme.bg` is the active scheme's background at the moment
+// the expression runs. Reads inside a render body follow the scheme as long as
+// the component re-renders on a flip — call useTheme() for that.
+export const Theme: Palette = liveView(
+  () => Palettes[activeScheme],
+  Object.keys(SolarizedLight) as (keyof Palette)[],
+);
+
+// Module-scope style sheets capture colour values when the module evaluates,
+// so a plain StyleSheet.create({ color: Theme.text }) would bake the light
+// palette forever. themedStyles builds one sheet per scheme (lazily) and hands
+// back a live view, so `styles.row` read during render is the active scheme's
+// row style. Name the factory parameter `Theme` to keep the body unchanged.
+export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme: Palette) => T): T {
+  const sheets: Partial<Record<ColorScheme, T>> = {};
+  const sheetFor = (scheme: ColorScheme): T => (sheets[scheme] ??= build(Palettes[scheme]));
+  return liveView(() => sheetFor(activeScheme), Object.keys(sheetFor('light')) as (keyof T)[]);
+}
+
+export function useActiveScheme(): ColorScheme {
+  return useSyncExternalStore(subscribeScheme, getActiveScheme, getActiveScheme);
+}
+
+// Subscribes the calling component to scheme flips and returns the live
+// palette. Every component that reads Theme or a themedStyles sheet in its
+// render calls this, otherwise it repaints in the new scheme only when
+// something else re-renders it.
+export function useTheme(): Palette {
+  useActiveScheme();
+  return Theme;
+}
 
 // The tab bar's fixed height (its own paddingBottom absorbs the home
 // indicator, so this is the full box). Overlays that float above the tab bar

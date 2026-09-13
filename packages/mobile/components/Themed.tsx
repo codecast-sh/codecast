@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { forwardRef } from 'react';
 
-import { Theme } from '@/constants/Theme';
+import { Theme, useActiveScheme, useTheme } from '@/constants/Theme';
 import { monoStyle } from '@/constants/fonts';
 
 type ThemeProps = {
@@ -31,9 +31,9 @@ export function useThemeColor(
   props: { light?: string; dark?: string },
   colorName: 'text' | 'background'
 ) {
-  // The app currently pins Solarized Light (dark parity is a follow-up); the
-  // light/dark prop API is kept so call sites stay source-compatible.
-  return props.light ?? (colorName === 'text' ? Theme.text : Theme.bg);
+  // Subscribes the wrapper to scheme flips; Theme itself reads live.
+  const scheme = useActiveScheme();
+  return props[scheme] ?? (colorName === 'text' ? Theme.text : Theme.bg);
 }
 
 export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref) {
@@ -43,6 +43,7 @@ export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref)
 });
 
 export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function TextInput(props, ref) {
+  const Theme = useTheme();
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
   return (
