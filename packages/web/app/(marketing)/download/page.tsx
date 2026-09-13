@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Logo, LogoMark } from "@/components/Logo";
+import { LogoMark } from "@/components/Logo";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { InstallTabs } from "@/components/install-tabs";
 import { track } from "@/lib/analytics";
 import { useRouteMeta } from "../pageMeta";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 // The server 302s this to the pinned dmg on dl.codecast.sh (release.sh bumps the pin).
 const MAC_DOWNLOAD_URL = "https://codecast.sh/download/mac";
@@ -183,32 +183,7 @@ export default function DownloadPage() {
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "#fdf6e3" }}>
-      {/* Nav */}
-      <nav className="sticky top-0 z-50 backdrop-blur-sm" style={{ borderBottom: "1px solid #eee8d5", backgroundColor: "rgba(253,246,227,0.8)" }}>
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link href="/">
-            <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link href="/documentation" className="hidden px-3 py-1.5 text-sm font-medium sm:block" style={{ color: "#657b83" }}>
-              Docs
-            </Link>
-            <Link href="/pricing" className="hidden px-3 py-1.5 text-sm font-medium sm:block" style={{ color: "#657b83" }}>
-              Pricing
-            </Link>
-            <Link href="/login">
-              <Button variant="ghost" className="font-medium" style={{ color: "#657b83" }}>
-                Sign in
-              </Button>
-            </Link>
-            <Link href="/signup">
-              <Button className="font-medium text-white" style={{ backgroundColor: "#002b36" }}>
-                Get started
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingNav active="/download" />
 
       {/* Hero */}
       <section className="mx-auto max-w-5xl px-6 pb-4 pt-16 text-center">

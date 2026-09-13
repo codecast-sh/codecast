@@ -1,40 +1,13 @@
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { useRouteMeta } from "../pageMeta";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 export default function AboutPage() {
   useRouteMeta("/about");
   return (
     <main className="min-h-screen w-full" style={{ backgroundColor: '#fdf6e3' }}>
-      <nav className="border-b border-[#eee8d5] bg-[#fdf6e3]/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/">
-            <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link href="/pricing" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Pricing
-            </Link>
-            <Link href="/blog" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Blog
-            </Link>
-            <Link href="/security" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5">
-              Security
-            </Link>
-            <Link href="/login">
-              <Button variant="ghost" className="text-[#657b83] hover:text-[#002b36] hover:bg-[#eee8d5] font-medium">
-                Sign in
-              </Button>
-            </Link>
-            <Link href="/signup">
-              <Button className="bg-[#002b36] text-[#fdf6e3] hover:bg-[#073642] font-medium">
-                Get started
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingNav active="/about" />
 
       <div className="max-w-3xl mx-auto px-6 py-20">
         <h1 className="text-4xl font-bold text-[#002b36] mb-8 tracking-tight" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>

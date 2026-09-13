@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
 import { useRouteMeta } from "../pageMeta";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 function TerminalIcon({ className }: { className?: string }) {
   return (
@@ -268,38 +269,7 @@ export default function CLIPage() {
 
   return (
     <main className="min-h-screen bg-stone-50 w-full">
-      {/* Nav */}
-      <nav className="border-b border-stone-200 bg-stone-50/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/">
-            <Logo size="md" className="[--logo-c:#444444] text-stone-900" />
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link href="/features" className="text-amber-600 font-medium text-sm px-3 py-1.5">
-              CLI
-            </Link>
-            <Link href="/pricing" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Pricing
-            </Link>
-            <Link href="/blog" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Blog
-            </Link>
-            <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
-              Security
-            </Link>
-            <Link href="/login">
-              <Button variant="ghost" className="text-stone-600 hover:text-stone-900 hover:bg-stone-100 font-medium">
-                Sign in
-              </Button>
-            </Link>
-            <Link href="/signup">
-              <Button className="bg-stone-900 text-white hover:bg-stone-800 font-medium">
-                Get started
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingNav active="/features" />
 
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-16">
