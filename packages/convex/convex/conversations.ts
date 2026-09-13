@@ -49,6 +49,7 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { normalizePaneUrl } from "@codecast/shared/contracts";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
@@ -11131,6 +11132,82 @@ export const getThreadState = query({
         : conv.inbox_stashed_at ? ("stashed" as const)
         : null,
     };
+  },
+});
+
+// ── the browser pane an agent offers ────────────────────────────────────────
+//
+// `cast browser pane <url>` stamps ONE offer on the session; the viewer grows a
+// chip beside the title and the reader opens it beside the conversation. The
+// agent never opens anything: the web app refuses machine-initiated moves of
+// what a reader is looking at (web store/viewNav.ts), and a pane that opened
+// itself would be that same intrusion wearing another hat.
+//
+// The URL is normalized again here rather than trusted from the CLI, because
+// what this field holds ends up in an iframe src: an old or hand-rolled client
+// must not be able to store `javascript:` for the browser to load.
+export const offerBrowserPane = mutation({
+  args: {
+    session: v.string(),
+    url: v.string(),
+    title: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const url = normalizePaneUrl(args.url);
+    if (!url) throw new Error(`"${args.url}" is not a web address a pane can load`);
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only offer a pane in sessions you run or own)`
+      );
+    }
+
+    const title = args.title?.trim().slice(0, 120) || undefined;
+    await ctx.db.patch(conv._id, {
+      browser_pane_offer: { url, offered_at: Date.now(), ...(title ? { title } : {}) },
+    });
+    return {
+      ok: true as const,
+      short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
+      url,
+      ...(title ? { title } : {}),
+    };
+  },
+});
+
+// The reader acted on the chip. Opening and dismissing write the same stamp on
+// purpose: from the offer's point of view both mean "handled", and the only
+// thing the field has to do is keep the chip from coming back here and on
+// every other device.
+export const markBrowserPaneOffered = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) throw new Error("Conversation not found");
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) {
+      throw new Error("Unauthorized: can only act on conversations you can see");
+    }
+    const offer = conv.browser_pane_offer;
+    // Nothing to do twice: a second click (two windows, a re-render) must not
+    // move the stamp and make a handled offer look freshly handled.
+    if (!offer || offer.opened_at) return { ok: true as const, changed: false };
+    await ctx.db.patch(conv._id, { browser_pane_offer: { ...offer, opened_at: Date.now() } });
+    return { ok: true as const, changed: true };
   },
 });
 

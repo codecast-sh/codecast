@@ -27,10 +27,16 @@ services:
       - "127.0.0.1:3210:3210"   # cloud origin (api)
       - "127.0.0.1:3211:3211"   # site origin (http actions)
     healthcheck:
-      # /instance_version answers on the cheap path and does not touch Postgres,
-      # so it reports "process alive", NOT "queries working". Real health is the
-      # verification list in the cutover runbook.
-      test: ["CMD", "curl", "-fsS", "http://localhost:3210/instance_version"]
+      # The image is a minimal Ubuntu carrying only the convex binary: it has no
+      # curl, wget, python or aws (verified 2026-09-13). It does have bash, so
+      # the check opens a TCP connection through bash's /dev/tcp rather than
+      # calling a binary that is not there. A curl based check would have failed
+      # every time and marked a healthy backend unhealthy.
+      #
+      # This proves the port accepts connections, NOT that queries work. During
+      # the July saturation those diverged: HTTP answered while every query
+      # timed out. Real verification is the list in the cutover runbook.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3210"]
       interval: 30s
       timeout: 5s
       retries: 3
