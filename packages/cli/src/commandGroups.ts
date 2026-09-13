@@ -264,6 +264,13 @@ Examples:
     load: () => import("./browser/cli.js").then((m) => m.registerBrowserCommand),
   },
   {
+    token: "preview",
+    args: ["<url>"],
+    hasOptions: true,
+    description: `Offer a page to your human as a pane beside this session (alias of cast browser pane)`,
+    load: () => import("./browser/paneOffer.js").then((m) => m.registerPreviewCommand),
+  },
+  {
     token: "app",
     hasOptions: true,
     description: `Drive and verify the codecast app itself: doctor, goto, sweep, wait-settle, as-user`,
@@ -277,7 +284,7 @@ Examples:
   {
     token: "agent",
     aliases: ["agents"],
-    hasOptions: true,
+    hasOptions: false,
     description: `Agent definitions and chains: named roles every launch surface runs as
 
 A definition binds a client, a model, an effort, a tool policy and a
