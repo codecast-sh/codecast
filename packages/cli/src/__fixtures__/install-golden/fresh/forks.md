@@ -4,7 +4,7 @@
 You can spin work off into your human's inbox as independent sessions — not hidden subagents. The difference is ownership: a subagent (Task tool) reports back to you and you keep its result; a fork or a spawned session lands in the human's inbox for them to review, steer, and continue on their own. Reach for these when the work is theirs to own, or when several directions are worth running at once and seeing side by side. Launch them when the human asks; if spinning them up is your idea, propose it first.
 
 ```bash
-cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
+cast fork "<direction>" ["<direction>" ...]   # N directions: you take the first, the rest become branches
 cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
 cast spawn --subagent --agent codex "<task>"  # subagent row nested under THIS session — yours to manage
 cast exec --agent grok "review this diff"     # run now, print the result, exit (no inbox card)
@@ -26,7 +26,9 @@ EOF
 
 `cast fork` branches the current conversation — each branch keeps the full history up to the fork point (just before the latest user message by default, so the fork request itself never enters a branch; `--at <line>` picks another spot, `-s <id>` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel. When forking is your own idea rather than the human's request, pass `--tip` — there is no fork request to strip, and the default would drop the human's real latest message.
 
-A fork fan-out is a handoff, not an orchestration. When the human asks to run work in N forks, issue ONE `cast fork` with all N directions, report the roster, and return to your own thread. A branch doesn't know it is a fork — its history ends before the fork request, and its seed arrives as its next instruction — so write each direction as a complete, self-contained instruction for that thread. The branches run independently and the human steers them from the inbox; do not stage launches, monitor branches, or build coordination between them.
+With two or more directions, THIS thread is one of them: you take the first direction and continue with it in place, and each remaining direction becomes a branch. When the human asks for work in N forks, issue ONE `cast fork` with all N directions, then carry on with the first as your own work — do not end the turn to report a roster. One direction spins off a single branch while you continue whatever you were doing. `--all-branches` keeps you out of the fan-out when the human wants this thread left as is.
+
+A branch receives its direction as its human's next message, exactly as if the person had typed it there. It does not know it is a fork, it has nobody to report back to, and it must not be treated as a worker: do not message, monitor, or wait on a branch, and do not build coordination between branches. Write each direction as a complete, self-contained instruction for a thread that will read it cold. The branches run independently and the human steers them from the inbox.
 
 `cast spawn` starts fresh sessions with no shared history, in the current project (`-C <dir>` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
 
@@ -40,7 +42,7 @@ cast exec --agent grok --model grok-4.6 --effort high "review the diff"
 git diff | cast exec --agent claude --model sonnet "write a commit message"
 ```
 
-Fork and spawn start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
+Fork and spawn start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human in one line what runs where, then get on with your own direction.
 
 Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass `--label <name>` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a `spawn` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: `cast spawn --label rollout "<task>" "<task>"`, then `cast sessions --label rollout` to see the whole fan-out as a group.
 
