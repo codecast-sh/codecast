@@ -159,6 +159,19 @@ Commands run when the workspace is destroyed, before the worktree is removed.
 run = ["docker compose down"]
 ```
 
+## `[verify]`
+
+The repo's check command. `cast workspace check` runs it in the current
+directory (a worktree, usually) and exits with its status; the line's verify
+station runs it between implement and review (docs/architecture/the-line.md
+L1). Leave the table out and `cast workspace check` passes with a note that
+nothing is configured.
+
+```toml
+[verify]
+command = "bun run typecheck && bun test"
+```
+
 ## `[browser]`
 
 A Chromium instance bound to the workspace, off by default. `allow` is the list

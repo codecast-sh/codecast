@@ -19,6 +19,7 @@ import {
 } from "./lifecycle.js";
 import { detectProject } from "./detect.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
+import { readVerifyCommand, runVerifyCommand } from "./verify.js";
 import { readState } from "./contract.js";
 import {
   clearRepoTrust,
@@ -184,6 +185,22 @@ export function registerWorkspaceCommand(program: Command): void {
   // -----------------------------------------------------------------------
   // cast workspace path <name>
   // -----------------------------------------------------------------------
+  // -----------------------------------------------------------------------
+  // cast workspace check — run the repo's verify command from the manifest
+  // -----------------------------------------------------------------------
+  ws.command("check")
+    .description("Run the repo's check command ([verify] command in .codecast/workspace.toml) in the current directory; passes with a note when none is configured")
+    .action(() => {
+      const repoRoot = findRepoRoot();
+      const command = readVerifyCommand(repoRoot);
+      if (!command) {
+        console.log(`no verify command configured in ${MANIFEST_REL_PATH} ([verify] command = "..."); nothing to run`);
+        return;
+      }
+      console.log(`$ ${command}`);
+      process.exitCode = runVerifyCommand(command, process.cwd());
+    });
+
   ws.command("path <name>")
     .description("Print a workspace's absolute worktree path (for `cd \"$(cast ws path <name>)\"`)")
     .action((name: string) => {

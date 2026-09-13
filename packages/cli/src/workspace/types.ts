@@ -62,6 +62,16 @@ export interface TeardownSpec {
 }
 
 /**
+ * The repo's check command: what `cast workspace check` runs in a worktree
+ * (typecheck + tests, whatever "green" means here). The line's verify station
+ * runs it between implement and review (docs/architecture/the-line.md L1).
+ * Absent = nothing to run; the check says so and passes.
+ */
+export interface VerifySpec {
+  command?: string;
+}
+
+/**
  * Per-workspace browser configuration. When enabled, a headless Chromium is
  * launched after setup completes and torn down at release. The CDP port is
  * allocated via the named-port system using `cdp_port` (default base=9222
@@ -97,6 +107,7 @@ export interface WorkspaceManifest {
   /** Static env vars exported into every command and hook. */
   env: Record<string, string>;
   teardown: TeardownSpec;
+  verify?: VerifySpec;
   /** Per-workspace browser configuration (off by default). */
   browser: BrowserSpec;
   /**
