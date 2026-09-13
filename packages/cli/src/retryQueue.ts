@@ -512,7 +512,7 @@ export class RetryQueue {
   //   - oldestPendingMs: age of the longest-waiting op = how far behind we are
   // One pass over the queued ops (not the messages on disk), so it stays cheap
   // enough to call on every heartbeat across 100+ sessions.
-  getHealth(): {
+  getHealth(stalled: readonly { conversationId?: string; sessionId: string; pendingSince: number }[] = []): {
     ops: number;
     pending: number;
     messages: number;
@@ -538,6 +538,12 @@ export class RetryQueue {
       } else {
         nonAddMessagesOps++;
       }
+    }
+    for (const file of stalled) {
+      const key = file.conversationId ?? `session:${file.sessionId}`;
+      if (!conversations.has(key)) nonAddMessagesOps++;
+      conversations.add(key);
+      oldestPendingMs = Math.max(oldestPendingMs, now - file.pendingSince);
     }
     return {
       ops: ops.length,
