@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -41,11 +42,17 @@ import {
 async function getUserWithSkills(ctx: QueryCtx, userId: Id<"users">) {
   const user = await ctx.db.get(userId);
   if (!user) return null;
-  const skillsRow = await ctx.db
+  const rows = await ctx.db
     .query("user_skills")
     .withIndex("by_user", (q) => q.eq("user_id", userId))
-    .first();
-  return skillsRow ? { ...user, available_skills: skillsRow.skills_json } : user;
+    .collect();
+  const legacy = rows.find((row) => row.project_path === undefined)?.skills_json ?? user.available_skills;
+  const projects = rows.filter((row) => row.project_path !== undefined);
+  if (projects.length === 0) return legacy === undefined ? user : { ...user, available_skills: legacy };
+  const parsed = legacy ? JSON.parse(legacy) : {};
+  const skillsMap = Array.isArray(parsed) ? { global: parsed } : parsed;
+  for (const row of projects) skillsMap[row.project_path!] = JSON.parse(row.skills_json);
+  return { ...user, available_skills: JSON.stringify(skillsMap) };
 }
 
 export const getCurrentUser = query({
@@ -1100,6 +1107,7 @@ export const updateNotificationPreferences = mutation({
       // stored object back and every toggle on web and mobile fails validation.
       chat_activity: v.optional(v.boolean()),
       email_notifications: v.optional(v.boolean()),
+      live_activity: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
@@ -1130,6 +1138,13 @@ export const updateNotificationPreferences = mutation({
       updateData.muted_members = args.muted_members;
     }
     await ctx.db.patch(userId, updateData);
+    // Flipping the Lock Screen switch ends the running activity (or starts one
+    // for what is already live) on the next refresh.
+    const before = (await ctx.db.get(userId))?.notification_preferences?.live_activity;
+    const after = updateData.notification_preferences?.live_activity;
+    if (args.notification_preferences !== undefined && before !== after) {
+      await scheduleLiveActivityRefresh(ctx, userId, { urgent: true });
+    }
   },
 });
 
