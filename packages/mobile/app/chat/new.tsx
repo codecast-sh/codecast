@@ -2,21 +2,32 @@ import { useMemo, useState } from 'react';
 import { StyleSheet, FlatList, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
 import { Text as RNText, TextInput as ThemedTextInput } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, Stack } from 'expo-router';
+import { useRouter, Stack, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import { Ionicons } from '@expo/vector-icons';
+import { dmRoomKey } from '@codecast/shared/contracts';
+import { startHuddle } from '@/lib/calls/callManager';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 
 // New message: pick one teammate and land in the 1:1, or several and land in
 // the group. openDm is idempotent on the member set, so tapping through to an
 // existing conversation and starting a "new" one are the same gesture — the
 // room that comes back is the room you already had.
+//
+// With `huddle=1` the same picker starts a call instead: one person rings
+// their 1:1 room, several ring the group's room (the same keys web's chips
+// use), and the call stage opens.
 
 export default function NewMessageScreen() {
+  const Theme = useTheme();
   const router = useRouter();
+  const { huddle } = useLocalSearchParams<{ huddle?: string }>();
+  const huddleMode = huddle === '1';
   const currentUser = useQuery(api.users.getCurrentUser);
   const viewerId = currentUser?._id ? String(currentUser._id) : '';
   const teamId = (currentUser as any)?.active_team_id ?? (currentUser as any)?.team_id;
@@ -48,6 +59,12 @@ export default function NewMessageScreen() {
 
   const open = async (ids: string[]) => {
     if (ids.length === 0 || opening) return;
+    if (huddleMode) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      void startHuddle({ roomKey: dmRoomKey(viewerId, ids), toUserIds: ids });
+      router.replace('/call');
+      return;
+    }
     setOpening(true);
     try {
       const res = await openDm({ member_ids: ids as any });
@@ -67,11 +84,16 @@ export default function NewMessageScreen() {
         <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.back}>
           <FontAwesome name="chevron-left" size={16} color={Theme.textMuted} />
         </TouchableOpacity>
-        <RNText style={styles.title}>New message</RNText>
+        <RNText style={styles.title}>{huddleMode ? 'Start a huddle' : 'New message'}</RNText>
         {picked.length > 0 && (
-          <TouchableOpacity style={styles.go} onPress={() => open(picked)} disabled={opening}>
+          <TouchableOpacity style={[styles.go, huddleMode && styles.goHuddle]} onPress={() => open(picked)} disabled={opening}>
             {opening ? (
               <ActivityIndicator size="small" color={Theme.bg} />
+            ) : huddleMode ? (
+              <RNView style={styles.goRow}>
+                <Ionicons name="headset" size={13} color={Theme.bg} />
+                <RNText style={styles.goText}>Ring{picked.length > 1 ? ` ${picked.length}` : ''}</RNText>
+              </RNView>
             ) : (
               <RNText style={styles.goText}>
                 Open{picked.length > 1 ? ` (${picked.length})` : ''}
@@ -123,7 +145,11 @@ export default function NewMessageScreen() {
                 <RNText style={styles.name} numberOfLines={1}>{m.name || m.github_username || 'Teammate'}</RNText>
                 <RNText style={styles.presence}>{line}</RNText>
               </RNView>
-              {on && <FontAwesome name="check-circle" size={16} color={Theme.blue} />}
+              {on ? (
+                <FontAwesome name="check-circle" size={16} color={huddleMode ? Theme.violet : Theme.blue} />
+              ) : huddleMode ? (
+                <Ionicons name="headset-outline" size={16} color={Theme.violet} />
+              ) : null}
             </TouchableOpacity>
           );
         }}
@@ -134,13 +160,15 @@ export default function NewMessageScreen() {
         }
       />
       {picked.length === 0 && (
-        <RNText style={styles.hint}>Tap to message · hold to start a group</RNText>
+        <RNText style={styles.hint}>
+          {huddleMode ? 'Tap to ring · hold to ring a group' : 'Tap to message · hold to start a group'}
+        </RNText>
       )}
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: 'row',
@@ -182,6 +210,8 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   rowOn: { backgroundColor: Theme.blue + '14' },
+  goHuddle: { backgroundColor: Theme.violet },
+  goRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   rowMain: { flex: 1, minWidth: 0 },
   name: { fontSize: 14, color: Theme.text },
   presence: { fontSize: 10.5, color: Theme.textMuted0, marginTop: 1 },
@@ -202,4 +232,4 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     paddingVertical: 8,
   },
-});
+}));
