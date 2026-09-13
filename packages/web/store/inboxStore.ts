@@ -1,4 +1,6 @@
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
+import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
+export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
 import {
@@ -53,7 +55,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -192,6 +194,7 @@ export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLi
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
+import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, sameInboxView, type InboxViewSnapshot } from "../lib/inboxViewHistory";
@@ -205,6 +208,7 @@ import {
   selectChannelReadMarker,
   type ChatSliceState,
 } from "./chatSlice";
+import { createOrgSlice, ORG_SYNC_REGISTRY, type OrgSliceState } from "./orgSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -248,7 +252,7 @@ export type { ThreadCardOpenEntry } from "./threadTypes";
 // is here: it decides the ARRANGEMENT at first paint. Seeded from localStorage
 // synchronously, a pinned split renders as a split immediately instead of
 // flashing a peek overlay until the server clientState arrives.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view", "workspace", "nav_sections"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -495,6 +499,8 @@ export type InboxSession = {
   // Per-session stable-context launch override and feed exclusions. These are
   // local-only while a new-session stub is pending, then ride create/reconfigure.
   stable_mode?: string;
+  /** Blank session: the agent definition it launches as (compose "as" pill). */
+  agent_definition?: string;
   stable_exclude?: string[];
   message_count: number;
   idle_summary?: string;
@@ -1093,14 +1099,31 @@ export interface CapabilityBindingRow {
   updated_at: number;
 }
 
+export type DecisionOption = {
+  label: string;
+  description?: string;
+  body_md?: string;
+  evidence?: Array<{ label: string; url: string }>;
+  cost?: string;
+  risk?: string;
+};
+export type DecisionKind = "single" | "multi" | "rank" | "form";
+// What the web hands answerDecision: one index (single), a typed answer, a
+// list of indexes (multi / rank) or a key→value map (form), or a dismissal.
+export type DecisionAnswerInput = { index?: number; text?: string; json?: any } | { dismiss: true };
+export type DecisionFormField = { key: string; label: string; type: "text" | "number" | "select" | "bool"; options?: string[] };
+export type DecisionHop = { role_id: string; recommendation?: number; note?: string; at: number };
+export type DecisionParty = { kind: "user" | "role" | "policy"; id: string };
+
 export type SessionDecisionItem = {
   _id: string;
+  short_id?: string;
   conversation_id: string;
   session_id: string;
   user_id?: string;
   question: string;
   context_md?: string;
-  options: Array<{ label: string; description?: string }>;
+  options: DecisionOption[];
   report_slug?: string;
   blocking: boolean;
   default_option?: number;
@@ -1108,6 +1131,26 @@ export type SessionDecisionItem = {
   status: "pending" | "answered" | "dismissed" | "withdrawn";
   answer_index?: number;
   answer_text?: string;
+  // multi: number[] (indexes); rank: number[] (ordered); form: Record<key, value>.
+  answer_json?: any;
+  // W2 (docs/architecture/decisions-as-documents.md): the document, the
+  // routing, the task binding and the stack.
+  kind?: DecisionKind;
+  category?: string;
+  category_proposed?: string;
+  doc_id?: string;
+  form?: { fields: DecisionFormField[] };
+  task_id?: string;
+  station?: string;
+  stack_id?: string;
+  holder?: { kind: "user" | "role"; id: string };
+  holder_key?: string;
+  asked_user_ids?: string[];
+  hops?: DecisionHop[];
+  answered_by?: DecisionParty;
+  grant_id?: string;
+  scope_keys?: string[];
+  reopened_from?: { grant_id: string; answer_index?: number; at: number };
   created_at: number;
   // conversation.message_count at ask time; live count minus this is
   // "messages since the ask", correct beyond the loaded window.
@@ -1115,6 +1158,53 @@ export type SessionDecisionItem = {
   // Last `cast decide edit`; created_at is the ask time (queue age).
   updated_at?: number;
   resolved_at?: number;
+};
+
+// A decision stack (decisionStacks.listStacks row): an ordered set of
+// decisions one person clears in one sitting, with its progress counted
+// server side so the queue groups without loading every member.
+export type DecisionStackItem = {
+  _id: string;
+  short_id?: string;
+  title: string;
+  team_id?: string;
+  scope_user_id?: string;
+  owner_user_id: string;
+  role_id?: string;
+  policy: { auto_default_after_ms?: number; delegate_role_id?: string };
+  status: "open" | "done";
+  decision_ids: string[];
+  total: number;
+  resolved: number;
+  pending: number;
+  next_decision_id?: string;
+  next_short_id?: string;
+  created_at: number;
+  updated_at: number;
+};
+
+// "Handled without you" (sessionDecisions.listHandledByRoles): a decision a
+// role answered under a grant, with the role and the grant for the disagree
+// and reopen controls.
+export type HandledDecisionItem = SessionDecisionItem & {
+  role: { _id: string; short_id?: string; name: string; handle?: string; status?: string; host_user_id?: string } | null;
+  grant: { _id: string; role_id: string; category: string; scope_key: string; expires_at: number; revoked_at?: number } | null;
+};
+
+// The document page's context (sessionDecisions.getWithDoc), keyed by the
+// decision id: the doc body, the task, the stack, the ladder with role names,
+// the people, the holder role, and the grant offer.
+export type DecisionDetailItem = {
+  _id: string;
+  decision: SessionDecisionItem;
+  doc: { _id: string; title?: string; content?: string; updated_at?: number } | null;
+  task: { _id: string; short_id?: string; title: string; status?: string; status_id?: string; project_id?: string } | null;
+  stack: { _id: string; short_id?: string; title: string; decision_ids: string[]; policy?: DecisionStackItem["policy"]; status: string } | null;
+  ladder: Array<DecisionHop & { role: HandledDecisionItem["role"] }>;
+  asked_users: Array<{ _id: string; name: string; avatar_url?: string }>;
+  holder_role: HandledDecisionItem["role"];
+  grant_offer: { role_id: string; role_name: string; category: string; scope_key: string; agreements: number; askers: number } | null;
+  grant: HandledDecisionItem["grant"];
 };
 
 // conversation_id → bucket_id lookup, derived at read time from the assignment
@@ -1385,6 +1475,12 @@ export type ClientUI = {
   theme?: "light" | "dark";
   visual_style?: "classic" | "minimal";
   sidebar_collapsed?: boolean;
+  // The sidebar sections the chevrons pin open (true) or closed (false), by
+  // section key. A section the user never touched is absent and follows the
+  // route ("you are on /tasks, so Tasks is open"); a pin is the user saying
+  // otherwise, so it outlives the route — and the reload. Unstamped: the
+  // sidebar's shape is a per-device layout preference like the rest.
+  nav_sections?: Record<string, boolean>;
   zen_mode?: boolean;
   sticky_headers_disabled?: boolean;
   diff_panel_open?: boolean;
@@ -1695,31 +1791,6 @@ export type ClientState = {
 type Draft = InboxStoreState;
 
 // -- Helpers --
-
-export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">): boolean {
-  return !!s.inbox_dismissed_at;
-}
-
-// Retired: the agent was torn down. A distinct field from inbox_dismissed_at,
-// not a synonym. Most kills write both — a hide patch carries
-// inbox_dismissed_at and applyHideTransition stamps the marker on top, which
-// covers the web's kill action AND `cast kill` (cliSetSessionVisibility patches
-// inbox_dismissed_at, then forces the kill transition). The exception is the
-// killSession MUTATION (conversations.ts), which stamps inbox_killed_at ALONE:
-// that's the path behind the web's convCommand("killSession") — the /sessions
-// kill button and the panel's kill-and-complete. Anything asking "is this
-// killed?" must read this field or it silently misses those.
-export function isSessionKilled(s: Pick<InboxSession, "inbox_killed_at">): boolean {
-  return !!s.inbox_killed_at;
-}
-
-export function isSessionStashed(
-  s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at">,
-): boolean {
-  // Dismiss wins: a stashed session that later gets dismissed renders in the
-  // Dismissed bucket, never both.
-  return !!s.inbox_stashed_at && !s.inbox_dismissed_at;
-}
 
 // Out of the active inbox buckets for either reason (dismissed or stashed).
 // Hidden sessions are viewed through the peek path (viewingDismissedId) so
@@ -2642,6 +2713,26 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
   counts: Record<InboxSectionKey, number>;
+}
+
+// The number a section header claims, for every surface that renders those
+// sections (the web panel and the mobile inbox both call this).
+//
+// `counts` is every row PLACED in the bucket — the flat cards plus the members
+// nested under a same-bucket lead. That is the honest number only while those
+// nested rows are on screen. With the subagent toggle off they render nowhere,
+// so the header claimed rows the reader could neither see nor reach: prod on
+// 2026-09-10 showed NEEDS INPUT (121) above 33 cards, while the sidebar badge
+// (flat cards only) said 34. A chip filter narrows a section the same way, so a
+// filtered section always reports the cards it shows.
+export function sectionHeaderCount(
+  shown: readonly InboxSession[],
+  full: readonly InboxSession[],
+  placedCount: number,
+  showSubagents: boolean,
+): number | undefined {
+  if (shown.length !== full.length) return undefined;
+  return showSubagents ? placedCount : shown.length;
 }
 
 // The store-state subset the chokepoint reads. Structural (never the store
@@ -4303,7 +4394,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -4483,12 +4574,16 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
 
   // -- Inline review (quote / comment on assistant message blocks) --
   // Ephemeral UI state: which message is in keyboard/inline-review mode, the
-  // highlighted block within it, and the batch of pending comments per
-  // conversation. Never synced or persisted — survives session switches in
-  // memory, resets on reload (the right lifetime for an in-progress batch).
+  // highlighted block within it, and which note editor is open. Never synced
+  // or persisted.
   reviewMessageId: string | null;
   reviewActiveBlock: number;
   reviewEditingId: string | null;
+  // The batch of pending quotes + notes per conversation (or `doc:<id>`). A
+  // note is a draft of the user's next message, so it persists exactly like
+  // `drafts` (registered as a local IDB meta key, written through sync()):
+  // navigation and reload never lose it. Cleared only when the batch is taken
+  // into a message or the user removes the quote.
   reviewComments: Record<string, PendingComment[]>;
   setReviewTarget: (messageId: string | null, blockIndex?: number) => void;
   setReviewActiveBlock: (blockIndex: number) => void;
@@ -4639,7 +4734,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -4775,6 +4870,8 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   setSessionTargetDevice: (id: string, deviceId: string | null) => void;
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
   setConversationAgent: (id: string, agentType: string) => void;
+  /** Blank session: the definition it launches as (compose "as" pill). */
+  setConversationAgentDefinition: (id: string, name: string | null) => void;
   switchAgent: (currentId: string, targetAgentType: string) => string;
   // Local-only optimistic model/effort stamp (header picker / new-session
   // picker). The durable value arrives via the server: rollup echo for
@@ -4985,10 +5082,13 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
 
   // -- Decision queue (cast decide) --
   sessionDecisions: Record<string, SessionDecisionItem>;
+  decisionStacks: Record<string, DecisionStackItem>;
+  handledDecisions: Record<string, HandledDecisionItem>;
+  decisionDetails: Record<string, DecisionDetailItem>;
   // Resolve a decision locally (status flips instantly; patch rides the
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch.
-  answerDecision: (decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) => void;
+  answerDecision: (decisionId: string, answer: DecisionAnswerInput) => void;
   // Local marks that a session's open AskUserQuestion / permission ask was
   // handled here (answered, dismissed, or evicted). Ephemeral by design — not
   // persisted, so a reload re-reads server truth. Every question surface reads
@@ -5054,6 +5154,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
   resolveTeamStub: (stubId: string, teamId: string) => void;
   discardTeamStub: (stubId: string, previousActiveTeamId: string | undefined) => void;
+  deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
+  dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined) => Promise<unknown>;
+  restoreTeamRow: (team: any, previousActiveTeamId: string | undefined) => void;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
@@ -5229,6 +5332,12 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
   updateIssueSyncSource: (id: string, fields: { status?: "active" | "paused"; delegate_label?: string; delegate_assignee?: string; auto_spawn?: boolean; push_new_tasks?: boolean }) => void;
   removeIssueSyncSource: (id: string) => void;
+
+  // -- Agent definitions and chains (settings > Agent library; cast agent) --
+  upsertAgentDefinition: (fields: Partial<AgentDefinitionSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
+  removeAgentDefinition: (id: string) => void;
+  upsertAgentChain: (fields: Partial<AgentChainSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
+  removeAgentChain: (id: string) => void;
 
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
@@ -5834,6 +5943,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // forever. localFirst pending-protection covers the answer flip until the
   // server echo confirms it.
   sessionDecisions: {},
+  decisionStacks: {},
+  handledDecisions: {},
+  decisionDetails: {},
   // NOT delta: savedViews.webList returns the complete visible set on every
   // push, so absence means removed. Delta mode would treat a deleted or
   // un-shared view as "unchanged" and leave it on the rail forever.
@@ -5855,6 +5967,8 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // never prunes another's, and a thread's replies survive a channel sync. See
   // store/chatSlice.ts for why these collections carry no pending protection.
   ...CHAT_SYNC_REGISTRY,
+  // Org tree singleton (store/orgSlice.ts): strips generated_at before compare.
+  ...ORG_SYNC_REGISTRY,
   // capabilityState / capabilityBindings: registered on the collection.
   // Crosstalk graph: the server stamps generatedAt on every execution, which
   // would defeat the singleton's equality bail and wake subscribers on every
@@ -6287,6 +6401,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   if (draft.clientState.drafts?.[oldId]) {
     draft.clientState.drafts[newId] = draft.clientState.drafts[oldId];
     draft.clientState.drafts[oldId] = null;
+  }
+  if (draft.reviewComments[oldId]) {
+    draft.reviewComments[newId] = draft.reviewComments[oldId];
+    delete draft.reviewComments[oldId];
   }
   if (draft.conversations[oldId]) {
     draft.conversations[newId] = { ...draft.conversations[oldId], _id: newId };
@@ -7250,53 +7368,42 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ reviewMessageId: messageId, reviewActiveBlock: messageId ? blockIndex : 0 }),
   setReviewActiveBlock: (blockIndex: number) => set({ reviewActiveBlock: blockIndex }),
   setReviewEditingId: (id: string | null) => set({ reviewEditingId: id }),
-  addReviewComment: (conversationId: string, comment: PendingComment) =>
-    set((s: any) => ({
-      reviewComments: {
-        ...s.reviewComments,
-        [conversationId]: [...(s.reviewComments[conversationId] ?? []), comment],
-      },
-    })),
+  // The writers below are sync(): a mutative draft + IDB write-through, no
+  // server dispatch — the same path the composer's drafts take. A raw set()
+  // here would keep the batch in memory only and lose every note on reload.
+  addReviewComment: sync(function (this: Draft, conversationId: string, comment: PendingComment) {
+    (this.reviewComments[conversationId] ??= []).push(comment);
+  }),
   // Set a comment's note (may be empty → stays a bare quote). This is what the
-  // note editor's "Save" does.
-  commitReviewComment: (conversationId: string, id: string, body: string) =>
-    set((s: any) => ({
-      reviewComments: {
-        ...s.reviewComments,
-        [conversationId]: (s.reviewComments[conversationId] ?? []).map((c: PendingComment) =>
-          c.id === id ? { ...c, body } : c,
-        ),
-      },
-    })),
-  removeReviewComment: (conversationId: string, id: string) =>
-    set((s: any) => {
-      const list: PendingComment[] = s.reviewComments[conversationId] ?? [];
-      const removed = list.find((c) => c.id === id);
-      const next = list.filter((c: PendingComment) => c.id !== id);
-      const map = { ...s.reviewComments };
-      if (next.length) map[conversationId] = next;
-      else delete map[conversationId];
-      const patch: any = { reviewComments: map };
-      // If the removed comment's editor was open, close it.
-      if (s.reviewEditingId === id) patch.reviewEditingId = null;
-      // When the review-target message has no quotes left, drop the target so its
-      // active-block highlight overlay stops painting (handles both the last quote
-      // overall and the last quote on the target message of a multi-message batch).
-      const targetMsg = s.reviewMessageId;
-      if (targetMsg && removed?.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
-        patch.reviewMessageId = null;
-        patch.reviewActiveBlock = 0;
-        patch.reviewEditingId = null;
-      }
-      return patch;
-    }),
-  clearReviewComments: (conversationId: string) =>
-    set((s: any) => {
-      if (!s.reviewComments[conversationId]) return {};
-      const map = { ...s.reviewComments };
-      delete map[conversationId];
-      return { reviewComments: map };
-    }),
+  // note editor's "Save" does, and what it does while you type.
+  commitReviewComment: sync(function (this: Draft, conversationId: string, id: string, body: string) {
+    const c = this.reviewComments[conversationId]?.find((c) => c.id === id);
+    if (!c || c.body === body) return;
+    c.body = body;
+  }),
+  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string) {
+    const list = this.reviewComments[conversationId] ?? [];
+    const removed = list.find((c) => c.id === id);
+    if (!removed) return;
+    const next = list.filter((c) => c.id !== id);
+    if (next.length) this.reviewComments[conversationId] = next;
+    else delete this.reviewComments[conversationId];
+    // If the removed comment's editor was open, close it.
+    if (this.reviewEditingId === id) this.reviewEditingId = null;
+    // When the review-target message has no quotes left, drop the target so its
+    // active-block highlight overlay stops painting (handles both the last quote
+    // overall and the last quote on the target message of a multi-message batch).
+    const targetMsg = this.reviewMessageId;
+    if (targetMsg && removed.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
+      this.reviewMessageId = null;
+      this.reviewActiveBlock = 0;
+      this.reviewEditingId = null;
+    }
+  }),
+  clearReviewComments: sync(function (this: Draft, conversationId: string) {
+    if (!this.reviewComments[conversationId]) return;
+    delete this.reviewComments[conversationId];
+  }),
   getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
@@ -7472,6 +7579,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // -- Decision queue (cast decide) --
   sessionDecisions: {},
+  decisionStacks: {},
+  handledDecisions: {},
+  decisionDetails: {},
   questionResolutions: {},
   // sync(): local-only bookkeeping — the mark never dispatches; server truth
   // arrives on its own rail (awaiting_input / agent_status) and expires it.
@@ -7482,7 +7592,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       message_count: (row?.message_count ?? 0) + (opts?.sends ?? 0),
     };
   }),
-  answerDecision: action(function (this: Draft, decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) {
+  answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
     const row = this.sessionDecisions[decisionId];
     if (!row || row.status !== "pending") return;
     const now = Date.now();
@@ -7492,15 +7602,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return;
     }
     row.status = "answered";
-    row.answer_index = answer.index;
+    row.answer_index = answer.index ?? (Array.isArray(answer.json) ? answer.json[0] : undefined);
     row.answer_text = answer.text;
+    row.answer_json = answer.json;
     row.resolved_at = now;
     // The chosen option enters the session as a normal user message so the
     // parked agent resumes with it — same rail as typing into the composer,
     // reusing the standard optimistic-bubble + outbox send pair (the mobile
     // AUQ answer path does the identical two-step). Deferred to after this
     // draft commits because both are themselves decorated store functions.
-    const answerText = answer.text ?? (answer.index !== undefined ? row.options[answer.index]?.label : undefined);
+    // The one-line label is the shared contract the server uses for its own
+    // answers (decisionAnswerLabel), so a multi, rank or form answer reads
+    // the same whichever path delivered it.
+    const answerText = decisionAnswerLabel(row, { answer_index: row.answer_index, answer_text: answer.text, answer_json: answer.json });
     // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
     // the decision and its question, so the bubble can render the answer
     // against its ask and link back to the `cast decide` call.
@@ -7514,6 +7628,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       });
     }
   }),
+
 
   // -- Manual session buckets --
   buckets: {},
@@ -8466,7 +8581,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -8497,6 +8612,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(normalizedModel ? { model: normalizedModel } : {}),
       ...(opts.effort || existing?.effort ? { effort: opts.effort ?? existing?.effort } : {}),
       ...(opts.stable_mode || existing?.stable_mode ? { stable_mode: opts.stable_mode ?? existing?.stable_mode } : {}),
+      ...(opts.agent_definition || existing?.agent_definition ? { agent_definition: opts.agent_definition ?? existing?.agent_definition } : {}),
       ...(opts.stable_exclude?.length || existing?.stable_exclude?.length
         ? { stable_exclude: opts.stable_exclude ?? existing?.stable_exclude }
         : {}),
@@ -8576,6 +8692,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // picker (setStableContextPrefs) — same lifecycle as model/effort.
       ...(cur?.stable_mode ? { stable_mode: cur.stable_mode } : {}),
       ...(cur?.stable_exclude?.length ? { stable_exclude: cur.stable_exclude } : {}),
+      ...(cur?.agent_definition ? { agent_definition: cur.agent_definition } : {}),
     });
   },
 
@@ -9405,6 +9522,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     if (this.currentConversation.conversationId === id) {
       this.currentConversation.agentType = agentType;
+    }
+  }),
+
+  setConversationAgentDefinition: action(function (this: Draft, id: string, name: string | null) {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
+      if (!row) continue;
+      row.agent_definition = name ?? undefined;
     }
   }),
 
@@ -10311,6 +10435,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.issueSyncSources as any)[id];
   }),
 
+  // Agent definitions and chains. An upsert with an _id patches the row in
+  // place; without one it writes a stub keyed by a client_key the server
+  // echoes back, so the stub supersedes onto the real row (registry altKey).
+  upsertAgentDefinition: asyncAction(function (this: Draft, fields: any) {
+    return upsertAgentLibraryRow(this, "agentDefinitions", "ad", fields);
+  }),
+  removeAgentDefinition: action(function (this: Draft, id: string) {
+    delete (this.agentDefinitions as any)[id];
+  }),
+  upsertAgentChain: asyncAction(function (this: Draft, fields: any) {
+    return upsertAgentLibraryRow(this, "agentChains", "ac", fields);
+  }),
+  removeAgentChain: action(function (this: Draft, id: string) {
+    delete (this.agentChains as any)[id];
+  }),
+
   // Local-first create: an optimistic stub renders the row instantly (the
   // quick-add loop on task detail fires several per second). The stub carries a
   // minted client_key and is keyed by `temp_task_<key>`; when the server row
@@ -10516,6 +10656,40 @@ const inboxStoreConfig = (set: any, get: any) => ({
   discardTeamStub: sync(function (this: Draft, stubId: string, previousActiveTeamId: string | undefined) {
     this.teams = (this.teams ?? []).filter((t: any) => t?._id !== stubId);
     if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = previousActiveTeamId;
+  }),
+
+  // Local-first delete, the mirror of createTeam: the row leaves the list and
+  // the workspace pointer moves in one draft, so the switcher, the sidebar and
+  // the settings panel re-scope in the same tick. The fallback is the caller's
+  // oldest remaining team, the same rule the server applies when it repoints
+  // users.active_team_id (teams.endMembership), so the mirror and the canonical
+  // pointer agree once the echo lands. A refused delete (not an admin, name
+  // mismatch) puts the row and the pointer back.
+  deleteTeam: async (teamId: string, confirmName: string) => {
+    const team = (get().teams ?? []).find((t: any) => t?._id === teamId);
+    if (!team) throw new Error("Team not found");
+    const previousActiveTeamId = get().clientState.ui?.active_team_id;
+    const fallback = (get().teams ?? [])
+      .filter((t: any) => t?._id !== teamId && isConvexId(String(t?._id)))
+      .sort((a: any, b: any) => (a?.joined_at ?? 0) - (b?.joined_at ?? 0))[0];
+    try {
+      await get().dispatchDeleteTeam(teamId, confirmName, fallback?._id);
+    } catch (error) {
+      if (!isParkedDispatchError(error)) get().restoreTeamRow(team, previousActiveTeamId);
+      throw error;
+    }
+  },
+
+  dispatchDeleteTeam: asyncAction(function (this: Draft, teamId: string, _confirmName: string, fallbackTeamId: string | undefined) {
+    this.teams = (this.teams ?? []).filter((t: any) => t?._id !== teamId);
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    if (this.clientState.ui.active_team_id === teamId) this.clientState.ui.active_team_id = fallbackTeamId;
+  }),
+
+  restoreTeamRow: sync(function (this: Draft, team: any, previousActiveTeamId: string | undefined) {
+    if (!(this.teams ?? []).some((t: any) => t?._id === team?._id)) this.teams = [...(this.teams ?? []), team];
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.active_team_id = previousActiveTeamId;
   }),
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
@@ -11094,6 +11268,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.clientState.ui.zen_mode = zen;
       writeCriticalUiPrefs({ zen_mode: zen });
     }
+    // The sidebar's pinned sections ride along with the panes. Assigned whole,
+    // including with nothing: a layout saved with no pins (or an older save,
+    // from before this field) hands every section back to its route default.
+    const sections = snap.navSections ?? {};
+    if (JSON.stringify(this.clientState.ui.nav_sections ?? {}) !== JSON.stringify(sections)) {
+      this.clientState.ui.nav_sections = { ...sections };
+      writeCriticalUiPrefs({ nav_sections: this.clientState.ui.nav_sections });
+    }
     // The chip rides along with the panes. Both axes are assigned together
     // rather than through the single-axis setters, whose "don't clobber the
     // other axis's exclude" guards exist for one-chip clicks; here the whole
@@ -11126,6 +11308,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       zen: st.clientState.ui?.zen_mode ?? false,
       path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
   },
@@ -11139,6 +11322,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // update from a different page shouldn't silently retarget the switch.
       path: path ?? prev?.path,
       filter: chipFilterOf(st),
+      navSections: st.clientState.ui?.nav_sections,
     });
     st.updateSavedView(id, { prefs: snap });
   },
@@ -11505,6 +11689,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the middleware wraps every action exactly as if it were written inline.
   ...createChatSlice(set, get),
 
+  // Org tree singleton + reshaping actions (store/orgSlice.ts), same spread rule.
+  ...createOrgSlice(),
+
 });
 
 function createInboxStore() {
@@ -11546,6 +11733,34 @@ const hotSwapCapable = process.env.NODE_ENV !== "production" && typeof document 
 const survivingInboxStore: ReturnType<typeof createInboxStore> | undefined = hotSwapCapable
   ? (globalThis as any).__codecastInboxStore
   : undefined;
+
+
+/** Shared draft write for the agent library: patch by _id, else stub a new
+ *  row in the active workspace. Returns the client_key the dispatch sends so
+ *  the server row answers to the same key. */
+function upsertAgentLibraryRow(draft: any, key: "agentDefinitions" | "agentChains", prefix: string, fields: any): { client_key: string; id?: string } {
+  const now = Date.now();
+  const { _id, ...rest } = fields;
+  if (_id && draft[key][_id]) {
+    Object.assign(draft[key][_id], rest, { updated_at: now });
+    return { client_key: draft[key][_id].client_key ?? `${prefix}_${_id}`, id: _id };
+  }
+  const client_key = `${prefix}_${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const teamId = draft.clientState.ui?.active_team_id;
+  const userId = draft.currentUser?._id ? String(draft.currentUser._id) : null;
+  draft[key][client_key] = {
+    _id: client_key,
+    short_id: `${prefix}-${now.toString(36)}`,
+    client_key,
+    team_id: teamId,
+    workspace: activeWorkspaceKey(teamId, userId) ?? undefined,
+    user_id: userId ?? undefined,
+    created_at: now,
+    updated_at: now,
+    ...rest,
+  };
+  return { client_key };
+}
 
 export const useInboxStore = survivingInboxStore ?? createInboxStore();
 

@@ -99,6 +99,7 @@ const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-yo
 const BlogTeamMemory = lazy(() => import("@/app/(marketing)/blog/your-agents-forget-your-team-does-not/page"));
 const BlogTriggers = lazy(() => import("@/app/(marketing)/blog/this-post-wrote-itself/page"));
 const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everything-your-agent-makes/page"));
+const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -115,10 +116,14 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Org = lazy(() => import("@/app/org/page"));
+const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
+const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
+const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
 const Threads = lazy(() => import("@/app/threads/page"));
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
@@ -201,6 +206,7 @@ const CallRing = lazy(() => import("@/app/call-ring/page"));
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
 const SettingsAgents = lazy(() => import("@/app/settings/agents/page"));
+const SettingsAgentLibrary = lazy(() => import("@/app/settings/agent-library/page"));
 const SettingsDevices = lazy(() => import("@/app/settings/devices/page"));
 const SettingsMigrate = lazy(() => import("@/app/settings/migrate/page"));
 const SettingsSync = lazy(() => import("@/app/settings/sync/page"));
@@ -239,6 +245,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/your-agents-forget-your-team-does-not", component: cast(BlogTeamMemory), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/this-post-wrote-itself", component: cast(BlogTriggers), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/a-url-for-everything-your-agent-makes", component: cast(BlogPublish), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/agents-that-talk-to-each-other", component: cast(BlogAgentsTalk), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 
@@ -255,6 +262,9 @@ export const ROUTES: RouteEntry[] = [
   { path: "inbox", component: cast(Inbox), layout: "dashboardShell", tab: "/inbox", fullWidth: true },
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
   { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
+  // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
+  { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org" },
+  { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
   // Chat is full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions and
   // /anchor), not via a DashboardLayout isOnXPage flag — so it carries no
   // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.
@@ -264,6 +274,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
   { path: "questions", component: cast(Questions), layout: "dashboardShell", tab: "/questions" },
+  { path: "decisions/stacks/:id", component: cast(DecisionStack), layout: "dashboardShell", tab: "/decisions/stacks/:id" },
+  { path: "decisions/:id", component: cast(DecisionDetail), layout: "dashboardShell", tab: "/decisions/:id" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
   { path: "threads", component: cast(Threads), layout: "dashboardShell", tab: "/threads" },
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },
@@ -387,6 +399,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings", component: cast(Settings), layout: "settings" },
   { path: "settings/cli", component: cast(SettingsCli), layout: "settings" },
   { path: "settings/agents", component: cast(SettingsAgents), layout: "settings" },
+  { path: "settings/agent-library", component: cast(SettingsAgentLibrary), layout: "settings" },
   { path: "settings/devices", component: cast(SettingsDevices), layout: "settings" },
   { path: "settings/migrate", component: cast(SettingsMigrate), layout: "settings" },
   { path: "settings/sync", component: cast(SettingsSync), layout: "settings" },
