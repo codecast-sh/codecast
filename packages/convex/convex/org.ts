@@ -37,7 +37,7 @@ type OrgSession = {
   short_id: string | null;
   title: string;
   agent_type: string;
-  work_state: WorkState;
+  state: WorkState;
   updated_at: number;
   owner_user_id: Id<"users"> | null;
   org_role_id: Id<"org_roles"> | null;
@@ -54,7 +54,7 @@ function emptyCounts(): StateCounts {
 }
 function orderSessions(rows: OrgSession[]): OrgSession[] {
   return rows.sort((a, b) => {
-    const d = STATE_ORDER.indexOf(a.work_state) - STATE_ORDER.indexOf(b.work_state);
+    const d = STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state);
     return d !== 0 ? d : b.updated_at - a.updated_at;
   });
 }
@@ -153,7 +153,7 @@ export async function collectOrgSessions(
       short_id: c.short_id ?? null,
       title: c.title ?? "",
       agent_type: c.agent_type,
-      work_state: workStates.get(cid) ?? "idle",
+      state: workStates.get(cid) ?? "idle",
       updated_at: c.updated_at,
       owner_user_id: c.owner_user_id ?? c.user_id ?? null,
       org_role_id: c.org_role_id ?? null,
@@ -188,7 +188,7 @@ export async function collectOrgSessions(
 
 function tallyOf(rows: OrgSession[]): StateCounts {
   const counts = emptyCounts();
-  for (const r of rows) counts[r.work_state]++;
+  for (const r of rows) counts[r.state]++;
   return counts;
 }
 
@@ -257,7 +257,7 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
       org_role_id: a.org_role_id ?? undefined,
       conversation_id: a.conversation_id ?? undefined,
       short_id: session?.short_id ?? undefined,
-      work_state: session?.work_state,
+      state: session?.state,
       status: a.status,
     };
   });
@@ -499,7 +499,7 @@ export async function computeScopeFeed(
       id: session._id.toString(),
       short_id: session.short_id ?? undefined,
       title: session.title || "(untitled)",
-      state: session.work_state,
+      state: session.state,
       actor: await actor(session.owner_user_id),
       updated_at: session.updated_at,
       href: `/conversation/${session.short_id ?? session._id}`,
@@ -792,7 +792,7 @@ export type BriefHand = {
   _id: Id<"conversations">;
   short_id: string;
   title: string;
-  work_state: WorkState;
+  state: WorkState;
   state_line: string | null;
   state_status: string | null;
   state_at: number | null;
@@ -849,7 +849,7 @@ export async function computeBriefFacts(ctx: Ctx, role: any, now: number): Promi
       _id: c._id,
       short_id: c.short_id ?? String(c._id).slice(0, 7),
       title: c.title ?? "",
-      work_state: states.get(c._id.toString()) ?? "idle",
+      state: states.get(c._id.toString()) ?? "idle",
       state_line: c.thread_state ? String(c.thread_state).split("\n")[0] : null,
       state_status: c.thread_state_status ?? null,
       state_at: c.thread_state_at ?? null,

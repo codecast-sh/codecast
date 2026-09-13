@@ -86,7 +86,7 @@ function detachSession(tree: OrgTree, conversationId: string): { session: OrgSes
     if (i < 0) continue;
     const [session] = b.sessions.splice(i, 1);
     b.total = Math.max(0, b.total - 1);
-    b.counts[session.work_state] = Math.max(0, (b.counts[session.work_state] ?? 0) - 1);
+    b.counts[session.state] = Math.max(0, (b.counts[session.state] ?? 0) - 1);
     return { session, from: b };
   }
   return null;
@@ -95,7 +95,7 @@ function detachSession(tree: OrgTree, conversationId: string): { session: OrgSes
 function attachSession(bucket: OrgPerson | OrgRole, session: OrgSession) {
   bucket.sessions.push(session);
   bucket.total += 1;
-  bucket.counts[session.work_state] = (bucket.counts[session.work_state] ?? 0) + 1;
+  bucket.counts[session.state] = (bucket.counts[session.state] ?? 0) + 1;
   refill(bucket);
 }
 
