@@ -50,19 +50,19 @@ kill_tree() {
 kill_port() {
     local port=$1
     local pids attempts=0
-    pids=$(lsof -ti :$port 2>/dev/null)
+    pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null)
     if [ -n "$pids" ]; then
         log "Clearing port $port (pids: $pids)"
         echo "$pids" | xargs kill 2>/dev/null || true
         sleep 0.5
-        pids=$(lsof -ti :$port 2>/dev/null)
+        pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null)
         [ -n "$pids" ] && echo "$pids" | xargs kill -9 2>/dev/null || true
     fi
-    while lsof -ti :$port >/dev/null 2>&1; do
+    while lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
         attempts=$((attempts + 1))
         if [ $attempts -ge 10 ]; then
             log_err "Port $port still in use after ${attempts}s, force killing"
-            lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
+            lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
             sleep 1
             break
         fi
