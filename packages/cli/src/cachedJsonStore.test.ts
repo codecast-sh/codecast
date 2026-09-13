@@ -121,3 +121,55 @@ describe("CachedJsonStore", () => {
     expect(last).toEqual({ a: 1, b: 2 });
   });
 });
+
+it("asynchronous pruning yields, bounds concurrency, and retains failed checks", async () => {
+  fs.writeFileSync(file, JSON.stringify(Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`k${i}`, i]))));
+  let active = 0;
+  let peak = 0;
+  let checked = 0;
+  const store = new CachedJsonStore<number>({
+    filePath: file,
+    flushDelayMs: 10000,
+    keepOnLoadAsync: async (key) => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      active--;
+      checked++;
+      if (key === "k1") throw new Error("transient I/O failure");
+      return key === "k0";
+    },
+  });
+  expect(store.get("k0")).toBe(0);
+  expect(checked).toBe(0);
+  await store.prune();
+  expect(peak).toBeLessThanOrEqual(16);
+  expect(checked).toBe(80);
+  expect(store.getAll()).toEqual({ k0: 0, k1: 1 });
+  store.flushSync();
+  expect(read()).toEqual({ k0: 0, k1: 1 });
+});
+
+it("a delayed prune cannot delete a newer write, even after its journal flushed", async () => {
+  fs.writeFileSync(file, JSON.stringify({ same: 1, changed: 2, deleted: 3, dead: 4 }));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const begun = new Promise<void>(resolve => { started = resolve; });
+  const store = new CachedJsonStore<number>({
+    filePath: file,
+    flushDelayMs: 10000,
+    keepOnLoadAsync: async () => { started(); await gate; return false; },
+  });
+  store.getAll();
+  await begun;
+  store.set("same", 1);
+  store.set("changed", 20);
+  store.delete("deleted");
+  store.set("added", 5);
+  store.flushSync();
+  release();
+  await store.prune();
+  store.flushSync();
+  expect(read()).toEqual({ same: 1, changed: 20, added: 5 });
+});
