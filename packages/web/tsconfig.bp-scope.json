@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "vite-env.d.ts",
+    "lib/browserPane.ts", "lib/__tests__/browserPane.test.ts", "lib/stage.ts", "lib/tabParams.ts",
+    "lib/pathLabel.ts", "lib/tabTitle.ts", "lib/pageLayout.tsx", "lib/tabRoutes.ts",
+    "lib/__tests__/stage.test.ts", "app/browser/page.tsx", "components/browser/BrowserPane.tsx",
+    "components/browser/backends/FrameBackend.tsx", "components/browser/backends/PaneCard.tsx",
+    "components/browser/backends/types.ts", "components/RoutePane.tsx",
+    "components/stage/StageSplitView.tsx", "components/RecentVisitRow.tsx",
+    "src/routes.manifest.ts", "src/App.tsx"
+  ],
+  "exclude": []
+}

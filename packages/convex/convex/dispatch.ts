@@ -14,6 +14,7 @@ import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscri
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
+import { stampBrowserPaneOfferHandled } from "./conversations";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser } from "./pendingMessages";
@@ -70,6 +71,11 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       // would bypass performReparentSession's rules and let the role's brief
       // and actor resolution treat the row as acting for the role.
       "org_role_id", "standing_role_id",
+      // An agent's pane offer is written by the agent and retired by the
+      // reader's click, and the retiring write must pass a VISIBILITY check
+      // rather than the ownership one this gate applies — a teammate reading a
+      // shared session acts on the chip too. It rides dismissBrowserPaneOffer.
+      "browser_pane_offer",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
@@ -1111,6 +1117,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       args: JSON.stringify({ conversation_id: convId }),
       created_at: Date.now(),
     });
+  },
+
+  // The reader opened or dismissed an agent's pane offer. One handler for both
+  // gestures: the offer only has to know it was handled. `at` is the client's
+  // own timestamp, written verbatim, so the optimistic value and the server's
+  // echo are the same object and the local field lock retires (see
+  // stampBrowserPaneOfferHandled).
+  dismissBrowserPaneOffer: async (ctx, userId, [convId, at]: [string, number]) => {
+    await stampBrowserPaneOfferHandled(ctx, userId, convId as Id<"conversations">, at);
   },
 
   // Mirror of conversations.setPrivacy — these two fields are immutable in

@@ -54,6 +54,7 @@ import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
+import { BrowserPaneOfferGlyph } from "./browser/BrowserPaneOfferChip";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
@@ -2956,6 +2957,7 @@ export const SessionCard = memo(function SessionCard({
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />
             <PrStatusChip status={session.pr_status} />
+            <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

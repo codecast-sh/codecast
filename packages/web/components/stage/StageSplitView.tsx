@@ -15,7 +15,7 @@
 // and stacking a second bar over it is the exact pattern the companion work
 // rejected.
 
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { PaneControls } from "./PaneControls";
 import { useInboxStore, useTrackedStore, type AppTab } from "../../store/inboxStore";
 import {
@@ -27,6 +27,7 @@ import {
 } from "../../store/stageSplit";
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { pathLabel } from "../../lib/pathLabel";
+import { browserPathLabel, parseBrowserRoute, subscribeBrowserTitles } from "../../lib/browserPane";
 import { chatTabTitle } from "../../lib/tabTitle";
 import { RoutePane } from "../RoutePane";
 import { SessionPane } from "./SessionPane";
@@ -38,6 +39,13 @@ import { ErrorBoundary } from "../ErrorBoundary";
 // title, the channel's name — because two panes both labeled "Docs" say
 // nothing. Subscribes only to the one row it names.
 function usePaneTitle(path: string): string {
+  // A browser pane is titled by the page: its own title once a backend could
+  // read one, else the host. That is learned, not stored, so it is subscribed
+  // to rather than read once (lib/browserPane).
+  const browser = useSyncExternalStore(
+    subscribeBrowserTitles,
+    () => (parseBrowserRoute(path) ? browserPathLabel(path) : ""),
+  );
   const clean = path.split("?")[0];
   const m = clean.match(/^\/(docs|tasks|plans|chat)\/([^/]+)/);
   const kind = m?.[1];
@@ -56,7 +64,24 @@ function usePaneTitle(path: string): string {
     : kind === "plans" ? s.plans[id]?.title
     : kind === "chat" ? chatTabTitle(path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id)
     : null;
-  return entity || pathLabel(path);
+  return browser || entity || pathLabel(path);
+}
+
+// A pane that draws its OWN header (a conversation, a browser pane) still
+// needs somewhere to grab: a grip that surfaces on hover, in the corner the
+// strip would have occupied.
+function PaneGrip({ leafId, path }: { leafId: string; path: string }) {
+  return (
+    <div
+      draggable
+      onDragStart={(e) => startPaneDrag(e, { path, title: pathLabel(path), from: { kind: "leaf", leafId } })}
+      className="stage-grip"
+      title="Drag to move this pane"
+      aria-label="Drag to move this pane"
+    >
+      <span />
+    </div>
+  );
 }
 
 // The strip is the pane's window title AND its drag handle: grab it to move
@@ -104,6 +129,8 @@ const StageCell = memo(function StageCell({
   isTabActive: boolean;
 }) {
   const sessionId = paneSessionId(path);
+  // Panes that draw their own 32px header get no PaneStrip stacked on top.
+  const ownsHeader = !!parseBrowserRoute(path);
   const navigate = useCallback(
     (p: string, mode: "push" | "replace") => stageNavigateLeaf(leafId, p, mode),
     [leafId],
@@ -122,25 +149,29 @@ const StageCell = memo(function StageCell({
     >
       {sessionId ? (
         <>
-          {/* A conversation pane has no strip (its own header hosts close and
-              expand), so its drag handle is a grip that surfaces on hover. */}
-          <div
-            draggable
-            onDragStart={(e) => startPaneDrag(e, { path, title: pathLabel(path), from: { kind: "leaf", leafId } })}
-            className="stage-grip"
-            title="Drag to move this pane"
-            aria-label="Drag to move this pane"
-          >
-            <span />
-          </div>
+          {/* A conversation pane has no strip: its own header hosts close and
+              expand, so the drag handle is a grip that surfaces on hover. */}
+          <PaneGrip leafId={leafId} path={path} />
           <SessionPane sessionId={sessionId} onClose={handleClose} onExpand={handleExpand} />
+        </>
+      ) : ownsHeader ? (
+        <>
+          {/* Same duality for a browser pane: its 32px address strip IS the
+              header, and it hosts PaneControls (leafId reaches it through
+              TabParamsCtx). A strip above that would be two bars. */}
+          <PaneGrip leafId={leafId} path={path} />
+          <div className="h-full min-h-0">
+            <ErrorBoundary name="StagePane" level="panel">
+              <RoutePane tabId={tabId} path={path} isActive={isTabActive && focused} navigate={navigate} leafId={leafId} />
+            </ErrorBoundary>
+          </div>
         </>
       ) : (
         <div className="h-full flex flex-col min-h-0">
           <PaneStrip leafId={leafId} path={path} focused={focused} />
           <div className="flex-1 min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={isTabActive && focused} navigate={navigate} />
+              <RoutePane tabId={tabId} path={path} isActive={isTabActive && focused} navigate={navigate} leafId={leafId} />
             </ErrorBoundary>
           </div>
         </div>

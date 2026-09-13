@@ -23,6 +23,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (path.startsWith("/feed")) return <Rss className={className} />;
   if (path.startsWith("/files") || path.startsWith("/vault")) return <Folder className={className} />;
   if (path.startsWith("/pages") || path.startsWith("/artifacts")) return <Globe className={className} />;
+  if (path.startsWith("/browser")) return <Globe className={className} />;
   if (path.startsWith("/projects")) return <FolderKanban className={className} />;
   if (path.startsWith("/workflows") || path.startsWith("/routines")) return <Workflow className={className} />;
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;

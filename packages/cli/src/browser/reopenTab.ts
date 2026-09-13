@@ -19,6 +19,7 @@
 
 import { execFile } from "node:child_process";
 import { resolveCastInvocation } from "../castInvocation.js";
+import { agentSpawnPath } from "../agentSpawnPath.js";
 import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
 import { sessionTarget } from "./engineReap.js";
 import { parseTabLine } from "./tabId.js";
@@ -82,7 +83,10 @@ export interface ReopenDeps {
 
 function runOpenViaCli(url: string, identity: Record<string, string>): Promise<{ status: number; stdout: string; stderr: string }> {
   const { cmd, prefixArgs } = resolveCastInvocation();
-  const env: Record<string, string | undefined> = { ...process.env };
+  // Under launchd the daemon's PATH has no node or bun, and the engine binary
+  // starts with a node shebang (agentSpawnPath.ts) — the same re-add every
+  // agent spawn makes.
+  const env: Record<string, string | undefined> = { ...process.env, PATH: agentSpawnPath() };
   for (const name of IDENTITY_ENV) delete env[name];
   Object.assign(env, identity);
   return new Promise((resolve) => {

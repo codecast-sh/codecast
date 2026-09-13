@@ -125,8 +125,12 @@ import {
   PanelBottom,
   Cloud,
   Laptop,
+  Globe,
 } from "lucide-react";
 import { AnchorGlyph } from "./anchor/AnchorIdentity";
+import { BROWSER_ROUTE, displayHost } from "../lib/browserPane";
+import { typedAddress } from "../lib/browserPaneLinks";
+import { openBeside, openBrowserPane } from "../lib/stage";
 import { isTriageBarCompact } from "./triage/graduation";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
 import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
@@ -1755,6 +1759,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // (docs/architecture/decisions-as-documents.md D4 / D5). These prefixes are
   // not in the shared entity registry — a decision has no pill yet — so the
   // palette answers them here.
+  // A typed address makes the browser-pane row concrete ("Open localhost:3000
+  // in a pane"); anything else leaves it as the blank-pane row.
+  const browserPaneUrl = useMemo(() => typedAddress(query), [query]);
+
   const decisionRef = useMemo(() => {
     const m = /^(sd|ds)-(\d+)$/i.exec(query.trim());
     if (!m) return null;
@@ -2958,6 +2966,25 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="truncate flex-1">{POP_OUT_PEOPLE_TITLE}</span>
               </CommandPrimitive.Item>
             )}
+            {/* A web page as a pane. With an address typed, the palette IS the
+                address bar — it already holds what you typed, so making you
+                retype it into the pane would be the worse answer. Otherwise
+                the pane opens blank with its own bar focused. */}
+            <CommandPrimitive.Item
+              key="cmd-browser-pane"
+              value="Open URL in a pane browser web page preview localhost dev server site address"
+              onSelect={() => {
+                closePalette();
+                if (browserPaneUrl) openBrowserPane({ kind: "url", url: browserPaneUrl });
+                else if (!openBeside(BROWSER_ROUTE)) navigate(BROWSER_ROUTE);
+              }}
+              className={itemClass}
+            >
+              <Globe className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">
+                {browserPaneUrl ? `Open ${displayHost(browserPaneUrl)} in a pane` : "Open a URL in a pane"}
+              </span>
+            </CommandPrimitive.Item>
             <CommandPrimitive.Item
               key="cmd-theme"
               value="Switch theme dark light mode appearance"

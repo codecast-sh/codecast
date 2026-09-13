@@ -68,6 +68,7 @@ import { authorizesTeardown } from "@codecast/shared/contracts";
 import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
 import { commandGroup } from "../commandGroups.js";
+import { registerPaneOfferCommand } from "./paneOffer.js";
 
 // colors.ts exposes semantic helpers, not raw colour names.
 const OK = `${fmt.success(icons.check)}`;
@@ -231,6 +232,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // The host group is shared with the top-level `cast hosts`: same builder,
   // two mount points, so the documented `cast browser hosts ...` keeps working.
   buildHostsCommand(br);
+
+  // Offering a page to the human is pure network — no Chrome, no tab, nothing
+  // to attach to — so it is registered here, above the engine handover, and
+  // works on a machine with no browser installed at all.
+  registerPaneOfferCommand(br, deps, "pane", "Offer a page to your human as a pane beside this session");
 
   // The agent-browser engine drives everything it covers, which is nearly all
   // of it. Our own CDP driver stays behind it as a fallback for a machine that
