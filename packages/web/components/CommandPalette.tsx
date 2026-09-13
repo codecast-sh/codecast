@@ -199,6 +199,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
+  { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/workflows", icon: "workflow", keywords: "orchestration runs graph dot gates", secondary: true },
@@ -1750,6 +1751,19 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     [router, standalone, closePalette]
   );
 
+  // A typed decision or stack short id (`sd-12`, `ds-3`) resolves to its page
+  // (docs/architecture/decisions-as-documents.md D4 / D5). These prefixes are
+  // not in the shared entity registry — a decision has no pill yet — so the
+  // palette answers them here.
+  const decisionRef = useMemo(() => {
+    const m = /^(sd|ds)-(\d+)$/i.exec(query.trim());
+    if (!m) return null;
+    const id = `${m[1].toLowerCase()}-${m[2]}`;
+    return m[1].toLowerCase() === "ds"
+      ? { kind: "stack" as const, id, href: `/decisions/stacks/${id}` }
+      : { kind: "decision" as const, id, href: `/decisions/${id}` };
+  }, [query]);
+
   // Hand the current query off to the full /search page — the palette shows a
   // capped preview; the page has filters, pagination, and message context.
   const openFullSearch = useCallback(() => {
@@ -1941,7 +1955,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (actionKey === "pin" && targetType === "doc") {
       const doc = target as DocItem;
       pinDoc(doc._id, !doc.pinned);
-      toast.success(doc.pinned ? "Unpinned" : "Pinned");
+      toast.success(doc.pinned ? "Unstarred" : "Starred");
       closePalette();
       return;
     }
@@ -2677,6 +2691,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <Folder className="w-4 h-4 shrink-0 text-sol-blue" /><span className="truncate flex-1">{project.title}</span>
               </CommandPrimitive.Item>
             ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {!picking && decisionRef && (
+          <CommandPrimitive.Group heading={decisionRef.kind === "stack" ? "Decision stack" : "Decision"} className={groupClass}>
+            <CommandPrimitive.Item
+              value={`__entity__ ${decisionRef.id}|||${decisionRef.id}`}
+              data-palette-type={decisionRef.kind === "stack" ? "decision_stack" : "decision"}
+              data-palette-short-id={decisionRef.id}
+              onSelect={() => navigate(decisionRef.href)}
+              className={itemClass}
+            >
+              <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
+              <span className="font-mono text-sol-text-dim">{decisionRef.id}</span>
+              <span className="flex-1 truncate">{decisionRef.kind === "stack" ? "open the stack" : "open the decision page"}</span>
+              <KeyCap size="xs">→</KeyCap>
+            </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
 
