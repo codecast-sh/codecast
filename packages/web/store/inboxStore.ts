@@ -6517,7 +6517,7 @@ function recordCurrentConversationPointer(
   id: string | undefined,
 ) {
   if (typeof document !== "undefined") {
-    if (!document.hasFocus()) return;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return;
     if (typeof window !== "undefined" && window.location?.pathname?.startsWith("/palette")) return;
   }
   draft.clientState.current_conversation_id = id;
