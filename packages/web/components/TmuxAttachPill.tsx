@@ -124,7 +124,7 @@ export function TmuxAttachPill({
           </svg>
           {/* Naming the machine is what makes the pill honest at a glance — a
               bare "tmux" reads as "here" no matter where the pane really is. */}
-          {foreign ? machineName : "tmux"}
+          <span className="cq-sq2">{foreign ? machineName : "tmux"}</span>
           <DeviceDot online={isLive} />
         </button>
       </ShortcutTooltip>
@@ -135,6 +135,7 @@ export function TmuxAttachPill({
               that tooltip is the entire explanation for why nothing copies. */}
           <button
             data-simple-hide
+            className="cq-sq1"
             onClick={copyAttach}
             aria-disabled={!attach}
             className={`inline-flex items-center pl-1 pr-1.5 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
