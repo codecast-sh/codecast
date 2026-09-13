@@ -34,9 +34,10 @@
 // a listen draws the strip; a call draws the ordinary dock, and the stage when
 // the person expanded it.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
-import { CHAT_CHANNEL_STUB_PREFIX, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
+import { CHAT_CHANNEL_STUB_PREFIX, dmOpenInFlight, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
 import { joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
 import {
   isVoiceHost,
@@ -61,7 +62,15 @@ import {
   startLocalMeter,
   stopLocalMeter,
 } from "./walkieMeter";
-import { MIN_BURST_MS, containerMime, landBurst, measureBurst, recorderMime } from "./walkieMessage";
+import {
+  MIN_BURST_MS,
+  containerMime,
+  landBurst,
+  measureBurst,
+  recorderMime,
+  resolveChannelStub,
+  type ChannelStubOutcome,
+} from "./walkieMessage";
 import { uploadBlobToStorage } from "../uploadBlob";
 import { mutateOnUnload } from "../keepaliveMutation";
 import {
@@ -753,24 +762,18 @@ function serverChannelIdFor(stubId: string): string | null {
   return resolveChannelStubId(useInboxStore.getState().chatChannels as Record<string, any>, stubId);
 }
 
-/** A channel id the server will accept, or null once waiting stops making
- *  sense. Real ids pass straight through; a stub waits — bounded, and never
- *  past the burst's own end — for the row that makes it real. */
-async function resolveServerChannelId(b: Burst, channelId: string): Promise<string | null> {
-  if (!channelId.startsWith(CHAT_CHANNEL_STUB_PREFIX)) return channelId;
-  const now = serverChannelIdFor(channelId);
-  if (now) return now;
-  const deadline = Date.now() + CHANNEL_RESOLVE_MS;
-  return await new Promise((resolve) => {
-    const tick = () => {
-      const found = serverChannelIdFor(channelId);
-      if (found || b.done || Date.now() > deadline) {
-        resolve(found);
-        return;
-      }
-      setTimeout(tick, 200);
-    };
-    tick();
+/** A channel id the server will accept, or why there is none. Real ids pass
+ *  straight through; a stub resolves off the open's own answer or the row it
+ *  rekeys onto, whichever lands first (walkieMessage.resolveChannelStub) —
+ *  bounded, and never past the burst's own end. */
+function resolveServerChannelId(b: Burst, channelId: string): Promise<ChannelStubOutcome> {
+  if (!channelId.startsWith(CHAT_CHANNEL_STUB_PREFIX)) return Promise.resolve({ id: channelId });
+  return resolveChannelStub({
+    lookup: () => serverChannelIdFor(channelId),
+    inFlight: dmOpenInFlight(channelId),
+    done: () => b.done,
+    deadlineMs: CHANNEL_RESOLVE_MS,
+    reason: (err) => humanizeConvexError(err, "Could not open the conversation"),
   });
 }
 
@@ -932,13 +935,17 @@ function startBurstHere(channelId: string, roomKey: string, clientId?: string): 
       // validates channel_id as a real document id, so a stub sent as-is is a
       // burst aborted every time. The words are already being recorded either
       // way, so waiting here costs nothing audible.
-      const serverChannelId = await resolveServerChannelId(b, channelId);
+      const channel = await resolveServerChannelId(b, channelId);
       if (b.done) return;
-      if (!serverChannelId) {
-        emit({ error: "Could not start the voice message" });
+      if (!channel || "failed" in channel) {
+        // The reason, when the server gave one: a burst that died because the
+        // DM could not be opened must say so, or the person reads it as the
+        // recording stopping by itself.
+        emit({ error: channel ? channel.failed : "Could not start the voice message" });
         await abortBurst(b);
         return;
       }
+      const serverChannelId = channel.id;
       const res = await convex!.mutation(api.chat.startVoiceBurst, {
         channel_id: serverChannelId,
         client_id: clientId,
