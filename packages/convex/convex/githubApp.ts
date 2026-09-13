@@ -1,5 +1,7 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
+import { action, mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import type { MappedPull } from "./githubApi";
 import type { QueryCtx } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -744,6 +746,108 @@ export const stampInstallationSync = internalMutation({
   },
 });
 
+/**
+ * Store one pull request GitHub described (list entry or single read) for a
+ * team, the way a webhook-born row ends up: the row itself, then for a newly
+ * seen open one its file list and a merge-state read. The backfill and the
+ * on-demand fetch share this so the two paths cannot drift.
+ */
+async function ingestPull(
+  ctx: { runMutation: any; runAction: any; scheduler: any },
+  args: {
+    teamId: Id<"teams">;
+    repository: string;
+    pull: MappedPull;
+    token: string;
+    withFiles: boolean;
+    mergeStateDelayMs?: number;
+  },
+): Promise<{ pr_id: Id<"pull_requests">; created: boolean }> {
+  const { teamId, repository, pull, token } = args;
+  const result: { pr_id: Id<"pull_requests">; created: boolean } = await ctx.runMutation(
+    internal.pull_requests.syncPRFromGitHub,
+    {
+      team_id: teamId,
+      github_pr_id: pull.id,
+      repository,
+      number: pull.number,
+      title: pull.title,
+      body: pull.body,
+      state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
+      author_github_username: pull.author_login ?? "unknown",
+      author_avatar_url: pull.author_avatar_url,
+      head_ref: pull.head_ref,
+      base_ref: pull.base_ref,
+      head_sha: pull.head_sha,
+      base_sha: pull.base_sha,
+      draft: pull.draft,
+      requested_reviewers: pull.requested_reviewers,
+      created_at: pull.created_at ?? Date.now(),
+      updated_at: pull.updated_at ?? Date.now(),
+      merged_at: pull.merged_at ?? undefined,
+      closed_at: pull.closed_at ?? undefined,
+    },
+  );
+  if (pull.state !== "open" || !result.created) return result;
+  if (args.withFiles) {
+    try {
+      const files = await ctx.runAction(internal.githubApi.getPRFiles, {
+        repository,
+        pr_number: pull.number,
+        github_access_token: token,
+      });
+      await ctx.runMutation(internal.pull_requests.updatePRFiles, {
+        pr_id: result.pr_id,
+        files: files.files,
+        additions: files.additions,
+        deletions: files.deletions,
+        changed_files: files.changed_files,
+        commits_count: files.commits_count,
+        base_ref: files.base_ref,
+      });
+    } catch (error) {
+      console.error(`Files for ${repository}#${pull.number} failed:`, error);
+    }
+  }
+  await ctx.scheduler.runAfter(args.mergeStateDelayMs ?? 0, internal.prShepherd.refreshMergeState, {
+    pr_id: result.pr_id,
+    attempt: 0,
+  });
+  return result;
+}
+
+/**
+ * Bring one pull request in on demand: a page opened for a pull request the
+ * backfill window did not reach (an old closed one), in a repository one of
+ * the caller's team installs covers. The row is stored for that install's
+ * team, so the page's own query answers on the next push. A personal install
+ * routes nothing to a team, so it cannot bring a row in.
+ */
+export const fetchPull = action({
+  args: { repository: v.string(), number: v.number() },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { ok: false, reason: "unauthenticated" };
+    const repository = normalizeRepository(args.repository);
+    const installation = await ctx.runQuery(internal.githubApp.getInstallationForRepo, {
+      repository,
+      user_id: userId,
+    });
+    if (!installation?.team_id) return { ok: false, reason: "no_team_installation" };
+    const { token } = await ctx.runAction(internal.githubApp.getInstallationToken, {
+      installation_id: installation.installation_id,
+    });
+    const pull = await ctx.runAction(internal.githubApi.getPull, {
+      repository,
+      number: args.number,
+      github_access_token: token,
+    });
+    if (!pull) return { ok: false, reason: "not_on_github" };
+    await ingestPull(ctx, { teamId: installation.team_id, repository, pull, token, withFiles: true });
+    return { ok: true };
+  },
+});
+
 /** Open pull requests are paged fully up to this many pages per repository. */
 const BACKFILL_OPEN_PAGES = 4;
 /** How many open pull requests per install get their file list during a backfill. */
@@ -803,53 +907,15 @@ export const backfillInstallationPulls = internalAction({
             github_access_token: token,
           });
           for (const pull of batch) {
-            const { pr_id, created } = await ctx.runMutation(internal.pull_requests.syncPRFromGitHub, {
-              team_id: teamId,
-              github_pr_id: pull.id,
-              repository,
-              number: pull.number,
-              title: pull.title,
-              body: pull.body,
-              state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
-              author_github_username: pull.author_login ?? "unknown",
-              author_avatar_url: pull.author_avatar_url,
-              head_ref: pull.head_ref,
-              base_ref: pull.base_ref,
-              head_sha: pull.head_sha,
-              base_sha: pull.base_sha,
-              draft: pull.draft,
-              requested_reviewers: pull.requested_reviewers,
-              created_at: pull.created_at ?? Date.now(),
-              updated_at: pull.updated_at ?? Date.now(),
-              merged_at: pull.merged_at ?? undefined,
-              closed_at: pull.closed_at ?? undefined,
-            });
             pulls++;
-            if (pull.state !== "open" || !created) continue;
-            if (filesLeft > 0) {
-              filesLeft--;
-              try {
-                const files = await ctx.runAction(internal.githubApi.getPRFiles, {
-                  repository,
-                  pr_number: pull.number,
-                  github_access_token: token,
-                });
-                await ctx.runMutation(internal.pull_requests.updatePRFiles, {
-                  pr_id,
-                  files: files.files,
-                  additions: files.additions,
-                  deletions: files.deletions,
-                  changed_files: files.changed_files,
-                  commits_count: files.commits_count,
-                  base_ref: files.base_ref,
-                });
-              } catch (error) {
-                console.error(`Backfill: files for ${repository}#${pull.number} failed:`, error);
-              }
-            }
-            // Spread the merge-state reads out so a large repository does not
-            // burst the installation's rate limit in one second.
-            await ctx.scheduler.runAfter(pulls * 500, internal.prShepherd.refreshMergeState, { pr_id, attempt: 0 });
+            const withFiles = filesLeft > 0;
+            const { created } = await ingestPull(ctx, {
+              teamId, repository, pull, token, withFiles,
+              // Spread the merge-state reads out so a large repository does
+              // not burst the installation's rate limit in one second.
+              mergeStateDelayMs: pulls * 500,
+            });
+            if (created && pull.state === "open" && withFiles) filesLeft--;
           }
           if (state === "open" && batch.length < 50) break;
         }
