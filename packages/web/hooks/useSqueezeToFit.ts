@@ -51,13 +51,13 @@ export function useSqueezeToFit(rowRef: RefObject<HTMLElement | null>, maxLevel:
       schedule();
     });
     ro.observe(row);
-    const mo = new MutationObserver(schedule);
-    mo.observe(row, { childList: true, subtree: true, characterData: true });
+    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
+    mo?.observe(row, { childList: true, subtree: true, characterData: true });
     // Web fonts land after first layout and change every measured width.
     document.fonts?.ready.then(schedule).catch(() => {});
     return () => {
       ro.disconnect();
-      mo.disconnect();
+      mo?.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
   }, [rowRef, maxLevel]);
