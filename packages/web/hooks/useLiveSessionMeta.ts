@@ -12,10 +12,10 @@ export function useLiveSessionMeta(conversationId: string | undefined) {
     if (!conversationId) return undefined;
     const id = s.resolveLiveSessionId(conversationId);
     const sess = s.sessions[id] as
-      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null }
+      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null; agent_definition?: string | null }
       | undefined;
     const conv = s.conversations[id] as
-      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null }
+      | { model?: string | null; effort?: string | null; agent_type?: string; owner_device_id?: string | null; agent_definition?: string | null }
       | undefined;
     if (!sess && !conv) return undefined;
     return {
@@ -23,6 +23,7 @@ export function useLiveSessionMeta(conversationId: string | undefined) {
       effort: conv?.effort !== undefined ? conv.effort : sess?.effort,
       agentType: conv?.agent_type ?? sess?.agent_type,
       ownerDeviceId: conv?.owner_device_id ?? sess?.owner_device_id,
+      agentDefinition: conv?.agent_definition ?? sess?.agent_definition ?? undefined,
     };
   }));
 }

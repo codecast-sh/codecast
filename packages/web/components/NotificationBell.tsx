@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { TopbarButton } from "./TopbarButton";
 import { agentNames, notificationRoute, sessionLabel, showsAgentIcon, typeColors, typeLabels } from "../lib/notificationTypes";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -134,12 +135,12 @@ export function NotificationBell() {
   return (
     <div className="relative" ref={dropdownRef}>
       <ShortcutTooltip label="Notifications">
-      <button
+      <TopbarButton
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-sol-text hover:text-sol-yellow transition-colors"
+        active={isOpen}
         aria-label="Notifications"
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -148,11 +149,11 @@ export function NotificationBell() {
           />
         </svg>
         {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="absolute -top-1 -right-2.5 inline-flex items-center justify-center px-1 sm:px-1.5 py-0.5 text-[10px] sm:text-xs font-bold leading-none text-white bg-sol-orange rounded-full min-w-[16px] sm:min-w-[18px]">
+          <span className="absolute -top-1 -right-1.5 inline-flex items-center justify-center px-1 py-0.5 text-[10px] font-bold leading-none text-white bg-sol-orange rounded-full min-w-[16px] ring-2 ring-sol-bg">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
-      </button>
+      </TopbarButton>
       </ShortcutTooltip>
 
       {isOpen && (
