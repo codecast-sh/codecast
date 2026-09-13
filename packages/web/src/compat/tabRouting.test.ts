@@ -102,6 +102,25 @@ describe("tabNavigate", () => {
     expect(calls).toEqual([{ op: "replace", url: "/inbox", state: { tabNav: true, tabId: "tab_1" } }]);
   });
 
+  // The recents rail lists sessions (recordSessionView) and real pages. A
+  // session opened from another surface lands in the inbox as /inbox?s=<id>
+  // (useOpenSession); that push is the session's visit, not a page of its own,
+  // and filing it as one put "Inbox" between the things the user had actually
+  // looked at in the Ctrl+Tab switcher. A bare /inbox — the sidebar's Inbox
+  // click — is a real visit and stays.
+  it("records real pages and the bare inbox, never an inbox push carrying a session", () => {
+    useInboxStore.setState({ recentVisits: [] });
+    tabNavigate("/tasks/ct-1", "push");
+    tabNavigate("/tasks", "push");
+    tabNavigate("/inbox?s=jx7abc", "push");
+    tabNavigate("/conversation/jx7abc", "push");
+    // The fixture's live URL is /inbox; a same-URL push downgrades to replace
+    // and records nothing, so stand somewhere else before the bare push.
+    (globalThis as any).window.location.pathname = "/tasks";
+    tabNavigate("/inbox", "push");
+    expect(useInboxStore.getState().recentVisits.map((v) => v.key)).toEqual(["page:/inbox", "page:/tasks", "page:/tasks/ct-1"]);
+  });
+
   it("replaces (no new entry) in replace mode", () => {
     tabNavigate("/tasks", "replace");
     expect(calls[0].op).toBe("replace");

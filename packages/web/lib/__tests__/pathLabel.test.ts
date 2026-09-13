@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { conversationTabPath, pathLabel, inboxTabSessionId, urlSessionId, tabNeedsUrlRestore } from "../pathLabel";
+import { conversationTabPath, pathLabel, inboxTabSessionId, poppedTabPath, urlSessionId, tabNeedsUrlRestore } from "../pathLabel";
 
 // A tab is labeled by its ROUTE, never its query string. The regression here:
 // stampedTabPath normalizes a conversation tab to /inbox?s=<id>, and the raw
@@ -157,5 +157,33 @@ describe("pathLabel for the repository pages", () => {
 
   it("names a pull request by its number", () => {
     expect(pathLabel("/pr/codecast-sh/shepherd-lab/2")).toBe("PR #2");
+  });
+});
+
+// Back from a page opened out of a conversation (session → /tasks → back).
+// The popped entry is the inbox's own `{ inboxId }` select, but the inbox
+// pane is unmounted once the tab shows another page, so nobody re-selected
+// the session: the URL moved to /conversation/<id> while the task page
+// stayed on screen. The tab must be re-pointed at the inbox spelling.
+describe("poppedTabPath — traversing onto a session entry from another page", () => {
+  const A = "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  it("re-points a tab on another page at the inbox spelling of the session", () => {
+    expect(poppedTabPath({ inboxId: A }, `/conversation/${A}`, "", ["/tasks"])).toBe(`/inbox?s=${A}`);
+    expect(poppedTabPath({ inboxId: A }, `/conversation/${A}`, "", ["/tasks/ct-1"])).toBe(`/inbox?s=${A}`);
+  });
+
+  it("stands down when the inbox pane is mounted — its own listener selects the session", () => {
+    expect(poppedTabPath({ inboxId: A }, `/conversation/${A}`, "", ["/inbox"])).toBeNull();
+    expect(poppedTabPath({ inboxId: A }, `/conversation/${A}`, "", [`/inbox?s=${A}`])).toBeNull();
+  });
+
+  it("stands down when a split stage holds an inbox pane beside the focused page", () => {
+    expect(poppedTabPath({ inboxId: A }, `/conversation/${A}`, "", ["/tasks/ct-1", `/inbox?s=${A}`])).toBeNull();
+  });
+
+  it("mirrors a tab navigation entry as-is", () => {
+    expect(poppedTabPath({ tabNav: true } as any, "/tasks/ct-1", "", ["/inbox?s=" + A])).toBe("/tasks/ct-1");
+    expect(poppedTabPath(null, "/files", "?f=a.md", ["/tasks"])).toBe("/files?f=a.md");
   });
 });

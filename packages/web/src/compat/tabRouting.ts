@@ -1,5 +1,5 @@
 import { useInboxStore } from "../../store/inboxStore";
-import { pathLabel } from "../../lib/pathLabel";
+import { inboxTabSessionId, pathLabel } from "../../lib/pathLabel";
 import { isDetachedTabWindow } from "../../lib/desktop";
 import { settingsSectionForPath } from "../../lib/settingsSections";
 import { isNonTabRoute } from "../../lib/tabRoutes";
@@ -87,10 +87,14 @@ export function tabNavigate(path: string, mode: "push" | "replace" = "push", fro
   const state = { tabNav: true, tabId };
   if (mode === "push" && path !== current) {
     window.history.pushState(state, "", path);
-    // Real (pushed) page navigations feed the recently-visited rail.
-    // Conversations are recorded as sessions by recordSessionView instead.
+    // Real (pushed) page navigations feed the recently-visited rail. A path
+    // that names a session — /conversation/<id>, or the inbox carrying one as
+    // /inbox?s=<id> (how a session opened from another surface lands there,
+    // useOpenSession) — is that session's visit, recorded by recordSessionView;
+    // filing it as a page put an "Inbox" entry on top of the session's own.
+    // A bare /inbox is the Inbox page itself (the sidebar click) and counts.
     const clean = path.split("#")[0];
-    if (!clean.startsWith("/conversation/")) {
+    if (!clean.startsWith("/conversation/") && !inboxTabSessionId(clean)) {
       store.recordRecentVisit({ kind: "page", key: `page:${clean}`, path: clean, label: pathLabel(clean) });
     }
   } else {
