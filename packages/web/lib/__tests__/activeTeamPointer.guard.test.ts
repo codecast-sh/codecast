@@ -54,12 +54,20 @@ describe("active-team pointer", () => {
   // moves the mirror in its draft (same tick as the stub row) and rides one
   // dispatch whose server side calls teams.createTeam, which writes the
   // canonical pointer. Both halves must stay in that one action.
-  test("the store's createTeam is the only draft writer of the mirror, and its dispatch writes the canonical pointer", () => {
+  // The local-first team delete is the third: it moves the mirror to the
+  // caller's fallback team in its draft, and its dispatch calls
+  // teams.deleteTeam, which repoints the canonical pointer through
+  // endMembership and returns where it landed so the mirror is re-stamped
+  // with the server's answer. restoreTeamRow is its rollback, as
+  // discardTeamStub is for create.
+  test("the store's createTeam and deleteTeam are the only draft writers of the mirror, and their dispatches write the canonical pointer", () => {
     const store = readFileSync(join(ROOT, "store/inboxStore.ts"), "utf8");
     const writers = [...store.matchAll(/^\s*(\w+):\s*(?:asyncAction|sync|action)\(function[\s\S]*?^ {2}\}\),/gm)]
       .filter((m) => /\.active_team_id = /.test(m[0]))
       .map((m) => m[1]);
-    expect(writers.sort()).toEqual(["discardTeamStub", "dispatchCreateTeam", "resolveTeamStub"]);
+    expect(writers.sort()).toEqual([
+      "discardTeamStub", "dispatchCreateTeam", "dispatchDeleteTeam", "resolveTeamStub", "restoreTeamRow",
+    ]);
 
     const dispatch = readFileSync(
       join(ROOT, "..", "convex", "convex", "dispatch.ts"),
@@ -72,6 +80,13 @@ describe("active-team pointer", () => {
     const teams = readFileSync(join(ROOT, "..", "convex", "convex", "teams.ts"), "utf8");
     const mutation = teams.match(/export const createTeam = mutation\([\s\S]*?^\}\);/m)?.[0] ?? "";
     expect(mutation).toContain("active_team_id: teamId");
+
+    const deleteHandler = dispatch.match(/^ {2}dispatchDeleteTeam: async \([\s\S]*?^ {2}\},/m)?.[0] ?? "";
+    expect(deleteHandler).toContain("api.teams.deleteTeam");
+    expect(deleteHandler).toContain("active_team_id: result?.active_team_id");
+    const deleteMutation = teams.match(/export const deleteTeam = mutation\([\s\S]*?^\}\);/m)?.[0] ?? "";
+    expect(deleteMutation).toContain("retireTeam(");
+    expect(deleteMutation).toContain("active_team_id: me?.active_team_id");
   });
 
   // While the create round trip is in flight the mirror holds the stub id
