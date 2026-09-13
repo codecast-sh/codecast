@@ -76,6 +76,9 @@ interface SidebarProps {
 
 /** A group label in the rail. Hidden when the rail is narrow, where the icons
  *  stand on their own and a heading would just be a stripe of unreadable text. */
+/** Stable empty bag: a fresh {} here would rewake every reader on each render. */
+const NO_SECTION_PINS: Record<string, boolean> = Object.freeze({});
+
 function RailHeading({ label, isNarrow }: { label: string; isNarrow: boolean }) {
   if (isNarrow) return null;
   return (
@@ -813,6 +816,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
   const isAnchor = pathname?.startsWith("/anchor");
+  const isOrg = pathname === "/org" || pathname?.startsWith("/org/");
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -930,8 +934,17 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     [isDocs, docViews, docPrefs]
   );
   // They reveal when you open that page (navigation is the default); the chevron
-  // pins a section open or closed regardless of which page you're on.
-  const [viewSectionOverride, setViewSectionOverride] = useState<Record<string, boolean>>({});
+  // pins a section open or closed regardless of which page you're on. A pin is a
+  // durable preference, not a gesture: it lives in the ui bag, so it survives
+  // reload and is captured by a saved layout with the rest of the chrome.
+  const viewSectionOverride = useInboxStore((s) => s.clientState.ui?.nav_sections) ?? NO_SECTION_PINS;
+  const setViewSectionOverride = useCallback(
+    (next: (cur: Record<string, boolean>) => Record<string, boolean>) => {
+      const cur = useInboxStore.getState().clientState.ui?.nav_sections ?? NO_SECTION_PINS;
+      updateClientUI({ nav_sections: next(cur) });
+    },
+    [updateClientUI],
+  );
   const applyView = useCallback((view: any) => {
     const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
     // Stamp which view this is, so the page can still name it after you change
@@ -1357,6 +1370,22 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
+          <NavSection
+            label="Org"
+            href="/org"
+            isActive={!!isOrg}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            title="Org — who reports to whom"
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <rect x="9" y="3" width="6" height="4.5" rx="1" strokeWidth={1.5} />
+                <rect x="3" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
+                <rect x="15" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V12M12 12H6v4.5M12 12h6v4.5" />
+              </svg>
+            }
           />
           <NavSection
             label="Anchor"

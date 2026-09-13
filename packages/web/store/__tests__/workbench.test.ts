@@ -515,3 +515,38 @@ describe("focus eviction after the chip changes", () => {
     });
   });
 });
+
+describe("the sidebar's pinned sections", () => {
+  afterEach(resetChipStore);
+
+  it("are captured with the rest of the chrome", () => {
+    const snap = captureWorkbench(workedIn(), { navSections: { tasks: true, docs: false } });
+    expect(snap.navSections).toEqual({ tasks: true, docs: false });
+  });
+
+  it("nothing pinned is no field at all — an empty bag never reaches a snapshot", () => {
+    expect(captureWorkbench(workedIn(), { navSections: {} }).navSections).toBeUndefined();
+    expect(captureWorkbench(workedIn()).navSections).toBeUndefined();
+  });
+
+  it("restore wholesale when the layout is applied", () => {
+    useInboxStore.setState({ clientState: { ui: { nav_sections: { chat: true } } } } as any);
+    useInboxStore.getState().applyWorkbench(
+      captureWorkbench(createWorkspace(), { path: "/inbox", navSections: { tasks: true, docs: false } }),
+    );
+    expect(useInboxStore.getState().clientState.ui?.nav_sections).toEqual({ tasks: true, docs: false });
+  });
+
+  it("a layout saved with no pins clears the live ones — a layout is the whole view", () => {
+    useInboxStore.setState({ clientState: { ui: { nav_sections: { tasks: true } } } } as any);
+    useInboxStore.getState().applyWorkbench(captureWorkbench(createWorkspace(), { path: "/inbox" }));
+    expect(useInboxStore.getState().clientState.ui?.nav_sections).toEqual({});
+  });
+
+  // A chevron is not a rearrangement: it must not light the update affordance
+  // on every saved layout, the same way a drag-resize doesn't.
+  it("are not drift — matching ignores them", () => {
+    const snap = captureWorkbench(workedIn(), { navSections: { tasks: true } });
+    expect(matchesWorkbench(workedIn(), snap)).toBe(true);
+  });
+});
