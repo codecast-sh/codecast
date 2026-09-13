@@ -6,6 +6,7 @@
 // state in the store (`anchorPanel`), opened by the header chip, ⌘⇧A, or the
 // palette; the /anchor page remains the full home (settings, Slack, routines).
 
+import { TopbarButton } from "../TopbarButton";
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, Plus, X } from "lucide-react";
@@ -269,19 +270,18 @@ export function AnchorChip() {
     : "Talk to Anchor";
   return (
     <ShortcutTooltip label={label} action="anchor.toggle">
-      <button
+      <TopbarButton
         onClick={() => useInboxStore.getState().toggleAnchorPanel()}
         aria-label={label}
         aria-pressed={open}
-        className={`relative hidden md:flex items-center p-1.5 rounded-md transition-colors ${
-          open ? "text-sol-cyan bg-sol-cyan/10" : "text-sol-text-dim/60 hover:text-sol-text-muted"
-        }`}
+        active={open}
+        desktopOnly
       >
-        <AnchorGlyph className="w-[18px] h-[18px]" />
+        <AnchorGlyph />
         {dot && (
           <span className={`absolute right-1 top-1 w-1.5 h-1.5 rounded-full ring-2 ring-sol-bg ${dot}`} />
         )}
-      </button>
+      </TopbarButton>
     </ShortcutTooltip>
   );
 }
