@@ -2,6 +2,8 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
+import { resolveActor } from "./lib/actor";
+import { markOrgActor } from "./orgEvents";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
@@ -589,6 +591,64 @@ export async function guardParentClose(
     `${task.short_id} has ${open.length} open subtask${open.length === 1 ? "" : "s"} (${ids}). ` +
     `Close them first, or pass --cascade to close them too, or --only-parent to close just this task.`,
   );
+}
+
+export const REVIEW_VERDICTS = ["approve", "changes", "reject"] as const;
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
+
+// The sessions doing a task's work: every conversation the task links that
+// is still bound to it (active_task_id, set by `cast task start`). This is
+// server state, not a claim in the request body, so a hand cannot step out
+// of its role by omitting or forging conversation_id.
+async function boundConversations(ctx: any, task: any): Promise<any[]> {
+  const out: any[] = [];
+  for (const id of task.conversation_ids ?? []) {
+    const conv = await ctx.db.get(id);
+    if (conv && String(conv.active_task_id) === String(task._id)) out.push(conv);
+  }
+  return out;
+}
+
+const roleOf = (conv: any): string | undefined =>
+  conv?.org_role_id ? String(conv.org_role_id) : conv?.standing_role_id ? String(conv.standing_role_id) : undefined;
+
+/**
+ * Independent review (docs/architecture/the-line.md L3). When the task's
+ * work belongs to an org role (a session bound to the task, or the caller's
+ * session, is a hand of the role or its standing session) the task moves to
+ * done only on an approve verdict from outside: not a session bound to the
+ * task, not a hand of the role, not the role's standing session. People and
+ * sessions with no role are unaffected. A verdict a person wrote (no
+ * conversation behind it) counts as outside every role. Reads the verdict
+ * being written in this call first, then the stored one.
+ */
+export async function enforceIndependentReview(
+  ctx: any,
+  task: any,
+  actor: any,
+  nextStatus: string | undefined,
+  pendingVerdict?: { verdict: ReviewVerdict; by_conversation_id?: Id<"conversations"> },
+): Promise<void> {
+  if (nextStatus !== "done" || task.status === "done") return;
+  const bound = await boundConversations(ctx, task);
+  const inside = [...bound, ...(actor ? [actor] : [])];
+  const roleIds = new Set(inside.map(roleOf).filter((r): r is string => !!r));
+  if (roleIds.size === 0) return;
+  const roleList = [...roleIds].join(", ");
+  const refuse = (why: string): never => {
+    throw new Error(
+      `Independent review required (the-line.md L3): a session of role ${roleList} cannot move ` +
+      `${task.short_id} to done ${why}. A session outside the role must run: cast task verdict ${task.short_id} approve`,
+    );
+  };
+  const verdict = pendingVerdict ?? task.review_verdict;
+  if (!verdict || verdict.verdict !== "approve") refuse("without an approve verdict");
+  if (!verdict.by_conversation_id) return;
+  const byId = String(verdict.by_conversation_id);
+  if (inside.some((c) => String(c._id) === byId)) refuse("on a verdict from a session doing the work");
+  const reviewer = await ctx.db.get(verdict.by_conversation_id);
+  const reviewerRole = roleOf(reviewer);
+  if (reviewerRole && roleIds.has(reviewerRole)) refuse("on a verdict from a session of the same role");
 }
 
 /**
@@ -1449,6 +1509,10 @@ export const update = mutation({
     verification_evidence: v.optional(v.string()),
     files_changed: v.optional(v.array(v.string())),
     estimated_minutes: v.optional(v.number()),
+    // The review station's verdict (the-line.md L3), recorded with the status
+    // move in this one write. by_conversation_id is the caller's session.
+    review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
+    review_note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1560,6 +1624,17 @@ export const update = mutation({
     const conv = args.conversation_id
       ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
       : null;
+    if (args.review_verdict) {
+      updates.review_verdict = {
+        verdict: args.review_verdict,
+        ...(conv ? { by_conversation_id: conv._id } : {}),
+        at: now,
+        ...(args.review_note ? { note: args.review_note } : {}),
+      };
+    }
+    // Refuses before any write, like the close-guard below. Runs before the
+    // linking block so the bound sessions are read as they stand.
+    await enforceIndependentReview(ctx, task, conv, nextStatus, updates.review_verdict);
     if (conv) {
       // A conversation in another workspace may still drive the write (an agent
       // working a cross-workspace task); only the conversation↔task linkage is
@@ -1582,8 +1657,10 @@ export const update = mutation({
           });
         }
       }
-      // Only bind conversation to task on explicit start (cast task start)
-      if (convMatchesWorkspace && nextStatus === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
+      // Only bind conversation to task on explicit start (cast task start).
+      // A `changes` verdict also moves to in_progress but must not bind the
+      // reviewer to the work it judges.
+      if (convMatchesWorkspace && nextStatus === "in_progress" && !args.review_verdict && (!conv.active_task_id || conv.active_task_id === task._id)) {
         await ctx.db.patch(conv._id, { active_task_id: task._id });
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
@@ -1615,6 +1692,12 @@ export const update = mutation({
     // Close-guard: refuses done/dropped on a parent with open subtasks unless
     // resolved; returns the subtree to cascade-close. Runs before any write.
     const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
+    // A cascade closes each child under the same review rule as the parent:
+    // a role cannot close its own subtasks through --cascade either.
+    for (const id of cascadeIds) {
+      const child = await ctx.db.get(id);
+      if (child) await enforceIndependentReview(ctx, child, conv, nextStatus, undefined);
+    }
 
     // Did the parent actually change? (Reparent/detach need history + plan reconcile.)
     const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
@@ -1626,12 +1709,18 @@ export const update = mutation({
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
     if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
+    if (args.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", args.review_verdict]);
 
+    // Who did it (lib/actor): a role's standing session writes as the role's
+    // bot user; a hand keeps its host. The calling conversation is also the
+    // actor for the wake rail's loop rules (orgEvents post write hook).
+    const actor = await resolveActor(ctx, auth.userId, conv);
+    markOrgActor(ctx, conv);
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {
         task_id: task._id,
-        user_id: auth.userId,
-        actor_type: "user",
+        user_id: actor.user_id,
+        actor_type: actor.kind === "role" ? "agent" : "user",
         action: "updated",
         field,
         old_value: String(oldVal),
@@ -1786,9 +1875,12 @@ export const addComment = mutation({
       ? conv._id : undefined;
 
     // A post from inside a session is an agent's: no actor, so the owner's
-    // thread lights up. A person running the CLI by hand is the actor.
+    // thread lights up. A person running the CLI by hand is the actor. A
+    // role's standing session signs as the role (lib/actor).
+    const actor = await resolveActor(ctx, auth.userId, conv);
+    markOrgActor(ctx, conv);
     const id = await insertTaskComment(ctx, task._id, {
-      author: args.author || user?.name || "unknown",
+      author: args.author || (actor.kind === "role" ? actor.name : undefined) || user?.name || "unknown",
       text: args.text,
       conversation_id,
       comment_type: args.comment_type || "note",
