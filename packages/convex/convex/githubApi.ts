@@ -1236,10 +1236,15 @@ export const listPulls = internalAction({
     );
     return {
       pulls: (data ?? []).map((pull: any) => ({
+        id: pull.id as number,
         number: pull.number as number,
         title: pull.title as string,
+        body: (pull.body ?? "") as string,
         state: pull.state as string,
         draft: !!pull.draft,
+        head_sha: pull.head?.sha as string | undefined,
+        base_sha: pull.base?.sha as string | undefined,
+        requested_reviewers: (pull.requested_reviewers ?? []).map((r: any) => r.login as string),
         merged_at: pull.merged_at ? new Date(pull.merged_at).getTime() : null,
         created_at: pull.created_at ? new Date(pull.created_at).getTime() : null,
         updated_at: pull.updated_at ? new Date(pull.updated_at).getTime() : null,

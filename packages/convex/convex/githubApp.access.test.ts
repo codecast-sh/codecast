@@ -18,7 +18,7 @@ const USER_B = "u_b";
 
 const PRIVATE_CONV = "conv_private";
 
-function tables(installations: any[]) {
+function tables(installations: any[]): Record<string, any[]> {
   return {
     teams: [
       { _id: TEAM_A, name: "Team A" },
@@ -218,7 +218,7 @@ describe("the webhook lookup is scoped too", () => {
     // And it may hand back a team to attribute to, nothing else. A token read
     // here would be exactly the unscoped credential resolution this forbids.
     const body = src.slice(enclosing, src.indexOf("\n}", idx));
-    expect(body).toContain("?.team_id");
+    expect(body).toContain("routingTeamForInstallation");
     expect(body).not.toContain("token");
   });
 
@@ -231,12 +231,21 @@ describe("the webhook lookup is scoped too", () => {
   });
 });
 
-// A personal installation is one person's credential: it follows its owner
-// into every workspace they work in, and reaches nobody else — not their
-// teammates, and never a webhook that serves a team.
+// A personal installation is one person's credential. It follows its owner
+// into every workspace they work in, and it ROUTES to wherever the owner is
+// working now (their active team, with a live membership): that team's PR
+// activity, triggers and browsing run through the owner's grant. With no
+// active team it serves the owner's own imports and pushes only.
 describe("personal installations", () => {
   function personalInstallation(owner: string, extra: Record<string, any> = {}) {
     return teamBInstallation({ _id: `gai_${owner}`, team_id: undefined, scope_user_id: owner, installation_id: 777, ...extra });
+  }
+
+  /** A db where `owner` is looking at `activeTeam` (and is a member there). */
+  function ctxWithActive(installations: any[], owner: string, activeTeam: string | null) {
+    const t = tables(installations);
+    t.users = [{ _id: owner, active_team_id: activeTeam ?? undefined }];
+    return { db: makeFakeDb(t) } as any;
   }
 
   test("the owner resolves it with no team named", async () => {
@@ -257,18 +266,47 @@ describe("personal installations", () => {
     expect((await lookup(both, { user_id: USER_A }))?.installation_id).toBe(777);
   });
 
-  test("a teammate never reaches another person's install", async () => {
-    // USER_B is in team B only; USER_A's personal install is not team B's.
+  test("with no active team it reaches nobody else, and no team", async () => {
+    // USER_B is in team B only; USER_A's install routes nowhere yet.
     expect(await lookup([personalInstallation(USER_A)], { user_id: USER_B })).toBeNull();
     expect(await lookup([personalInstallation(USER_A)], { user_id: USER_B, team_id: TEAM_B })).toBeNull();
-  });
-
-  test("the team-only entry point skips it — a webhook serves teams", async () => {
     const found = await (getInstallationForRepoInTeam as any)._handler(ctx([personalInstallation(USER_A)]), {
       repository: "acme/widgets",
       team_id: TEAM_A,
     });
     expect(found).toBeNull();
+  });
+
+  test("it routes to the owner's active team: the team-only entry point serves that team", async () => {
+    const c = ctxWithActive([personalInstallation(USER_A)], USER_A, TEAM_A);
+    const inA = await (getInstallationForRepoInTeam as any)._handler(c, { repository: "acme/widgets", team_id: TEAM_A });
+    expect(inA?.installation_id).toBe(777);
+    // Not any other team, even one the owner could see.
+    const inB = await (getInstallationForRepoInTeam as any)._handler(c, { repository: "acme/widgets", team_id: TEAM_B });
+    expect(inB).toBeNull();
+  });
+
+  test("a member of the routing team reaches it in that team; a stranger does not", async () => {
+    // USER_A is looking at team A; USER_B (team B only) is not a member there.
+    const c = ctxWithActive([personalInstallation(USER_A)], USER_A, TEAM_A);
+    const teammateCtx = { ...c };
+    // Put USER_B into team A too, as a plain member.
+    const t = tables([personalInstallation(USER_A)]);
+    t.users = [{ _id: USER_A, active_team_id: TEAM_A }];
+    t.team_memberships.push({ _id: "tm_b_in_a", user_id: USER_B, team_id: TEAM_A, role: "member", joined_at: 2 });
+    const both = { db: makeFakeDb(t) } as any;
+    const asTeammate = await (getInstallationForRepo as any)._handler(both, { repository: "acme/widgets", user_id: USER_B, team_id: TEAM_A });
+    expect(asTeammate?.installation_id).toBe(777);
+    // The stranger (team B only) with no team named: nothing.
+    const asStranger = await (getInstallationForRepo as any)._handler(teammateCtx, { repository: "acme/widgets", user_id: USER_B });
+    expect(asStranger).toBeNull();
+  });
+
+  test("a stale active pointer without membership routes nowhere", async () => {
+    // USER_A points at team B but holds no membership there.
+    const c = ctxWithActive([personalInstallation(USER_A)], USER_A, TEAM_B);
+    const inB = await (getInstallationForRepoInTeam as any)._handler(c, { repository: "acme/widgets", team_id: TEAM_B });
+    expect(inB).toBeNull();
   });
 
   test("the personal entry point answers for the owner alone", async () => {
