@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { canBrowse, getBranches, ingestLocal, listRepositories } from "./repos";
 import { makeFakeDb } from "./testDb";
 
@@ -32,6 +32,30 @@ function context(user: string | null, overrides: Record<string, any[]> = {}) {
 const rows = [{ kind: "branches", ref: "-", path: "", content: JSON.stringify({ default_branch: "main", truncated: false, branches: [{ name: "main", sha, protected: false }] }) }];
 
 describe("repos.ingestLocal", () => {
+  test("identical recent cache payloads do not contend across checkouts", async () => {
+    const ctx = context("publisher");
+    const args = { root: "/home/p/src/demo", repository: "acme/demo", rows };
+    await (ingestLocal as any)._handler(ctx, args);
+    const cached = ctx.db._tables.repo_cache[0];
+    const patch = spyOn(ctx.db, "patch");
+    for (let i = 0; i < 10; i++) await (ingestLocal as any)._handler(ctx, { ...args, root: `/home/p/src/checkout-${i}` });
+    expect(patch.mock.calls.filter(([id]) => id === cached._id)).toHaveLength(0);
+    patch.mockRestore();
+  });
+
+  test("changed cache payloads publish immediately and old identical rows refresh", async () => {
+    const ctx = context("publisher");
+    const args = { root: "/home/p/src/demo", repository: "acme/demo", rows };
+    await (ingestLocal as any)._handler(ctx, args);
+    const cached = ctx.db._tables.repo_cache[0];
+    const changed = [{ ...rows[0], content: "{}", sha, size: 2, truncated: true }];
+    await (ingestLocal as any)._handler(ctx, { ...args, rows: changed });
+    expect(await ctx.db.get(cached._id)).toMatchObject(changed[0]);
+    await ctx.db.patch(cached._id, { fetched_at: Date.now() - 120_000 });
+    await (ingestLocal as any)._handler(ctx, { ...args, rows: changed });
+    expect((await ctx.db.get(cached._id)).fetched_at).toBeGreaterThan(Date.now() - 1_000);
+  });
+
   test("a checkout under a shared directory publishes to that team", async () => {
     const ctx = context("publisher");
     const result = await (ingestLocal as any)._handler(ctx, {

@@ -186,6 +186,27 @@ export async function requireTeamMembership(
   return membership;
 }
 
+/**
+ * The team a user is working in right now: the team they are looking at
+ * (`active_team_id`), else their home team, counted only with a live
+ * membership row behind it. The user row keeps pointing at a team after
+ * membership lapses (routing ≠ visibility), so the pointer alone proves
+ * nothing. Null when the user is in no team they belong to.
+ */
+export async function activeTeamMembershipFor(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+): Promise<{ teamId: Id<"teams">; membership: any } | null> {
+  const user = await ctx.db.get(userId);
+  const teamId = (user?.active_team_id ?? user?.team_id) as Id<"teams"> | undefined;
+  if (!teamId) return null;
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+    .first();
+  return membership ? { teamId, membership } : null;
+}
+
 export async function requireTeamAdmin(
   ctx: AccessCtx,
   userId: Id<"users">,
