@@ -15,7 +15,7 @@ import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import type { ChatAuthor, ChatChannelView, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
-import { dmOtherIds } from "@codecast/shared/chat";
+import { dmOtherIds, mentionUserIds } from "@codecast/shared/chat";
 
 export type ChatMember = {
   _id: string;
@@ -276,7 +276,9 @@ export function sessionAuthorFor(row: ChatMessageRow, ctx: ViewContext): ChatAut
 
 export function mentionsViewer(row: ChatMessageRow, viewerId: string): boolean {
   if (row.mention_scope === "here") return true;
-  return !!row.mentions?.some((id) => id === viewerId);
+  // People only: a role or session entry is an object and can never be the
+  // viewer, even when the viewer hosts that role.
+  return mentionUserIds(row.mentions).includes(viewerId);
 }
 
 /** Per-root reply rollups, in one pass over the whole message map.
@@ -348,6 +350,8 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     editedAt: row.edited_at,
     deletedAt: row.deleted_at,
     mentionsMe: mentionsViewer(row, ctx.viewerId),
+    mentionRefs: row.mentions?.length ? row.mentions : undefined,
+    mentionFolded: row.mention_folded || undefined,
     attachments: row.attachments?.length ? row.attachments : undefined,
     // A canceled burst carries `deleted_at` too, so it never reaches the voice
     // bubble — the deleted branch above it answers first. toMessageViews drops

@@ -34,7 +34,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
-import { Headphones, Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
+import { Headphones, Lock, BellOff, Bell, Bot, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
+import { toast } from "sonner";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
 import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
@@ -68,6 +69,9 @@ import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
 import { ChannelContextMenu } from "../../components/chat/ChannelMenu";
+import { ChannelListeners } from "../../components/chat/ChannelListeners";
+import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
+import { mentionWakeLine } from "../../lib/chatMentionWakes";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
@@ -84,7 +88,9 @@ function SearchPill({ onOpen }: { onOpen: () => void }) {
     <button type="button" className="ch-search-open" title="Search messages" onClick={onOpen}>
       <Search className="w-3 h-3" />
       Search
-      <MenuKeyCaps action="chat.search" />
+      <span className="ch-search-keys">
+        <MenuKeyCaps action="chat.search" />
+      </span>
     </button>
   );
 }
@@ -97,6 +103,11 @@ export default function ChatPage() {
 
   const rail = useChatRail();
   const { members: teamMembers, viewerId, handles } = useChatMembers();
+  // The org tree of the active workspace (the singleton the org page paints
+  // from): the header's "listening: N roles" and the composer's @role rows
+  // read it. A per-view feeder like the org page's own, so a follower window
+  // keeps it fresh too.
+  useSyncOrgTree();
 
   // ── Is the reader actually here? ──────────────────────────────────────────
   const tabActive = useTabActive();
@@ -291,12 +302,27 @@ export default function ChatPage() {
     [router],
   );
 
+  // What a send woke (agent-channels.md C2): the server answers with
+  // mention_wakes, the toast says which role and session — one line, gone on
+  // its own. Silence when the line named nobody; the same toast the muted
+  // channel notice already uses.
+  const onSent = useCallback(
+    (content: string) => (res: { mention_wakes?: any } | undefined) => {
+      const roles = new Set<string>(
+        ((useInboxStore.getState().orgTree?.roles ?? []) as { handle: string }[]).map((r) => r.handle.toLowerCase()),
+      );
+      const line = mentionWakeLine(content, res?.mention_wakes, roles);
+      if (line) toast(line, { duration: 4000 });
+    },
+    [],
+  );
+
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[]) => {
       if (!activeChannelId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content, { attachments });
+      useInboxStore.getState().sendChatMessage(activeChannelId, content, { attachments, onSent: onSent(content) });
     },
-    [activeChannelId],
+    [activeChannelId, onSent],
   );
 
   const sendReply = useCallback(
@@ -306,9 +332,10 @@ export default function ChatPage() {
         threadRootId,
         attachments,
         broadcast: opts?.broadcast,
+        onSent: onSent(content),
       });
     },
-    [activeChannelId, threadRootId],
+    [activeChannelId, threadRootId, onSent],
   );
 
   const markRead = useCallback(() => {
@@ -473,11 +500,18 @@ export default function ChatPage() {
               ) : (
                 <span className="ch-head-name">
                   <span className="ch-head-hash" aria-hidden="true">
-                    {activeChannel?.isPrivate ? <Lock className="w-3 h-3 inline-block" /> : "#"}
+                    {activeChannel?.isPrivate
+                      ? <Lock className="w-3 h-3 inline-block" />
+                      : activeChannel?.kind === "agents"
+                        ? <Bot className="w-3 h-3 inline-block" />
+                        : "#"}
                   </span>
                   {activeChannel?.name ?? "channel"}
                 </span>
               )}
+              {/* Which roles read this room on their next wake, and "follow
+                  as @handle" for the viewer's own roles. */}
+              {activeChannel && <ChannelListeners channel={activeChannel} />}
               {activeChannel?.kind !== "dm" && activeChannel?.topic
                 ? <span className="ch-head-topic">{activeChannel.topic}</span>
                 : <span className="ch-head-topic" />}
@@ -514,6 +548,8 @@ export default function ChatPage() {
                   roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)}
                   anchorTitle={`#${activeChannel.name}`}
                   className="shrink-0"
+                  // A phone header has no room for the word beside the icon.
+                  compact={narrowViewport}
                 />
               )}
               <SearchPill onOpen={() => setSearchOpen(true)} />

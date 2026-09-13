@@ -5,7 +5,7 @@
 // fixture, from an optimistic stub and from a synced server row — and so the
 // whole surface can be designed and screenshot-verified before the store exists.
 
-import type { ChatVoiceStatus } from "@codecast/shared/chat";
+import type { ChatMentionRef, ChatVoiceStatus } from "@codecast/shared/chat";
 
 export type ChatAuthor = {
   id: string;
@@ -58,6 +58,12 @@ export type ChatMessageView = {
   editedAt?: number;
   deletedAt?: number;
   mentionsMe?: boolean;
+  /** The server's resolved mentions: people, roles and sessions. The role
+   *  and session entries are what turn an `@handle` in the body into a pill
+   *  (lib/remarkChatMentions) — an unresolved handle stays plain text. */
+  mentionRefs?: ChatMentionRef[];
+  /** A role or session named here was over its hourly cap and not woken. */
+  mentionFolded?: boolean;
   reactions?: ChatReaction[];
   agentStatus?: ChatAgentStatus;
   /** Set on a thread REPLY. In the channel timeline it only ever appears on a
@@ -103,8 +109,10 @@ export type ChatMessageView = {
 export type ChatChannelView = {
   id: string;
   name: string;
-  /** Absent = public. Shapes the icon, the naming, and what the menu offers. */
-  kind?: "public" | "private" | "dm";
+  /** Absent = public. Shapes the icon, the naming, and what the menu offers.
+   *  "agents": a public room roles and sessions post in — a bot icon, and a
+   *  header line naming the roles listening. */
+  kind?: "public" | "private" | "dm" | "agents";
   /** The OTHER parties of a DM (viewer excluded) — the naming source. */
   dmMemberIds?: string[];
   /** Roster of a restricted room, viewer included (the members panel). */

@@ -1,4 +1,5 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
+import type { ChatRoleMention } from "@codecast/shared/chat";
 
 // Highlight @mentions inside chat message bodies.
 //
@@ -38,10 +39,23 @@ export type ChatMentionOptions = {
    *  Ramadurgam" over the stored "@samvit" — the same face a person mention
    *  wears in the doc editor, whose classes this plugin emits. */
   names?: Map<string, string>;
+  /** Org roles this line names, by lowercase handle (from the row's resolved
+   *  `mentions`, never guessed from the text): the chip becomes a role pill
+   *  linking to the role's page. */
+  roles?: Map<string, ChatRoleMention>;
+  /** Session short ids this line names (same source). `@jx7abcd` becomes the
+   *  app's ordinary session pill — the entity:// link EntityAwareLink already
+   *  renders, title and open-on-click included — with the "@" folded in. */
+  sessions?: Set<string>;
 };
 
+/** The route a role pill opens. */
+export function orgRoleHref(shortId: string): string {
+  return `/org/${encodeURIComponent(shortId)}`;
+}
+
 export function remarkChatMentions(options: ChatMentionOptions = {}) {
-  const { known, self, names } = options;
+  const { known, self, names, roles, sessions } = options;
   const has = (set: Set<string> | undefined, handle: string) =>
     !!set && (set.has(handle) || set.has(handle.toLowerCase()));
 
@@ -56,8 +70,44 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
             // Returning false leaves the original text exactly as written, which
             // is what an unknown handle or a mid-word "@" must do.
             if (before && !BOUNDARY_RE.test(before)) return false;
+            const lower = handle.toLowerCase();
+            // Roles and sessions come from the server's resolution of THIS
+            // line, so they outrank the roster: a role's standing agent is a
+            // bot named after the role, and the role must win (agent-channels.md
+            // "Shapes"). This plugin runs BEFORE remarkEntityIds in chat, so
+            // the session case sees the whole "@jx7abcd" rather than a lone
+            // "@" beside a pill the id plugin already made.
+            const role = roles?.get(lower);
+            if (role) {
+              return {
+                type: "link",
+                url: orgRoleHref(role.short_id),
+                data: {
+                  hProperties: {
+                    className: "editor-mention mention-role ch-mention-role",
+                    "data-mention": lower,
+                    "data-role-id": role.role_id,
+                    title: `${role.short_id} · open the role`,
+                  },
+                },
+                children: [{ type: "text", value: `@${role.handle}` }],
+              };
+            }
+            if (sessions?.has(lower)) {
+              return {
+                type: "link",
+                url: `entity://${lower}`,
+                // The text is the payload EntityAwareLink reads (react-markdown
+                // strips the entity:// href), exactly as remarkEntityIds emits it.
+                // data-mention marks it as an ADDRESS, so remarkEntityCards
+                // leaves it an inline pill rather than promoting it to a card:
+                // "@jx7abcd" asks the session something, a bare id shares it.
+                data: { hProperties: { "data-mention": lower, className: "ch-mention-session" } },
+                children: [{ type: "text", value: lower }],
+              };
+            }
             if (known && !has(known, handle)) return false;
-            const display = names?.get(handle) ?? names?.get(handle.toLowerCase());
+            const display = names?.get(handle) ?? names?.get(lower);
             return {
               type: "emphasis",
               // data.hName/hProperties is how mdast hands a node to rehype under
