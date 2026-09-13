@@ -1234,31 +1234,50 @@ export const listPulls = internalAction({
       `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls?${params.toString()}`,
       args.github_access_token,
     );
-    return {
-      pulls: (data ?? []).map((pull: any) => ({
-        id: pull.id as number,
-        number: pull.number as number,
-        title: pull.title as string,
-        body: (pull.body ?? "") as string,
-        state: pull.state as string,
-        draft: !!pull.draft,
-        head_sha: pull.head?.sha as string | undefined,
-        base_sha: pull.base?.sha as string | undefined,
-        requested_reviewers: (pull.requested_reviewers ?? []).map((r: any) => r.login as string),
-        merged_at: pull.merged_at ? new Date(pull.merged_at).getTime() : null,
-        created_at: pull.created_at ? new Date(pull.created_at).getTime() : null,
-        updated_at: pull.updated_at ? new Date(pull.updated_at).getTime() : null,
-        closed_at: pull.closed_at ? new Date(pull.closed_at).getTime() : null,
-        author_login: pull.user?.login as string | undefined,
-        author_avatar_url: pull.user?.avatar_url as string | undefined,
-        head_ref: pull.head?.ref as string | undefined,
-        base_ref: pull.base?.ref as string | undefined,
-        labels: (pull.labels ?? []).map((label: any) => ({
-          name: label.name as string,
-          color: label.color as string,
-        })),
-        html_url: pull.html_url as string,
-      })),
-    };
+    return { pulls: (data ?? []).map(mapPull) };
+  },
+});
+
+/** The fields codecast keeps from one pull request object, list or single. */
+export function mapPull(pull: any) {
+  return {
+    id: pull.id as number,
+    number: pull.number as number,
+    title: pull.title as string,
+    body: (pull.body ?? "") as string,
+    state: pull.state as string,
+    draft: !!pull.draft,
+    head_sha: pull.head?.sha as string | undefined,
+    base_sha: pull.base?.sha as string | undefined,
+    requested_reviewers: (pull.requested_reviewers ?? []).map((r: any) => r.login as string),
+    merged_at: pull.merged_at ? new Date(pull.merged_at).getTime() : null,
+    created_at: pull.created_at ? new Date(pull.created_at).getTime() : null,
+    updated_at: pull.updated_at ? new Date(pull.updated_at).getTime() : null,
+    closed_at: pull.closed_at ? new Date(pull.closed_at).getTime() : null,
+    author_login: pull.user?.login as string | undefined,
+    author_avatar_url: pull.user?.avatar_url as string | undefined,
+    head_ref: pull.head?.ref as string | undefined,
+    base_ref: pull.base?.ref as string | undefined,
+    labels: (pull.labels ?? []).map((label: any) => ({
+      name: label.name as string,
+      color: label.color as string,
+    })),
+    html_url: pull.html_url as string,
+  };
+}
+
+export type MappedPull = ReturnType<typeof mapPull>;
+
+/** One pull request by number, in the same shape as a list entry. Null on 404. */
+export const getPull = internalAction({
+  args: { repository: v.string(), number: v.number(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<MappedPull | null> => {
+    const [owner, repo] = repoParts(args.repository);
+    try {
+      return mapPull(await ghFetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.number}`, args.github_access_token));
+    } catch (error: any) {
+      if (/returned 404/.test(error?.message ?? "")) return null;
+      throw error;
+    }
   },
 });
