@@ -31,7 +31,7 @@ function tablesWith(extra: Record<string, unknown> = {}) {
 }
 
 function ctxAs(db: any, userId: string) {
-  return { db, auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) } } as any;
+  return { db, scheduler: { runAfter: async () => {} }, auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) } } as any;
 }
 
 describe("setThreadState", () => {

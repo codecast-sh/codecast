@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { setSessionError, switchSessionAgent } from "./conversations";
 import { makeFakeDb } from "./testDb";
 import { AGENT_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
@@ -103,6 +103,25 @@ describe("switchSessionAgent", () => {
 });
 
 describe("agent switch failure reporting", () => {
+  test.each([undefined, "Codex history import failed"])("does not rewrite an unchanged error: %s", async error => {
+    const db = seedConv();
+    db._tables.conversations[0].session_error = error;
+    const patch = spyOn(db, "patch");
+    await (setSessionError as any)._handler(ctxFor(db), { conversation_id: CONV, error, force: true });
+    expect(patch).not.toHaveBeenCalled();
+    patch.mockRestore();
+  });
+
+  test("clears an error once even when several devices repeat the clear", async () => {
+    const db = seedConv();
+    db._tables.conversations[0].session_error = "Codex history import failed";
+    const patch = spyOn(db, "patch");
+    for (let i = 0; i < 4; i++) await (setSessionError as any)._handler(ctxFor(db), { conversation_id: CONV });
+    expect(db._tables.conversations[0].session_error).toBeUndefined();
+    expect(patch).toHaveBeenCalledTimes(1);
+    patch.mockRestore();
+  });
+
   test("forces the import error past a stale managed-session heartbeat", async () => {
     const db = seedConv({
       managed_sessions: [{
