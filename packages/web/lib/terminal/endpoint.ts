@@ -253,7 +253,7 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
  */
 export async function getTerminalEndpoint(
   convex: ConvexReactClient,
-  opts?: { force?: boolean; deviceId?: string },
+  opts?: { force?: boolean; deviceId?: string; trustCache?: boolean },
 ): Promise<TerminalEndpoint | null> {
   const override = readOverride();
   if (override) return override;
@@ -265,6 +265,15 @@ export async function getTerminalEndpoint(
   const want = opts?.deviceId;
   if (!opts?.force) {
     const cached = readCache();
+    // `trustCache`: hand back the cached endpoint with no probe. For a caller
+    // whose own request is the probe (a one-shot POST that fails fast on a
+    // dead port or a stale token, then re-runs discovery with `force`) the
+    // revalidation is a second round trip through a busy daemon — up to a
+    // second — bought for nothing.
+    if (opts?.trustCache && cached && (!want || cached.deviceId === want)) {
+      lastFailure = "none";
+      return cached;
+    }
     // A cached endpoint that still answers on loopback tells us which machine
     // this browser is on. That settles a targeted lookup either way:
     //   same device → it's local, hand back the endpoint
