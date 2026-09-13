@@ -252,6 +252,29 @@ test("host-owned hooks removed by the settings transform are not required source
   expect(JSON.parse(transformForHost(settings.relativePath, settings.bytes, { fromHome: home, toHome: "/home/u" })!.toString())).not.toHaveProperty("hooks");
 });
 
+test("Claude plugin catalogs and install registries stay host-owned while installed portable context remains stable", async () => {
+  const runtime = [".claude/plugins/marketplaces/catalog/plugins/tool/README.md", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json"];
+  for (const rel of runtime) write(rel, "{}");
+  write(".claude/skills/helper/SKILL.md", "portable skill");
+  write(".claude/docs/guide.md", "portable guide");
+  write(".claude/plugins/cache/tool/1.0/skills/helper/SKILL.md", "installed skill");
+  write(".claude/plugins/cache/tool/1.0/assets/icon.svg", "<svg/>");
+  fs.symlinkSync(path.join(home, ".claude/plugins/marketplaces/catalog"), path.join(home, ".claude/docs/catalog-alias"));
+  fs.symlinkSync(path.join(home, runtime[1]!), path.join(root, "registry-alias.json"));
+  write("src/repo/AGENTS.md", `See ${runtime.map((rel) => `~/${rel}`).join(" and ")} or [registry](registry-alias.json).`);
+  const config = { cloud_mirror_include: [...runtime, ".claude/docs/catalog-alias"].join(",") };
+  const before = await collectMirrorFiles({ home, hostHome: "/home/u", config });
+  expect(before.entries.map((entry) => entry.path)).toEqual([
+    ".claude/docs/guide.md", ".claude/plugins/cache/tool/1.0/assets/icon.svg",
+    ".claude/plugins/cache/tool/1.0/skills/helper/SKILL.md", ".claude/skills/helper/SKILL.md",
+  ]);
+  for (const rel of runtime) { write(rel, '{"updated":true}'); fs.chmodSync(path.join(home, rel), 0o755); }
+  const after = await collectMirrorFiles({ home, hostHome: "/home/u", config });
+  expect(after.entries).toEqual(before.entries);
+  const project = await collectProjectContextAsync({ root, home, config });
+  expect(project.files.map((file) => file.relativePath)).toEqual(["AGENTS.md"]);
+});
+
 test("Grok runtime registries stay excluded through includes and aliases while portable context remains", async () => {
   write(".grok/grove/pin_gc_orphans.json", JSON.stringify({ orphans: { "session-id": "runtime state" } }));
   write(".grok/last-copy.txt", "copied conversation");
