@@ -51,8 +51,14 @@ type Row = {
 const D = "daemon.ts";
 const MAIN = "async function main(";
 const ROWS: Row[] = [
+  { file: D, name: "workflowAgentTranscriptPathFor", kind: "function", minLines: 25, mustContain: "await walkEntryBatches" },
+  { file: D, name: "ensureProfileStores", kind: "function", minLines: 25, mustContain: "await ensureProfileStoreAsync" },
+  { file: "ccAccounts.ts", name: "ensureProfileStoreAsync", kind: "function", minLines: 15, mustContain: "readProfileSecretRawAsync" },
+  { file: "ccAccounts.ts", name: "writeProfileStoreCredentialsAsync", kind: "function", minLines: 15, mustContain: "await execFileAsync" },
+  { file: "ccAccounts.ts", name: "deleteProfileStoreAsync", kind: "function", minLines: 10, mustContain: "await execFileAsync" },
   ...["processSessionFile", "processCursorSession", "processCursorTranscriptFile", "processCodexSession", "processGeminiSession", "processOpencodeSession", "processTranscriptDeltaSession"].map(name => ({ file: D, name: `${name}Pass`, kind: "function" as const, minLines: 70, mustContain: "await readTranscriptIngest" })),
   { file: D, name: "sendHeartbeat", kind: "function", minLines: 40, mustContain: "has_tmux" },
+  { file: "remote/device.ts", name: "stableHostnameAsync", kind: "function", minLines: 8, mustContain: "execFileAsync" },
   { file: D, name: "collectResourceSnapshot", kind: "function", minLines: 30, mustContain: "classifySharedPidSessions" },
   { file: D, name: "runHeartbeatMaintenance", kind: "function", minLines: 20, mustContain: "reconcileStatusFromTranscript" },
   { file: D, name: "reconcileStatusFromTranscript", kind: "function", minLines: 20, mustContain: "primeOpenTaskScan" },

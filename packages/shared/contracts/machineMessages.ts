@@ -220,6 +220,29 @@ function unescapeTagAttr(s: string): string {
   return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
 
+// The one line the asking agent acts on, per decision kind: single = the
+// chosen label, multi = labels joined by ", ", rank = labels joined by " > ",
+// form = "key=value; key=value". Shared by the server's finalizeAnswer and the
+// web's optimistic answerDecision so the delivered message never differs by
+// path. A typed free-text answer wins over any index.
+export function decisionAnswerLabel(
+  row: { kind?: string; options: { label: string }[] },
+  verdict: { answer_index?: number; answer_text?: string; answer_json?: any },
+): string | undefined {
+  if (verdict.answer_text) return verdict.answer_text;
+  const kind = row.kind ?? "single";
+  const label = (i: number) => row.options[i]?.label ?? `option ${i + 1}`;
+  if (kind === "single") return verdict.answer_index !== undefined ? label(verdict.answer_index) : undefined;
+  if (kind === "multi" && Array.isArray(verdict.answer_json)) return verdict.answer_json.map(label).join(", ");
+  if (kind === "rank" && Array.isArray(verdict.answer_json)) return verdict.answer_json.map(label).join(" > ");
+  if (kind === "form" && verdict.answer_json && typeof verdict.answer_json === "object") {
+    return Object.entries(verdict.answer_json)
+      .map(([k, val]) => `${k}=${String(val)}`)
+      .join("; ");
+  }
+  return verdict.answer_index !== undefined ? label(verdict.answer_index) : undefined;
+}
+
 export function formatDecisionAnswer(a: { id: string; question: string; answer: string }): string {
   return `Decision: ${a.answer}\n<cast-decision id="${a.id}" question="${escapeTagAttr(a.question)}"/>`;
 }
