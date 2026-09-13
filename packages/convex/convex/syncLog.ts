@@ -68,6 +68,7 @@ export const CHURN_ONLY_FIELDS: Record<string, ReadonlySet<string>> = {
   conversations: new Set([
     "updated_at",
     "message_count",
+    "usage_totals",
     "last_message_at",
     "last_message_role",
     "last_heartbeat",

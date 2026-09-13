@@ -20,6 +20,7 @@ import {
 } from "./syncLog";
 import { prunablePrefix } from "./syncLogPrune";
 import { canAccessTask, heldKeysFor } from "./lib/access";
+import { rollUpUsage } from "./messages";
 
 // Same fake-DatabaseWriter convention as changeLog.test.ts: ids are
 // "<table>:<n>" so normalizeId is a prefix check. Extended with the index
@@ -347,6 +348,40 @@ describe("makeChangeTrackedDb — dual emission through the interceptor", () => 
 });
 
 describe("churn exemption (design D1)", () => {
+  test("assistant usage rollups persist without reading or advancing the shared sync head", async () => {
+    const { db, actions, head } = makeFakeDb();
+    const scope = userScopeKey("users:1");
+    const query = db.query.bind(db);
+    let headReads = 0;
+    db.query = (table: string) => {
+      if (table === "sync_heads") headReads++;
+      return query(table);
+    };
+    let lastId: string = "";
+    for (let i = 0; i < 25; i++) {
+      lastId = await db.insert("conversations", { user_id: "users:1" });
+      const conversation = await db.get(lastId);
+      const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
+      const patch: Record<string, unknown> = { message_count: 1, updated_at: 100 };
+      await rollUpUsage({ db: tracked }, conversation, [{ input_tokens: 10, output_tokens: 5 }], patch, 100);
+      await tracked.patch(lastId, patch);
+      expect((await db.get(lastId)).usage_totals).toEqual({
+        input: 10, output: 5, cache_read: 0, cache_write: 0, updated_at: 100,
+      });
+    }
+    expect(headReads).toBe(0);
+    expect(head(scope)).toBeNull();
+    expect(actions(scope)).toEqual([]);
+
+    const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const patch: Record<string, unknown> = { title: "Updated title" };
+    await rollUpUsage({ db: tracked }, await db.get(lastId), [{ input_tokens: 2, output_tokens: 3 }], patch, 200);
+    await tracked.patch(lastId, patch);
+    expect(head(scope)?.position).toBe(1);
+    expect(actions(scope)[0].patch).toEqual({ title: "Updated title" });
+    expect((await db.get(lastId)).usage_totals).toMatchObject({ input: 12, output: 8, updated_at: 200 });
+  });
+
   test("counter/liveness-only conversation patches emit no sync action", async () => {
     const { db, actions } = makeFakeDb();
     const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
