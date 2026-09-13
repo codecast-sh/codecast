@@ -54,13 +54,10 @@ interface SyncLedger {
 // and grew without bound). Dead transcripts are pruned on load.
 const store = new CachedJsonStore<SyncRecord>({
   filePath: LEDGER_FILE,
-  keepOnLoad: (filePath) => {
-    try {
-      return fs.existsSync(filePath);
-    } catch {
-      return true; // transient stat failure — keep the entry rather than re-sync from 0
-    }
-  },
+  keepOnLoadAsync: (filePath) => fs.promises.access(filePath).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => error.code !== "ENOENT" && error.code !== "ENOTDIR",
+  ),
 });
 
 export function getSyncRecord(filePath: string): SyncRecord | null {
