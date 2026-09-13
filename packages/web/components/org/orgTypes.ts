@@ -11,7 +11,7 @@ export type OrgSession = {
   short_id: string;
   title: string;
   agent_type: string;
-  work_state: WorkState;
+  state: WorkState;
   updated_at: number;
   owner_user_id?: string;
   org_role_id?: string;
@@ -56,6 +56,15 @@ export type OrgRole = {
   /** Chat channels whose lines ride the role's next wake frame
    *  (docs/architecture/agent-channels.md C1). */
   follow_channel_ids?: string[];
+  // The standing agent's documents, autonomy and spend
+  // (docs/architecture/org-roles-standing.md T1 to T4); the row's own fields.
+  charter_doc_id?: string;
+  brief_doc_id?: string;
+  trust?: "understand" | "decide" | "direct";
+  caps?: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
+  counters?: { day: string; hands: number; wakes: number; tokens: number };
+  coalesce_ms?: number;
+  review_backend?: string;
   created_by: string;
   created_at: number;
   updated_at: number;
@@ -78,7 +87,7 @@ export type OrgAnchor = {
   scope_user_id?: string;
   conversation_id?: string;
   short_id?: string;
-  work_state?: WorkState;
+  state?: WorkState;
   status: string;
 };
 
@@ -105,14 +114,14 @@ export const ORG_STATE_ORDER: WorkState[] = ["needs_input", "working", "dormant"
 export function sortOrgSessions(list: OrgSession[]): OrgSession[] {
   const rank = new Map(ORG_STATE_ORDER.map((s, i) => [s, i]));
   return [...list].sort((a, b) => {
-    const d = (rank.get(a.work_state) ?? 9) - (rank.get(b.work_state) ?? 9);
+    const d = (rank.get(a.state) ?? 9) - (rank.get(b.state) ?? 9);
     return d !== 0 ? d : b.updated_at - a.updated_at;
   });
 }
 
 export function countStates(list: OrgSession[]): StateCounts {
   const out: StateCounts = { ...EMPTY_COUNTS };
-  for (const s of list) out[s.work_state] = (out[s.work_state] ?? 0) + 1;
+  for (const s of list) out[s.state] = (out[s.state] ?? 0) + 1;
   return out;
 }
 
