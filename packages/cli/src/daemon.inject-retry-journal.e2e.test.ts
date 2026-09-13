@@ -54,7 +54,7 @@ test.skipIf(!Bun.which("tmux"))("a process exit and repeated delivery timeouts r
   }
 }, 120_000);
 
-test.skipIf(!Bun.which("tmux"))("an exited agent's failed delivery resumes in a replacement pane", async () => {
+test.skipIf(!Bun.which("tmux")).each(["exited", "buffered"] as const)("a %s delivery resumes in a replacement pane", async mode => {
   const cwd = mkdtempSync(join(tmpdir(), "codecast-exited-journal-"));
   const failedCwd = join(cwd, "failed");
   const replacementCwd = join(cwd, "replacement");
@@ -62,16 +62,20 @@ test.skipIf(!Bun.which("tmux"))("an exited agent's failed delivery resumes in a 
   mkdirSync(replacementCwd);
   const statePath = join(cwd, "state.json");
   const failedFixture = fileURLToPath(new URL("./test-helpers/tmuxExitAfterSubmit.ts", import.meta.url));
-  let pane = spawnHarness({ cwd: failedCwd, jsonlPath: statePath, command: `tmux set-option -p remain-on-exit on && exec bun ${shellQuote(failedFixture)}` });
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  let pane = spawnHarness({ cwd: failedCwd, jsonlPath: statePath, command: mode === "exited"
+    ? `tmux set-option -p remain-on-exit on && exec bun ${shellQuote(failedFixture)}`
+    : `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude", join(cwd, "release")].map(shellQuote).join(" ")}` });
   const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
   const delivery = { messageId: "pending-after-exit", conversationId: "fixture" };
   try {
     await waitFor(() => pane.capturePane().includes("shift+tab"));
-    await expect(injectViaTmux(`${pane.tmuxSession}:0.0`, "continue", "claude", { delivery, journal })).rejects.toThrow("SESSION_EXITED");
-    expect(journal.get(delivery.messageId)?.terminalExited).toBe(1);
-    await expect(injectViaTmux(`${pane.tmuxSession}:0.0`, "continue", "claude", { delivery, journal })).rejects.toThrow("exited terminal");
+    await expect(injectViaTmux(`${pane.tmuxSession}:0.0`, "continue", "claude", { delivery, journal, gateBudgetMs: 500 })).rejects.toThrow(mode === "exited" ? "SESSION_EXITED" : "AGENT_STDIN_NOT_READY");
+    if (mode === "exited") {
+      expect(journal.get(delivery.messageId)?.terminalExited).toBe(1);
+      await expect(injectViaTmux(`${pane.tmuxSession}:0.0`, "continue", "claude", { delivery, journal })).rejects.toThrow("exited terminal");
+    }
     pane.tearDown();
-    const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
     pane = spawnHarness({ cwd: replacementCwd, jsonlPath: statePath,
       command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude"].map(shellQuote).join(" ")}` });
     await waitFor(() => pane.capturePane().includes("shift+tab"));

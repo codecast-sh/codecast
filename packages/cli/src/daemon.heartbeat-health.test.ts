@@ -141,3 +141,18 @@ test.skipIf(!Bun.which("tmux"))("an actual tmux timeout preserves the live pane 
     pane.tearDown();
   }
 }, 60_000);
+
+test.skipIf(!Bun.which("tmux"))("an actual missing-session response still triggers recovery", async () => {
+  const pane = spawnHarness({ command: "exec sleep 600" });
+  try {
+    const h = harness(undefined, `${pane.tmuxSession}-missing`, (args, opts) =>
+      execFileAsync("tmux", args, { timeout: opts?.timeout, killSignal: "SIGKILL", env: { ...process.env } }),
+    );
+    await h.check();
+    expect(h.events).toContain("repair");
+    expect(h.resumeSessionCache.has(h.sessionId)).toBe(false);
+    expect(tmuxRun(["has-session", "-t", pane.tmuxSession]).status).toBe(0);
+  } finally {
+    pane.tearDown();
+  }
+}, 60_000);

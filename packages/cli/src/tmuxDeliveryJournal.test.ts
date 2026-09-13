@@ -41,6 +41,7 @@ test("a replaced pane allows an unsubmitted write only after the old pane is def
   const store = open();
   store.begin(identity, generation, "continue");
   const exec = async (args: string[]) => {
+    if (args[0] === "list-panes") return { stdout: "%2\n" };
     if (args[3] === "%1") throw new Error("can't find pane: %1");
     return { stdout: "100|/socket|%2|201|301" };
   };
@@ -53,6 +54,7 @@ test("an unreadable old pane and a submit with unknown outcome never authorize r
   const store = open();
   store.begin(identity, generation, "continue");
   const exec = async (args: string[]) => {
+    if (args[0] === "list-panes") return { stdout: "%1\n%2\n" };
     if (args[3] === "%1") throw new Error("timeout");
     return { stdout: "100|/socket|%2|201|301" };
   };
