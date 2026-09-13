@@ -34,6 +34,13 @@ export const ORCH_MARKER = "/.codecast/orchestration/";
 /** Home-relative path of the orchestration skill directory. */
 export const ORCH_SKILL_REL = ".claude/skills/codecast-orchestrate";
 
+export const CODECAST_SKILL_NAMES = [
+  "codecast-why",
+  "codecast-conflicts",
+  "codecast-second-opinion",
+  "codecast-standup",
+] as const;
+
 /** The agent definitions the orchestration snippet installs under ~/.claude/agents/. */
 export const ORCH_AGENT_FILES = ["implementer.md", "reviewer.md", "critic.md"] as const;
 
@@ -43,6 +50,7 @@ export const ORCH_AGENT_FILES = ["implementer.md", "reviewer.md", "critic.md"] a
  */
 export const CODECAST_OWNED_HOME_PATHS: readonly string[] = [
   ORCH_SKILL_REL,
+  ...CODECAST_SKILL_NAMES.map((name) => `.claude/skills/${name}`),
   ...ORCH_AGENT_FILES.map((f) => `.claude/agents/${f}`),
   ...CODECAST_HOOK_SCRIPTS.map((f) => `.claude/hooks/${f}`),
   ".codecast",

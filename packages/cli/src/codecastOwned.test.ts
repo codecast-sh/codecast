@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { BUNDLED_SKILLS } from "./bundledSkills";
 import {
-  CODECAST_HOOK_SCRIPTS, CODECAST_OWNED_HOME_PATHS, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL,
+  CODECAST_HOOK_SCRIPTS, CODECAST_OWNED_HOME_PATHS, CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL,
   STABLE_FEED_HOOK_FILE, isCodecastHookCommand, isCodecastOwnedHomePath,
 } from "./codecastOwned";
 
@@ -63,6 +64,16 @@ describe("isCodecastHookCommand", () => {
 });
 
 describe("isCodecastOwnedHomePath", () => {
+  test("every bundled skill is protected from home mirror pruning", () => {
+    const names = BUNDLED_SKILLS.map((skill) => skill.name);
+    expect([...CODECAST_SKILL_NAMES].sort()).toEqual([...names].sort());
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      expect(isCodecastOwnedHomePath(`.claude/skills/${name}/SKILL.md`)).toBe(true);
+      expect(isCodecastOwnedHomePath(`.claude/skills/${name}-fork/SKILL.md`)).toBe(false);
+    }
+  });
+
   test("owned paths and their children are owned; siblings are not", () => {
     expect(isCodecastOwnedHomePath(".claude/skills/codecast-orchestrate/SKILL.md")).toBe(true);
     expect(isCodecastOwnedHomePath(".claude/agents/reviewer.md")).toBe(true);
