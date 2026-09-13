@@ -37,11 +37,13 @@ import {
   type ChatRailChannel,
 } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
+import { mentionKey, mentionUserIds } from "@codecast/shared/chat";
 import { memberListSig } from "./useTeamRoster";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { markChatRailLive } from "../lib/chatLive";
+import { navigateFromHere } from "../lib/desktop";
 import { isConvexId } from "../lib/entityLinks";
 import {
   buildHandleSets,
@@ -109,7 +111,10 @@ export const messagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.thread_root_id ?? ""}|${m.user_id}|${m.author_kind ?? ""}` +
     `|${m.created_at}|${m.edited_at ?? 0}|${m.deleted_at ?? 0}|${m.agent_status ?? ""}` +
-    `|${m._failedAt ?? 0}|${m.mention_scope ?? ""}|${(m.mentions ?? []).join(",")}` +
+    // Each mention by its key: a role or session entry is an object, and a
+    // plain join would print two different ones as the same "[object Object]".
+    // The fold flag is rendered too (the "folded" marker).
+    `|${m._failedAt ?? 0}|${m.mention_scope ?? ""}|${(m.mentions ?? []).map(mentionKey).join(",")}|${m.mention_folded ? 1 : 0}` +
     `|${m.content.length}:${hash(m.content)}` +
     `|${m.voice ? `${m.voice.status}:${m.voice.duration_ms ?? 0}:${m.voice.room_key ?? ""}:${m.voice.transcribing ? 1 : 0}` : ""}` +
     `|${(m.attachments ?? []).map((a) => a.storage_id).join(",")}`,
@@ -132,7 +137,9 @@ export const messagesSig = makeCollectionSig<ChatMessageRow>(
 export const railMessagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.user_id}|${m.created_at}|${m.deleted_at ?? 0}` +
-    `|${m.mention_scope ?? ""}|${(m.mentions ?? []).join(",")}|${m.voice?.status ?? ""}`,
+    // People only: the rail's mention count is about the viewer, and a role or
+    // session entry can never be them.
+    `|${m.mention_scope ?? ""}|${mentionUserIds(m.mentions).join(",")}|${m.voice?.status ?? ""}`,
 );
 
 /** What a session PERSONA on a chat line renders (chatViews sessionAuthorFor):
@@ -462,14 +469,23 @@ function anchorBotsSig(anchors: Record<string, any> | undefined): string {
  *  for the modal, the rail's suggestions and the sidebar's, so "how a DM
  *  opens" is decided in exactly one place. */
 export function useOpenDm(): (memberIds: string[]) => void {
-  const router = useRouter();
+  const openChat = useOpenChatPath();
   return useCallback(
     (memberIds: string[]) => {
       const channelId = useInboxStore.getState().openDmChannel(memberIds);
-      router.push(`/chat/${channelId}`);
+      openChat(`/chat/${channelId}`);
     },
-    [router],
+    [openChat],
   );
+}
+
+/** Go to a chat path from wherever the gesture happened. From a satellite
+ *  window (the voice window's strip, the people window) the path goes to the
+ *  main window and the satellite stays as it was; anywhere else this window
+ *  moves. One hook, so the DM opener and the strip's Chat button agree. */
+export function useOpenChatPath(): (path: string) => void {
+  const router = useRouter();
+  return useCallback((path: string) => navigateFromHere(path, (p) => router.push(p)), [router]);
 }
 
 /** The channel rail, already sorted and counted. */
