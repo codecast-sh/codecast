@@ -134,7 +134,8 @@ export async function pasteTextIntoPane(
     await exec(["load-buffer", "-b", id, tmpFile]);
     bufferLoaded = true;
     await exec(["paste-buffer", "-p", "-t", target, "-b", id, "-d"]);
-  } catch {
+  } catch (error) {
+    if (bufferLoaded) throw error;
     await exec([
       "send-keys",
       "-t",

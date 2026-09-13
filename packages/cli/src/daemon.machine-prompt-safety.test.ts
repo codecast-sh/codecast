@@ -10,6 +10,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
+import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -21,6 +22,8 @@ const cursorMenu = "Ship the change?\n❯ 1. Deploy\n  2. Deny";
 const confirmation = "Confirm deployment\nPress Enter to continue · Esc to cancel";
 const box = (text = "", busy = false) => `────────────────────────────────────────\n❯ ${text}\n────────────────────────────────────────\n${busy ? "esc to interrupt" : "? for shortcuts"}`;
 const fail = (name: string) => () => { throw new Error(`Unexpected effect: ${name}`); };
+
+let fixtureFactory: ((...args: any[]) => any) | undefined;
 
 function fixture(transport = "tmux", cached = true) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-prompt-guard-"));
@@ -178,6 +181,7 @@ function fixture(transport = "tmux", cached = true) {
     },
     clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
     autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
+    prepareTmuxDelivery: async () => null, TmuxDeliveryUncertainError,
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
     IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
@@ -185,64 +189,67 @@ function fixture(transport = "tmux", cached = true) {
     sendAgentStatus: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
     checkForInteractivePrompt: async () => {},
   };
-  const names = [
-    "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
-    "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
-    "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
-    "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
-    "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
-    "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
-    "deliverIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
-    "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
-    "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
-    "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
-    "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
-  ];
-  const constants = [
-    "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
-    "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
-  ].map(name => {
-    const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
-    if (!line) throw new Error(`Missing constant ${name}`);
-    return line.replace("export ", "");
-  });
-  const parserStart = source.indexOf("type InteractivePrompt =");
-  const parserEnd = source.indexOf("\n// Claude Code's spend-limit interstitial", parserStart);
-  const resume = functionBlock(source, "autoResumeSessionInner").text;
-  const readiness = blockAt(resume, resume.indexOf("    while (Date.now() - startTime < maxPollMs)")).text;
-  const warnings = blockAt(resume, resume.indexOf("    if (ready || !content)")).text;
-  const fastProbe = blockAt(resume, resume.indexOf("  if (agentTypeHint)")).text;
-  const resumeFatalStart = resume.indexOf("const fatalErrors = [");
-  const resumeFatalErrors = resume.slice(resumeFatalStart, resume.indexOf("];", resumeFatalStart) + 2);
-  const resumeScope = 'const sessionId = "sid", shortId = "sid", agentType = "claude", tmuxSession = "target", promptPattern = /[❯›]/;';
-  const catches = [fastProbe, readiness, warnings, resume].map((region, i) => {
-    const handler = region.slice(region.lastIndexOf("catch (err) {"), region.lastIndexOf("\n"));
-    return `async function propagation${i}(error) { ${resumeScope} try { throw error; } ${handler} return "fallback"; }`;
-  });
-  const fatalStart = source.indexOf("const STARTED_PANE_FATAL_ERRORS =");
-  // Multi-line array constants: the one-line reader above cannot take these.
-  const arrayConst = (name: string): string => {
-    const start = source.indexOf(`const ${name} =`);
-    if (start < 0) throw new Error(`Missing constant ${name}`);
-    return source.slice(start, source.indexOf("];", start) + 2);
-  };
-  const code = [
-    source.slice(parserStart, parserEnd),
-    blockAt(source, source.indexOf("class MachineInputBlockedError")).text,
-    blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
-    "class UndeliverableMessageError extends Error {}",
-    source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
-    arrayConst("CODEX_PERMISSION_PATTERNS"),
-    ...constants,
-    ...names.map(name => functionBlock(source, name).text),
-    `const scheduleMessageRetry = ((setTimeout) => { ${functionBlock(source, "scheduleMessageRetry").text}; return scheduleMessageRetry; })(recordTimer);`,
-    ...catches,
-    `async function resumeReadiness(content) { ${resumeScope} ${resumeFatalErrors} const startTime = Date.now(), maxPollMs = 100; let ready = false; ${readiness} return ready; }`,
-    `async function resumeWarnings(content) { ${resumeScope} const ready = true; ${warnings} }`,
-    blockAt(source, source.indexOf("  const handlePendingMessagesUpdate = async")).text,
-  ].join("\n").replace(/^export /gm, "");
-  const api = new Function(...Object.keys(deps), new Bun.Transpiler({ loader: "ts" }).transformSync(code) +
-    "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, machineInputGuard, assertMachinePromptAbsent, MachineInputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3] };")(...Object.values(deps));
+  if (!fixtureFactory) {
+    const names = [
+      "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
+      "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
+      "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
+      "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
+      "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
+      "deliverIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
+      "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
+      "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
+      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
+      "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
+    ];
+    const constants = [
+      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
+      "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
+    ].map(name => {
+      const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
+      if (!line) throw new Error(`Missing constant ${name}`);
+      return line.replace("export ", "");
+    });
+    const parserStart = source.indexOf("type InteractivePrompt =");
+    const parserEnd = source.indexOf("\n// Claude Code's spend-limit interstitial", parserStart);
+    const resume = functionBlock(source, "autoResumeSessionInner").text;
+    const readiness = blockAt(resume, resume.indexOf("    while (Date.now() - startTime < maxPollMs)")).text;
+    const warnings = blockAt(resume, resume.indexOf("    if (ready || !content)")).text;
+    const fastProbe = blockAt(resume, resume.indexOf("  if (agentTypeHint)")).text;
+    const resumeFatalStart = resume.indexOf("const fatalErrors = [");
+    const resumeFatalErrors = resume.slice(resumeFatalStart, resume.indexOf("];", resumeFatalStart) + 2);
+    const resumeScope = 'const sessionId = "sid", shortId = "sid", agentType = "claude", tmuxSession = "target", promptPattern = /[❯›]/;';
+    const catches = [fastProbe, readiness, warnings, resume].map((region, i) => {
+      const handler = region.slice(region.lastIndexOf("catch (err) {"), region.lastIndexOf("\n"));
+      return `async function propagation${i}(error) { ${resumeScope} try { throw error; } ${handler} return "fallback"; }`;
+    });
+    const fatalStart = source.indexOf("const STARTED_PANE_FATAL_ERRORS =");
+    // Multi-line array constants: the one-line reader above cannot take these.
+    const arrayConst = (name: string): string => {
+      const start = source.indexOf(`const ${name} =`);
+      if (start < 0) throw new Error(`Missing constant ${name}`);
+      return source.slice(start, source.indexOf("];", start) + 2);
+    };
+    const code = [
+      source.slice(parserStart, parserEnd),
+      blockAt(source, source.indexOf("class MachineInputBlockedError")).text,
+      blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
+      "class UndeliverableMessageError extends Error {}",
+      source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
+      arrayConst("CODEX_PERMISSION_PATTERNS"),
+      ...constants,
+      ...names.map(name => functionBlock(source, name).text),
+      `const scheduleMessageRetry = ((setTimeout) => { ${functionBlock(source, "scheduleMessageRetry").text}; return scheduleMessageRetry; })(recordTimer);`,
+      ...catches,
+      `async function resumeReadiness(content) { ${resumeScope} ${resumeFatalErrors} const startTime = Date.now(), maxPollMs = 100; let ready = false; ${readiness} return ready; }`,
+      `async function resumeWarnings(content) { ${resumeScope} const ready = true; ${warnings} }`,
+      blockAt(source, source.indexOf("  const handlePendingMessagesUpdate = async")).text,
+    ].join("\n").replace(/^export /gm, "");
+    fixtureFactory = new Function(...Object.keys(deps), new Bun.Transpiler({ loader: "ts" }).transformSync(code) +
+      "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, machineInputGuard, assertMachinePromptAbsent, MachineInputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3] };") as (...args: any[]) => any;
+  }
+  const api = fixtureFactory(...Object.values(deps));
   return {
     ...api, state, events, bodies, commands, captureSizes, hooks, timers, clock, prompt, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
     deliver: (body: string, id = "update") => api.deliverMessage("conv", body, deps.conversationCache, syncService, id, {}),
@@ -254,6 +261,26 @@ function fixture(transport = "tmux", cached = true) {
 }
 
 describe("machine prompt delivery safety", () => {
+  test("a timed-out waiter does not steal the active terminal writer's lock", async () => {
+    const f = fixture();
+    const active = new Promise<void>(() => {});
+    f.deps.tmuxTargetLocks.set("target", active);
+    await expect(f.injectViaTmux("target:0.0", "continue", "claude")).rejects.toThrow("earlier delivery still owns");
+    expect(f.deps.tmuxTargetLocks.get("target")).toBe(active);
+    expect(f.events).toEqual([]);
+  });
+
+  test("waiting for input confirmation does not exhaust the retry budget", async () => {
+    const f = fixture();
+    const calls: unknown[][] = [];
+    f.deps.syncService.retryMessage = async (...args: unknown[]) => { calls.push(args); };
+    f.scheduleMessageRetry("update", 10, "conv", "continue", "waiting for terminal input confirmation");
+    expect(f.statuses).toEqual([]);
+    expect(f.timers[0].ms).toBe(5000);
+    await f.timers[0].fn();
+    expect(calls).toEqual([["update", { holdReason: "waiting for terminal input confirmation" }]]);
+  });
+
   test("fixture resolves a one-second delivery sleep while retry timers stay controlled", async () => {
     const f = fixture();
     const start = f.clock.now;

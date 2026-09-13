@@ -97,20 +97,18 @@ describe("pasteTextIntoPane", () => {
 
   test("deletes a loaded tmux buffer when paste fails", async () => {
     const calls: string[][] = [];
-    await pasteTextIntoPane(async (args) => {
+    await expect(pasteTextIntoPane(async (args) => {
       calls.push(args);
       if (args[0] === "paste-buffer") throw new Error("target pane disappeared");
-    }, "%9", "sensitive\nprompt", true);
+    }, "%9", "sensitive\nprompt", true)).rejects.toThrow("target pane disappeared");
 
     const bufferId = calls[0]?.[2];
     expect(calls.map((args) => args[0])).toEqual([
       "load-buffer",
       "paste-buffer",
-      "send-keys",
       "delete-buffer",
     ]);
-    expect(calls[2]).toEqual(["send-keys", "-t", "%9", "-l", "sensitive prompt"]);
-    expect(calls[3]).toEqual(["delete-buffer", "-b", bufferId]);
+    expect(calls[2]).toEqual(["delete-buffer", "-b", bufferId]);
   });
 });
 

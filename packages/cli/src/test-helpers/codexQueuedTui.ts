@@ -1,7 +1,9 @@
 import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { codexQueuedPane } from "./codexQueuedPane.js";
 
-const [statePath, finishPath, layout] = process.argv.slice(2);
+const [statePath, finishPath, layout, inputReleasePath] = process.argv.slice(2);
+let inputHeld = !!inputReleasePath;
+let footerTick = 0;
 const state = { active: true, interrupts: 0, queued: ["Existing worker report."], delivered: [] as string[] };
 let composer = "";
 let input = "";
@@ -9,8 +11,10 @@ let input = "";
 function render() {
   writeFileSync(`${statePath}.tmp`, JSON.stringify(state));
   renameSync(`${statePath}.tmp`, statePath);
-  const prompt = composer || "Ask Codex to do anything";
-  const pane = state.active
+  const prompt = composer || (layout === "claude" ? "" : "Ask Codex to do anything");
+  const pane = layout === "claude"
+    ? `${"─".repeat(80)}\n❯ ${prompt}\n${"─".repeat(80)}\n  bypass permissions on (shift+tab to cycle)${inputReleasePath ? ` · ${footerTick}` : ""}`
+    : state.active
     ? layout === "clipped"
       ? `    Existing queued report …\n\n› ${prompt}\n\n  gpt-6-astra xhigh · /tmp`
       : codexQueuedPane(prompt, state.queued.flatMap((message) => message.split("\n")))
@@ -50,7 +54,16 @@ process.stdin.on("data", (chunk: string) => {
     render();
   }
 });
+if (inputHeld) process.stdin.pause();
 setInterval(() => {
+  if (inputHeld) {
+    footerTick++;
+    render();
+    if (existsSync(inputReleasePath)) {
+      inputHeld = false;
+      process.stdin.resume();
+    }
+  }
   if (state.active && existsSync(finishPath)) {
     state.delivered.push(...state.queued);
     state.queued = [];

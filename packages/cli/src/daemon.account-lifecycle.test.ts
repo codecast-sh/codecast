@@ -107,6 +107,29 @@ test("credentials never change until an in-flight launch reports ready", async (
   expect(h.state.account).toBe("new");
 });
 
+test("same-account recovery allows unrelated launches while excluding credential changes", async () => {
+  const h = harness(), teardown = deferred();
+  h.hooks.kill = async () => { await teardown.promise; };
+  const recovery = h.switchAccount({ conversation_ids: ["recovering"], continue_blocked: false });
+  let launched = false;
+  let changed = false;
+  await waitFor(() => h.events.includes("kill:recovering"));
+  const launch = h.resume("unrelated", "", {}, undefined, "unrelated-conv", "claude").then(() => { launched = true; });
+  let change: Promise<unknown> | undefined;
+  try {
+    await waitFor(() => launched, { timeoutMs: 1000 });
+    expect(h.state.switchAcquires).toBe(0);
+    change = h.switchAccount({ profile: "new", continue_blocked: false }).then(() => { changed = true; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(changed).toBe(false);
+    expect(h.state.account).toBe("old");
+  } finally {
+    teardown.resolve();
+    await Promise.all([recovery, launch, change]);
+  }
+  expect(h.state.account).toBe("new");
+});
+
 test("production switch waits for Claude readiness and cleanup; queued Claude waits for teardown, Codex bypasses", async () => {
   const h = harness(), boot = deferred(), teardown = deferred();
   h.hooks.launch = async id => { if (id === "first") await boot.promise; return true; };
