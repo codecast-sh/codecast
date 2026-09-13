@@ -34,14 +34,16 @@ import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
-import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { BrowserTabPill, BrowserSessionContext, BROWSER_ROW_PILL } from "./browser/BrowserTabPill";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, computeConversationTaskStats, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, computeConversationTaskStats, isForkSeedClientId, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
+import { formatCountdown } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
+import { LimitParkCard } from "./LimitParkCard";
 import {
   describeSmallToolGroup,
   describeToolGroup,
@@ -82,6 +84,8 @@ import { latestUsageOf } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { cssZoomOf } from "../lib/cssZoom";
+import { RevealHost } from "./ObjectReveal";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -139,7 +143,8 @@ import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
-import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
+import { AgentDefinitionPill, HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import {
   DropdownMenu,
@@ -177,6 +182,7 @@ import { inActiveWorkspace } from "../lib/workspaceScope";
 import { MarkdownRenderer, CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
+import { SentFileBlock, type SentFileData } from "./tools/SentFileBlock";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { MessagePromptPreview } from "./MessagePromptPreview";
@@ -510,14 +516,19 @@ const MessageMarkdown = memo(function MessageMarkdown({ content, userText }: { c
   if (userText && !query && content.length > USER_PLAIN_TEXT_THRESHOLD) {
     return <div className="whitespace-pre-wrap break-words">{content}</div>;
   }
+  // RevealHost: any object reference in the body (pill or card) can open its
+  // full page inline, as a full-bleed band after the body's blocks. It renders
+  // a fragment, so the blocks stay direct children of the message content.
   if (query) {
     return (
-      <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
-        {content}
-      </ReactMarkdown>
+      <RevealHost persistKey={content}>
+        <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+          {content}
+        </ReactMarkdown>
+      </RevealHost>
     );
   }
-  return renderMessageMarkdownCached(content, userText);
+  return <RevealHost persistKey={content}>{renderMessageMarkdownCached(content, userText)}</RevealHost>;
 });
 
 // Renders an assistant message body as a flat run of block elements: ★ Insight
@@ -553,15 +564,10 @@ const renderAssistantBody = (content: string) => {
 const VIRT_HEIGHT_CACHE = new Map<string, number>();
 const VIRT_HEIGHT_CACHE_MAX = 8000;
 
-// The in-app zoom (DashboardLayout's zoom.in/out shortcuts) sets CSS zoom on
-// <html>. Under CSS zoom, getBoundingClientRect() returns screen px (layout px
-// × zoom) while everything the virtualizer and scroll math work in — scrollTop,
-// scrollHeight, offsetHeight, translateY row offsets — stays layout px. Any
-// rect-derived length must be divided by this factor before mixing with layout
+// cssZoomOf (lib/cssZoom): rect-derived lengths are screen px under the in-app
+// zoom and must be divided by it before mixing with the virtualizer's layout
 // px. Feeding raw rect heights into resizeItem at 50% zoom halved every
 // believed row height, overlapping all rows into settled garble.
-const cssZoomOf = (el: Element): number =>
-  (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1;
 function virtHeightKey(itemKey: string | number, densityKey: string): string {
   return `${itemKey}|${densityKey}`;
 }
@@ -697,6 +703,7 @@ function formatMessagePartsForCopy(
 type Message = {
   _id: string;
   message_uuid?: string;
+  client_id?: string;
   // Sender of a user message when it differs from the conversation owner
   // (team sends, cast send, fork replies). Absent = the owner typed it.
   from_user_id?: string;
@@ -707,6 +714,7 @@ type Message = {
   tool_calls?: ToolCall[];
   tool_results?: ToolResult[];
   images?: ImageData[];
+  files?: SentFileData[];
   subtype?: string;
   model?: string;
   _isOptimistic?: true;
@@ -1946,6 +1954,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
         })}
         <span className="text-sol-border/50 text-xs">|</span>
         <LaunchModelPill conversationId={storeSession?._id || conversation._id} />
+        <AgentDefinitionPill conversationId={storeSession?._id || conversation._id} />
       </div>
 
       {picking && (
@@ -2531,10 +2540,12 @@ function useApiErrorLive(conversationId?: string): boolean {
 
 function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; timestamp?: number; compact?: boolean }) {
   const live = useApiErrorLive(conversationId);
-  // Relative "when" ticks so the card stays true as time passes.
-  const now = useCoarseNow(30_000);
-  const resetAt = error.isLimit ? parseLimitResetAt(error.message, timestamp) : undefined;
-  const resetPassed = resetAt != null && now >= resetAt;
+  // A usage-limit park has its own card: fixed shape in every density, the
+  // reset counted down in the viewer's clock, and the owner machine's
+  // recovery flags read into a "what happens next" line.
+  if (error.isLimit) {
+    return <LimitParkCard message={error.message} timestamp={timestamp} conversationId={conversationId} live={live} compact={compact} />;
+  }
   const isServerError = !error.isAuth && !error.isLimit && !error.isConnection && !error.isThrottle && (error.statusCode ?? 0) >= 500;
 
   // Tone: amber (or red for a provider 5xx) while the block is in force;
@@ -2572,20 +2583,6 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
           <ProviderKeyInlineEntry errorMessage={error.message} conversationId={conversationId} />
         )}
       </>
-    );
-  } else if (error.isLimit) {
-    heading = "Usage limit reached";
-    icon = (
-      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-        <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-    hint = (
-      <p className="mt-1.5 text-xs text-sol-text-dim">
-        {resetPassed
-          ? <>The limit window reset {formatRelativeTime(resetAt!)} — send a message to pick up where it left off.</>
-          : "The session is paused until the limit resets — send a message after that to pick up where it left off."}
-      </p>
     );
   } else if (error.isThrottle) {
     heading = "Rate limited";
@@ -2675,7 +2672,7 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
         <p className="mt-1.5 text-xs text-sol-text-dim">
           The session continued after this — nothing to do here.
         </p>
-      ) : (!compact || resetPassed) && hint}
+      ) : !compact && hint}
     </div>
   );
 }
@@ -3276,7 +3273,9 @@ function ConversationMetadata({
   if (!resolvedAgent && !resolvedModel && !startedAt && !messageCount) return null;
 
   return (
-    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim min-w-0 overflow-hidden">
+    // flex-shrink-0: this cluster must overflow, not clip, so the header's
+    // squeeze measurement sees it and sheds its parts tier by tier.
+    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-shrink-0">
       {resolvedAgent && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
@@ -3294,14 +3293,14 @@ function ConversationMetadata({
         canEdit={!!canEditModel}
       />
       {startedAt && (
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0 cq-sq2">
           <span className="text-sol-text-dim">&middot;</span>
           <span title={formatFullTimestamp(startedAt)}>{formatRelativeTime(startedAt)}</span>
         </div>
       )}
       {messageCount !== undefined && messageCount > 0 && (
         <button
-          className="hidden sm:flex items-center gap-1.5 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
+          className="hidden sm:flex items-center gap-1.5 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer cq-sq1"
           title="Copy conversation ID"
           onClick={() => { if (conversationId) setTimeout(() => { copyToClipboard(conversationId).then(() => toast.success("ID copied")); }); }}
         >
@@ -3310,7 +3309,7 @@ function ConversationMetadata({
         </button>
       )}
       {startedAt && (
-        <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
+        <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0 cq-sq1">
           <span className="text-sol-text-dim">&middot;</span>
           <span>{formatDuration(startedAt)}</span>
         </div>
@@ -3870,8 +3869,21 @@ function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // Monitor, background Bash, Workflow, and ScheduleWakeup stay visible in
   // condensed feeds: all are standing state the reader needs to know is armed
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
-  // fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  // fire), not a transient tool step. A sent file is here for a different
+  // reason: it is addressed to the reader. Folding a delivery into a receipt
+  // chip is how the file went unseen in the first place.
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+}
+
+// A row that is nothing but tool calls: one-line receipts, not prose. The
+// message already sets its own tight spacing (mb-0.5), so the row wrapper must
+// not add the gutter a written turn needs — that gutter on top of a 16px
+// receipt is what turned a stack of commands into a ladder of gaps.
+function isToolReceiptRow(msg: Message, showThinking: boolean): boolean {
+  if (msg.role !== "assistant") return false;
+  if (msg.content && msg.content.trim().length > 0) return false;
+  if (showThinking && msg.thinking && msg.thinking.trim().length > 0) return false;
+  return (msg.tool_calls?.length ?? 0) > 0;
 }
 
 interface ToolChangeRange {
@@ -5823,74 +5835,9 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   );
 }
 
-/**
- * The two affordances on a `cast browser` row — "open tab" and "watch live" —
- * as small pills, so they read as controls beside the command rather than as
- * more of its text.
- */
-const BROWSER_ROW_PILL =
-  "flex-shrink-0 inline-flex items-center gap-1 rounded-full border border-sol-border/60 bg-sol-bg-highlight/40 " +
-  "px-1.5 py-px text-[10px] leading-4 font-mono text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors";
-
+// The "open tab" pill lives in browser/BrowserTabPill.tsx; "watch live" below
+// shares its pill styling so the two read as one pair of controls.
 const EMPTY_BROWSER_ROWS: Record<string, BrowserRowState> = {};
-
-const OPEN_TAB_ICON = (
-  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-  </svg>
-);
-
-/**
- * "open tab" for the driven browser tab behind a tool call (browserTabOf). A
- * Claude-in-Chrome tab opens through its clau.de link. A `cast browser` tab is
- * RAISED in the driven Chrome (lib/browserFocus.ts) and nothing else: if the
- * tab is gone, the browser stopped, or the viewer is on another machine, the
- * click is a no-op, never a fresh copy of the page. Modified clicks keep their
- * native open-the-URL behavior. Discovery of the daemon's loopback endpoint can
- * outlast a click's activation window, so it starts as soon as the pill
- * renders — by the time the human clicks, the endpoint is cached.
- */
-function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
-  const convex = useConvex();
-  const castTabId = tab.kind === "cast" ? tab.tabId : null;
-  useWatchEffect(() => {
-    if (castTabId) prefetchBrowserFocusEndpoint(convex);
-  }, [castTabId, convex]);
-  if (tab.kind === "extension") {
-    return (
-      <a
-        href={`https://clau.de/chrome/tab/${tab.tabId}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={BROWSER_ROW_PILL}
-        onClick={(e) => e.stopPropagation()}
-        title={`View tab ${tab.tabId}`}
-      >
-        {OPEN_TAB_ICON}
-        <span>open tab</span>
-      </a>
-    );
-  }
-  return (
-    <a
-      href={tab.url ?? undefined}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={BROWSER_ROW_PILL}
-      onMouseEnter={() => prefetchBrowserFocusEndpoint(convex)}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-        e.preventDefault();
-        void focusBrowserTab(convex, tab.tabId);
-      }}
-      title={`focus tab ${tab.tabId} in the agent's browser${tab.url ? `\n${tab.url}` : ""}`}
-    >
-      {OPEN_TAB_ICON}
-      <span>open tab</span>
-    </a>
-  );
-}
 
 /**
  * "watch live" on a `cast browser` row: opens the read-only stream of the tab
@@ -8028,6 +7975,25 @@ function TeammateMessageCard({ teammateId, color, summary, content, timestamp, s
   );
 }
 
+// The turn a branch was seeded with (`cast fork "<direction>"`). On the wire it
+// is the human's own plain message — the agent must not see anything that
+// says "fork" — so the mark comes from the fork-seed client_id stamp and the
+// row's lineage, not from the content. A quiet line above the bubble: where
+// this thread came from, and that this turn is where it diverged.
+function ForkSeedMark({ parentId, parentTitle, parentUsername, convLink }: { parentId: string; parentTitle?: string; parentUsername?: string; convLink: (id: string) => string }) {
+  const label = parentTitle || (parentUsername ? `@${parentUsername}` : parentId.slice(0, 7));
+  return (
+    <div className="flex items-center gap-1.5 px-3 pt-1 text-[11px] text-sol-text-dim" data-cc-fork-seed>
+      <svg className="w-3 h-3 shrink-0 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+      </svg>
+      <span className="uppercase tracking-wide font-medium">Branch seed</span>
+      <span aria-hidden>·</span>
+      <span className="truncate">forked from <Link href={convLink(parentId)} className="text-sol-text-muted hover:underline underline-offset-2">{label}</Link></span>
+    </div>
+  );
+}
+
 function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -8958,6 +8924,7 @@ function AssistantBlockImpl({
   onSendInlineMessage,
   isConversationActive,
   globalImageMap,
+  globalFileMap,
 }: {
   content?: string;
   timestamp: number;
@@ -8999,6 +8966,7 @@ function AssistantBlockImpl({
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData[]>;
+  globalFileMap?: Record<string, SentFileData[]>;
 }) {
   const CONTENT_MAX_HEIGHT = 800;
 
@@ -9065,6 +9033,8 @@ function AssistantBlockImpl({
       <TaskListBlock key={tc.id} tool={tc} result={result} taskRecordMap={taskRecordMap} />
     ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
       <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} taskRecordMap={taskRecordMap} />
+    ) : tc.name === "SendUserFile" ? (
+      <SentFileBlock key={tc.id} files={globalFileMap?.[tc.id] ?? []} />
     ) : tc.name === "SendMessage" ? (
       <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
     ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
@@ -9292,6 +9262,9 @@ function AssistantBlockImpl({
             tools of absorbed messages alike). Always-visible blocks stay. */}
         {hasToolCalls && toolCalls?.map((tc) => {
           if (condensed && !isAlwaysVisibleToolCall(tc)) return null;
+          // A delivered file reads as the end of what the agent just said, so
+          // its cards go under the content rather than above it.
+          if (tc.name === "SendUserFile") return null;
           return renderToolBlock(tc, toolResultMap[tc.id], { messageId, messageUuid, timestamp });
         })}
 
@@ -9353,6 +9326,10 @@ function AssistantBlockImpl({
             )}
           </>
         )}
+
+        {hasToolCalls && toolCalls?.filter(tc => tc.name === "SendUserFile").map(tc => (
+          renderToolBlock(tc, toolResultMap[tc.id], { messageId, messageUuid, timestamp })
+        ))}
 
         {condensedReceipt && (
           <CondensedToolsGroup
@@ -10173,7 +10150,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -10227,6 +10204,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
   const composeTeamId = useInboxStore((s) => s.sessions[conversationId]?.team_id);
+  // Parked on a usage limit: the status line says so instead of "Ready", with
+  // the reset counted down from the park stamp's banner (a primitive
+  // signature, so heartbeats never re-render the composer for it).
+  const limitParkedAt = useInboxStore((s) => {
+    const row = s.sessions[conversationId];
+    return row?.pending_api_error && row.pending_api_error_kind === "limit" ? (row.pending_api_error_at ?? 0) : null;
+  });
+  const limitResetAt = useInboxStore((s) => {
+    if (limitParkedAt == null) return undefined;
+    const msgs = s.messages[conversationId];
+    for (let i = (msgs?.length ?? 0) - 1; i >= 0; i--) {
+      const m = msgs![i];
+      if (m.role === "assistant" && m.content && classifyApiErrorBanner(m.content.trim()) === "limit") {
+        return parseLimitResetAt(m.content, m.timestamp);
+      }
+    }
+    return undefined;
+  });
+  // Re-render only when the countdown's printed minutes change.
+  const limitNow = useNowWhen(
+    (t) => (limitParkedAt == null ? "" : limitResetAt != null ? formatCountdown(limitResetAt - t) + (t >= limitResetAt ? "!" : "") : "parked"),
+    30_000,
+  );
   // Suggestion pills pref — off by default; the strip mounts only when on.
   const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
   const memberTeams = useInboxStore((s) => s.teams);
@@ -10352,11 +10352,33 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         .map(s => ({ label: s.name, description: s.description, type: "skill" as string }));
     }
     if (acTrigger.type === "@") {
+      // Chat mode's own vocabulary (docs/architecture/agent-channels.md C2):
+      // the org roles of the active workspace answer to @handle, and a
+      // session answers to its 7-char short id — offered once the query
+      // starts "jx", from the 20 most recent in the store, so a room's people
+      // and roles are never buried under every session the cache holds.
+      const chatState = chatMentionMode ? useInboxStore.getState() : null;
+      const roleItems: MentionItem[] = (chatState?.orgTree?.roles ?? [])
+        .filter((r: any) => r.status !== "retired")
+        .map((r: any) => ({
+          id: String(r._id), type: "role", label: r.name, sublabel: `@${r.handle}`,
+          handle: r.handle, shortId: r.short_id, updatedAt: r.updated_at,
+        }));
+      const recentSessionIds = chatState
+        ? new Set(
+            Object.values(chatState.sessions)
+              .filter((sess: any) => !sess.is_subagent)
+              .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
+              .slice(0, 20)
+              .map((sess: any) => String(sess._id)),
+          )
+        : null;
       const candidates = mergeMentionSuggestions(
-        effectiveMentionItemsRef.current ?? [], acServerItems,
+        [...roleItems, ...(effectiveMentionItemsRef.current ?? [])], acServerItems,
         mentionViewTimes(useInboxStore.getState()),
       ).filter((m) => {
         if (chatMentionMode && (m.type === "label" || (m.type === "person" && !m.handle))) return false;
+        if (chatMentionMode && m.type === "session" && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
         return mentionItemMatches(m, acQuery);
       });
       const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 8 : 6, acQuery)
@@ -10409,12 +10431,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const after = message.slice(cursorPos);
 
       let inserted: string;
-      if (chatMentionMode && item.type === "person" && item.handle) {
+      if (chatMentionMode && (item.type === "person" || item.type === "role") && item.handle) {
         // The handle the server resolves, at the @ the user typed. The ref form
         // (`@[Name id]`) is the session vocabulary; for people in chat it only
         // notified when the label happened to contain the handle — and the
         // anchor's label never did, which is how "@[Anchor] hi" woke nothing.
+        // A role is the same shape: `@growth` wakes it, `@[Growth or-3]` is prose.
         inserted = `@${item.handle} `;
+      } else if (chatMentionMode && item.type === "session" && item.shortId) {
+        // Only the bare 7-char short id resolves to a session in chat.
+        inserted = `@${item.shortId} `;
       } else if (item.type === "file" || item.type === "skill") {
         inserted = `@${item.label} `;
       } else {
@@ -11994,6 +12020,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Processing...
                   </span>
+                ) : limitParkedAt != null && !showStuckBanner && (!agentStatus || agentStatus === "idle" || agentStatus === "connected") ? (
+                  <span className="flex items-center gap-1.5 text-amber-500">
+                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    {limitResetAt != null && limitResetAt > limitNow
+                      ? `Usage limit · resets in ${formatCountdown(limitResetAt - limitNow)}`
+                      : limitResetAt != null
+                        ? "Usage limit · window open — send continue"
+                        : "Usage limit · parked until the window resets"}
+                  </span>
                 ) : isSessionReady && !showStuckBanner && (!agentStatus || agentStatus === "idle" || agentStatus === "connected") ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400" />
@@ -12105,10 +12140,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       onMouseLeave={() => setModeTooltip(false)}
                       className="flex items-center gap-1.5"
                     >
-                      <div className={`w-2 h-2 rounded-full transition-colors ${
+                      {/* The dot pulses while the daemon walks the session's
+                          cycle and reads the landing mode back off the pane;
+                          it settles the moment the observed mode arrives. */}
+                      <div className={`w-2 h-2 rounded-full transition-colors ${permissionModePending ? "animate-pulse" : ""} ${
                         permissionMode === "plan" ? "bg-sol-blue" :
                         permissionMode === "acceptEdits" ? "bg-emerald-400" :
                         permissionMode === "bypassPermissions" ? "bg-orange-500" :
+                        permissionMode === "auto" ? "bg-sol-violet" :
                         permissionMode === "dontAsk" ? "bg-sol-yellow" :
                         "bg-sol-base00/50"
                       }`} />
@@ -12123,12 +12162,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                             permissionMode === "plan" ? "text-sol-blue" :
                             permissionMode === "acceptEdits" ? "text-emerald-400" :
                             permissionMode === "bypassPermissions" ? "text-orange-500" :
+                            permissionMode === "auto" ? "text-sol-violet" :
                             "text-sol-yellow"
                           }`}
                         >
                           {permissionMode === "plan" ? "plan" :
-                           permissionMode === "acceptEdits" ? "auto-edit" :
+                           permissionMode === "acceptEdits" ? "accept edits" :
                            permissionMode === "bypassPermissions" ? "bypass" :
+                           permissionMode === "auto" ? "auto" :
                            permissionMode === "dontAsk" ? "don't ask" :
                            permissionMode}
                         </span>
@@ -12140,6 +12181,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           permissionMode === "plan" ? "text-sol-blue" :
                           permissionMode === "acceptEdits" ? "text-emerald-400" :
                           permissionMode === "bypassPermissions" ? "text-orange-500" :
+                          permissionMode === "auto" ? "text-sol-violet" :
                           permissionMode === "dontAsk" ? "text-sol-yellow" :
                           "text-sol-text-dim"
                         }>
@@ -12147,6 +12189,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                            permissionMode === "plan" ? "plan mode" :
                            permissionMode === "acceptEdits" ? "accept edits" :
                            permissionMode === "bypassPermissions" ? "bypass permissions" :
+                           permissionMode === "auto" ? "auto mode" :
                            permissionMode === "dontAsk" ? "don't ask" :
                            permissionMode}
                         </span>
@@ -12610,8 +12653,6 @@ function settleTimelineItemAtOffset(
   setTimeout(attempt, opts?.initialDelayMs ?? 300);
 }
 
-const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
-
 // The forwardRef render function itself. Never call it as a plain function
 // from another component: its hooks would then run on the caller's fiber, and
 // Fast Refresh signs the caller, whose own hook list never changes, so an edit
@@ -12795,6 +12836,10 @@ const ConversationViewInner = (
   // padding shares its surface; on the outer wrapper the padding area showed
   // the wrapper's own darker background as a 78px block with a hard seam.
   const titlebarHeadRef = useTitlebarHead<HTMLDivElement>();
+  // The header row sheds chip detail level by level until the title fits
+  // (see hooks/useSqueezeToFit and the .cq-sq* tiers in globals.css).
+  const squeezeRowRef = useRef<HTMLDivElement>(null);
+  useSqueezeToFit(squeezeRowRef, 4);
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
@@ -13003,33 +13048,34 @@ const ConversationViewInner = (
     }
   }, [selectedWorkflowId, createWorkflowRun, conversation?.project_path, conversation?._id]);
 
-  const handleCycleMode = useCallback(() => {
+  // Claude Code owns the shift+tab cycle (it changed when auto mode arrived,
+  // and bypass is only in it when the launch enabled it), so the client never
+  // predicts where a press lands: the daemon presses, reads the mode back off
+  // the pane, and publishes it. Until that lands the pill pulses: "switching"
+  // is derived from the mode the request started on still being the live
+  // mode, so it ends in the render the observed mode arrives, with a bounded
+  // fallback for a press the daemon could not honour.
+  const effectiveMode = managedSession?.permission_mode || "default";
+  const [switchingFrom, setSwitchingFrom] = useState<string | null>(null);
+  const modeSwitching = switchingFrom !== null && switchingFrom === effectiveMode;
+  const modeSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useMountEffect(() => () => { if (modeSwitchTimerRef.current) clearTimeout(modeSwitchTimerRef.current); });
+  const requestPermissionMode = useCallback((target?: string) => {
     // convexConvId is undefined until the session exists server-side; a not-yet-started
     // draft carries a stub id and has no live process to receive keystrokes.
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    const currentMode = useInboxStore.getState().sessions[convexConvId]?.permission_mode || "default";
-    const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
-    void convCommand(convexConvId, "sendKeysToSession", { keys: "BTab" }, { permission_mode: CC_MODE_ORDER[nextIdx] }).catch((err) => {
+    const from = useInboxStore.getState().sessions[convexConvId]?.permission_mode || "default";
+    setSwitchingFrom(from);
+    if (modeSwitchTimerRef.current) clearTimeout(modeSwitchTimerRef.current);
+    modeSwitchTimerRef.current = setTimeout(() => setSwitchingFrom(null), 6000);
+    void convCommand(convexConvId, "setPermissionMode", target ? { target } : {}).catch((err) => {
+      setSwitchingFrom(null);
       if (isParkedDispatchError(err)) return;
       toast.error(err instanceof Error ? err.message : "Failed to change permission mode");
     });
   }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
-
-  const handleEnableBypass = useCallback(() => {
-    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    const currentMode = useInboxStore.getState().sessions[convexConvId]?.permission_mode || "default";
-    const currentIdx = CC_MODE_ORDER.indexOf(currentMode);
-    const targetIdx = CC_MODE_ORDER.indexOf("bypassPermissions");
-    if (currentIdx === -1 || targetIdx === -1 || currentIdx === targetIdx) return;
-    const steps = (targetIdx - currentIdx + CC_MODE_ORDER.length) % CC_MODE_ORDER.length;
-    if (steps === 0) return;
-    const keys = Array(steps).fill("BTab").join(" ");
-    void convCommand(convexConvId, "sendKeysToSession", { keys }, { permission_mode: "bypassPermissions" }).catch((err) => {
-      if (isParkedDispatchError(err)) return;
-      toast.error(err instanceof Error ? err.message : "Failed to enable bypass permissions");
-    });
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
-  const effectiveMode = managedSession?.permission_mode || "default";
+  const handleCycleMode = useCallback(() => requestPermissionMode(), [requestPermissionMode]);
+  const handleEnableBypass = useCallback(() => requestPermissionMode("bypassPermissions"), [requestPermissionMode]);
 
   const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
 
@@ -14501,7 +14547,7 @@ const ConversationViewInner = (
       const hasTextContent = msg.content && msg.content.trim().length > 0;
       const toolCount = msg.tool_calls?.length || 0;
       if (!hasTextContent && !msg.thinking && !msg.images?.length && toolCount === 0) return 8;
-      if (!hasTextContent && toolCount > 0) return Math.min(toolCount * 30, 200);
+      if (!hasTextContent && toolCount > 0) return Math.min(toolCount * 20, 200);
       return 200;
     }
     return 40;
@@ -14545,7 +14591,26 @@ const ConversationViewInner = (
     return size;
   }, [rowDensityKey]);
 
+  const updateScrollProgress = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
+    if (!scrollProgressRef.current || jumpPendingRef.current) return;
+    const ctx = scrollCtxRef.current;
+    let progress: number;
+    if (ctx.messageCount > 150) {
+      const items = instance.getVirtualItems();
+      if (items.length === 0) return;
+      const centerIdx = items[Math.floor(items.length / 2)].index;
+      progress = Math.max(0, Math.min(1, (ctx.loadedStartIndex + (centerIdx / Math.max(ctx.timelineLen, 1)) * ctx.messagesLen) / ctx.messageCount));
+    } else {
+      const maxScroll = instance.getTotalSize() - (instance.scrollRect?.height ?? 0);
+      progress = maxScroll > 0 ? Math.max(0, Math.min(1, (instance.scrollOffset ?? 0) / maxScroll)) : 1;
+    }
+    scrollProgressRef.current.style.height = `${progress * 100}%`;
+    setNavScrollProgress(progress);
+  }, []);
+
   const virtualizer = useVirtualizer({
+    directDomUpdates: true,
+    onChange: updateScrollProgress,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -14693,7 +14758,9 @@ const ConversationViewInner = (
       // we just wrote. Programmatic scrollTop writes don't reliably emit a
       // scroll event (same-value writes, batching), so without this the list can
       // paint one frame showing the items from the *previous* offset.
-      sc.dispatchEvent(new Event('scroll', { bubbles: true }));
+      queueMicrotask(() => {
+        if (sc.isConnected) sc.dispatchEvent(new Event('scroll', { bubbles: true }));
+      });
     };
     pull();
     requestAnimationFrame(pull);
@@ -15260,29 +15327,8 @@ const ConversationViewInner = (
 
   const totalSize = virtualizer.getTotalSize();
   useWatchEffect(() => {
-    // Frozen while a jump is pending: the progress bar must not move until the
-    // single post-load scroll lands (the completion effect sets it explicitly).
-    if (!scrollProgressRef.current || jumpPendingRef.current) return;
-    const totalMessages = conversation?.message_count || messages.length;
-    const isPaginated = totalMessages > 150;
-    let progress: number;
-    if (isPaginated) {
-      const items = virtualizer.getVirtualItems();
-      if (items.length === 0) return;
-      const centerIdx = items[Math.floor(items.length / 2)].index;
-      const loadedMessages = messages.length;
-      const startOffset = conversation?.loaded_start_index ?? 0;
-      const tLen = Math.max(timeline.length, 1);
-      progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
-    } else {
-      const scrollEl = containerRef.current;
-      if (!scrollEl) return;
-      const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
-      progress = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 1;
-    }
-    scrollProgressRef.current.style.height = `${progress * 100}%`;
-    setNavScrollProgress(progress);
-  }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
+    updateScrollProgress(virtualizer);
+  }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize, virtualizer, updateScrollProgress]);
 
   // Pixel-perfect page mount, both directions. The virtualizer's own
   // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
@@ -15791,8 +15837,12 @@ const ConversationViewInner = (
   // that made the call, so the ToolBlock finds them by tool id here. A list,
   // not a single image: one command can hand back several (`cast browser
   // shot --viewports`), and keeping only the last would silently drop the rest.
-  const globalImageMap = useMemo(() => {
+  // Sent files (SendUserFile) ride the same index, for the same reason: a
+  // condensed row renders tool blocks from OTHER messages, so binding by tool
+  // id is what keeps a folded delivery attached to its own card.
+  const { globalImageMap, globalFileMap } = useMemo(() => {
     const map: Record<string, ImageData[]> = {};
+    const fileMap: Record<string, SentFileData[]> = {};
     const sources = [conversation?.messages].filter(Boolean) as Message[][];
     for (const msgs of sources) {
       for (const msg of msgs) {
@@ -15803,9 +15853,16 @@ const ConversationViewInner = (
             }
           }
         }
+        if (msg.files) {
+          for (const file of msg.files) {
+            if (file.tool_use_id) {
+              (fileMap[file.tool_use_id] ??= []).push(file);
+            }
+          }
+        }
       }
     }
-    return map;
+    return { globalImageMap: map, globalFileMap: fileMap };
   }, [conversation?.messages]);
 
   // toolCallId → page URL + tab id for every `cast browser` row, carrying the
@@ -15832,6 +15889,20 @@ const ConversationViewInner = (
     if (!sameBrowserRowMap(browserRowMapRef.current, next)) browserRowMapRef.current = next;
     return browserRowMapRef.current;
   }, [conversation?.messages, globalToolResultMap]);
+  // The page the browser was last on: what the watch pane offers to reopen
+  // when the session's tab is gone. Rows are in transcript order, so the
+  // last entry with a URL is the latest page.
+  const lastBrowserPage = useMemo(() => {
+    let last: BrowserRowState | null = null;
+    for (const row of Object.values(browserRowMap)) if (row.url) last = row;
+    return last;
+  }, [browserRowMap]);
+  // Which session the driven browser belongs to, for the reopen (the same
+  // identity the watch stream's hello carries).
+  const browserSession = useMemo(
+    () => ({ sessionUuid: managedSession?.session_id ?? null, tmuxSession: managedSession?.tmux_session ?? null }),
+    [managedSession?.session_id, managedSession?.tmux_session],
+  );
 
   const chatWakeMapRef = useRef<Record<string, ChatWakePrompt>>({});
   const chatWakeMap = useMemo(() => {
@@ -16231,7 +16302,15 @@ const ConversationViewInner = (
           // A decision answer is a normal user bubble whose body is the chosen
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
-          return <UserPrompt key={msg._id} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const forkSeedParent = isForkSeedClientId(msg.client_id) ? conversation?.forked_from : undefined;
+          const prompt = <UserPrompt key={msg._id} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          if (!forkSeedParent) return prompt;
+          return (
+            <Fragment key={msg._id}>
+              <ForkSeedMark parentId={forkSeedParent} parentTitle={conversation?.forked_from_details?.title} parentUsername={conversation?.forked_from_details?.username} convLink={convLink} />
+              {prompt}
+            </Fragment>
+          );
         }
       }
     }
@@ -16341,6 +16420,7 @@ const ConversationViewInner = (
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
+          globalFileMap={globalFileMap}
         />
       );
     }
@@ -16420,6 +16500,7 @@ const ConversationViewInner = (
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
+    <BrowserSessionContext.Provider value={browserSession}>
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
@@ -16435,7 +16516,7 @@ const ConversationViewInner = (
       <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
           <div ref={titlebarHeadRef} className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
-            <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
+            <div ref={squeezeRowRef} className="cq-squeeze-row flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {isZenMode && (
               <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
                 <button
@@ -16479,14 +16560,14 @@ const ConversationViewInner = (
             {managedSession?.agent_status === "hibernated" ? <HibernatedMarker status={managedSession.agent_status} /> : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
               <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
-                <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
-                <span className="sm:hidden">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
+                <span className="hidden sm:inline cq-sq3">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
+                <span className="sm:hidden cq-sq3">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
               </span>
             ) : isSessionDisconnected ? (
               <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
-                <span className="hidden sm:inline">Disconnected</span>
-                <span className="sm:hidden">Disc</span>
+                <span className="hidden sm:inline cq-sq3">Disconnected</span>
+                <span className="sm:hidden cq-sq3">Disc</span>
               </span>
             ) : null}
 
@@ -16507,7 +16588,7 @@ const ConversationViewInner = (
                   managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan" :
                   "bg-emerald-400"
                 }`} />
-                <span className="hidden sm:inline">{managedSession?.agent_status === "thinking" ? "Thinking" :
+                <span className="hidden sm:inline cq-sq3">{managedSession?.agent_status === "thinking" ? "Thinking" :
                  managedSession?.agent_status === "compacting" ? "Compacting" :
                  managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "Dormant" :
                  managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
@@ -16515,7 +16596,7 @@ const ConversationViewInner = (
                  managedSession?.agent_status === "resuming" ? "Resuming" :
                  managedSession?.agent_status === "connected" ? "Connected" :
                  "Working"}</span>
-                <span className="sm:hidden">{managedSession?.agent_status === "thinking" ? "Think" :
+                <span className="sm:hidden cq-sq3">{managedSession?.agent_status === "thinking" ? "Think" :
                  managedSession?.agent_status === "compacting" ? "Compact" :
                  managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "Dormant" :
                  managedSession?.agent_status === "permission_blocked" ? "Input" :
@@ -16530,7 +16611,7 @@ const ConversationViewInner = (
               // Simple view keeps the metadata cluster functional (it owns the
               // model picker) but pulls it back visually; the plan/task badges
               // drop away entirely.
-              <span data-cc-conv-meta data-simple-dim className="cq-header-collapse contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+              <span data-cc-conv-meta data-simple-dim className="cq-header-collapse cq-sq3 contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -16545,12 +16626,12 @@ const ConversationViewInner = (
             )}
 
             {(conversation as any)?.active_plan && (
-              <span data-simple-hide className="cq-header-collapse contents">
+              <span data-simple-hide className="cq-header-collapse cq-sq3 contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
             {(conversation as any)?.active_task && (
-              <span data-simple-hide className="cq-header-collapse contents">
+              <span data-simple-hide className="cq-header-collapse cq-sq3 contents">
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
@@ -16602,7 +16683,7 @@ const ConversationViewInner = (
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                     </svg>
-                    Parent
+                    <span className="cq-sq2">Parent</span>
                   </Link>
                   );
                 })()}
@@ -17091,7 +17172,7 @@ const ConversationViewInner = (
             <Suspense fallback={null}>
               <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
             </Suspense>
-            <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} />
+            <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}
       </header>
@@ -17293,8 +17374,8 @@ const ConversationViewInner = (
             </div>
           ) : (
           <div
+            ref={virtualizer.containerRef}
             style={{
-              height: virtualizer.getTotalSize(),
               width: "100%",
               position: "relative",
             }}
@@ -17313,6 +17394,7 @@ const ConversationViewInner = (
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
               const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
+              const isToolRow = item.type === 'message' && isToolReceiptRow(item.data as Message, showThinking);
               const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
               const isBelowForkSelection = forkSelectionIdx !== null && virtualItem.index > forkSelectionIdx;
               return (
@@ -17326,12 +17408,11 @@ const ConversationViewInner = (
                     top: 0,
                     left: 0,
                     width: "100%",
-                    transform: `translateY(${virtualItem.start}px)`,
                     ...(content ? {} : { height: 0, overflow: "hidden" }),
                   }}
                 >
                   {content && (
-                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
                         <TimelineRule color="var(--sol-orange)" label="New messages">
                           <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
@@ -17459,7 +17540,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
@@ -17647,6 +17728,7 @@ const ConversationViewInner = (
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
     </ChatWakeContext.Provider>
+    </BrowserSessionContext.Provider>
     </CastBrowserRowContext.Provider>
     </FilePathContext.Provider>
     </HighlightContext.Provider>
