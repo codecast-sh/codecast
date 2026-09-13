@@ -1214,3 +1214,25 @@ describe("parser - harness text riding a tool_result row", () => {
     expect(msg.toolResults).toBeUndefined();
   });
 });
+
+describe("per-message usage extraction (org-roles-standing.md T4)", () => {
+  const line = (message: any, extra: Record<string, any> = {}) => JSON.stringify({
+    type: "assistant", uuid: "u1", timestamp: "2026-09-12T10:00:00.000Z",
+    message: { role: "assistant", model: "claude-opus-4-8", content: [{ type: "text", text: "hello" }], ...message },
+    ...extra,
+  });
+
+  test("an assistant record's usage rides the parsed message", () => {
+    const [msg] = parseSessionFile(line({ usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5, cache_creation_input_tokens: 0 } }));
+    expect(msg.usage).toEqual({ input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5, cache_creation_input_tokens: 0 });
+  });
+
+  test("a synthetic banner or a record without usage carries none", () => {
+    const [noUsage] = parseSessionFile(line({}));
+    expect(noUsage.usage).toBeUndefined();
+    const [synthetic] = parseSessionFile(line({ model: "<synthetic>", usage: { input_tokens: 1, output_tokens: 1 } }));
+    expect(synthetic.usage).toBeUndefined();
+    const [malformed] = parseSessionFile(line({ usage: { input_tokens: "12" } }));
+    expect(malformed.usage).toBeUndefined();
+  });
+});
