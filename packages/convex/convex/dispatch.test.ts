@@ -1252,3 +1252,27 @@ describe("legacy comment action bridge", () => {
     ]);
   });
 });
+
+// Org tree pointers are server-owned (docs/architecture/org-roles.md S1): only
+// orgRoles.reparentSession / retire write org_role_id, and only the standing
+// agent provisioning writes standing_role_id. The generic patch path must drop
+// both even from the runner, or a client could file a session under any role.
+describe("applyPatches drops org tree pointers", () => {
+  const RUNNER = "u".repeat(31) + "r";
+  const CONV = "c".repeat(32);
+  test("org_role_id and standing_role_id never land through a client patch", async () => {
+    const db = makeFakeDb({
+      conversations: [{ _id: CONV, user_id: RUNNER, status: "active", title: "x", message_count: 1 }],
+      session_owners: [],
+      messages: [],
+      pending_messages: [],
+    });
+    await applyPatches({ db } as any, RUNNER as any, {
+      conversations: { [CONV]: { org_role_id: "org_roles_1", standing_role_id: "org_roles_1", title: "renamed" } },
+    });
+    const row = db._tables.conversations[0];
+    expect(row.org_role_id).toBeUndefined();
+    expect(row.standing_role_id).toBeUndefined();
+    expect(row.title).toBe("renamed"); // the rest of the patch still lands
+  });
+});
