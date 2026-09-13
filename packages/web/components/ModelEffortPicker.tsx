@@ -23,6 +23,8 @@ import {
 } from "./ui/dropdown-menu";
 import { useInboxStore } from "../store/inboxStore";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
+import { useAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
+import { toConvexAgentType } from "@codecast/shared/contracts";
 import { formatModel } from "../lib/conversationProcessor";
 import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel } from "../lib/modelSwitch";
 import { commitModelChange, notifyModelToast as notifyToast } from "../lib/modelSwitchWeb";
@@ -354,6 +356,56 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
           });
         }}
       />
+    </DropdownMenu>
+  );
+}
+
+/** Blank session: launch as a named agent definition (Settings > Agent
+ *  Library). Picking one stamps the row; a definition that names a client
+ *  flips the agent pill too, and its model rides the create through the
+ *  server's resolveSpawnDefinition. Hidden until the workspace has one. */
+export function AgentDefinitionPill({ conversationId }: { conversationId: string }) {
+  const definitions = useAgentDefinitions();
+  const live = useLiveSessionMeta(conversationId);
+  if (definitions.length === 0) return null;
+  const current = live?.agentDefinition;
+  const pick = (name: string | null) => {
+    const s = useInboxStore.getState();
+    s.setConversationAgentDefinition(conversationId, name);
+    const def = name ? definitions.find((d) => d.name === name) : undefined;
+    if (def?.agent) s.setConversationAgent(conversationId, toConvexAgentType(def.agent));
+  };
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all font-mono ${
+            current ? "border-sol-cyan/50 bg-sol-cyan/10 text-sol-cyan" : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
+          }`}
+          title="Launch as a named agent definition"
+        >
+          {current ? `as ${current}` : "as…"}
+          <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="center" className="min-w-[16rem]">
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Agent definition</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => pick(null)} className={!current ? "text-sol-cyan" : ""}>
+          <span className="font-mono text-xs">none</span>
+          <span className="ml-2 text-[11px] text-sol-text-dim">plain session</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {definitions.map((d) => (
+          <DropdownMenuItem key={d._id} onSelect={() => pick(d.name)} className={current === d.name ? "text-sol-cyan" : ""}>
+            <div className="flex min-w-0 flex-col">
+              <span className="font-mono text-xs">{d.name}<span className="ml-2 text-[10px] text-sol-text-dim">{[d.agent, d.model, d.effort].filter(Boolean).join(" · ")}</span></span>
+              <span className="truncate text-[11px] text-sol-text-dim">{d.description}</span>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
     </DropdownMenu>
   );
 }
