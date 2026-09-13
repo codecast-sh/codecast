@@ -20,6 +20,7 @@ import TeamPanel from "../../app/settings/team/page";
 import SyncPanel from "../../app/settings/sync/page";
 import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
+import AgentLibraryPanel from "../../app/settings/agent-library/page";
 import AgentFeaturesPanel from "../../app/settings/agent-features/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
 import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
@@ -38,6 +39,7 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "sync": SyncPanel,
   "integrations": IntegrationsPanel,
   "agents": AgentsPanel,
+  "agent-library": AgentLibraryPanel,
   "agent-features": AgentFeaturesPanel,
   "provider-keys": ProviderKeysPanel,
   "claude-accounts": ClaudeAccountsPanel,
@@ -84,6 +86,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
       { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI and sign a machine in", keywords: "install token terminal shell" },
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
+      { id: "agent-library", label: "Agent Library", icon: Bot, desc: "Named agent definitions and chains: client, model, effort, tools, prompt", keywords: "definitions roles reviewer scout chain pipeline subagent model effort prompt as" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins and auto-switching", keywords: "usage limits switch profiles anthropic" },
       { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online" },
       { id: "migrate", label: "Migration", icon: ArrowRightLeft, desc: "Move many sessions to a cloud host or back, in one go", keywords: "migrate move bulk cloud host laptop transfer sessions batch" },
