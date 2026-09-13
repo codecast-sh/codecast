@@ -8,7 +8,7 @@
 // daemon routes and the `cast vault` command group keep the vault vocabulary —
 // only the label and the canonical route changed.
 
-import { lazy, Suspense, useCallback, useMemo, useRef, useState, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
@@ -17,7 +17,6 @@ import {
   Group,
   Separator,
   usePanelRef,
-  type PanelImperativeHandle,
 } from "react-resizable-panels";
 import {
   ArrowUpDown,
@@ -63,6 +62,9 @@ import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useV
 import { vaultPresence } from "../../lib/vault/scopeModel";
 import { vaultLandingPath } from "../../lib/vault/projectVault";
 import { filesHref, resolveVaultTarget } from "../../lib/vault/vaultHref";
+import { locateVault } from "../../lib/vault/client";
+import { inferHomeDir, resolveCustomPath } from "../../lib/utils";
+import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
 import { useVaultStore, type VaultUnreachableReason } from "../../store/vaultStore";
 import {
   toggleVaultEditMode,
@@ -83,27 +85,6 @@ const headerButtonClass = "text-sol-text-dim hover:text-sol-text transition-colo
 
 const SIDE_MIN_PX = 200;
 
-// A Panel mounted into an already-live Group (the tree pane, when a narrow
-// pane widens past the split threshold) gets its imperative handle in the
-// mounting commit, but the group only derives that panel's constraints one
-// commit later — collapse() throws "Panel constraints not found" until then.
-// Retry across a few frames; give up once the desired state changed or the
-// panel is gone.
-export function collapsePanelSoon(
-  panelRef: RefObject<PanelImperativeHandle | null>,
-  stillWanted: () => boolean,
-  frames = 5,
-) {
-  const ref = panelRef.current;
-  if (!ref || !stillWanted()) return;
-  try {
-    ref.collapse();
-  } catch {
-    if (frames > 0) {
-      requestAnimationFrame(() => collapsePanelSoon(panelRef, stillWanted, frames - 1));
-    }
-  }
-}
 
 const separatorClass =
   "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
@@ -442,7 +423,15 @@ function VaultContent() {
   // A file opens; a directory expands in the tree with nothing selected. The
   // effect re-runs as each prerequisite lands: the vault list, the selected
   // vault, its file table.
+  //
+  // A path outside every vault the browser knows is the daemon's question,
+  // not a dead end: it has the disk, so it names the vault holding the path,
+  // registering one when none did (GET /vault/locate). The answer joins the
+  // vault list and this effect re-runs into the ordinary branch. Asked once
+  // per link, so a path that truly does not exist reports that rather than
+  // asking forever.
   const scannedAtForPath = useVaultStore((s) => s.scannedAt);
+  const locatedPathRef = useRef<string | null>(null);
   useWatchEffect(() => {
     if (!localPath) return;
     if (connection !== "connected" && connection !== "cached") return;
@@ -450,10 +439,22 @@ function VaultContent() {
     const activeRoot = vaults.find((v) => v.id === activeVaultId)?.root;
     const target = resolveVaultTarget(localPath, vaults, activeRoot);
     if (!target) {
-      useVaultStore.setState({
-        opError: `No vault on this machine contains ${localPath}. Add one with \`cast vault add <dir>\`.`,
-      });
-      router.replace(filesHref());
+      const fail = (message: string) => {
+        useVaultStore.setState({ opError: message });
+        router.replace(filesHref());
+      };
+      const abs = resolveCustomPath(localPath, inferHomeDir(vaults.map((v) => v.root)), activeRoot);
+      if (!store.endpoint || !abs || locatedPathRef.current === localPath) {
+        fail(`No vault on this machine contains ${localPath}. Add one with \`cast vault add <dir>\`.`);
+        return;
+      }
+      locatedPathRef.current = localPath;
+      void locateVault(store.endpoint, abs)
+        .then((located) => {
+          if (located) store.adoptVault(located.vault);
+          else fail(`${abs} does not exist on this machine.`);
+        })
+        .catch(() => fail(`No vault on this machine contains ${localPath}. Add one with \`cast vault add <dir>\`.`));
       return;
     }
     if (target.vaultId !== activeVaultId) {
