@@ -285,7 +285,9 @@ function createWindow() {
   function startLoad() {
     loadAttempts++;
     armStallTimer();
-    mainWindow.loadURL(currentBaseUrl);
+    // Straight to the app: the site root is the marketing page, and the web
+    // only routes a desktop shell away from it as a courtesy to older builds.
+    mainWindow.loadURL(`${currentBaseUrl}/inbox`);
   }
 
   mainWindow.webContents.on("did-fail-load", (_e, errorCode, _desc, _url, isMainFrame) => {
