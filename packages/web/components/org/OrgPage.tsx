@@ -190,7 +190,7 @@ export function OrgPageInner() {
   const openSession = useCallback((conversationId: string) => {
     const row = tree ? [...tree.people, ...tree.roles].flatMap((b) => b.sessions).find((x) => x._id === conversationId) : null;
     if (preview) return;
-    openLinked({ _id: conversationId, title: row?.title, short_id: row?.short_id, agent_type: row?.agent_type, updated_at: row?.updated_at ?? Date.now(), is_active: row?.work_state === "working" });
+    openLinked({ _id: conversationId, title: row?.title, short_id: row?.short_id, agent_type: row?.agent_type, updated_at: row?.updated_at ?? Date.now(), is_active: row?.state === "working" });
   }, [tree, preview, openLinked]);
 
   const requestMove = useCallback((req: OrgReparentRequest) => {

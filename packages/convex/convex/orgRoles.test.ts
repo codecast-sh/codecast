@@ -224,7 +224,7 @@ describe("org.tree", () => {
     expect(tree.people[0]!.sessions.map((s: any) => s.title)).toEqual(["Fresh"]);
     expect(tree.anchors.length).toBe(1);
     expect(tree.anchors[0].short_id ?? null).toBeNull();
-    expect(tree.anchors[0].work_state).toBeDefined();
+    expect(tree.anchors[0].state).toBeDefined();
   });
 
 
@@ -252,7 +252,7 @@ describe("org.tree", () => {
     expect(growth.sessions[0].title).toBe("Lead");
     expect(growth.sessions[0].subagent_count).toBe(1);
     expect(growth.sessions[0].org_role_id).toBe(role._id);
-    expect(["needs_input", "working", "done", "dormant", "idle"]).toContain(growth.sessions[0].work_state);
+    expect(["needs_input", "working", "done", "dormant", "idle"]).toContain(growth.sessions[0].state);
 
     const me = tree.people.find((p: any) => p.user_id === ME)!;
     expect(me.is_me).toBe(true);
@@ -261,7 +261,7 @@ describe("org.tree", () => {
     const mate = tree.people.find((p: any) => p.user_id === MATE)!;
     expect(mate.total).toBe(1);
     expect(mate.sessions[0].title).toBe("Mate's");
-    expect(mate.counts[mate.sessions[0].work_state]).toBe(1);
+    expect(mate.counts[mate.sessions[0].state]).toBe(1);
     // The subagent is counted, never emitted.
     const all = [...tree.people, ...tree.roles].flatMap((n: any) => n.sessions.map((s: any) => s.title));
     expect(all).not.toContain("Kid");

@@ -65,7 +65,7 @@ export type BriefHand = {
   _id: string;
   short_id: string;
   title: string;
-  work_state: WorkState;
+  state: WorkState;
   state_line: string | null;
   state_status: string | null;
   state_at: number | null;

@@ -137,7 +137,7 @@ export function buildFrame(input: FrameInput): Frame {
     const task = h.task
       ? ` · ${h.task.short_id} ${h.task.status}${h.task.execution_status ? ` (${h.task.execution_status})` : ""}${h.task.review_verdict ? ` · review: ${h.task.review_verdict}` : ""}`
       : "";
-    return `- ${h.short_id} ${h.title}: ${h.work_state}${task}${h.state_line ? ` — ${h.state_line}` : ""}`;
+    return `- ${h.short_id} ${h.title}: ${h.state}${task}${h.state_line ? ` — ${h.state_line}` : ""}`;
   });
   sections.push([`## Hands say`, ...(handLines.length ? budgeted(handLines, budget) : ["- no hands"])].join("\n"));
 

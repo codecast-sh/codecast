@@ -180,7 +180,7 @@ describe("orgWakes.buildFrame", () => {
     scope: { projects: [{ id: "p1", title: "Infrastructure" }], plans: [], whole_workspace: false },
     tasks: { total: 4, open: 3, by_status: { open: 2, in_progress: 1, done: 1 }, by_priority: { high: 1, medium: 3 } },
     plans: [{ id: "pl1", short_id: "pl-9", title: "Move to Postgres", status: "active", updated_at: NOW, progress: { total: 3, done: 1, in_progress: 1, open: 1 } }],
-    hands: [{ _id: "hand1" as any, short_id: "jxhand1", title: "Fix the deploy", work_state: "working", state_line: "checking CI", state_status: "working", state_at: NOW, updated_at: NOW, task: { short_id: "ct-5", title: "Deploy", status: "in_review", execution_status: "done", review_verdict: "changes" } }],
+    hands: [{ _id: "hand1" as any, short_id: "jxhand1", title: "Fix the deploy", state: "working", state_line: "checking CI", state_status: "working", state_at: NOW, updated_at: NOW, task: { short_id: "ct-5", title: "Deploy", status: "in_review", execution_status: "done", review_verdict: "changes" } }],
     changed: [{ kind: "task", short_id: "ct-5", title: "Deploy", status: "in_review", updated_at: NOW }],
     decisions: { open: 1, answered_today: 2 },
     usage: { day: "2027-01-01", wakes: 3, hands: 1, tokens: 1200, caps: { ...DEFAULT_CAPS }, uncounted_sessions: 0 },
