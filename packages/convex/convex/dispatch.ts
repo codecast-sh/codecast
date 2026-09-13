@@ -1,6 +1,8 @@
 import { mutation, syncAckPositions } from "./functions";
+import { guardClientResolution, personMayResolve, settleClientResolution } from "./sessionDecisions";
 import type { ThreadKind } from "./threadReads";
 import { v } from "convex/values";
+import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession } from "./devices";
 import { upsertBinding } from "./capabilityBindings";
@@ -62,6 +64,12 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       // Second-party ownership is server-assigned only: setSessionOwner, plus
       // performSessionSend's auto-own on cross-user sends into unowned sessions.
       "owner_user_id",
+      // Org tree pointers are server-owned (docs/architecture/org-roles.md S1,
+      // org-roles-standing.md T1): reparentSession / retire write org_role_id,
+      // the provisioning wave writes standing_role_id. A client patch of either
+      // would bypass performReparentSession's rules and let the role's brief
+      // and actor resolution treat the row as acting for the role.
+      "org_role_id", "standing_role_id",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
@@ -94,7 +102,15 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "_id", "_creationTime", "user_id", "conversation_id", "session_id",
       "question", "context_md", "options", "report_slug", "blocking",
       "default_option", "created_at",
+      // W2 routing fields: server assigned, changed only by the named
+      // mutations (recommend / answer / grant / stacks).
+      "short_id", "kind", "category", "category_proposed", "doc_id", "form",
+      "task_id", "station", "stack_id", "holder", "holder_key", "asked_user_ids",
+      "hops", "answered_by", "grant_id", "reopened_from", "scope_keys", "stack_joined_at",
     ]),
+    // First writer wins on this rail too: a resolution patch on a row a role
+    // or a stack policy already resolved is dropped whole.
+    beforePatch: (doc: any, safe: Record<string, any>) => guardClientResolution(doc, safe),
   },
   // Kept for backward compatibility with already-persisted generic edit
   // outbox rows. Current comment writes use named receipt-backed side effects;
@@ -343,7 +359,11 @@ export async function applyPatches(
         // validated setSessionOwner mutation only.
         let permitted = !!doc && (
           (doc as any)[config.ownerField] === userId ||
-          (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString())
+          (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString()) ||
+          // A decision is answerable by every person it was asked of
+          // (docs/architecture/decisions-as-documents.md D6), not only the
+          // asking session's owner.
+          (table === "session_decisions" && personMayResolve(doc as any, userId))
         );
         // owner_user_id caches only the PRIMARY (first-added) owner; a SECONDARY
         // owner's triage patch must resolve through the canonical owner set or
@@ -410,6 +430,11 @@ export async function applyPatches(
           await ctx.db.patch(docKey as Id<any>, finalSafe);
         }
         if (table === "inbox_buckets") bucketViewChanged = true;
+        // A decision resolved from the web: the same side effects a server
+        // answer carries (inbox rows done, stack close, override scoring).
+        if (table === "session_decisions" && "status" in finalSafe) {
+          await settleClientResolution(ctx, doc as any, finalSafe as any, userId, Date.now());
+        }
         // Lifecycle hooks on the DATA transition (a conversation patch setting
         // inbox_dismissed_at / inbox_stashed_at), not any one action, so every
         // dismiss/stash path funnels through here — the inbox shortcuts, the
@@ -566,6 +591,66 @@ async function linkConversationToObject(
 }
 
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
+  // Org roles (docs/architecture/org-roles.md S5/S6). The web patches the
+  // `orgTree` store singleton optimistically; that snapshot is not a dispatch
+  // table, so these named effects are the only server write. The functions
+  // live in orgRoles.ts; `api` is widened so this file compiles before that
+  // module exists in a given checkout.
+  reparentOrgSession: async (ctx, _userId, [conversationId, target]: [string, any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.reparentSession, {
+      conversation_id: conversationId,
+      target,
+    });
+  },
+  reparentOrgRole: async (ctx, _userId, [roleId, reportsTo]: [string, any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo });
+  },
+  createOrgRole: async (ctx, _userId, [input]: [any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.create, {
+      name: input.name,
+      handle: input.handle,
+      ...(input.team_id ? { team_id: input.team_id } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.reports_to ? { reports_to: input.reports_to } : {}),
+      ...(input.charter ? { charter: input.charter } : {}),
+    });
+  },
+  updateOrgRole: async (ctx, _userId, [roleId, fields]: [string, any]) => {
+    // A pause or resume is the standing agent's (org-roles-standing.md T4):
+    // hands get their interrupt and held wakes flush, which a bare status
+    // patch would skip. Trust and caps have their own human-only mutations.
+    if (fields.status === "paused") await ctx.runMutation!((api as any).orgRoles.pause, { role_id: roleId });
+    else if (fields.status === "active") await ctx.runMutation!((api as any).orgRoles.resume, { role_id: roleId });
+    if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
+    if (fields.caps !== undefined) {
+      await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
+    }
+    const rest: Record<string, any> = { ...fields };
+    delete rest.trust; delete rest.caps;
+    if (rest.status === "paused" || rest.status === "active") delete rest.status;
+    if (!["name", "handle", "scope", "charter", "status"].some((k) => rest[k] !== undefined)) return null;
+    fields = rest;
+    return await ctx.runMutation!((api as any).orgRoles.update, {
+      role_id: roleId,
+      ...(fields.name !== undefined ? { name: fields.name } : {}),
+      ...(fields.handle !== undefined ? { handle: fields.handle } : {}),
+      ...(fields.scope !== undefined ? { scope: fields.scope } : {}),
+      ...(fields.charter !== undefined ? { charter: fields.charter } : {}),
+      ...(fields.status !== undefined ? { status: fields.status } : {}),
+    });
+  },
+  // A role following a chat channel (agent-channels.md C1). orgChannels
+  // resolves the role by short id or handle and checks the admin grant.
+  followOrgChannel: async (ctx, _userId, [roleShortId, channelId, follow]: [string, string, boolean]) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!((api as any).orgChannels[follow ? "follow" : "unfollow"], {
+      role: roleShortId,
+      channel: channelId,
+    });
+  },
+  retireOrgRole: async (ctx, _userId, [roleId]: [string]) => {
+    return await ctx.runMutation!((api as any).orgRoles.retire, { role_id: roleId });
+  },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
   // no error, so a generic patch to capability_bindings would silently not
@@ -707,7 +792,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -740,6 +825,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
+    // The compose bar's "as <definition>" pick: the definition's client, model
+    // and effort fill whatever the row left unset, and the rest of it (tools,
+    // prompt, mode, worktree) rides the start command to the daemon.
+    const asDef = await resolveSpawnDefinition(ctx, userId, opts.agent_definition, {
+      agentType: opts.agent_type,
+      model: opts.model,
+      effort: opts.effort,
+      isolated: opts.isolated,
+    });
+    if (asDef.definition) {
+      opts = { ...opts, agent_type: asDef.agentType ?? opts.agent_type, model: asDef.model, effort: asDef.effort, isolated: asDef.isolated };
+    }
     const agentType = (opts.agent_type || "claude_code") as ConvexAgentType;
     const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.target_device_id);
 
@@ -889,6 +986,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(effortOk ? { effort: opts.effort } : {}),
       ...(opts.stable_mode ? { stableMode: opts.stable_mode } : {}),
       ...(opts.stable_exclude?.length ? { stableExclude: opts.stable_exclude } : {}),
+      ...(asDef.definition ? { definition: asDef.definition } : {}),
     });
 
     return conversationId;
@@ -1126,12 +1224,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  // The doc star (rendered as a star; stored as `pinned`). Access is the doc's
+  // own workspace rule, not the viewer's active team: a doc in another team
+  // the viewer belongs to must star too, and team_id is routing, never access.
   pinDoc: async (ctx, userId, [docId, pinned]: [string, boolean]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (doc.user_id !== userId && doc.team_id !== teamId) throw new Error("Not authorized");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
     await ctx.db.patch(doc._id, { pinned, updated_at: Date.now() });
   },
 
@@ -1184,6 +1283,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // provider webhook and schedules the first import — so the side effect
   // delegates rather than re-deriving any of it. The store paints
   // issueSyncSources optimistically; these perform the real write.
+  // Agent definitions and chains. The store's upsert returns the client_key
+  // it stamped on the stub (and the server id when it patched a real row), so
+  // the mutation lands on the same row and the stub supersedes onto it.
+  upsertAgentDefinition: async (ctx, userId, [fields]: [any], result) => {
+    const { _id, ...rest } = fields ?? {};
+    const r = (result ?? {}) as { client_key?: string; id?: string };
+    return await (ctx as any).runMutation(api.agentDefinitions.upsert, {
+      ...rest,
+      ...(isServerId(r.id ?? _id) ? { id: r.id ?? _id } : {}),
+      client_key: r.client_key,
+    });
+  },
+  removeAgentDefinition: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    await (ctx as any).runMutation(api.agentDefinitions.remove, { id });
+  },
+  upsertAgentChain: async (ctx, userId, [fields]: [any], result) => {
+    const { _id, ...rest } = fields ?? {};
+    const r = (result ?? {}) as { client_key?: string; id?: string };
+    return await (ctx as any).runMutation(api.agentDefinitions.upsertChain, {
+      ...rest,
+      ...(isServerId(r.id ?? _id) ? { id: r.id ?? _id } : {}),
+      client_key: r.client_key,
+    });
+  },
+  removeAgentChain: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    await (ctx as any).runMutation(api.agentDefinitions.removeChain, { id });
+  },
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
@@ -1235,6 +1363,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       client_state: { _: { ui: { active_team_id: teamId } } },
     });
     return teamId;
+  },
+  // Local-first team delete (inboxStore.deleteTeam). The mutation repoints the
+  // canonical users.active_team_id when it named the team; the ui mirror
+  // already moved to the client's fallback, so re-stamp it with the server's
+  // answer in the same transaction. Both apply the oldest-membership rule.
+  dispatchDeleteTeam: async (ctx, userId, [teamId, confirmName]: [string, string, string | undefined]) => {
+    const result = await (ctx as any).runMutation(api.teams.deleteTeam, {
+      team_id: teamId,
+      confirm_name: confirmName,
+    });
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { active_team_id: result?.active_team_id ?? undefined } } },
+    });
+    return result;
   },
   createSavedView: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
@@ -1918,6 +2060,7 @@ const SESSION_COMMANDS = {
   rewindSession: api.conversations.rewindSession,
   forkFromMessage: api.conversations.forkFromMessage,
   sendKeysToSession: api.conversations.sendKeysToSession,
+  setPermissionMode: api.conversations.setPermissionMode,
   sendEscapeToSession: api.conversations.sendEscapeToSession,
   resumeSession: api.users.resumeSession,
 };
