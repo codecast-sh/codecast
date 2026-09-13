@@ -22,7 +22,7 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal } from "lucide-react";
+import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
@@ -36,10 +36,13 @@ import { StorageHealthBanner } from "./StorageHealthBanner";
 import { StatusNoticeStack } from "./StatusNoticeStack";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
+import { StatusDot } from "./StatusDot";
+import { TopbarButton, TopbarDivider } from "./TopbarButton";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
 import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
+import { useSyncAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
@@ -57,6 +60,7 @@ import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { FilePathMenuHost } from "./FilePathMenuHost";
+import { LinkMenuHost } from "./LinkMenuHost";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncCore } from "../hooks/useSyncCore";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
@@ -71,7 +75,8 @@ import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { tabTitle } from "../lib/tabTitle";
-import { pathLabel } from "../lib/pathLabel";
+import { pathLabel, poppedTabPath } from "../lib/pathLabel";
+import { leavesOf } from "../store/stageSplit";
 import { TabContent } from "./TabContent";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -187,10 +192,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
           boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
         }}
       >
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-40" style={{ animationDuration: '1.5s' }} />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-        </span>
+        <StatusDot color="var(--sol-green)" ping pingDuration="1.5s" />
         <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
           {activeAgentCount}
         </span>
@@ -265,6 +267,9 @@ function HostFeeders() {
   // integrations panel and any project surface that shows where its tasks
   // came from — one subscription rather than one per opened card.
   useSyncIssueSyncSources();
+  // The workspace's agent definitions and chains: the compose "as" chooser,
+  // the settings library and the spawn actions all read them.
+  useSyncAgentDefinitions();
   useSyncSettings();
   return null;
 }
@@ -349,6 +354,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.workspace.nav.size,
     s => s.workspace.context.size,
     s => s.workspace.context.pane?.kind,
+    // The terminal toggle lights while the dock is open.
+    s => s.workspace.dock.pane != null,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
@@ -769,17 +776,21 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           if (v.mode && v.mode !== store.inboxViewMode()) store.setInboxViewMode(v.mode);
         });
       }
-      if (popped.inboxId) return;
       if (isNonTabRoute(window.location.pathname)) return;
       // A detached tab window navigates via React Router only — the shared
       // tabs its store hydrates belong to the main window, so mirroring this
       // window's URL into the "active tab" would rewrite someone else's tab.
       if (isDetachedTabWindow()) return;
       const store = useInboxStore.getState();
-      const id = store.activeTabId;
-      if (!id) return;
-      const full = window.location.pathname + window.location.search;
-      store.updateTab(id, { path: full, title: pathLabel(full) });
+      const tab = store.tabs.find((t) => t.id === store.activeTabId);
+      if (!tab) return;
+      // A session-select entry is the inbox pane's to reconcile while that
+      // pane is mounted; once the tab shows another page, the pane is gone
+      // and the tab itself must return to the inbox (poppedTabPath).
+      const panePaths = tab.layout ? leavesOf(tab.layout).map((l) => l.path) : [tab.path];
+      const full = poppedTabPath(popped, window.location.pathname, window.location.search, panePaths);
+      if (full === null) return;
+      store.updateTab(tab.id, { path: full, title: pathLabel(full) });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1032,36 +1043,30 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           {/* Left section: Sidebar toggle + nav */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
-              <button
+              <TopbarButton
                 onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
-                className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+                desktopOnly
               >
-                <PanelLeft className="w-[18px] h-[18px]" />
-              </button>
+                <PanelLeft />
+              </TopbarButton>
             </ShortcutTooltip>
             {isDesktopApp && (
               <div className="flex items-center gap-0.5">
                 <ShortcutTooltip label="Back" action="nav.back">
-                  <button
+                  <TopbarButton
                     onClick={(e) => { window.history.back(); tipActions.whisper('nav.back', e); }}
-                    className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
                     aria-label="Go back"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
+                    <ChevronLeft />
+                  </TopbarButton>
                 </ShortcutTooltip>
                 <ShortcutTooltip label="Forward" action="nav.forward">
-                  <button
+                  <TopbarButton
                     onClick={(e) => { window.history.forward(); tipActions.whisper('nav.forward', e); }}
-                    className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
                     aria-label="Go forward"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
+                    <ChevronRight />
+                  </TopbarButton>
                 </ShortcutTooltip>
               </div>
             )}
@@ -1098,73 +1103,86 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
           </div>
 
-          <div className="hidden md:block flex-shrink-0 mx-1" style={{ width: 1, minWidth: 1, height: 20, backgroundColor: "var(--sol-text-dim)", opacity: 0.35 }} />
-
-          {/* Right section: Actions */}
+          {/* Right section, three groups left to right: STATUS (dot-led
+              pills: account usage, daemon, sync, running agents), ACTIONS
+              (new session, anchor, notifications, theme, account) and
+              LAYOUT (comments, terminal, sessions panel). Every icon
+              control is a TopbarButton so the row reads as one set. */}
           <div data-cc-topbar-actions className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            <ErrorBoundary name="AccountUsageChip" level="inline">
-              <AccountUsageChip />
-            </ErrorBoundary>
-            <ErrorBoundary name="DaemonStatusChip" level="inline">
-              <DaemonStatusChip />
-            </ErrorBoundary>
-            <ErrorBoundary name="SyncStatusChip" level="inline">
-              <SyncStatusChip />
-            </ErrorBoundary>
-            <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            <ErrorBoundary name="AnchorChip" level="inline">
-              <AnchorChip />
-            </ErrorBoundary>
-            <ShortcutTooltip label="New session" action="session.create">
-              <button
-                onClick={(e) => {
-                  openCompose();
-                  tipActions.whisper('session.create', e);
-                }}
-                className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
-              >
-                <Plus className="w-[18px] h-[18px]" />
-              </button>
-            </ShortcutTooltip>
-            <ThemeToggle />
-            <ErrorBoundary name="NotificationBell" level="inline">
-              <NotificationBell />
-            </ErrorBoundary>
-            <ErrorBoundary name="UserMenu" level="inline">
-              <UserMenu />
-            </ErrorBoundary>
-            {showCommentsToggle && (
-              <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
-                <button
-                  onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
-                  className={`flex items-center p-1.5 rounded-md transition-colors ${commentRailOpen ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-muted"}`}
+            <div data-cc-topbar-group className="hidden md:flex items-center gap-1.5">
+              <ErrorBoundary name="AccountUsageChip" level="inline">
+                <AccountUsageChip />
+              </ErrorBoundary>
+              <ErrorBoundary name="DaemonStatusChip" level="inline">
+                <DaemonStatusChip />
+              </ErrorBoundary>
+              <ErrorBoundary name="SyncStatusChip" level="inline">
+                <SyncStatusChip />
+              </ErrorBoundary>
+              <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+            </div>
+            <TopbarDivider />
+            <div data-cc-topbar-group className="flex items-center gap-0.5">
+              <ShortcutTooltip label="New session" action="session.create">
+                <TopbarButton
+                  onClick={(e) => {
+                    openCompose();
+                    tipActions.whisper('session.create', e);
+                  }}
+                  aria-label="New session"
+                  desktopOnly
                 >
-                  <MessageSquare className="w-[18px] h-[18px]" />
-                </button>
+                  <Plus />
+                </TopbarButton>
               </ShortcutTooltip>
-            )}
-            {!isMobile && (
-              <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
-                <button
-                  onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
-                  className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-                  aria-label="Toggle terminal panel"
+              <ErrorBoundary name="AnchorChip" level="inline">
+                <AnchorChip />
+              </ErrorBoundary>
+              <ErrorBoundary name="NotificationBell" level="inline">
+                <NotificationBell />
+              </ErrorBoundary>
+              <ThemeToggle />
+              <ErrorBoundary name="UserMenu" level="inline">
+                <UserMenu />
+              </ErrorBoundary>
+            </div>
+            <TopbarDivider />
+            <div data-cc-topbar-group className="flex items-center gap-0.5">
+              {showCommentsToggle && (
+                <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
+                  <TopbarButton
+                    onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
+                    active={commentRailOpen}
+                    aria-label={commentRailOpen ? "Hide comments" : "Show comments"}
+                  >
+                    <MessageSquare />
+                  </TopbarButton>
+                </ShortcutTooltip>
+              )}
+              {!isMobile && (
+                <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
+                  <TopbarButton
+                    onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
+                    active={s.workspace.dock.pane != null}
+                    aria-label="Toggle terminal panel"
+                    desktopOnly
+                  >
+                    <SquareTerminal />
+                  </TopbarButton>
+                </ShortcutTooltip>
+              )}
+              {/* Detached tab window only: merge this surface back into the
+                  main window as a tab (renders null everywhere else). */}
+              <AttachTabButton />
+              <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
+                <TopbarButton
+                  onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
+                  aria-label="Toggle sessions panel"
                 >
-                  <SquareTerminal className="w-[18px] h-[18px]" />
-                </button>
+                  <PanelRight />
+                </TopbarButton>
               </ShortcutTooltip>
-            )}
-            {/* Detached tab window only: merge this surface back into the
-                main window as a tab (renders null everywhere else). */}
-            <AttachTabButton />
-            <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
-              <button
-                onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
-                className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-              >
-                <PanelRight className="w-[18px] h-[18px]" />
-              </button>
-            </ShortcutTooltip>
+            </div>
           </div>
         </div>
       </header>
@@ -1278,6 +1296,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <ErrorBoundary name="VaultQuickSwitcher" level="panel">
           <VaultQuickSwitcherDock />
           <FilePathMenuHost />
+          <LinkMenuHost />
         </ErrorBoundary>
       )}
 
@@ -1342,7 +1361,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           vanished" with no way back (Jason, 2026-08-24). The fallback is a
           floating chip where the dock lived: retry re-renders, hang up also
           frees the seat, and the ErrorBoundary toast still carries the trace. */}
-      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt shadow-xl">
         <ErrorBoundary
           name="Call window"
           fallback={({ retry }) => (
@@ -1371,7 +1390,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           without a word left the main window looking as though no call were
           running at all — and the first thing that invites is starting a second
           one. It sits where the dock would, and says only where to look. */}
-      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
+      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-xl">
         <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
       </div>
       {/* A recording in progress, wherever the person has wandered to. It
