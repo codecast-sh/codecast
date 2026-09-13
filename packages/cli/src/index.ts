@@ -13039,7 +13039,7 @@ org
   .requiredOption("--handle <handle>", "Unique handle in the workspace: a-z, 0-9 and -, 2 to 32 chars")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--reports-to <target>", "A role (or-N or @handle) or a person (name, id, or me); default: you")
-  .option("--charter <text>", "One or two sentences on what the role owns")
+  .option("--charter <text>", stdinText("One or two sentences on what the role owns"))
   .option("--json", "Machine-readable output")
   .action(async (name: string, options: any) => {
     const ws = await writeWorkspace(options.team);
