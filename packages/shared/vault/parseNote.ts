@@ -176,7 +176,7 @@ function parseScalar(raw: string): unknown {
 
 const indentOf = (line: string): number => line.length - line.replace(/^\s+/, "").length;
 
-function parseYamlSubset(lines: string[]): Record<string, unknown> {
+export function parseYamlSubset(lines: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   let i = 0;
   while (i < lines.length) {
@@ -258,7 +258,7 @@ function parseYamlSubset(lines: string[]): Record<string, unknown> {
 }
 
 /** Frontmatter list fields accept `a`, `a, b`, `[a, b]`, or a block list. */
-function toStringList(value: unknown): string[] {
+export function toStringList(value: unknown): string[] {
   if (value == null) return [];
   if (Array.isArray(value)) return value.flatMap(toStringList);
   if (typeof value === "string") {
