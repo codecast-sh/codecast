@@ -18,13 +18,15 @@
     "./render": "./render/index.ts",
     "./tasks": "./tasks/index.ts",
     "./docs": "./docs/index.ts",
+    "./files": "./files/index.ts",
     "./time": "./time/index.ts",
     "./vault": "./vault/index.ts",
     "./chat": "./chat/index.ts",
     "./comments": "./comments/index.ts",
     "./blame": "./blame/index.ts",
     "./ratchet": "./ratchet/index.ts",
-    "./analytics": "./analytics/index.ts"
+    "./analytics": "./analytics/index.ts",
+    "./agents": "./agents/index.ts"
   },
   "dependencies": {
     "@platform/analytics": "file:../../platform/packages/analytics"
