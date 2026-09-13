@@ -1,3 +1,6 @@
+import { captureException } from "./pendingInputError";
+import { readPendingMessageJournal, writePendingMessageJournal, type PendingJournalStorage } from "./pendingMessageJournal";
+import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
 // expo-sqlite's kv-store default export is an AsyncStorage-compatible, SQLite-backed
 // key-value store (getItem/setItem/removeItem + multiGet). It is durable and survives
 // app restart — the RN replacement for the web Dexie engine. Metro resolves this
@@ -138,6 +141,64 @@ export function isPersistedStoreKey(key: string): boolean {
   return isPersistedClientStoreKey(key);
 }
 
+const PENDING_INPUT_PREFIX = "pendingInput:v1:";
+
+const pendingJournalStorage: PendingJournalStorage = {
+  getItem: key => Storage.getItemSync(key),
+  setItem: (key, value) => Storage.setItemSync(key, value),
+  removeItem: key => Storage.removeItemSync(key),
+  key: index => Storage.getAllKeysSync()[index] ?? null,
+  get length() { return Storage.getAllKeysSync().length; },
+};
+
+function flushPendingInputJournal(): void {
+  for (const batch of readPendingMessageJournal(pendingJournalStorage)) {
+    for (const write of batch.writes) {
+      const key = `${PENDING_INPUT_PREFIX}${batch.ownerId}:${write.id}`;
+      const raw = Storage.getItemSync(key);
+      const value = applyPendingMessageWrite(raw ? JSON.parse(raw) : undefined, write);
+      Storage.setItemSync(key, JSON.stringify(value));
+    }
+    Storage.removeItemSync(batch.key);
+  }
+}
+
+export function persistPendingMessageChanges(before: PendingMessages, after: PendingMessages, ownerId?: string): void {
+  if (before === after) return;
+  const writes = pendingMessageWrites(before, after);
+  if (!writes.length) return;
+  if (!Storage?.setItemSync) throw new Error("Update Codecast before sending so your messages can be saved safely.");
+  if (!ownerId) throw new Error("Sign in before sending a message so it can be saved safely.");
+  writePendingMessageJournal(pendingJournalStorage, ownerId, writes);
+  void Promise.resolve().then(flushPendingInputJournal).catch(error => captureException(error, { tags: { source: "pending-input-journal" } }));
+}
+
+async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
+  if (!ownerId || !Storage) return {};
+  flushPendingInputJournal();
+  const prefix = `${PENDING_INPUT_PREFIX}${ownerId}:`;
+  const legacy = await Storage.getItem(META_PREFIX + "pendingMessages");
+  const user = await Storage.getItem(META_PREFIX + "currentUser");
+  if (legacy && user && JSON.parse(user)?._id === ownerId) {
+    for (const write of pendingMessageWrites({}, JSON.parse(legacy))) {
+      const key = prefix + write.id;
+      if (Storage.getItemSync(key) !== null) continue;
+      Storage.setItemSync(key, JSON.stringify(applyPendingMessageWrite(undefined, write)));
+    }
+    await Storage.removeItem(META_PREFIX + "pendingMessages");
+  }
+  const queued = await Storage.getItem(META_PREFIX + "queuedMessages");
+  if (queued && user && JSON.parse(user)?._id === ownerId) {
+    for (const write of pendingMessageWrites({}, importLegacyQueuedMessages(JSON.parse(queued)))) {
+      Storage.setItemSync(prefix + write.id, JSON.stringify(applyPendingMessageWrite(undefined, write)));
+    }
+    await Storage.removeItem(META_PREFIX + "queuedMessages");
+  }
+  const keys: string[] = Storage.getAllKeysSync();
+  const rows = keys.filter(key => key.startsWith(prefix)).map(key => JSON.parse(Storage.getItemSync(key)));
+  return pendingMessagesFromRecords(rows);
+}
+
 export function writePatchesToIDB(patches: Patch[], state: any) {
   if (!Storage || _hydrating) return;
 
@@ -148,6 +209,7 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 
   for (const key of affectedKeys) {
+    if (key === "pendingMessages" || key === "queuedMessages") continue;
     if (COLLECTION_TABLES.has(key)) {
       const data = state[key];
       if (data && typeof data === "object") {
@@ -184,14 +246,15 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 }
 
-export async function loadCache(): Promise<Record<string, any> | null> {
+export async function loadCache(keys?: readonly string[], context: Record<string, any> = {}): Promise<Record<string, any> | null> {
   if (!Storage) return null;
   try {
     const result: Record<string, any> = {};
     let hasData = false;
 
-    const collectionKeys = [...COLLECTION_TABLES];
-    const metaKeys = [...META_KEYS];
+    const wanted = keys ? new Set(keys) : null;
+    const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
+    const metaKeys = [...META_KEYS].filter(key => !wanted || wanted.has(key));
     const pairs = await Storage.multiGet([
       ...collectionKeys.map((k) => COLLECTION_PREFIX + k),
       ...metaKeys.map((k) => META_PREFIX + k),
@@ -267,6 +330,16 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       if (raw == null) continue;
       result[key] = JSON.parse(raw);
       hasData = true;
+    }
+
+    if (!wanted || wanted.has("pendingMessages") || wanted.has("queuedMessages")) {
+      const rawUser = await Storage.getItem(META_PREFIX + "currentUser");
+      const ownerId = context.currentUser?._id ?? result.currentUser?._id ?? (rawUser ? JSON.parse(rawUser)?._id : undefined);
+      if (ownerId) {
+        result.pendingMessages = await loadPendingInput(ownerId);
+        result.queuedMessages = queuedMessagesFromPending(result.pendingMessages);
+        hasData = true;
+      }
     }
 
     // The conversations map is the sessions cache's twin persisted as ONE meta

@@ -11426,11 +11426,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : { media_type: img.file.type, preview_url: img.previewUrl, uploading: true }
     );
     sendingRef.current = true;
+    let clientId: string;
+    try {
+      clientId = addOptimistic(targetConvId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
+    } catch (error) {
+      captureException(error);
+      sendingRef.current = false;
+      setMessage(message);
+      messageRef.current = message;
+      if (composeMode) composeRef.current?.setMarkdown(message);
+      toast.error(error instanceof Error ? error.message : "Could not save your message. Please try again.");
+      return false;
+    }
     if (draftTimerRef.current) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
     }
-    const clientId = addOptimistic(targetConvId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     soundSend();
     setMessage("");
     messageRef.current = "";
@@ -11530,10 +11541,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     queueDrainingRef.current = true;
     const queueTargetConvId = conversationId;
     const queueCanQuery = canQueryServer;
-    const next = queuedMessages[0];
-    setQueuedMessages(prev => prev.slice(1));
+    let queued: { content: string; clientId: string } | undefined;
+    try {
+      queued = useInboxStore.getState().takeQueuedMessage(queueTargetConvId);
+    } catch (error) {
+      captureException(error);
+      queueDrainingRef.current = false;
+      toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
+      return;
+    }
+    if (!queued) { queueDrainingRef.current = false; return; }
+    const { content: next, clientId } = queued;
     setSelectedQueueIndex(null);
-    const clientId = addOptimistic(queueTargetConvId, next);
     soundSend();
     onMessageSent?.();
     (async () => {
@@ -11573,7 +11592,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // still running. Same handler the Alt+Shift+Enter chord fires.
   const handleSendAndStash = () => {
     if (!onSendAndDismiss) return;
-    void handleSubmit({ preventDefault: () => {} } as unknown as React.FormEvent).then(() => onSendAndDismiss());
+    void handleSubmit({ preventDefault: () => {} } as unknown as React.FormEvent).then(saved => { if (saved !== false) onSendAndDismiss(); });
   };
 
   const handleForkSend = () => {
@@ -11874,8 +11893,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const text = message.trim();
       if (text) {
         sendingRef.current = true;
+        try {
+          setQueuedMessages(prev => [...prev, text]);
+        } catch (error) {
+          captureException(error);
+          sendingRef.current = false;
+          toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
+          return;
+        }
         if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
-        setQueuedMessages(prev => [...prev, text]);
         setMessage("");
         messageRef.current = "";
         useInboxStore.getState().clearDraftFinal(conversationId);
@@ -11886,12 +11912,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss) {
       e.preventDefault();
-      handleSubmit(e).then(() => onSendAndDismiss());
+      handleSubmit(e).then(saved => { if (saved !== false) onSendAndDismiss(); });
       return;
     }
     if (e.key === "Enter" && e.altKey && !e.shiftKey && onSendAndAdvance) {
       e.preventDefault();
-      handleSubmit(e).then(() => onSendAndAdvance());
+      handleSubmit(e).then(saved => { if (saved !== false) onSendAndAdvance(); });
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {

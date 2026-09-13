@@ -1,3 +1,5 @@
+import { captureException } from "./pendingInputError";
+import { persistPendingMessageChanges } from "./idbCache";
 // Codecast's binding of the @platform/engine middleware. The engine owns the
 // mechanics (mutative drafts, auto-pending, the durable dispatch outbox, the
 // storage watchdog, receipt envelopes); everything codecast-shaped — the sync
@@ -363,8 +365,21 @@ export function mutativeMiddleware(
   config: any,
   opts?: Omit<MiddlewareOptions, "registryMaps">,
 ): any {
-  return engineMutativeMiddleware(config, CODECAST_PLATFORM_CONFIG, {
+  const middleware = engineMutativeMiddleware(config, CODECAST_PLATFORM_CONFIG, {
     ...opts,
     registryMaps: REGISTRY_MAPS,
   });
+  return (set: any, get: any, api: any) => middleware((next: any, replace?: boolean) => {
+    const previous = get();
+    const value = typeof next === "function" ? next(previous) : next;
+    if (previous?.pendingMessages && value?.pendingMessages && previous.pendingMessages !== value.pendingMessages) {
+      try {
+        persistPendingMessageChanges(previous.pendingMessages, value.pendingMessages, previous.currentUser?._id);
+      } catch (error) {
+        captureException(error, { tags: { source: "pending-input-save" } });
+        throw new Error("Your message could not be saved on this device. Keep this window open and try again.", { cause: error });
+      }
+    }
+    set(value, replace);
+  }, get, api);
 }
