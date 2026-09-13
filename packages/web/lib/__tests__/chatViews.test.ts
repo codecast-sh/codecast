@@ -300,3 +300,17 @@ describe("railRowTip", () => {
     expect(railRowTip({ id: "c1", name: "team", mentionCount: 3 }, members, { live: true }).state).toBe("Huddle live");
   });
 });
+
+describe("role and session mentions on the view", () => {
+  it("carries the refs and the fold flag, and never counts them as the viewer", () => {
+    const row: any = {
+      _id: "m1", channel_id: "c1", user_id: "u1", content: "@growth @jx7c6zk", created_at: 1, updated_at: 1,
+      mentions: [{ kind: "role", role_id: "r1", short_id: "or-1", handle: "growth" }, { kind: "session", conversation_id: "jx7c6zkabc", short_id: "jx7c6zk" }],
+      mention_folded: true,
+    };
+    const view = toMessageView(row, { members: new Map(), viewerId: "r1" });
+    expect(view.mentionsMe).toBe(false);
+    expect(view.mentionFolded).toBe(true);
+    expect(view.mentionRefs).toHaveLength(2);
+  });
+});
