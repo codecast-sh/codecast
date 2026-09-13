@@ -23,3 +23,16 @@ export function shortTabId(targetId: string): string {
 export function tabLine(targetId: string, next?: string): string {
   return `tab ${shortTabId(targetId)}${next ? ` — ${next}` : ""}`;
 }
+
+/**
+ * The inverse: the tab id a `cast browser` transcript names, or null. Last
+ * mention wins (a wedged tab replaced mid-command names the later one), and
+ * the bare word is required so a recovery hint's `--tab 4A2CDC7E` does not
+ * count. The web keeps a twin of this in lib/browserFocus.ts because the two
+ * packages cannot import each other.
+ */
+export function parseTabLine(output: string): string | null {
+  const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
+  const matches = [...clean.matchAll(/(?:^|[^-\w])tab ([0-9A-Fa-f]{8})\b/g)];
+  return matches.length ? matches[matches.length - 1][1] : null;
+}

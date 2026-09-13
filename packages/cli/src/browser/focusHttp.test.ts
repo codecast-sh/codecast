@@ -137,6 +137,21 @@ describe("focusBrowserTab", () => {
     expect(result).toEqual({ ok: false, reason: "tab-not-found" });
   });
 
+  test("engines are listed at once, and order still decides who wins", async () => {
+    const calls: string[] = [];
+    const slow = (name: string, ms: number, tabs: FocusTab[]): FocusEngine =>
+      engine(name, { calls, listTabs: () => new Promise((r) => setTimeout(() => r(tabs), ms)) });
+    const started = Date.now();
+    const result = await focusBrowserTab("2be86883", {
+      engines: [slow("builtin", 80, []), slow("local-chrome", 80, [tab(T1, { port: 1111 })]), slow("bridge", 80, [tab(T1, { port: 2222 })])],
+      raiseApp: () => {},
+    });
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual([`local-chrome:activate:${T1}@1111`]);
+    // Three 80ms listings in sequence would be 240ms; in parallel they are one.
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
   test("a tab with no known pid still activates, without a raise", async () => {
     const calls: string[] = [];
     const result = await focusBrowserTab("2be86883", {

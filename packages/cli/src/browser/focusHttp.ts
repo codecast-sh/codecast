@@ -1,5 +1,6 @@
 /**
- * Loopback route that raises a driven-browser tab: POST /browser/focus?tab=<id>.
+ * Loopback routes for the driven browser: POST /browser/focus?tab=<id> raises
+ * a tab, POST /browser/reopen brings a closed one back (reopenTab.ts).
  *
  * Mounted on the daemon's hook server next to the terminal and vault routes,
  * behind the same envelope of an allowed origin and the daemon's persisted
@@ -34,6 +35,9 @@ import {
   corsHeaders,
   type TerminalServerOptions,
 } from "../terminal/terminalServer.js";
+import { readBody } from "../vault/vaultServer.js";
+import { ownerCandidates, tmuxPaneId } from "./watchServer.js";
+import { reopenBrowserTab, type ReopenDeps } from "./reopenTab.js";
 
 /** Why a focus request could not be honored; the web treats them all the same
  *  (fall back to opening the URL) but the distinction keeps logs debuggable. */
@@ -202,6 +206,8 @@ export interface FocusDeps {
   engines: FocusEngine[];
   raiseApp: (pid: number, log?: (line: string) => void) => void;
   log?: (line: string) => void;
+  /** How /browser/reopen runs the open; injectable for tests. */
+  reopen?: ReopenDeps;
 }
 
 const defaultDeps = (raiseApp = raiseAppByPid): FocusDeps => ({ engines, raiseApp });
@@ -218,9 +224,14 @@ export function focusBrowserTabBlocking(query: string): Promise<FocusResult> {
 }
 
 /**
- * Ask each engine for the tab; the first one that has it wins. The reported
- * failure is the most hopeful one seen: a stopped engine beside a running one
- * that merely lacks the tab reads as "tab-not-found", not "browser-stopped".
+ * Ask every engine for its tabs at once, then take the first engine in order
+ * that has the tab. Listing is where the time goes (a `ps` pass, a bridge
+ * proof, a `/json/list` from a loaded Chrome), and a tab in the human's
+ * Chrome sits behind the LAST engine — asked in sequence the route took
+ * ~1.6s on a busy machine, long enough for the web to give up on the click.
+ * The reported failure is the most hopeful one seen: a stopped engine beside
+ * a running one that merely lacks the tab reads as "tab-not-found", not
+ * "browser-stopped".
  */
 export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDeps()): Promise<FocusResult> {
   let reason: FocusFailure = "browser-stopped";
@@ -229,11 +240,11 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
     if (rank[r] > rank[reason]) reason = r;
   };
 
-  for (const engine of deps.engines) {
-    let tabs: FocusTab[];
-    try {
-      tabs = await engine.listTabs();
-    } catch {
+  const listed = await Promise.all(
+    deps.engines.map((engine) => engine.listTabs().then((tabs) => ({ engine, tabs }), () => ({ engine, tabs: null }))),
+  );
+  for (const { engine, tabs } of listed) {
+    if (tabs === null) {
       worse("browser-unreachable");
       continue;
     }
@@ -294,6 +305,41 @@ export function handleBrowserFocusHttp(
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));
     });
+    return true;
+  }
+
+  // The tab is gone and the human said to bring the page back: open it as
+  // the session (reopenTab.ts), then raise it like a focus would. The body
+  // names the page and the session the way the watch stream's hello does.
+  if (req.method === "POST" && url.startsWith("/browser/reopen")) {
+    void (async () => {
+      const raw = await readBody(req, 16 * 1024);
+      let body: { url?: unknown; session_uuid?: unknown; tmux_session?: unknown } = {};
+      try {
+        body = raw ? JSON.parse(raw.toString("utf8")) : {};
+      } catch {
+        /* handled below as a bad request */
+      }
+      const pageUrl = typeof body.url === "string" ? body.url : "";
+      const candidates = await ownerCandidates(
+        {
+          session_uuid: typeof body.session_uuid === "string" ? body.session_uuid : undefined,
+          tmux_session: typeof body.tmux_session === "string" ? body.tmux_session : undefined,
+        },
+        tmuxPaneId,
+      );
+      const result = await reopenBrowserTab({ url: pageUrl, candidates }, deps.reopen);
+      if (!result.ok) {
+        opts.log(`[BROWSER] Could not reopen ${pageUrl}: ${result.reason}${result.detail ? ` (${result.detail})` : ""}`);
+        res.writeHead(result.reason === "bad-request" ? 400 : 502, headers);
+        res.end(JSON.stringify(result));
+        return;
+      }
+      opts.log(`[BROWSER] Reopened ${pageUrl} as tab ${result.tabId}`);
+      const focused = await focusBrowserTab(result.tabId, { ...deps, log: deps.log ?? opts.log });
+      res.writeHead(200, headers);
+      res.end(JSON.stringify({ ok: true, tabId: result.tabId, focused: focused.ok }));
+    })();
     return true;
   }
 

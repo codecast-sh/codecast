@@ -61,13 +61,20 @@ export function writeBoundTarget(session: string, targetId: string, stateDir = e
   fs.renameSync(tmp, file);
 }
 
-async function targetAlive(endpoint: CdpEndpoint, targetId: string): Promise<boolean> {
+/**
+ * Is the bound tab still open? "unknown" when the browser did not answer in
+ * time: over the bridge the list is a round trip through the extension, which
+ * a busy Chrome can stretch past the deadline, and reading that as "gone"
+ * created a fresh blank tab beside a live one on every slow check, orphaning
+ * the old tab for good.
+ */
+export async function targetLiveness(endpoint: CdpEndpoint, targetId: string, timeoutMs = 2_000): Promise<"alive" | "gone" | "unknown"> {
   try {
-    const res = await fetch(cdpHttpUrl(endpoint, "/json/list"), { signal: AbortSignal.timeout(2_000) });
-    if (!res.ok) return false;
-    return ((await res.json()) as Array<{ id: string }>).some((t) => t.id === targetId);
+    const res = await fetch(cdpHttpUrl(endpoint, "/json/list"), { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return "unknown";
+    return ((await res.json()) as Array<{ id: string }>).some((t) => t.id === targetId) ? "alive" : "gone";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
@@ -121,7 +128,9 @@ export async function ensurePinnedTab(session = engineSession()): Promise<void> 
       await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true }).catch(() => {});
     }
     if (sessionDaemonPid(session)) return;
-    if (bound && (await targetAlive(browser.endpoint, bound))) return;
+    // Only a tab the browser says is gone is replaced; an unanswered check
+    // leaves the binding alone.
+    if (bound && (await targetLiveness(browser.endpoint, bound)) !== "gone") return;
 
     const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);
     try {
