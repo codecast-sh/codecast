@@ -384,6 +384,19 @@ describe("workflow/runner (command nodes)", () => {
     expect(cap.logs.some(l => l.includes("hello-world"))).toBe(true);
   });
 
+  test("command node honors a per-node timeout attribute (seconds)", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      slow  [shape=parallelogram, script="sleep 2; echo done", timeout=1]
+      exit  [shape=Msquare]
+      start -> slow
+      slow -> exit [condition="outcome = success"]
+    }`);
+    expect(g.nodes.get("slow")?.timeout).toBe(1);
+    const outcome = await runWorkflow(g, { cwd: tmpDir });
+    expect(outcome).toBe("failed");
+  }, 15000);
+
   test("command node times out and returns failure for hanging script", async () => {
     const g2 = parseWorkflowSource(`digraph g {
       start [shape=Mdiamond]
