@@ -138,9 +138,9 @@ export function usePushNotifications() {
         return;
       }
       if (data.type === CALL_PUSH_TYPE_MISSED) {
-        // Ring back from the missed-call notification: land on the team tab
+        // Ring back from the missed-call notification: land on the Chat tab
         // where the huddle affordances live.
-        router.push('/(tabs)/team');
+        router.push('/(tabs)/chat' as never);
         return;
       }
       if (data.conversationId) {
