@@ -89,10 +89,10 @@ describe("buildTaskGroups", () => {
       task({ status: "open" }),
       task({ status: "in_review" }),
     ]);
-    expect(result.map((g) => g.label)).toEqual(["Done", "In Review", "In Progress", "Open", "Backlog", "Dropped"]);
+    expect(result.map((g) => g.label)).toEqual(["Done", "In Progress", "In Review", "Open", "Backlog", "Dropped"]);
   });
 
-  it("puts further-progressed custom statuses first without reversing their progress indicators", () => {
+  it("keeps in-progress buckets ahead of review, further-progressed custom statuses first within each", () => {
     const taskStatuses = orderedStatuses([
       ...DEFAULT_TASK_STATUSES,
       { id: "today", name: "Today", category: "in_progress" },
@@ -104,9 +104,10 @@ describe("buildTaskGroups", () => {
       task({ status: "in_review" }),
       task({ status: "in_review", status_id: "approved" }),
     ], "", { ...ctx, taskStatuses });
-    expect(result.map((g) => g.label)).toEqual(["Approved", "In Review", "Today", "In Progress"]);
+    expect(result.map((g) => g.label)).toEqual(["Today", "In Progress", "Approved", "In Review"]);
+    // Fill still reads progress: each category's further-progressed status leads it.
     expect(result.map((g) => statusFill(taskStatuses.find((s) => s.name === g.label), taskStatuses)))
-      .toEqual([0.8, 0.6, 0.4, 0.2]);
+      .toEqual([0.4, 0.2, 0.8, 0.6]);
   });
 
   it("sorts named buckets alphabetically and trails the empty one", () => {
