@@ -131,9 +131,9 @@ export function AssignmentBadge({
               {d ? (
                 <>
                   <DeviceIcon d={d} />
-                  {!compact && <span className="truncate">{deviceDisplayName(d)}</span>}
+                  {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
                   {!compact && worktree && (
-                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70">{worktree}</span>
+                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70 cq-sq1">{worktree}</span>
                   )}
                   {/* While the host is being prepared there is nothing to be
                       online about yet — the dot would read as "offline", which is
@@ -141,7 +141,7 @@ export function AssignmentBadge({
                   {preparing ? (
                     <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
                       <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
-                      {!compact && <span className="text-[9px]">preparing cloud host</span>}
+                      {!compact && <span className="text-[9px] cq-sq1">preparing cloud host</span>}
                     </span>
                   ) : (
                     <DeviceDot online={d.online} />
@@ -150,7 +150,7 @@ export function AssignmentBadge({
               ) : (
                 <>
                   <DeviceDot online={false} />
-                  {!compact && <span>Unassigned</span>}
+                  {!compact && <span className="cq-sq1">Unassigned</span>}
                 </>
               )}
             </span>
@@ -172,7 +172,7 @@ export function AssignmentBadge({
                   })}
                 </span>
                 {!compact && (
-                  <span className="truncate">
+                  <span className="truncate cq-sq1">
                     {ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
                   </span>
                 )}
