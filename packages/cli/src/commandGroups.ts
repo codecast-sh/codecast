@@ -127,6 +127,13 @@ Subcommands:
   cast decide ls                      This session's decisions, with ids and answers
   cast decide edit [id] [flags]       Change the open decision in place (question, -o, --context, --report, --advisory/--blocking)
   cast decide cancel [id]             Withdraw the open decision
+  cast decide show <sd>               One decision with its document, ladder and holder
+  cast decide recommend <sd> <n>      A role on the ladder recommends option n (within 5 minutes; --note -)
+  cast decide answer <sd> <n>         Answer: n | "1,3" (multi) | "2>1>3" (rank) | --form k=v (form)
+  cast decide escalate <sd>           A role passes it upward without a recommendation
+
+Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
+  --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md
 
 Examples:
   cast decide "Which schema wins?" -o "Frontmatter wins" -o "Path wins" --context -  <<'EOF'
@@ -144,6 +151,20 @@ Examples:
   EOF
   cast decide cancel                           # the question no longer applies`,
     load: () => import("./decideCommand.js").then((m) => m.registerDecideCommand),
+  },
+  {
+    token: "stack",
+    args: ["[sub]", "[args...]"],
+    hasOptions: true,
+    description: `Decision stacks: an ordered set of decisions your human clears in one sitting
+
+  cast stack create "<title>" [--policy auto-default:24h] [--delegate @handle]
+  cast stack ls [--all]
+  cast stack show ds-N
+  cast stack add ds-N sd-N
+  cast stack policy ds-N [--auto-default 24h | --no-auto-default] [--delegate @handle]
+  cast stack delegate ds-N @handle       # the role answers every open category for the stack's members`,
+    load: () => import("./stackCommand.js").then((m) => m.registerStackCommand),
   },
   {
     token: "image",
@@ -252,6 +273,36 @@ Examples:
     token: "computer",
     description: `Drive a native macOS app through its accessibility tree (cast browser is still the tool for web pages)`,
     load: () => import("./computer/cli.js").then((m) => (program: Command) => m.registerComputerCommand(program)),
+  },
+  {
+    token: "agent",
+    aliases: ["agents"],
+    hasOptions: true,
+    description: `Agent definitions and chains: named roles every launch surface runs as
+
+A definition binds a client, a model, an effort, a tool policy and a
+system prompt under one name. \`cast exec --as reviewer\`, \`cast spawn --as
+reviewer\`, \`cast trigger add --as reviewer\` and a workflow node's
+\`definition=reviewer\` all resolve it. Definitions are workspace rows,
+edited here or in Settings > Agent Library, and travel as markdown files
+with frontmatter (the pi and Claude Code agents/*.md shape).
+
+A chain runs definitions in order; each step's output feeds the next.
+
+Examples:
+  cast agent ls                              # definitions and chains
+  cast agent show reviewer                   # the markdown form
+  cast agent create reviewer --agent codex --model gpt-5.5 --effort high \\
+    --tools Read,Grep,Bash --safe -d "Reviews a diff" - <<'EOF'
+  You are a senior reviewer. ...
+  EOF
+  cast agent import ~/.claude/agents/*.md    # bring existing roles in
+  cast agent export reviewer > reviewer.md
+  cast agent rm reviewer
+  cast agent chain create implement --step scout:"Find code for: {task}" \\
+    --step planner:"Plan: {task}\\n{previous}" --step worker:"Do it: {previous}"
+  cast agent run implement "add retries to the sync loop"   # = cast exec --chain`,
+    load: () => import("./agentCommand.js").then((m) => m.registerAgentCommand),
   },
   {
     token: "exec",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, type DecisionRow } from "./decideCommand.js";
+import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -135,5 +135,46 @@ describe("decision staleness", () => {
     expect(formatAge(5 * 60_000)).toBe("5m ago");
     expect(formatAge(3 * 60 * 60_000)).toBe("3h ago");
     expect(formatAge(50 * 60 * 60_000)).toBe("2d ago");
+  });
+});
+
+describe("cast decide answer parsing (W2)", () => {
+  const isId = looksLikeDecisionId;
+  it("single takes one 1-based number and rejects lists", () => {
+    expect(parseAnswerSpec("single", "2", [], 3)).toEqual({ answer_index: 1 });
+    expect(() => parseAnswerSpec("single", "1,2", [], 3)).toThrow(/one option/);
+    expect(() => parseAnswerSpec("single", "4", [], 3)).toThrow(/not an option/);
+  });
+  it("multi takes a comma list, rank an ordered list, form key=value pairs", () => {
+    expect(parseAnswerSpec("multi", "1,3", [], 3)).toEqual({ answer_json: [0, 2], answer_index: 0 });
+    expect(parseAnswerSpec("rank", "2>1>3", [], 3)).toEqual({ answer_json: [1, 0, 2], answer_index: 1 });
+    expect(() => parseAnswerSpec("rank", "2", [], 3)).toThrow(/at least two/);
+    const fields = [
+      { key: "env", label: "Env", type: "select" as const, options: ["dev", "prod"] },
+      { key: "n", label: "N", type: "number" as const },
+      { key: "ok", label: "Ok", type: "bool" as const },
+      { key: "note", label: "Note", type: "text" as const },
+    ];
+    expect(parseAnswerSpec("form", undefined, ["env=prod", "n=3", "ok=true", "note=42"], undefined, fields)).toEqual({
+      answer_json: { env: "prod", n: 3, ok: true, note: "42" },
+    });
+    expect(() => parseAnswerSpec("form", undefined, ["n=lots"], undefined, fields)).toThrow(/must be a number/);
+    expect(() => parseAnswerSpec("form", undefined, ["ok=yes"], undefined, fields)).toThrow(/true or false/);
+    expect(() => parseAnswerSpec("form", undefined, [])).toThrow(/--form/);
+  });
+  it("sd-N short ids count as decision ids", () => {
+    expect(isId("sd-12")).toBe(true);
+    expect(isId("edit")).toBe(false);
+  });
+  it("a spec parses string options and validates kind and form", () => {
+    const spec = parseDecideSpec(JSON.stringify({ question: "Q", kind: "multi", options: ["A :: a", { label: "B", cost: "1d" }] }));
+    expect(spec.options).toEqual([{ label: "A", description: "a" }, { label: "B", cost: "1d" }]);
+    expect(() => parseDecideSpec(JSON.stringify({ kind: "weird" }))).toThrow(/kind/);
+    expect(() => parseDecideSpec(JSON.stringify({ form: { fields: [] } }))).toThrow(/form.fields/);
+    expect(() => parseDecideSpec("not json")).toThrow(/JSON/);
+  });
+  it("--option-body takes n=file", () => {
+    expect(parseOptionBodyArg("2=why.md")).toEqual({ index: 1, file: "why.md" });
+    expect(() => parseOptionBodyArg("why.md")).toThrow(/n=file/);
   });
 });
