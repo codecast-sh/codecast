@@ -9,7 +9,7 @@ import { RefreshCw as PaletteRestart, Copy as PaletteCopy, Search as PaletteSear
 import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
 import Link from "next/link";
-import { dragCarriesPane } from "../lib/stage";
+import { canOpenBeside, dragCarriesPane, openBrowserPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
@@ -34,7 +34,8 @@ import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
-import { BrowserTabPill, BrowserSessionContext, BROWSER_ROW_PILL } from "./browser/BrowserTabPill";
+import { BrowserTabPill } from "./browser/BrowserTabPill";
+import { BrowserSessionContext, BROWSER_ROW_PILL } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
@@ -5840,29 +5841,65 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
 const EMPTY_BROWSER_ROWS: Record<string, BrowserRowState> = {};
 
 /**
- * "watch live" on a `cast browser` row: opens the read-only stream of the tab
- * this agent is driving (BrowserWatchSplit), docked above the conversation.
- * Rendered on every browser row — whether a stream actually exists is the
- * daemon's call, and the split reports it honestly on connect.
+ * "watch live" on a `cast browser` row: opens the stream of the tab this agent
+ * is driving. Rendered on every browser row — whether a stream actually exists
+ * is the daemon's call, and the stream reports it honestly on connect.
+ *
+ * Two homes for the same picture. A stage pane (/browser?watch=…) is the
+ * default: it is resizable, it survives a reload with the tab, and it leaves
+ * the transcript its own width. The dock above the transcript is the fallback
+ * for a window too narrow to hold two panes, and stays available on the
+ * chevron for anyone who prefers it there.
  */
 function BrowserWatchButton({ conversationId }: { conversationId: Id<"conversations"> }) {
   const convKey = conversationId.toString();
   const open = useBrowserWatchOpen(convKey);
+  // The pane is addressed by the agent's own session uuid, not the
+  // conversation id — the daemon follows the SESSION's tab.
+  const sessionUuid = useInboxStore((s) => s.sessions[convKey]?.session_id ?? null);
+  const dock = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    toggleBrowserWatch(convKey);
+  };
+  const watch = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Nothing to address the pane with, or no room for one: the dock needs
+    // neither, and it is the same stream.
+    if (open || !sessionUuid || !canOpenBeside()) {
+      toggleBrowserWatch(convKey);
+      return;
+    }
+    openBrowserPane({ kind: "watch", sessionUuid });
+  };
   return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        toggleBrowserWatch(convKey);
-      }}
-      className={`${BROWSER_ROW_PILL} ${open ? "text-sol-red border-sol-red/40 hover:text-sol-red/80" : ""}`}
-      title={open ? "Close the live browser view" : "Watch what this agent's browser shows, live — take control to sign in for it"}
-    >
-      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-      <span>{open ? "watching" : "watch live"}</span>
-    </button>
+    <span className="inline-flex items-center gap-0.5 flex-shrink-0">
+      <button
+        onClick={watch}
+        className={`${BROWSER_ROW_PILL} ${open ? "text-sol-red border-sol-red/40 hover:text-sol-red/80" : ""}`}
+        title={
+          open
+            ? "Close the live browser view"
+            : "Watch what this agent's browser shows, live, in a pane beside this thread — take control to sign in for it"
+        }
+      >
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        <span>{open ? "watching" : "watch live"}</span>
+      </button>
+      {!open && (
+        <button
+          type="button"
+          onClick={dock}
+          className="text-[10px] leading-4 px-0.5 rounded-full text-sol-text-dim hover:text-sol-text-muted"
+          title="Dock the live view above the transcript instead"
+          aria-label="Dock the live view above the transcript"
+        >
+          <ChevronDown className="w-3 h-3" />
+        </button>
+      )}
+    </span>
   );
 }
 

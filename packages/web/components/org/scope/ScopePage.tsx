@@ -11,7 +11,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Anchor as AnchorGlyph, ArrowLeft, Bell, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal } from "lucide-react";
+import { Anchor as AnchorGlyph, Archive, ArrowLeft, Bell, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal } from "lucide-react";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -29,11 +29,12 @@ import { TaskListContent } from "../../../app/tasks/page";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
-import { ORG_STATE_META, StateTally } from "../OrgNodeCards";
-import { parentName } from "../OrgScopePanel";
+import { StateTally } from "../OrgNodeCards";
+import { ORG_STATE_META, parentName } from "../orgMeta";
 import type { OrgAnchor, OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { ScopeFeed } from "./ScopeFeed";
-import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab, useScopeIds } from "./ScopeTabs";
+import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
+import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopeSettings } from "./ScopeSettings";
 import { DEFAULT_CAPS, TRUST_META, briefFirstLine, type TrustStage } from "./scopeTypes";
 
@@ -135,7 +136,7 @@ export function ScopePageInner({ id }: { id: string }) {
   const standing = useInboxStore((st) => (anchor?.conversation_id ? st.sessions[anchor.conversation_id] : undefined));
   const model = (standing as any)?.model ?? null;
   const hostName = role ? tree?.people.find((p) => p.user_id === role.host_user_id)?.name ?? "the host" : tree?.workspace.name ?? "";
-  const workState = anchor?.work_state;
+  const workState = anchor?.state;
   const stateMeta = workState ? ORG_STATE_META[workState] : null;
   const trust: TrustStage = role?.trust ?? "understand";
   const caps = role?.caps ?? DEFAULT_CAPS;
@@ -245,7 +246,7 @@ export function ScopePageInner({ id }: { id: string }) {
               {role && canEdit && (
                 <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
               )}
-              {role && canEdit && <ActionButton icon={Settings2} label="Retire" danger tip="Retire from Settings, with a confirmation" onClick={() => setTab("settings")} />}
+              {role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire from Settings, with a confirmation" onClick={() => setTab("settings")} />}
             </div>
           )}
         </div>

@@ -26,7 +26,7 @@ import "./chat.css";
 export type ListenersChannel = { id: string; kind?: string; isPrivate?: boolean };
 
 /** Roles following this channel, and the ones the viewer may point at it. */
-export function channelListeners(tree: OrgTree | null, channelId: string, viewerId: string) {
+function channelListeners(tree: OrgTree | null, channelId: string, viewerId: string) {
   const roles = (tree?.roles ?? []).filter((r) => r.status !== "retired");
   const me = tree?.people.find((p) => p.is_me) ?? tree?.people.find((p) => p.user_id === viewerId);
   const isAdmin = me?.role === "admin" || me?.role === "owner" || tree?.workspace.kind === "user";

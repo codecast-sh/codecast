@@ -15,7 +15,8 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { groupDecisions, type DecisionGroup } from "../../lib/decisionGroups";
-import { DecisionCompactCard, decisionHref } from "./DecisionCompactCard";
+import { DecisionCompactCard } from "./DecisionCompactCard";
+import { decisionHref } from "../../lib/decisionLinks";
 import { StackChecklist } from "./StackChecklist";
 
 const api = _api as any;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { computeOrgViewport, hiddenRoots } from "./OrgGraph";
+import { computeOrgViewport, hiddenRoots } from "./orgViewport";
 import { layoutOrgTree, personNodeId } from "./orgLayout";
 import { ORG_FIXTURE } from "./orgFixture";
 

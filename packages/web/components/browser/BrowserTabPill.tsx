@@ -12,101 +12,24 @@
 // ever RAISED, never copied: the pill does not open the URL in the viewer's
 // own browser (modified clicks keep their native open-the-URL behaviour).
 
-import { createContext, useContext, useRef, useState } from "react";
+import { useContext } from "react";
 import { useConvex } from "convex/react";
-import { focusBrowserTab, prefetchBrowserFocusEndpoint, reopenBrowserTab, type BrowserSessionRef, type BrowserTabFailure } from "../../lib/browserFocus";
+import { Columns2, Copy, ExternalLink } from "lucide-react";
+import { toast } from "sonner";
+import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../ui/context-menu";
+import { openBrowserPane } from "../../lib/stage";
+import { copyToClipboard } from "../../lib/utils";
+import { prefetchBrowserFocusEndpoint } from "../../lib/browserFocus";
 import type { BrowserTabRef } from "../castCommand";
+import { BrowserSessionContext, BROWSER_ROW_PILL, useBrowserTabActions, type BrowserTabActionState } from "../../hooks/useBrowserTabActions";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
-
-/** The session whose browser the rows belong to, for the reopen. Provided by
- *  the conversation view; the pill can raise without it but not reopen. */
-export const BrowserSessionContext = createContext<BrowserSessionRef>({});
-
-export const BROWSER_ROW_PILL =
-  "flex-shrink-0 inline-flex items-center gap-1 rounded-full border border-sol-border/60 bg-sol-bg-highlight/40 " +
-  "px-1.5 py-px text-[10px] leading-4 font-mono text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors";
 
 const OPEN_TAB_ICON = (
   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
   </svg>
 );
-
-export type BrowserTabActionState =
-  | { kind: "idle" }
-  | { kind: "busy"; verb: "focusing" | "reopening" }
-  /** The tab is gone (or the browser is stopped); a reopen is on offer. */
-  | { kind: "offer"; reason: "tab-gone" | "browser-stopped" }
-  /** A transient explanation; clears itself, or on the next click. */
-  | { kind: "note"; text: string };
-
-const NOTE_MS = 6_000;
-
-function noteFor(reason: BrowserTabFailure, detail?: string): string {
-  switch (reason) {
-    case "no-daemon":
-      return "no cast daemon on this machine";
-    case "unreachable":
-      return "browser not answering — click to retry";
-    case "open-failed":
-      return detail ? `reopen failed: ${detail}` : "reopen failed";
-    default:
-      return "could not reach the tab";
-  }
-}
-
-/**
- * Focus / reopen for one driven tab. `tabId` is the tab the row named; after
- * a reopen the hook follows the new tab, so the next click raises that one.
- * `url` is what a reopen brings back; without it the offer is not made.
- */
-export function useBrowserTabActions(
-  tab: { tabId: string | null; url: string | null },
-  session: BrowserSessionRef,
-  onReopened?: (tabId: string) => void,
-): { state: BrowserTabActionState; tabId: string | null; focus: () => void; reopen: () => void; dismiss: () => void } {
-  const convex = useConvex();
-  const [state, setState] = useState<BrowserTabActionState>({ kind: "idle" });
-  const [tabId, setTabId] = useState(tab.tabId);
-  const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The row's tab wins whenever it changes (a later row named another tab).
-  useWatchEffect(() => setTabId(tab.tabId), [tab.tabId]);
-  useMountEffect(() => () => {
-    if (noteTimer.current) clearTimeout(noteTimer.current);
-  });
-
-  const note = (text: string) => {
-    setState({ kind: "note", text });
-    if (noteTimer.current) clearTimeout(noteTimer.current);
-    noteTimer.current = setTimeout(() => setState((s) => (s.kind === "note" ? { kind: "idle" } : s)), NOTE_MS);
-  };
-  const canReopen = !!tab.url && !!(session.sessionUuid || session.tmuxSession);
-
-  const focus = () => {
-    if (!tabId || state.kind === "busy") return;
-    setState({ kind: "busy", verb: "focusing" });
-    void focusBrowserTab(convex, tabId).then((out) => {
-      if (out.ok) return setState({ kind: "idle" });
-      if ((out.reason === "tab-gone" || out.reason === "browser-stopped") && canReopen) return setState({ kind: "offer", reason: out.reason });
-      note(out.reason === "tab-gone" ? "tab is gone" : out.reason === "browser-stopped" ? "browser is not running" : noteFor(out.reason, out.detail));
-    });
-  };
-
-  const reopen = () => {
-    if (!tab.url || state.kind === "busy") return;
-    setState({ kind: "busy", verb: "reopening" });
-    void reopenBrowserTab(convex, { url: tab.url, ...session }).then((out) => {
-      if (!out.ok) return note(noteFor(out.reason, out.detail));
-      setTabId(out.tabId);
-      setState({ kind: "idle" });
-      onReopened?.(out.tabId);
-    });
-  };
-
-  const dismiss = () => setState({ kind: "idle" });
-  return { state, tabId, focus, reopen, dismiss };
-}
 
 /** The offer / busy / note rendering shared by the row pill and the watch pane. */
 export function BrowserTabActionLabel({ state, idle }: { state: BrowserTabActionState; idle: React.ReactNode }) {
@@ -149,6 +72,7 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
   const castTab = tab.kind === "cast" ? tab : null;
   const isCast = !!castTab;
   const actions = useBrowserTabActions({ tabId: castTab?.tabId ?? null, url: castTab?.url ?? null }, session);
+  const menu = useContextMenu<string>();
   useWatchEffect(() => {
     if (isCast) prefetchBrowserFocusEndpoint(convex);
   }, [isCast, convex]);
@@ -193,10 +117,37 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
         }}
         title={title}
         aria-busy={state.kind === "busy"}
+        onContextMenu={(e) => tab.url && menu.open(e, tab.url, { force: true })}
       >
         {state.kind === "idle" && OPEN_TAB_ICON}
         <BrowserTabActionLabel state={state} idle={<span>open tab</span>} />
       </a>
+      {/* The page, in YOUR browser, as a pane. Deliberately not the same thing
+          as raising the agent's tab or watching it live: this is a second
+          visit to the same address with your own session, which is what you
+          want when you are checking the agent's work rather than its steps. */}
+      <ContextMenu state={menu}>
+        {(url) => (
+          <>
+            <CtxItem icon={Columns2} onSelect={() => openBrowserPane({ kind: "url", url })}>
+              Preview this page in a pane
+            </CtxItem>
+            <CtxItem
+              icon={ExternalLink}
+              onSelect={() => window.open(url, "_blank", "noopener,noreferrer")}
+            >
+              Open in a browser tab
+            </CtxItem>
+            <CtxSeparator />
+            <CtxItem
+              icon={Copy}
+              onSelect={() => void copyToClipboard(url).then(() => toast.success("Address copied"))}
+            >
+              Copy address
+            </CtxItem>
+          </>
+        )}
+      </ContextMenu>
       {state.kind === "offer" && (
         <button
           type="button"

@@ -45,7 +45,7 @@ type RevealHostValue = {
 const RevealHostCtx = createContext<RevealHostValue | null>(null);
 
 /** The host a reference toggles itself in — null on a surface without one. */
-export function useRevealHost(): RevealHostValue | null {
+function useRevealHost(): RevealHostValue | null {
   return useContext(RevealHostCtx);
 }
 

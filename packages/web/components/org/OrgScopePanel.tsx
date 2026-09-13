@@ -15,7 +15,8 @@ import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { SelectBox } from "../ui/select-box";
 import { cn } from "../../lib/utils";
-import { ORG_STATE_META, StateBar, StateTally } from "./OrgNodeCards";
+import { StateBar, StateTally } from "./OrgNodeCards";
+import { ORG_STATE_META, parentName } from "./orgMeta";
 import type { OrgLayoutNode } from "./orgLayout";
 import { parentNodeId } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
@@ -46,12 +47,6 @@ type FeedRow =
   | { kind: "task"; id: string; title: string; at: number; task: TaskItem }
   | { kind: "doc"; id: string; title: string; at: number; doc: DocItem };
 
-export function parentName(tree: OrgTree, ref: OrgParentRef): string {
-  return ref.kind === "user"
-    ? tree.people.find((p) => p.user_id === ref.user_id)?.name ?? "someone"
-    : tree.roles.find((r) => r._id === ref.role_id)?.name ?? "a role";
-}
-
 export function SectionLabel({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between mt-5 mb-2">
@@ -61,7 +56,7 @@ export function SectionLabel({ children, right }: { children: React.ReactNode; r
   );
 }
 
-export function StateChip({ state }: { state: OrgSession["work_state"] }) {
+export function StateChip({ state }: { state: OrgSession["state"] }) {
   const m = ORG_STATE_META[state] ?? ORG_STATE_META.idle;
   return <span className={cn("inline-flex items-center h-[18px] px-1.5 rounded-md border text-[10px] font-medium", m.chip)}>{m.label}</span>;
 }
@@ -69,7 +64,7 @@ export function StateChip({ state }: { state: OrgSession["work_state"] }) {
 // ---------------------------------------------------------------- feed rows
 
 export function SessionRow({ s, now, onOpen }: { s: OrgSession; now: number; onOpen: () => void }) {
-  const m = ORG_STATE_META[s.work_state] ?? ORG_STATE_META.idle;
+  const m = ORG_STATE_META[s.state] ?? ORG_STATE_META.idle;
   return (
     <button type="button" onClick={onOpen} className="group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors hover:bg-sol-bg-highlight/70">
       <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: m.color }} />
@@ -402,7 +397,7 @@ function SessionPanel({ tree, session, parent, canEdit, onOpenSession, onMove, o
           <div className="text-[17px] leading-snug font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{session.title || "Untitled"}</div>
           <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
             <span>{session.short_id}</span>
-            <StateChip state={session.work_state} />
+            <StateChip state={session.state} />
             <span>{compactAge(now - session.updated_at)} ago</span>
           </div>
         </div>
@@ -443,7 +438,7 @@ function KV({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 
 function AnchorPanel({ tree, anchor, onOpenSession }: { tree: OrgTree; anchor: OrgTree["anchors"][number]; onOpenSession: (id: string) => void }) {
   const host = tree.people.find((p) => p.user_id === anchor.host_user_id);
-  const st = anchor.work_state ? ORG_STATE_META[anchor.work_state] : null;
+  const st = anchor.state ? ORG_STATE_META[anchor.state] : null;
   return (
     <>
       <div className="flex items-center gap-3">

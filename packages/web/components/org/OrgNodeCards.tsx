@@ -7,8 +7,6 @@ import { memo, type ReactNode } from "react";
 import Link from "next/link";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { ChevronDown, ChevronRight, GitFork, Layers, Anchor as AnchorGlyph, Shield, Crown } from "lucide-react";
-import type { WorkState } from "@codecast/shared/contracts";
-import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { compactAge } from "../../lib/threadState";
@@ -16,16 +14,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
 import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
-
-// ---------------------------------------------------------------- state meta
-
-export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
-  needs_input: { label: "needs input", color: "var(--sol-yellow)", chip: THREAD_STATE_STATUS_META.blocked.chip },
-  working: { label: "working", color: "var(--sol-green)", chip: THREAD_STATE_STATUS_META.working.chip },
-  dormant: { label: "dormant", color: "var(--sol-blue)", chip: THREAD_STATE_STATUS_META.dormant.chip },
-  done: { label: "done", color: "var(--sol-cyan)", chip: THREAD_STATE_STATUS_META.done.chip },
-  idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
-};
+import { ORG_STATE_META } from "./orgMeta";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
 export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
@@ -291,8 +280,8 @@ export type AnchorNodeData = CardData & { anchor: OrgAnchor };
 
 export const AnchorCard = memo(function AnchorCard({ data }: NodeProps<Node<AnchorNodeData>>) {
   const a = data.anchor;
-  const st = a.work_state ? ORG_STATE_META[a.work_state] : null;
-  const live = a.work_state === "working";
+  const st = a.state ? ORG_STATE_META[a.state] : null;
+  const live = a.state === "working";
   return (
     <Frame
       selected={data.selected}
@@ -327,13 +316,13 @@ export type SessionNodeData = CardData & { session: OrgSession; parent: OrgParen
 
 export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<SessionNodeData>>) {
   const s = data.session;
-  const st = ORG_STATE_META[s.work_state] ?? ORG_STATE_META.idle;
+  const st = ORG_STATE_META[s.state] ?? ORG_STATE_META.idle;
   const now = useCoarseNow(30_000);
   return (
     <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-1.5 flex items-center gap-2 overflow-hidden" style={{ borderRadius: 10 }}>
       <Ports />
-      <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: st.color, opacity: s.work_state === "idle" ? 0.4 : 1 }} aria-hidden />
-      {s.work_state === "working" && (
+      <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: st.color, opacity: s.state === "idle" ? 0.4 : 1 }} aria-hidden />
+      {s.state === "working" && (
         <span className="absolute left-0 top-0 bottom-0 w-[3px] animate-pulse" style={{ background: st.color, opacity: 0.5 }} aria-hidden />
       )}
       <AgentIcon agentType={s.agent_type} className="w-4 h-4" />
@@ -403,10 +392,3 @@ export const ClusterCard = memo(function ClusterCard({ data }: NodeProps<Node<Cl
   );
 });
 
-export const ORG_NODE_TYPES = {
-  person: PersonCard,
-  role: RoleCard,
-  anchor: AnchorCard,
-  session: SessionCard,
-  cluster: ClusterCard,
-};

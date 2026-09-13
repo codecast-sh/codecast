@@ -5,13 +5,13 @@ import { ArrowUpRight, Check, ChevronDown, ChevronRight, CornerUpLeft } from "lu
 import Link from "next/link";
 import { pickAnsweredDecision, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { type SessionDecisionItem, useInboxStore, isConvexId } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { DecisionRecordedAnswer } from "./decisions/DecisionAnswerControls";
-import { decisionHref } from "./decisions/DecisionCompactCard";
+import { decisionHref } from "../lib/decisionLinks";
 
 // The strip under a decision answer bubble: which question this answered, a
 // way back to the `cast decide` call, and (unfolded) the options with the
@@ -43,7 +43,8 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
     api.sessionDecisions.findByAnswer,
     legacyLookup ? { conversation_id: conversationId as any, answer: decision.answer, near: timestamp } : "skip",
   );
-  const row = storeRow ?? fetchedById ?? fetchedByAnswer ?? null;
+  // The fetched shapes are the row's answer-bubble projection; one type for the render below.
+  const row = (storeRow ?? fetchedById ?? fetchedByAnswer ?? null) as SessionDecisionItem | null;
   const question = row?.question ?? decision.question ?? "";
   const jump = useJumpToDecisionAsk(conversationId, decision.id || row?._id, question);
   const loading = !row && ((open && isConvexId(decision.id) && fetchedById === undefined) || (legacyLookup && fetchedByAnswer === undefined));

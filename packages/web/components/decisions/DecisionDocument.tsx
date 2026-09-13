@@ -15,7 +15,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
-import { ladderRecommendation } from "./DecisionCompactCard";
+import { ladderRecommendation } from "../../lib/decisionLinks";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import "./decisions.css";
 

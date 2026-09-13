@@ -10,7 +10,8 @@ import { AvatarImg } from "../../lib/avatarCache";
 import { navigateMainWindow } from "../../lib/desktop";
 import { AgentTypeIcon } from "../AgentTypeIcon";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
-import { FeedChip, findSessionRow } from "./FeedChip";
+import { FeedChip } from "./FeedChip";
+import { findSessionRow } from "../../lib/calls/findSessionRow";
 import { useRemoveLiveFeed } from "./useCallFeed";
 import "./callSurface.css";
 
