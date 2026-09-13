@@ -12,7 +12,7 @@ import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { computePlanProgress } from "@codecast/web/lib/liveEntities";
@@ -25,6 +25,7 @@ import { MarkdownContent } from "@/components/MarkdownRenderer";
 type PlanStatus = keyof typeof PLAN_STATUS_CONFIG;
 
 export default function PlanDetailScreen() {
+  const Theme = useTheme();
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   const plans = useInboxStore((s) => s.plans);
@@ -234,7 +235,7 @@ export default function PlanDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
   loading: {
@@ -344,4 +345,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Theme.textMuted0,
   },
-});
+}));

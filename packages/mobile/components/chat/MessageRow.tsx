@@ -4,7 +4,7 @@ import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 
 // One chat message on mobile. The same rules as the web row, in RN idiom:
@@ -18,6 +18,7 @@ import { MarkdownContent } from '@/components/MarkdownRenderer';
  *  screen uses; a tile keeps a fixed footprint while it resolves so the
  *  transcript doesn't jump when the bytes land. */
 function AttachmentImage({ storageId, onOpen }: { storageId: string; onOpen?: (url: string) => void }) {
+  const Theme = useTheme();
   const { width } = useWindowDimensions();
   const url = useQuery(api.images.getImageUrl, { storageId: storageId as any });
   const side = Math.min(width - 96, 280);
@@ -88,6 +89,7 @@ function clock(ts: number): string {
 }
 
 export function ChatAvatar({ author, size = 26 }: { author: ChatAuthorLite; size?: number }) {
+  const Theme = useTheme();
   if (author.isAgent) {
     return (
       <RNView style={[styles.avatar, styles.avatarAgent, { width: size, height: size }]}>
@@ -136,6 +138,7 @@ export const MessageRow = memo(function MessageRow({
    *  nobody — the same gate the web renderer applies. */
   knownMentionHandles?: Set<string>;
 }) {
+  const Theme = useTheme();
   const { author, agentStatus } = message;
   const thinking = agentStatus === 'thinking' || agentStatus === 'streaming';
   const errored = agentStatus === 'error';
@@ -257,6 +260,7 @@ export const MessageRow = memo(function MessageRow({
 });
 
 export function DayDivider({ label }: { label: string }) {
+  const Theme = useTheme();
   return (
     <RNView style={styles.day}>
       <RNView style={styles.dayLine} />
@@ -267,6 +271,7 @@ export function DayDivider({ label }: { label: string }) {
 }
 
 export function NewDivider() {
+  const Theme = useTheme();
   return (
     <RNView style={styles.newRule}>
       <RNText style={styles.newLabel}>NEW</RNText>
@@ -275,7 +280,7 @@ export function NewDivider() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   avatar: {
     borderRadius: 6,
     alignItems: 'center',
@@ -367,4 +372,4 @@ const styles = StyleSheet.create({
   newRule: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 6, paddingHorizontal: Spacing.md },
   newLabel: { fontSize: 9, fontWeight: '700', color: Theme.orange, letterSpacing: 1 },
   newLine: { flex: 1, height: 1, backgroundColor: Theme.orange + '66' },
-});
+}));

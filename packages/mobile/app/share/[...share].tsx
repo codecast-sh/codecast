@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
 import { parseSharePath } from '@codecast/shared/entities';
 import { setShareTokenScope } from '@codecast/web/lib/shareTokenScope';
@@ -27,6 +27,7 @@ import { useAuth } from '@/lib/auth';
  * readable instead of empty.
  */
 export default function ShareLinkScreen() {
+  const Theme = useTheme();
   const params = useLocalSearchParams<{ share: string | string[] }>();
   const router = useRouter();
   const { isAuthenticated } = useAuth();
@@ -125,7 +126,7 @@ export default function ShareLinkScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -145,4 +146,4 @@ const styles = StyleSheet.create({
     borderColor: Theme.borderLight,
   },
   backBtnText: { fontSize: 13, color: Theme.text },
-});
+}));
