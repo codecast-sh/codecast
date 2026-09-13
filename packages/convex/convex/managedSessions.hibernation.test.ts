@@ -39,11 +39,12 @@ describe("hibernation status mutation ordering", () => {
     const f = fixture();
     await f.write("hibernated", 300, { hibernated_at: 300, permission_mode: "plan", open_tasks: [] });
     const before = structuredClone(f.row());
+    const scheduledBefore = [...f.scheduled];
     expect((await f.write("working", 200, { hibernated_at: null, permission_mode: "default", open_tasks: [{ id: "stale", kind: "background" }] })).applied).toBe(false);
     expect(f.row()).toEqual(before);
     expect(f.db._tables.pending_messages[0].status).toBe("injected");
     expect(f.db._tables.conversations[0].has_pending_messages).toBe(true);
-    expect(f.scheduled).toEqual([]);
+    expect(f.scheduled).toEqual(scheduledBefore);
   });
 
   test("first applied status wins conflicting equal timestamps; identical retry succeeds", async () => {

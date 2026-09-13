@@ -13,6 +13,8 @@ import {
   NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS,
 } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
+import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
+import { scheduleAgentTurnMirror } from "./callChat";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -466,6 +468,7 @@ export const heartbeat = mutation({
     // those healed transitions must feed the needs-input push like any other.
     if (patch?.agent_status && patch.agent_status_updated_at && session.conversation_id) {
       await scheduleNeedsInputCheck(ctx, session.conversation_id, patch.agent_status, patch.agent_status_updated_at);
+      await scheduleLiveActivityRefresh(ctx, session.user_id, { urgent: true });
     }
 
     let dismissed = false;
@@ -522,6 +525,7 @@ export const heartbeatBatch = mutation({
       // Same self-healed-transition hook as the single heartbeat above.
       if (patch.agent_status && patch.agent_status_updated_at && session.conversation_id) {
         await scheduleNeedsInputCheck(ctx, session.conversation_id, patch.agent_status, patch.agent_status_updated_at);
+        await scheduleLiveActivityRefresh(ctx, session.user_id, { urgent: true });
       }
       updated++;
     }
@@ -830,10 +834,26 @@ export const updateAgentStatus = mutation({
       await ctx.db.patch(session._id, patch);
     }
 
+    // A turn just ended. A session in a huddle (fed its live transcript)
+    // answers in the room: its reply is mirrored into the huddle chat. Two
+    // signals say "ended", because not every client stamps the turn: the
+    // stamp advancing, or an active status settling. The mirror dedupes by
+    // message, so a settle that fires both posts once.
+    const turnStampAdvanced =
+      args.turn_completed_at !== undefined && args.turn_completed_at > (session.turn_completed_at ?? 0);
+    const activeSettled =
+      ACTIVE_AGENT_STATUSES.has(session.agent_status ?? "") && !ACTIVE_AGENT_STATUSES.has(args.agent_status);
+    if (turnStampAdvanced || activeSettled) {
+      await scheduleAgentTurnMirror(ctx, args.conversation_id);
+    }
+
     // agent_status_updated_at is only set on an ACTUAL status change — the
     // needs-input push keys off transitions, never re-assertions.
     if (patch.agent_status_updated_at) {
       await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at, args.session_boundary);
+      // The Lock Screen strip follows every status transition, boundary or not:
+      // a resume that lands the agent idle is a change the strip must show.
+      await scheduleLiveActivityRefresh(ctx, session.user_id, { urgent: true });
     }
 
     // An observed processing state proves the message reached the session — ack injected messages.
