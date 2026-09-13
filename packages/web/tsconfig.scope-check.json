@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [],
+  "files": [
+    "app/org/[id]/page.tsx",
+    "components/org/scope/ScopePage.tsx",
+    "components/org/scope/ScopeFeed.tsx",
+    "components/org/scope/ScopeTabs.tsx",
+    "components/org/scope/ScopeSettings.tsx",
+    "components/org/scope/scopeTypes.ts",
+    "hooks/useScopeQueries.ts",
+    "hooks/useIsPhone.ts",
+    "components/org/OrgPage.tsx",
+    "components/org/OrgNodeCards.tsx",
+    "components/org/OrgScopePanel.tsx",
+    "store/orgSlice.ts",
+    "src/routes.manifest.ts",
+    "components/RoutePane.tsx"
+  ]
+}
