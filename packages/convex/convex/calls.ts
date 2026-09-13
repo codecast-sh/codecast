@@ -867,7 +867,13 @@ export const setRoomTranscribeOff = mutation({
     const userId = await requireUser(ctx);
     const now = Date.now();
     const seat = await requireSeated(ctx, userId, args.room_key, now);
-    await upsertRoomState(ctx, args.room_key, seat, { transcribe_off: args.off }, now);
+    await upsertRoomState(
+      ctx,
+      args.room_key,
+      seat,
+      args.off ? { transcribe_off: true, transcribe_off_at: now } : { transcribe_off: false },
+      now,
+    );
     return { transcribe_off: args.off };
   },
 });
@@ -1026,6 +1032,7 @@ export const getLiveRooms = query({
         // The huddle said "don't transcribe": what keeps every seated client's
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
+        transcribe_off_at: state?.transcribe_off ? state.transcribe_off_at ?? state.updated_at : null,
         can_join: canJoin,
         redacted,
         title,

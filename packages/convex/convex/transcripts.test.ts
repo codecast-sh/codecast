@@ -7,10 +7,12 @@ import {
   finishRecordingTranscript,
   huddleDigestTarget,
   needsServerTranscription,
+  ownRoomTarget,
   parseTranscriptionSegments,
   recLeaseExpired,
   setRecordingScope,
   setSummary,
+  withDefaultRoutes,
   webGetCall,
   webListCalls,
 } from "./transcripts";
@@ -441,6 +443,32 @@ describe("the huddle digest", () => {
     expect(args.body.endsWith("</huddle-summary>")).toBe(true);
   });
 
+  test("a session that heard the huddle live gets the digest as a record, not a second ask", async () => {
+    const c = ctx([
+      huddle({
+        room_key: "session:conv1",
+        routes: [{ kind: "session", target: "conv1", mode: "live", sent_seq: 3, added_by: "ua" }],
+      }),
+    ]);
+    await call(setSummary, c, verdict);
+    const { args } = c._scheduled[0];
+    expect(args.body).toContain("You already heard it live");
+    // Still the whole digest: the summary, the action items, the pointer.
+    expect(args.body).toContain("- Bob: ship the fix behind a flag");
+    expect(args.body).toContain("cast call t1 --transcript");
+  });
+
+  test("a feed pointed somewhere ELSE does not make the digest a record here", async () => {
+    const c = ctx([
+      huddle({
+        room_key: "session:conv1",
+        routes: [{ kind: "session", target: "conv9", mode: "live", sent_seq: 3, added_by: "ua" }],
+      }),
+    ]);
+    await call(setSummary, c, verdict);
+    expect(c._scheduled[0].args.body).toContain("A huddle just ended in this session's room.");
+  });
+
   test("the digest posts once: a second verdict on a settled row is not a second row", async () => {
     const c = ctx([huddle({ summary_status: "done" })]);
     await call(setSummary, c, verdict);
@@ -654,5 +682,41 @@ describe("recording scope and triage", () => {
     await expect(
       call(setRecordingScope, c, { transcript_id: "tr_rec", team_id: "teamA" }),
     ).rejects.toThrow("Recording not found");
+  });
+});
+
+// Talking in a session's huddle is talking to its agent: the room's transcript
+// carries a live feed into that session from its first breath, so no one has to
+// point the words at the agent whose room they are already standing in.
+describe("the routes a room starts with", () => {
+  test("a session room feeds itself, live", () => {
+    expect(withDefaultRoutes("session:conv1", [])).toEqual([
+      { kind: "session", target: "conv1", mode: "live", sent_seq: 0 },
+    ]);
+  });
+
+  test("every other room starts with nothing", () => {
+    expect(withDefaultRoutes("channel:chan1", [])).toEqual([]);
+    expect(withDefaultRoutes("dm:ua:ub", [])).toEqual([]);
+    expect(withDefaultRoutes("rec:0123456789ab", [])).toEqual([]);
+    expect(withDefaultRoutes("garbage", [])).toEqual([]);
+  });
+
+  test("a caller that named this session's feed keeps its own mode", () => {
+    const asked = [{ kind: "session" as const, target: "conv1", mode: "after" as const, sent_seq: 0 }];
+    expect(withDefaultRoutes("session:conv1", asked)).toEqual(asked);
+  });
+
+  test("feeds pointed elsewhere are kept, and the room's own is added", () => {
+    const asked = [{ kind: "doc" as const, target: "doc1", mode: "live" as const, sent_seq: 0 }];
+    expect(withDefaultRoutes("session:conv1", asked)).toEqual([
+      ...asked,
+      { kind: "session", target: "conv1", mode: "live", sent_seq: 0 },
+    ]);
+  });
+
+  test("the room's own session is the one a live chunk addresses directly", () => {
+    expect(ownRoomTarget("session:conv1")).toBe("conv1");
+    expect(ownRoomTarget("channel:chan1")).toBeNull();
   });
 });
