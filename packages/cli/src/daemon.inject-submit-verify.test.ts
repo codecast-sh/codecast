@@ -72,6 +72,18 @@ function scriptedIO(frames: string[], extra: Partial<TmuxSubmitVerifyIO> = {}) {
 }
 
 describe("verifyTmuxSubmitAfterPaste", () => {
+  test("hi submits without extra Enters when it also appears in the footer", async () => {
+    const pane = (draft: string, activity = "") => `${activity}\n❯ ${draft}\n────────────────────\n  bypass permissions on (shift+tab to cycle)`;
+    const { io, actions } = scriptedIO([pane("", "● Thinking"), pane("", "● Thinking")]);
+    const result = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: pane(""),
+      pasteConfirmed: true,
+      contentPrefix: "hi",
+    });
+    expect(result.outcome).toBe("delivered");
+    expect(actions).toEqual([]);
+  });
+
   test("cold boot: waits through frozen pane, presses Enter when text appears, confirms submit", async () => {
     // Pane frozen (identical to pre-paste) for 10 ticks, then the pty buffer
     // drains (text visible in box), then Claude starts working.

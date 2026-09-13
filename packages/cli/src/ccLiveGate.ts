@@ -8,11 +8,13 @@
 // its own refresh and reads back whatever the CLI rotated instead
 // (resnapshotIfActiveFresher in ccAccounts.ts).
 //
-// Only a session on the KEYCHAIN login holds that credential. A session pinned
-// to a saved profile runs on that profile's setup-token, exported as
-// CLAUDE_CODE_OAUTH_TOKEN by accountSourcePrefix: a static year-long token with
-// no refresh half, so it can neither rotate the active credential nor be
-// stranded when the daemon does.
+// A session holds the keychain credential when it was launched on the
+// keychain login: unpinned, or pinned to the profile that IS the machine's
+// login (accountSourcePrefix runs those on the keychain too). A session pinned
+// to a dormant profile runs on that profile's own credential store instead
+// (ccAccounts.ts, "Per-profile credential stores"): it rotates that store, not
+// the keychain, so the daemon's dormant-profile rotation must stand back from
+// those profiles the same way (liveClaudeProfiles).
 //
 // The set is persisted, because a daemon restart with live panes must come back
 // with the gate still CLOSED — an empty in-memory set would let the first
@@ -46,6 +48,14 @@ interface GateFile {
 
 const live = new Map<string, GateEntry>();
 const drainListeners = new Set<() => void>();
+// Which saved profile covers the machine's login right now. Installed by the
+// daemon (ccAccounts.activeProfileName); the default pins nothing, so every
+// pinned session counts as running on its own store.
+let activeProfileResolver: () => string | undefined = () => undefined;
+
+export function setActiveProfileResolver(resolver: () => string | undefined): void {
+  activeProfileResolver = resolver;
+}
 
 // Read-modify-write of one file from marks that can arrive together (two
 // sessions starting at once): without a chain the second write would race the
@@ -57,16 +67,27 @@ function gateStatePath(): string {
   return path.join(dir, "cc-live-gate.json");
 }
 
-/** A pinned session runs on a setup-token, so only an unpinned one contends for
- *  the credential the daemon would rotate. */
-function holdsActiveCredential(entry: GateEntry): boolean {
-  return !entry.account;
+/** Unpinned, or pinned to the profile that is the machine's login: both run on
+ *  the keychain credential the daemon would otherwise rotate. */
+function holdsActiveCredential(entry: GateEntry, activeProfile: string | undefined): boolean {
+  return !entry.account || entry.account === activeProfile;
 }
 
 function holderCount(): number {
+  const activeProfile = activeProfileResolver();
   let n = 0;
-  for (const entry of live.values()) if (holdsActiveCredential(entry)) n++;
+  for (const entry of live.values()) if (holdsActiveCredential(entry, activeProfile)) n++;
   return n;
+}
+
+/** The dormant profiles a live claude runs on (their own stores). */
+export function liveClaudeProfiles(): Set<string> {
+  const activeProfile = activeProfileResolver();
+  const held = new Set<string>();
+  for (const entry of live.values()) {
+    if (entry.account && entry.account !== activeProfile) held.add(entry.account);
+  }
+  return held;
 }
 
 /** True while at least one live claude runs on the machine's keychain login.
@@ -194,5 +215,6 @@ export async function flushLiveClaudeGate(): Promise<void> {
 export async function resetLiveClaudeGate(): Promise<void> {
   live.clear();
   drainListeners.clear();
+  activeProfileResolver = () => undefined;
   await persist();
 }

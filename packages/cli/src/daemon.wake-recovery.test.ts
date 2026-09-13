@@ -162,9 +162,7 @@ test("a window holding both a sleep and a stall reports the stall AND still reco
   expect(classifyTickWindow(189_000, 150_000, 189_000)).toEqual({ stalled: true, recover: false });
   // A plain hibernate recovers, as it always did.
   expect(classifyTickWindow(2_234_000, 400, 6)).toEqual({ stalled: false, recover: true });
-  // A platform whose monotonic clock runs through suspend keeps the CPU rule
-  // and still recovers.
-  expect(classifyTickWindow(2_234_000, 400, 2_234_000)).toEqual({ stalled: false, recover: true });
+  expect(classifyTickWindow(2_234_000, 400, 2_234_000)).toEqual({ stalled: true, recover: false });
 });
 
 // BackendOutageClock feeds the self-heal restart ("backend recovered after Ns
@@ -256,12 +254,10 @@ test("once the clocks disagree the CPU counter no longer overrules them", () => 
   expect(classifyLoopGap(2_234_000, 900, 100)).toEqual({ kind: "suspend", freezeMs: 0 });
 });
 
-test("with no monotonic signal the verdict matches the CPU rule exactly", () => {
-  // A platform whose monotonic clock DOES advance across suspend degrades to
-  // today's behavior rather than misclassifying anything.
+test("matching clocks count filesystem waits even with negligible CPU", () => {
   for (const [late, cpu] of [[937_000, 6], [42_000, 928], [6_000, 0], [29_999, 0]] as const) {
     const verdict = classifyLoopGap(late, late, cpu);
-    expect(verdict.kind === "suspend").toBe(isSuspendGap(late, cpu) || late < 5_000);
+    expect(verdict).toEqual({ kind: "freeze", freezeMs: late });
   }
 });
 
@@ -322,4 +318,13 @@ test("a drifting hour total sends the same number until it moves a whole step", 
   // A whole 5s step does move it.
   ledger.record(5_000, 5_000);
   expect(freezeBeatFields(ledger.summary(6_000)).loop_freeze_1h_ms).toBe(45_000);
+});
+
+
+test("live filesystem freezes never trigger wake recovery", () => {
+  for (const [wall, cpu] of [[39436, 795], [86633, 1497], [62000, 1148], [60000, 0]]) {
+    expect(classifyTickWindow(wall, cpu, wall)).toEqual({ stalled: true, recover: false });
+    expect(classifyLoopGap(wall, wall, cpu)).toEqual({ kind: "freeze", freezeMs: wall });
+  }
+  expect(classifyTickWindow(2234000, 100, 60000)).toEqual({ stalled: true, recover: true });
 });
