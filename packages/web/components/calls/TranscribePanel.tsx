@@ -17,7 +17,7 @@ import { startTranscribing, stopTranscribing } from "../../lib/calls/callManager
 // transcribing, which is what the switch shows. A window that only knew its
 // own scribe status would read "off" in a room somebody else is transcribing,
 // and a person pressing it to stop would find nothing changed.
-export function useTranscribeToggle(live: boolean) {
+function useTranscribeToggle(live: boolean) {
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, () => ({
     active: false,
     transcriptId: null,

@@ -11,7 +11,8 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { orgRoleReparentMakesCycle, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
 import { cn } from "../../../lib/utils";
-import { InlineEdit, ScopeEditor, parentName } from "../OrgScopePanel";
+import { InlineEdit, ScopeEditor } from "../OrgScopePanel";
+import { parentName } from "../orgMeta";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type ScopeOverlap, type TrustStage } from "./scopeTypes";
 

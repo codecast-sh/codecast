@@ -250,7 +250,7 @@ export function DecisionAnswerControls({
 
 // The recorded answer, read-only, for an answered row: the chosen option(s)
 // in order, or the form values, or the typed text.
-export function DecisionRecordedAnswer({ decision }: { decision: SessionDecisionItem }) {
+export function DecisionRecordedAnswer({ decision }: { decision: Pick<SessionDecisionItem, "kind" | "status" | "options" | "answer_index" | "answer_text" | "answer_json"> }) {
   const kind = decision.kind ?? "single";
   if (decision.status !== "answered") return null;
   if (decision.answer_text) return <div className="text-sm text-sol-text">{decision.answer_text}</div>;

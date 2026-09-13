@@ -22,23 +22,8 @@ import { DocRow, SessionRow, InlineEdit } from "../OrgScopePanel";
 import { StateBar, StateTally } from "../OrgNodeCards";
 import { ORG_TOP_N, sortOrgSessions, type OrgRole, type OrgSession, type OrgTree } from "../orgTypes";
 import type { BriefFacts } from "./scopeTypes";
-
-/** The ids a scope covers, expanded the F1 way: a plan of a project in scope is in scope. */
-export type ScopeIds = { projectIds: string[]; planIds: string[]; whole: boolean };
-
-export function useScopeIds(scope: { project_ids: string[]; plan_ids: string[] } | null, plans: PlanItem[]): ScopeIds {
-  return useMemo(() => {
-    if (!scope) return { projectIds: [], planIds: [], whole: true };
-    const whole = scope.project_ids.length === 0 && scope.plan_ids.length === 0;
-    const projectIds = [...scope.project_ids];
-    const planIds = new Set(scope.plan_ids);
-    for (const p of plans) if ((p as any).project_id && projectIds.includes((p as any).project_id)) planIds.add(p._id);
-    return { projectIds, planIds: Array.from(planIds), whole };
-  }, [scope, plans]);
-}
-
-export const inScope = (ids: ScopeIds, row: { project_id?: string | null; plan_id?: string | null }): boolean =>
-  ids.whole || (!!row.project_id && ids.projectIds.includes(row.project_id)) || (!!row.plan_id && ids.planIds.includes(row.plan_id));
+import { inScope, useScopeIds, type ScopeIds } from "../../../hooks/useScopeIds";
+import { decisionHref } from "../../../lib/decisionLinks";
 
 export function Empty({ title, hint }: { title: string; hint?: string }) {
   return (
@@ -195,10 +180,6 @@ export function ScopeSessionsTab({ tree, role, scope }: { tree: OrgTree; role: O
 
 const DECISION_TONE: Record<string, string> = { pending: "var(--sol-yellow)", answered: "var(--sol-cyan)", dismissed: "var(--sol-text-dim)", withdrawn: "var(--sol-text-dim)" };
 
-export function decisionHref(d: SessionDecisionItem & { short_id?: string }): string {
-  return d.short_id ? `/decisions/${d.short_id}` : `/questions?s=${d.conversation_id}`;
-}
-
 export function ScopeDecisionsTab({ ids }: { ids: ScopeIds }) {
   const tasks = useWorkspaceCollection<TaskItem>("tasks");
   const decisions = useInboxStore((s) => s.sessionDecisions);
@@ -270,6 +251,7 @@ function RoleDoc({ docId, editable, backHref }: { docId: string; editable: boole
         markdownContent={listItem?.content || doc.content || ""}
         editable={editable}
         defaultEditing={false}
+        embedded
         titleInBody
         backHref={backHref}
         linkedObjectId={doc._id}
@@ -312,7 +294,7 @@ export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
             {facts.hands.map((h) => (
               <li key={h._id}>
                 <button type="button" onClick={() => openLinked({ _id: h._id, short_id: h.short_id, title: h.title, agent_type: "claude_code" })} className="w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-xl hover:bg-sol-bg-highlight/70">
-                  <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: h.work_state === "needs_input" ? "var(--sol-yellow)" : h.work_state === "working" ? "var(--sol-green)" : h.work_state === "done" ? "var(--sol-cyan)" : h.work_state === "dormant" ? "var(--sol-blue)" : "var(--sol-text-dim)" }} />
+                  <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: h.state === "needs_input" ? "var(--sol-yellow)" : h.state === "working" ? "var(--sol-green)" : h.state === "done" ? "var(--sol-cyan)" : h.state === "dormant" ? "var(--sol-blue)" : "var(--sol-text-dim)" }} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{h.title || "Untitled"}</span>
                     <span className="block truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>{h.state_line ?? "no state pinned"}</span>

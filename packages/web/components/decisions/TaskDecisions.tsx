@@ -29,7 +29,7 @@ export function TaskDecisions({ taskId }: { taskId: string }) {
 // How many open decisions a task carries: the list row's "decision" chip.
 // Subscribes to a count string, not the collection, so a row re-renders
 // only when its own number changes.
-export function useTaskPendingDecisionCount(taskId: string): number {
+function useTaskPendingDecisionCount(taskId: string): number {
   const s = useTrackedStore([
     (st) => {
       let n = 0;

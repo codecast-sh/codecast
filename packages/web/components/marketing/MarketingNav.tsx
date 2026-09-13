@@ -17,7 +17,7 @@ import { useLocalAuth } from "@/lib/localAuth";
  * local-first one — a stored token is enough — so the bar never flashes the
  * signed-out state while the server confirms.
  */
-export const MARKETING_NAV_LINKS = [
+const MARKETING_NAV_LINKS = [
   { href: "/documentation", label: "Docs" },
   { href: "/features", label: "CLI" },
   { href: "/download", label: "Download" },
