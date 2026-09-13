@@ -19,6 +19,9 @@ function isEntityLink(node: any): boolean {
     node?.type === "link" &&
     typeof node.url === "string" &&
     node.url.startsWith("entity://") &&
+    // A mention ("@jx7abcd", lib/remarkChatMentions) addresses the object; it
+    // is not the author sharing it, so it stays an inline pill.
+    !node.data?.hProperties?.["data-mention"] &&
     cardEligible(mdastText(node))
   );
 }

@@ -43,7 +43,7 @@ export function BranchCodeLink({ session, className = "", detail = true }: { ses
   const dirty = detail && !!session.git_dirty;
   return (
     <span
-      className={`inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-[10px] text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
+      className={`cq-sq2-tight inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-[10px] text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
       title={`${repository}${branch ? ` at ${branch}` : ""}${sha ? ` on ${sha.slice(0, 7)}` : ""}${dirty ? ", uncommitted changes" : ""}`}
     >
       <Link href={branch ? repoTreeHref(repository, branch) : repoHomeHref(repository)} onClick={stop} onKeyDown={stop}
@@ -53,14 +53,14 @@ export function BranchCodeLink({ session, className = "", detail = true }: { ses
         {dirty && <span className="text-sol-orange" aria-label="uncommitted changes">*</span>}
       </Link>
       {sha && (
-        <Link href={commitPageHref(repository, sha)} onClick={stop} onKeyDown={stop} aria-label={`Open commit ${sha.slice(0, 7)}`} className={`${promptPart} text-sol-text-muted`}>
+        <Link href={commitPageHref(repository, sha)} onClick={stop} onKeyDown={stop} aria-label={`Open commit ${sha.slice(0, 7)}`} className={`${promptPart} cq-sq1 text-sol-text-muted`}>
           {sha.slice(0, 7)}
         </Link>
       )}
       {(ahead > 0 || behind > 0) && branch && (
         <Link href={repoCompareHref(repository, `origin/${branch}`, branch)} onClick={stop} onKeyDown={stop}
           aria-label={`${ahead} ahead, ${behind} behind upstream`} title={`${ahead} ahead, ${behind} behind upstream`}
-          className={`${promptPart} ${behind > 0 ? "text-sol-orange" : "text-sol-text-muted"}`}>
+          className={`${promptPart} cq-sq1 ${behind > 0 ? "text-sol-orange" : "text-sol-text-muted"}`}>
           {ahead > 0 && <span>↑{ahead}</span>}
           {behind > 0 && <span>↓{behind}</span>}
         </Link>
