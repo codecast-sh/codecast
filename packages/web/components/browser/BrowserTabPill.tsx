@@ -14,11 +14,6 @@
 
 import { useContext } from "react";
 import { useConvex } from "convex/react";
-import { Columns2, Copy, ExternalLink } from "lucide-react";
-import { toast } from "sonner";
-import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../ui/context-menu";
-import { openBrowserPane } from "../../lib/stage";
-import { copyToClipboard } from "../../lib/utils";
 import { prefetchBrowserFocusEndpoint } from "../../lib/browserFocus";
 import type { BrowserTabRef } from "../castCommand";
 import { BrowserSessionContext, BROWSER_ROW_PILL, useBrowserTabActions, type BrowserTabActionState } from "../../hooks/useBrowserTabActions";
@@ -72,7 +67,6 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
   const castTab = tab.kind === "cast" ? tab : null;
   const isCast = !!castTab;
   const actions = useBrowserTabActions({ tabId: castTab?.tabId ?? null, url: castTab?.url ?? null }, session);
-  const menu = useContextMenu<string>();
   useWatchEffect(() => {
     if (isCast) prefetchBrowserFocusEndpoint(convex);
   }, [isCast, convex]);
@@ -117,37 +111,10 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
         }}
         title={title}
         aria-busy={state.kind === "busy"}
-        onContextMenu={(e) => tab.url && menu.open(e, tab.url, { force: true })}
       >
         {state.kind === "idle" && OPEN_TAB_ICON}
         <BrowserTabActionLabel state={state} idle={<span>open tab</span>} />
       </a>
-      {/* The page, in YOUR browser, as a pane. Deliberately not the same thing
-          as raising the agent's tab or watching it live: this is a second
-          visit to the same address with your own session, which is what you
-          want when you are checking the agent's work rather than its steps. */}
-      <ContextMenu state={menu}>
-        {(url) => (
-          <>
-            <CtxItem icon={Columns2} onSelect={() => openBrowserPane({ kind: "url", url })}>
-              Preview this page in a pane
-            </CtxItem>
-            <CtxItem
-              icon={ExternalLink}
-              onSelect={() => window.open(url, "_blank", "noopener,noreferrer")}
-            >
-              Open in a browser tab
-            </CtxItem>
-            <CtxSeparator />
-            <CtxItem
-              icon={Copy}
-              onSelect={() => void copyToClipboard(url).then(() => toast.success("Address copied"))}
-            >
-              Copy address
-            </CtxItem>
-          </>
-        )}
-      </ContextMenu>
       {state.kind === "offer" && (
         <button
           type="button"

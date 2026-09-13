@@ -11,7 +11,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Anchor as AnchorGlyph, Archive, ArrowLeft, Bell, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal } from "lucide-react";
+import { Anchor as AnchorGlyph, ArrowLeft, Bell, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal } from "lucide-react";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -246,7 +246,7 @@ export function ScopePageInner({ id }: { id: string }) {
               {role && canEdit && (
                 <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
               )}
-              {role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire from Settings, with a confirmation" onClick={() => setTab("settings")} />}
+              {role && canEdit && <ActionButton icon={Settings2} label="Retire" danger tip="Retire from Settings, with a confirmation" onClick={() => setTab("settings")} />}
             </div>
           )}
         </div>
