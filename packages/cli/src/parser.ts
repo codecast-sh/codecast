@@ -1,5 +1,6 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { extractInlineImages } from "./inlineImage.js";
+import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
 import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
@@ -31,6 +32,7 @@ export interface ClaudeSessionEntry {
     content: string | ContentBlock[];
     model?: string;
     stop_reason?: string | null;
+    usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
   };
   summary?: string;
   operation?: "enqueue" | "remove";
@@ -77,6 +79,8 @@ export interface ImageBlock {
   toolUseId?: string;
 }
 
+export type FileBlock = SyncFile;
+
 export interface ParsedMessage {
   uuid?: string;
   role: "user" | "assistant" | "system";
@@ -86,9 +90,37 @@ export interface ParsedMessage {
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageBlock[];
+  /** Files the agent handed to the human with SendUserFile. */
+  files?: FileBlock[];
   subtype?: string;
   stopReason?: string;
   model?: string;
+  /** Claude's per turn token usage (assistant records only). Rolled up on
+   *  the server into conversations.usage_totals (org-roles-standing.md T4). */
+  usage?: ClaudeUsage;
+}
+
+export interface ClaudeUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+/** The usage block of a JSONL assistant record, or undefined when absent or
+ *  malformed (a synthetic banner turn, an older transcript). */
+export function usageOf(message: unknown): ClaudeUsage | undefined {
+  const u = (message as any)?.usage;
+  if (!u || typeof u !== "object") return undefined;
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
+  const input = n(u.input_tokens), output = n(u.output_tokens);
+  if (input === undefined && output === undefined) return undefined;
+  return {
+    input_tokens: input ?? 0,
+    output_tokens: output ?? 0,
+    ...(n(u.cache_creation_input_tokens) !== undefined ? { cache_creation_input_tokens: n(u.cache_creation_input_tokens) } : {}),
+    ...(n(u.cache_read_input_tokens) !== undefined ? { cache_read_input_tokens: n(u.cache_read_input_tokens) } : {}),
+  };
 }
 
 export function parseSessionLine(line: string, opts?: { quiet?: boolean }): ClaudeSessionEntry | null {
@@ -258,6 +290,7 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
     const toolCalls: ToolCall[] = [];
     const toolResults: ToolResult[] = [];
     const images: ImageBlock[] = [];
+    const files: FileBlock[] = [];
 
     // Handle old format: message is a string directly
     if (typeof entry.message === "string") {
@@ -281,6 +314,9 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
             thinking += block.thinking;
           } else if (block.type === "tool_use") {
             toolCalls.push({ id: block.id, name: block.name, input: block.input });
+            // A file the agent sent the human rides the message the same way a
+            // screenshot does — see userFiles.ts.
+            files.push(...extractSentFiles(block, entry.cwd));
           } else if (block.type === "tool_result") {
             let toolResultContent = block.content;
             if (Array.isArray(block.content)) {
@@ -363,8 +399,10 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
         images: images.length > 0 ? images : undefined,
+        files: files.length > 0 ? files : undefined,
         stopReason,
         model,
+        usage: role === "assistant" && model ? usageOf(entry.message) : undefined,
       });
       onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
       lastEmittedReceiptTimestamp = Math.max(lastEmittedReceiptTimestamp, receiptTimestamp);
