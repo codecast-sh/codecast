@@ -182,6 +182,17 @@ describe("answerLocalRead", () => {
     expect(blame.ranges[0]).toMatchObject({ start_line: 1, end_line: 2, message: "second commit", author_name: "Tess Ter" });
   });
 
+  test("branches, tags and meta answer on demand with the rows the eager push publishes", async () => {
+    const repo = makeRepo();
+    const pushed = (await buildRepoMirror(repo))!.rows;
+    for (const kind of ["branches", "branchdetails", "tags", "meta"]) {
+      const answer = (await ask(repo, kind, "-", "")) as any;
+      expect(answer.error).toBeUndefined();
+      expect(answer.row).toEqual(pushed.find((r) => r.kind === kind));
+    }
+    expect(payload(await ask(repo, "branches", "-", "")).branches.map((b: any) => b.name).sort()).toEqual(["feature", "main"]);
+  });
+
   test("a compare between branches carries counts, commits and files with patches", async () => {
     const repo = makeRepo();
     const compare = payload(await ask(repo, "compare", "main", "feature", { base: "main", head: "feature" }));

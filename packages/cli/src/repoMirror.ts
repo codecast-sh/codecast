@@ -293,6 +293,68 @@ async function languagesFor(run: GitRunner, root: string, ref: string): Promise<
   return totals;
 }
 
+// ── Row builders shared by the eager push and the on-demand read ──
+//
+// The server asks a checkout for these by kind whenever the cached row goes
+// stale (repos LOCAL_KINDS), so every kind the push publishes must also be
+// answerable on demand from the same builder.
+
+/** Branches, twice: the plain list, and the detailed list the branches page reads. */
+async function branchRows(run: GitRunner, root: string, defaultBranch: string): Promise<[MirrorRow, MirrorRow]> {
+  const branches = await branchLines(run, root);
+  const truncated = branches.length === MAX_REFS;
+  const details = [];
+  for (const [index, b] of branches.entries()) {
+    let ahead_by: number | undefined;
+    let behind_by: number | undefined;
+    if (index < MAX_AHEAD_BEHIND && b.name !== defaultBranch) {
+      const counts = await tryGitLine(run, root, ["rev-list", "--left-right", "--count", `${defaultBranch}...${b.name}`]);
+      const m = counts?.match(/^(\d+)\s+(\d+)$/);
+      if (m) {
+        behind_by = Number(m[1]);
+        ahead_by = Number(m[2]);
+      }
+    }
+    details.push({ name: b.name, sha: b.sha, subject: b.subject, committed_at: b.committed_at, author_name: b.author_name, ahead_by, behind_by, open_pr: null });
+  }
+  const plain = { default_branch: defaultBranch, truncated, branches: branches.map((b) => ({ name: b.name, sha: b.sha, protected: false })) };
+  return [
+    { kind: "branches", ref: "-", path: "", content: JSON.stringify(plain) },
+    { kind: "branchdetails", ref: "-", path: "", content: JSON.stringify({ default_branch: defaultBranch, truncated, branches: details }) },
+  ];
+}
+
+async function tagsRow(run: GitRunner, root: string): Promise<MirrorRow> {
+  const tags = await tagLines(run, root);
+  return { kind: "tags", ref: "-", path: "", content: JSON.stringify({ truncated: tags.length === MAX_REFS, tags }) };
+}
+
+/**
+ * Meta. A checkout says nothing about GitHub-side counts, so those are zero
+ * and private stays true: the public route must never open on a local row.
+ */
+async function metaRow(run: GitRunner, root: string, defaultBranch: string, htmlBase: string): Promise<MirrorRow> {
+  const headAt = await tryGitLine(run, root, ["log", "-1", "--format=%ct", defaultBranch]);
+  const payload = {
+    private: true,
+    description: null,
+    homepage: null,
+    topics: [],
+    default_branch: defaultBranch,
+    size: 0,
+    stargazers_count: 0,
+    forks_count: 0,
+    open_issues_count: 0,
+    pushed_at: headAt ? Number(headAt) * 1000 : null,
+    archived: false,
+    html_url: htmlBase,
+    license: null,
+    languages: await languagesFor(run, root, defaultBranch),
+    source: "local",
+  };
+  return { kind: "meta", ref: "-", path: "", content: JSON.stringify(payload) };
+}
+
 /**
  * Everything the daemon publishes for one checkout, or null when the folder
  * is not a repository with at least one commit.
@@ -310,31 +372,8 @@ export async function buildRepoMirror(root: string, run: GitRunner = runGit): Pr
     rows.push({ kind, ref, path: rowPath, content: JSON.stringify(payload), ...extra });
   };
 
-  // Branches, twice: the plain list, and the detailed list the branches page reads.
-  const branches = await branchLines(run, root);
-  row("branches", "-", "", {
-    default_branch: defaultBranch,
-    truncated: branches.length === MAX_REFS,
-    branches: branches.map((b) => ({ name: b.name, sha: b.sha, protected: false })),
-  });
-  const details = [];
-  for (const [index, b] of branches.entries()) {
-    let ahead_by: number | undefined;
-    let behind_by: number | undefined;
-    if (index < MAX_AHEAD_BEHIND && b.name !== defaultBranch) {
-      const counts = await tryGitLine(run, root, ["rev-list", "--left-right", "--count", `${defaultBranch}...${b.name}`]);
-      const m = counts?.match(/^(\d+)\s+(\d+)$/);
-      if (m) {
-        behind_by = Number(m[1]);
-        ahead_by = Number(m[2]);
-      }
-    }
-    details.push({ name: b.name, sha: b.sha, subject: b.subject, committed_at: b.committed_at, author_name: b.author_name, ahead_by, behind_by, open_pr: null });
-  }
-  row("branchdetails", "-", "", { default_branch: defaultBranch, truncated: branches.length === MAX_REFS, branches: details });
-
-  const tags = await tagLines(run, root);
-  row("tags", "-", "", { truncated: tags.length === MAX_REFS, tags });
+  rows.push(...(await branchRows(run, root, defaultBranch)));
+  rows.push(await tagsRow(run, root));
 
   // The root tree under the branch name (what the home page asks for) and
   // under its own sha (what the walk asks for), then each subdirectory by sha.
@@ -394,26 +433,7 @@ export async function buildRepoMirror(root: string, run: GitRunner = runGit): Pr
   }
   row("lastcommits", defaultBranch, "", last);
 
-  // Meta. A checkout says nothing about GitHub-side counts, so those are zero
-  // and private stays true: the public route must never open on a local row.
-  const headTime = commits[0]?.timestamp ?? null;
-  row("meta", "-", "", {
-    private: true,
-    description: null,
-    homepage: null,
-    topics: [],
-    default_branch: defaultBranch,
-    size: 0,
-    stargazers_count: 0,
-    forks_count: 0,
-    open_issues_count: 0,
-    pushed_at: headTime,
-    archived: false,
-    html_url: htmlBase,
-    license: null,
-    languages: await languagesFor(run, root, defaultBranch),
-    source: "local",
-  });
+  rows.push(await metaRow(run, root, defaultBranch, htmlBase));
 
   return { repository, remote_url: origin || undefined, default_branch: defaultBranch, head_sha: headSha, rows, commits };
 }
@@ -623,6 +643,18 @@ export async function answerLocalRead(request: LocalReadRequest, run: GitRunner 
       }
       case "readme":
         return { row: await readmeRow(run, root, ref) };
+      case "branches":
+      case "branchdetails": {
+        const [plain, details] = await branchRows(run, root, await defaultBranchFor(run, root, await tryGitLine(run, root, ["rev-parse", "--abbrev-ref", "HEAD"])));
+        return { row: kind === "branches" ? plain : details };
+      }
+      case "tags":
+        return { row: await tagsRow(run, root) };
+      case "meta": {
+        const origin = await tryGitLine(run, root, ["remote", "get-url", "origin"]);
+        const current = await tryGitLine(run, root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+        return { row: await metaRow(run, root, await defaultBranchFor(run, root, current), htmlUrlFor(origin)) };
+      }
       case "lastcommits": {
         const dir = String(params.path ?? "");
         let paths: string[] = Array.isArray(params.paths) ? params.paths : [];
