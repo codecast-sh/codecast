@@ -38,7 +38,7 @@ services:
       REPLICATION_SSLROOTCERT: /certs-client/primary-root.crt
       # The base backup reads the whole primary once; take it in the quiet
       # window after the 09:00Z dump, never during US working hours.
-      BOOTSTRAP_AFTER: "2026-09-13T10:30:00Z"
+      BOOTSTRAP_AFTER: "2026-09-14T06:30:00Z"
       # Sizing for 123 GB of RAM shared with the Convex backend (~64 GB).
       REPLICA_SHARED_BUFFERS: 32GB
       REPLICA_EFFECTIVE_CACHE_SIZE: 80GB
