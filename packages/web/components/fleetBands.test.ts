@@ -149,9 +149,10 @@ describe("fleetTileMeta", () => {
     expect(fleetTileMeta(s, "needsYou", NOW).text).toBe("asks: Asked which port to bind");
   });
 
-  it("labels rate limits in red", () => {
+  it("labels a usage-limit park in red", () => {
+    // A usage window closing is not a rate limit (that is the throttle kind).
     const meta = fleetTileMeta(sess({ pending_api_error: true, pending_api_error_kind: "limit" }), "needsYou", NOW);
-    expect(meta.text).toContain("rate limited");
+    expect(meta.text).toContain("usage limit");
     expect(meta.tone).toBe("red");
   });
 
