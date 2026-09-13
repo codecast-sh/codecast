@@ -322,7 +322,7 @@ export function GlobalSearch() {
         </button>
       )}
       <div
-        className={`relative w-full min-w-0 transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+        className={`relative w-full min-w-0 transition-[max-width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)] ${
           isExpanded
             ? compact
               ? "tb-search-overlay"
