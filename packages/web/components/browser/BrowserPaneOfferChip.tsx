@@ -18,7 +18,7 @@ import { deviceDisplayName, type BrowserPaneOffer } from "@codecast/shared/contr
 import { useInboxStore } from "../../store/inboxStore";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { canOpenBeside, openBrowserPane } from "../../lib/stage";
+import { openBrowserPane, stageHasRoom } from "../../lib/stage";
 import { isLoopbackUrl } from "../../lib/browserPane";
 import { paneOfferDecision, paneOfferHint, paneOfferLabel } from "../../lib/browserPaneOffer";
 
@@ -57,20 +57,28 @@ export function BrowserPaneOfferChip({ conversationId }: { conversationId: strin
     now: Date.now(),
     attended,
     autoOpen: autoOpenPref,
-    hasRoom: canOpenBeside(),
+    hasRoom: stageHasRoom(),
   });
 
+  // The click. A person asked for this page, so it opens either way: beside
+  // when the stage has room, and in this tab when it does not.
   const open = useCallback(() => {
     if (!offer) return;
     openBrowserPane({ kind: "url", url: offer.url });
     dismiss(conversationId, Date.now());
   }, [offer, conversationId, dismiss]);
 
-  // The preference, honoured once per offer: dismissing it as we open is what
-  // keeps a re-render or a second window from opening the same pane twice.
+  // The preference. Nobody clicked, so a pane is the only acceptable outcome:
+  // `beside: "only"` refuses the navigation fallback, and an offer that could
+  // not open stays live for the reader to click later rather than being marked
+  // handled by a gesture that did nothing. Dismissing on success is what keeps
+  // a re-render or a second window from opening the same pane twice.
   useWatchEffect(() => {
-    if (decision.autoOpen) open();
-  }, [decision.autoOpen, open]);
+    if (!decision.autoOpen || !offer) return;
+    if (openBrowserPane({ kind: "url", url: offer.url }, { beside: "only" })) {
+      dismiss(conversationId, Date.now());
+    }
+  }, [decision.autoOpen, offer, conversationId, dismiss]);
 
   if (!decision.show || !offer) return null;
 

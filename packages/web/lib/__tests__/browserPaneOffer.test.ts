@@ -26,7 +26,14 @@ describe("paneOfferDecision", () => {
   test("auto-open needs the preference, the reader's attention, and room", () => {
     expect(decide({ autoOpen: true })).toEqual({ show: true, autoOpen: true });
     expect(decide({ autoOpen: true, attended: false }).autoOpen).toBe(false);
-    expect(decide({ autoOpen: true, hasRoom: false }).autoOpen).toBe(false);
+  });
+
+  test("a full stage keeps the chip and refuses to open it for the reader", () => {
+    // hasRoom counts the pane cap (lib/stage stageHasRoom), so this is the
+    // stage that is wide enough but already holds four panes. The offer must
+    // stay clickable and must NOT open itself — opening would fall back to
+    // navigating the tab, moving the view nobody asked to move.
+    expect(decide({ autoOpen: true, hasRoom: false })).toEqual({ show: true, autoOpen: false });
   });
 });
 
