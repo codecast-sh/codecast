@@ -8,15 +8,17 @@ export async function switchSessionAgent(
   targetAgentType: ConvexAgentType,
 ): Promise<void> {
   const store = useInboxStore.getState();
-  const id = store.getConvexId(session._id) ?? session._id;
+  let id = store.getConvexId(session._id) ?? session._id;
+  const row = store.sessions[id] ?? store.conversations[id];
   const previousAgentType = session.agent_type || "claude_code";
   if (previousAgentType === targetAgentType) return;
 
   store.setConversationAgent(id, targetAgentType);
-  if (!isConvexId(id)) return;
+  if (!isConvexId(id) && !row?.forked_from) return;
 
   try {
-    await store.convCommand(id, "switchSessionAgent", { agent_type: targetAgentType });
+    if (!isConvexId(id)) id = await store.awaitConvexId(id);
+    await useInboxStore.getState().convCommand(id, "switchSessionAgent", { agent_type: targetAgentType });
   } catch (error) {
     if (isParkedDispatchError(error)) return;
     captureException(error);

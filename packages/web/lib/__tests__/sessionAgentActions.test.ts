@@ -17,6 +17,52 @@ test("switching changes the agent immediately and restores it when the command f
   expect(updates).toEqual(["codex", "claude_code"]);
 });
 
+test("switching a fork still being created waits for its real id and switches the process", async () => {
+  const stubId = "2109dc9b-aabb-4928-b627-426a663be342";
+  const calls: any[] = [];
+  let resolveCreate!: (id: string) => void;
+  const created = new Promise<string>(resolve => { resolveCreate = resolve; });
+  useInboxStore.setState({
+    getConvexId: () => undefined,
+    sessions: { [stubId]: { ...session, _id: stubId, forked_from: session._id } } as any,
+    awaitConvexId: () => created,
+    setConversationAgent: (id, agent) => { calls.push(["agent", id, agent]); },
+    convCommand: (async (id, command, args) => { calls.push([command, id, args]); }) as any,
+  });
+  const switched = switchSessionAgent({ ...session, _id: stubId }, "codex");
+  expect(calls).toEqual([["agent", stubId, "codex"]]);
+  resolveCreate(session._id);
+  await switched;
+  expect(calls).toContainEqual(["switchSessionAgent", session._id, { agent_type: "codex" }]);
+});
+
+test("a failed switch after fork creation restores the real row", async () => {
+  const stubId = "2109dc9b-aabb-4928-b627-426a663be342";
+  const updates: any[] = [];
+  useInboxStore.setState({
+    getConvexId: () => undefined,
+    sessions: { [stubId]: { ...session, _id: stubId, forked_from: session._id } } as any,
+    awaitConvexId: async () => session._id,
+    setConversationAgent: (id, agent) => { updates.push([id, agent]); },
+    convCommand: (() => Promise.reject(new Error("Switch failed"))) as any,
+  });
+  await expect(switchSessionAgent({ ...session, _id: stubId }, "codex")).rejects.toThrow("Switch failed");
+  expect(updates.at(-1)).toEqual([session._id, "claude_code"]);
+});
+
+test("choosing an agent on an unstarted blank session only updates its launch preference", async () => {
+  const stubId = "blank-session";
+  const updates: string[] = [];
+  useInboxStore.setState({
+    getConvexId: () => undefined,
+    sessions: { [stubId]: { ...session, _id: stubId, message_count: 0 } } as any,
+    setConversationAgent: (_, agent) => { updates.push(agent); },
+    awaitConvexId: async () => { throw new Error("Blank sessions must not be launched by this picker"); },
+  });
+  await switchSessionAgent({ ...session, _id: stubId }, "codex");
+  expect(updates).toEqual(["codex"]);
+});
+
 test("forking seeds and tracks a child before the server responds", async () => {
   const calls: any[] = [];
   useInboxStore.setState({ getConvexId: id => id, syncRecord: ((...args: any[]) => calls.push(["sync", ...args])) as any, injectSession: row => { calls.push(["inject", row]); }, moveDraft: (...args) => { calls.push(["draft", ...args]); }, trackSessionCreate: () => {}, resolveForkSessionId: (...args) => { calls.push(["resolve", ...args]); }, convCommand: ((id: string, command: string, args: any) => { calls.push([command, id, args]); return Promise.resolve({ conversation_id: "jx700000000000000000000000000002" }); }) as any });
