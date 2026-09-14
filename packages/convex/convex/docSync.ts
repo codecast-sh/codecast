@@ -8,6 +8,7 @@ import { packSnapshotContent, readSnapshotContent } from "./lib/docSnapshot";
 import { requireAccessibleDoc } from "./lib/access";
 import { checkConversationAccess } from "./privacy";
 import { notFound } from "./lib/auth";
+import { afterRoleDocWrite } from "./orgRoles";
 
 const MAX_DELTA_FETCH = 100;
 const MAX_SNAPSHOT_FETCH = 10;
@@ -203,6 +204,10 @@ export const submitSnapshot = mutation({
       if (doc && parsed) {
         const patch = snapshotDocPatch(md, doc as any, Date.now());
         if (patch) await ctx.db.patch(doc._id, patch);
+        // A role's brief or charter saved from the web editor lands here, not
+        // in docs.update: run the same after-write hook (brief state mirror,
+        // charter wake) so the editor and the CLI agree.
+        if (patch && "content" in patch) await afterRoleDocWrite(ctx, doc, patch.content);
 
         const newMentions = extractPersonMentionIds(parsed);
         if (newMentions.size > 0) {

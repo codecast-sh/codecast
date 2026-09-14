@@ -1,6 +1,6 @@
 import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
-import { enqueueRoleEvent } from "./orgEvents";
+import { afterRoleDocWrite } from "./orgRoles";
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { Id, type Doc } from "./_generated/dataModel";
@@ -686,30 +686,15 @@ export const update = mutation({
 
     await ctx.db.patch(args.id, updates);
 
-    // A charter edit wakes its role at once (T3): the rules just changed.
-    if (doc.doc_type === "charter" && text.content !== undefined) await wakeRolesOfCharter(ctx, doc);
+    // A brief mirrors its first line into the standing session's state; a
+    // charter wakes its role at once (org-roles-standing.md T2, T3).
+    if (text.content !== undefined) await afterRoleDocWrite(ctx, doc, text.content);
 
     // The HTTP route resets the collab snapshot from the returned content, so a
     // title edit (which rewrites the heading line) reaches open editors too.
     return { success: true, content: text.content };
   },
 });
-
-// The role a charter doc belongs to has no back pointer on the doc: scan the
-// boundary's roles for the one whose charter_doc_id is this doc.
-async function wakeRolesOfCharter(ctx: any, doc: any): Promise<void> {
-  const rows: any[] = doc.team_id
-    ? await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", doc.team_id)).collect()
-    : await ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", doc.user_id)).collect();
-  for (const role of rows) {
-    if (String(role.charter_doc_id ?? "") !== String(doc._id)) continue;
-    await enqueueRoleEvent(ctx, role._id, {
-      kind: "immediate",
-      cause: `your charter changed; re-read it (cast brief) before acting`,
-      ref: { table: "docs", id: String(doc._id) },
-    });
-  }
-}
 
 export const addComment = mutation({
   args: {
