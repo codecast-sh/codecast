@@ -7,7 +7,7 @@ import type { ParsedMessage } from '../parser.js';
 const messageFields = Object.keys({
   uuid: true, role: true, content: true, timestamp: true, thinking: true,
   toolCalls: true, toolResults: true, images: true, files: true, subtype: true,
-  stopReason: true, model: true, usage: true,
+  stopReason: true, model: true, usage: true, apiMessageId: true,
 } satisfies Record<keyof ParsedMessage, true>);
 
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v) && [Object.prototype,null].includes(Object.getPrototypeOf(v));

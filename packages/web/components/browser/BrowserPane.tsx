@@ -12,7 +12,8 @@
 // pane-local router, which keeps the tab-path invariant and makes back,
 // reload, drag-to-split and tab restore work with no state of our own.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useConvex } from "convex/react";
 import { ArrowUpRight, Globe, Laptop, Lock, RotateCw } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -91,7 +92,7 @@ export function BrowserPane() {
   // STATE is deliberately not reset here — the backend owns it, and a child's
   // effect runs before its parent's, so resetting would erase the verdict the
   // backend just reached (an http page blocked under https never showed).
-  useEffect(() => {
+  useWatchEffect(() => {
     setLiveUrl(null);
     setLiveTitle(null);
     setDraft(null);
@@ -99,7 +100,7 @@ export function BrowserPane() {
     setGraceOver(false);
   }, [url, source?.kind, reloadToken]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (state.kind !== "ready" || !state.opaque) return;
     const t = setTimeout(() => setGraceOver(true), REFUSAL_GRACE_MS);
     return () => clearTimeout(t);
@@ -163,14 +164,14 @@ export function BrowserPane() {
   // A pane with no address exists to be typed into (the palette's "Open a URL
   // in a pane"), so its bar takes focus as it appears — and only there: a
   // pane showing a page must never steal focus from what you were doing.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (source || !focused) return;
     inputRef.current?.focus();
   }, [source, focused]);
 
   // Cmd/Ctrl+L is the address bar's key everywhere; inside the app it belongs
   // to the focused browser pane, so it only binds while this pane has focus.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!focused) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "l") return;
@@ -548,7 +549,7 @@ function useThisMachine() {
   const convex = useConvex();
   const { byId } = useDevices();
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     let live = true;
     // Full discovery, not cache-only: without it the badge says "this machine"
     // and never names it. The lookup is cached module-wide, so a pane that

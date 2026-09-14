@@ -16,7 +16,8 @@
 // which backend is under it.
 
 import { ChevronLeft, ChevronRight, Code2, MonitorOff } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { browserPaneBridge, type BrowserPaneEvent } from "../../../lib/desktop";
 import { useNativeBrowserPane } from "../../../hooks/useNativeBrowserPane";
 import { isLoopbackUrl } from "../../../lib/browserPane";
@@ -105,7 +106,7 @@ export function NativeBackend({
   // Create the view, and take it down again when the pane goes. A pane that
   // unmounted with its view still up would leave a page floating over the
   // stage, owned by nothing.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pane || !url) return;
     let live = true;
     setFailed(null);
@@ -148,7 +149,7 @@ export function NativeBackend({
   }, [pane, paneId, url]);
 
   // Everything that can move, cover or reveal the pane.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pane || !url || typeof window === "undefined") return;
     const el = host.current;
     const ro = new ResizeObserver(chase);
@@ -171,19 +172,19 @@ export function NativeBackend({
 
   // The tab this pane lives in became the visible one, or stopped being it.
   // Not a rect change, so nothing else would notice.
-  useEffect(() => {
+  useWatchEffect(() => {
     chase();
   }, [focused, chase]);
 
   // The strip's reload button and Cmd+R both land here.
   const firstReload = useRef(reloadToken);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pane || reloadToken === firstReload.current) return;
     void pane.send("reload", { paneId });
   }, [pane, paneId, reloadToken]);
 
   // What the shell sees about the page, translated into what the pane shows.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pane) return;
     return pane.on((e: BrowserPaneEvent) => {
       if (e.paneId !== paneId) return;
@@ -223,7 +224,7 @@ export function NativeBackend({
   }, [pane, paneId, leafId, url, onTitle, onUrl, onState]);
 
   // Back, forward and this pane's own devtools, in the pane's strip.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!onActions) return;
     if (!pane || !url) {
       onActions([]);

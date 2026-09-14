@@ -61,5 +61,5 @@ What cast adds to the usual pattern:
 - **Web-app surfaces.** `eval` awaits promises and takes top-level `await`; multi-line scripts come from `--stdin` (heredoc) or `--file`. Camera, microphone, and clipboard permission prompts in the human's Chrome are for them to approve. `shot -s <sel>` screenshots one element. `find` ranks visible elements above hidden ones. Namesakes are numbered: `find "Delete (3rd)"` picks the third visible match; stale refs are re-found at the same position after a refresh.
 
 Separate-browser controls are deliberately absent from this everyday guide. A human-approved exception applies only to the requested work; it never changes the default for later commands.
-<!-- cast 1.1.132 -->
+<!-- cast @VERSION@ -->
 <!-- /codecast-browser -->
