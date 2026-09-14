@@ -133,8 +133,21 @@ describe("command groups stay off the boot graph", () => {
     // (agentDefinitions, forkSeed, liveActivity). The command-only modules the
     // sweep added load at their use sites instead: forkFanout.ts inside
     // `cast fork`, orgTarget.ts inside the org verbs that resolve a target.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(214);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2990);
+    //
+    // 216 files, 3,010 KB and 302 after the 2026-09-14 release. The KB are
+    // growth inside files already here (supervision.ts, daemonMarkers.ts,
+    // index.ts), not new reach. toolKinds.ts is a split of
+    // shared/render/toolCall.ts (its family classifiers, no new reach) and
+    // sits on both graphs where toolCall.ts already was. orgInit.ts registers
+    // the `cast org init` verbs; their bodies, the analyzer prompt and the
+    // proposal contract it embeds load inside each action (orgInitRun.ts).
+    // browser/desktopPaneRegistry.ts is the daemon's own record of the
+    // desktop panes it pins, read by the watch source that feeds them.
+    // The bundled skills, the brief lines and the two new contracts
+    // (orgProposal, browserPaneOffer) stay off: loaded at their use sites, and
+    // the contracts are imported by path, never through the barrel.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(216);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3010);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -160,7 +173,7 @@ describe("command groups stay off the boot graph", () => {
     // messagePreparationValidation.ts under the ingest client, userFiles.ts,
     // shared/files and the three contracts. reopenTab.ts left the graph at the
     // same time: focusHttp.ts loads it on the reopen route only.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(300);
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(302);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

@@ -9,11 +9,11 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { canAccessPlan, canAccessProject, isTeamMember, workspaceForResource, workspaceKey } from "./lib/access";
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
-import { provisionStandingAgent, type RoleBootstrap } from "./anchors";
+import { decommissionAnchorRow, provisionStandingAgent, type RoleBootstrap } from "./anchors";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
-import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, scheduleFlush, trustOf } from "./orgEvents";
+import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, scheduleFlush, trustOf, unflushedRowsFor } from "./orgEvents";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
 // org-roles.md S1, S2, S5). A role has no standing session in this slice; it is
@@ -309,7 +309,7 @@ export async function performCreateRole(
 export async function performUpdateRole(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; from_session?: string; review_backend?: string },
+  args: { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; from_session?: string; review_backend?: string; api_token?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   // A retired seat is closed: its handle may already belong to a live role
@@ -318,8 +318,8 @@ export async function performUpdateRole(
   // Scope and charter edits are human only (F1, T2): a call carrying the
   // session it runs in is an agent's, and an agent may not widen or narrow
   // what a role owns, nor rewrite the statement of its job.
-  if (args.scope !== undefined) refuseFromAgent(args.from_session, "Scope");
-  if (args.charter !== undefined) refuseFromAgent(args.from_session, "Charter");
+  if (args.scope !== undefined) await refuseUnlessHuman(ctx, args, "Scope");
+  if (args.charter !== undefined) await refuseUnlessHuman(ctx, args, "Charter");
   // Retiring through update is the retire path: sessions must fall back to
   // their owners, not keep pointing at a hidden seat.
   if (args.status === "retired") return performRetireRole(ctx, userId, { role_id: args.role_id });
@@ -404,9 +404,36 @@ export async function performReparentRole(
   return await ctx.db.get(role._id);
 }
 
-export async function performRetireRole(ctx: Ctx, userId: Id<"users">, args: { role_id: string }): Promise<any> {
+export async function performRetireRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
+  if (role.status === "retired") return { ...role, cleared: 0, rehomed: 0, interrupted: 0, cancelled_triggers: 0 };
   const now = Date.now();
+  // Live hands hear it first (before org_role_id is cleared, or handsOf finds
+  // nothing): stop at a safe point; the session now reports to its owner.
+  const interrupted = await interruptHands(ctx, role, userId, "role-retired",
+    `Your role ${role.name} (@${role.handle}) was retired. Stop at a safe point, pin your state with cast state, and end your turn. This session now reports to its owner.`);
+  // The standing session goes down with the seat: its routines are cancelled
+  // (or they would fire into a dead role and spend the host's account), its
+  // held and pending turns dropped, its anchor decommissioned (kill command,
+  // status completed, bot off the team roster). Outbox rows that never
+  // flushed are dropped too.
+  let cancelledTriggers = 0;
+  const standing = await standingConversationOf(ctx, role);
+  if (standing) {
+    const routines: any[] = await ctx.db.query("agent_tasks")
+      .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id)).collect();
+    for (const t of routines) {
+      if (t.status === "cancelled" || t.status === "completed" || t.status === "failed") continue;
+      await ctx.db.patch(t._id, { status: "cancelled", updated_at: now });
+      cancelledTriggers++;
+    }
+    const held: any[] = await ctx.db.query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "held")).collect();
+    for (const p of held) await ctx.db.patch(p._id, { status: "cancelled", cancelled_at: now });
+  }
+  const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+  if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor);
+  for (const row of await unflushedRowsFor(ctx, role._id)) await ctx.db.delete(row._id);
   const filed: any[] = await ctx.db
     .query("conversations")
     .withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
@@ -421,7 +448,7 @@ export async function performRetireRole(ctx: Ctx, userId: Id<"users">, args: { r
   );
   for (const child of children) await ctx.db.patch(child._id, { reports_to: role.reports_to, updated_at: now });
   await ctx.db.patch(role._id, { status: "retired", updated_at: now });
-  return { ...(await ctx.db.get(role._id)), cleared: filed.length, rehomed: children.length };
+  return { ...(await ctx.db.get(role._id)), cleared: filed.length, rehomed: children.length, interrupted, cancelled_triggers: cancelledTriggers };
 }
 
 // Move a session in the tree. A user target changes ownership (the existing
@@ -505,7 +532,7 @@ export const update = mutation({
     from_session: v.optional(v.string()),
     review_backend: v.optional(v.string()),
   },
-  handler: async (ctx, { api_token, ...args }) => performUpdateRole(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, ...args }) => performUpdateRole(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 
 // `cast role scope <handle> --add project:<ref> --remove plan:<ref>` (F1).
@@ -566,10 +593,14 @@ export function reviewBackendConflict(role: { review_backend?: string | null }, 
 export const TRUST_STAGES = ["understand", "decide", "direct"] as const;
 
 // The human only gate (T4): trust, caps, scope and the charter are a
-// person's to change. A call that names the session it runs inside is an
-// agent's and is refused; the CLI stamps that session on every such call.
-export function refuseFromAgent(fromSession: string | undefined, what: string): void {
-  if (fromSession) throw new Error(`${what} changes are human only: run this from a plain terminal or the role page`);
+// person's to change. Identity is the browser's auth session, never a body
+// field: an api token call is a terminal's, and a terminal can be a hand's
+// (a hand runs under its host's token, and the host is the role's admin).
+// The from_session check stays only for the friendlier message.
+export async function refuseUnlessHuman(ctx: any, args: { api_token?: string; from_session?: string }, what: string): Promise<void> {
+  if (args.from_session) throw new Error(`${what} changes are human only: an agent session may not make them; use the role page`);
+  const identity = args.api_token ? null : await ctx.auth?.getUserIdentity?.();
+  if (!identity) throw new Error(`${what} changes are human only: make them from the role page in the browser`);
 }
 
 async function scopeNamesOf(ctx: Ctx, role: any): Promise<string[]> {
@@ -694,19 +725,26 @@ export async function performPauseRole(ctx: any, userId: Id<"users">, args: { ro
   // Idempotent: a second pause changes nothing and interrupts nobody twice.
   if (role.status === "paused") return { ...role, interrupted: 0 };
   await ctx.db.patch(role._id, { status: "paused", updated_at: Date.now() });
+  const interrupted = await interruptHands(ctx, role, userId, "role-paused",
+    `Your role ${role.name} (@${role.handle}) was paused. Stop at a safe point: finish the step in flight, pin your state with cast state, and end your turn.`);
+  return { ...(await ctx.db.get(role._id)), interrupted };
+}
+
+// Tell every LIVE hand of a role to stop at a safe point. Only a hand whose
+// agent is producing is told; a dormant hand would be woken for one turn
+// just to be told to rest. Shared by pause and retire.
+export async function interruptHands(ctx: any, role: any, userId: Id<"users">, tag: string, text: string): Promise<number> {
   let interrupted = 0;
   for (const hand of await handsOf(ctx, role)) {
-    // Only a hand whose agent is producing is told to stop; a dormant hand
-    // would be woken for one turn just to be told to rest.
     const managed = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", hand._id)).first();
     if (!managed || !ACTIVE_AGENT_STATUSES.has(managed.agent_status ?? "")) continue;
     await enqueuePendingMessage(ctx, hand, userId, {
-      content: `<role-paused ${role.short_id}>Your role ${role.name} (@${role.handle}) was paused. Stop at a safe point: finish the step in flight, pin your state with cast state, and end your turn.</role-paused>`,
-      client_id: `role-paused:${role._id}:${hand._id}`,
+      content: `<${tag} ${role.short_id}>${text}</${tag}>`,
+      client_id: `${tag}:${role._id}:${hand._id}`,
     });
     interrupted++;
   }
-  return { ...(await ctx.db.get(role._id)), interrupted };
+  return interrupted;
 }
 
 export async function performResumeRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
@@ -729,8 +767,8 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
 }
 
 // trust — human only, logged on the charter as a doc entry.
-export async function performSetTrust(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string }): Promise<any> {
-  refuseFromAgent(args.from_session, "Trust stage");
+export async function performSetTrust(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string; api_token?: string }): Promise<any> {
+  await refuseUnlessHuman(ctx, args, "Trust stage");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const trust = args.trust.trim().toLowerCase();
   if (!(TRUST_STAGES as readonly string[]).includes(trust)) throw new Error(`Unknown trust stage "${args.trust}"; use understand, decide or direct`);
@@ -748,8 +786,8 @@ export async function performSetTrust(ctx: any, userId: Id<"users">, args: { rol
   return { ...(await ctx.db.get(role._id)), previous_trust: previous };
 }
 
-export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; from_session?: string }): Promise<any> {
-  refuseFromAgent(args.from_session, "Cap");
+export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; from_session?: string; api_token?: string }): Promise<any> {
+  await refuseUnlessHuman(ctx, args, "Cap");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const caps = capsFor(role);
   const pos = (n: number | undefined, name: string) => {
@@ -773,13 +811,20 @@ export async function performWakeRole(ctx: any, userId: Id<"users">, args: { rol
   const role = await requireRole(ctx, userId, args.role_id, "access");
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet");
-  const from = args.from_session ? await findConversationByAnyRefWhere(ctx, args.from_session, async (c: any) => (await checkConversationAccess(ctx, userId, c)) !== null) : null;
+  const from = await callerSession(ctx, userId, args.from_session);
   const pendingId = await enqueuePendingMessage(ctx, conv, userId, {
     content: args.message,
     from_conversation_id: from?._id,
     human: !from,
   });
-  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: pendingId };
+  // The flush holds every row while the role is paused (orgWakes gate 1), so
+  // the caller learns the line waits for a resume rather than a wake.
+  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: pendingId, held: wakeIsHeld(role) };
+}
+
+/** A paused role reads its lines when someone resumes it (orgWakes gate 1). */
+export function wakeIsHeld(role: { status: string }): boolean {
+  return role.status === "paused";
 }
 
 export async function listWakes(ctx: Ctx, userId: Id<"users">, args: { role_id: string; limit?: number }): Promise<any[]> {
@@ -798,7 +843,7 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   const role = await requireRole(ctx, userId, args.role_id, "access");
   // Who may write: the role's own standing session, or a person who can
   // reshape the role (its parent side).
-  const from = args.from_session ? await findConversationByAnyRefWhere(ctx, args.from_session, async (c: any) => (await checkConversationAccess(ctx, userId, c)) !== null) : null;
+  const from = await callerSession(ctx, userId, args.from_session);
   const isOwnSession = !!from && String(from.standing_role_id ?? "") === String(role._id);
   if (!isOwnSession && !(await userCanAdminRole(ctx, userId, role))) {
     throw new Error("Only the role's own session or an admin of the role may edit its brief");
@@ -862,6 +907,14 @@ export async function afterRoleDocWrite(ctx: Ctx, doc: any, content: string): Pr
   }
 }
 
+// The session the caller RUNS (lib/actor: identity follows the token). A row
+// the caller can merely read (a team role's standing session is team
+// visible) is not the caller's own session and grants nothing.
+async function callerSession(ctx: any, userId: Id<"users">, ref?: string): Promise<any | null> {
+  if (!ref) return null;
+  return await findConversationByAnyRefWhere(ctx, ref, async (c: any) => String(c.user_id) === String(userId));
+}
+
 // The state line of a brief: its first line, then the labelled lines the
 // thread state renders as labels (Status:, Next:, Blocked:).
 export function briefStateText(content: string): string {
@@ -874,7 +927,7 @@ export function briefStateText(content: string): string {
 // The role a calling session speaks for, with what the line needs to start:
 // the trust stage, the review backend, and the session's own agent.
 export async function roleForSession(ctx: Ctx, userId: Id<"users">, sessionRef: string): Promise<any | null> {
-  const conv = await findConversationByAnyRefWhere(ctx, sessionRef, async (c: any) => (await checkConversationAccess(ctx, userId, c)) !== null);
+  const conv = await callerSession(ctx, userId, sessionRef);
   const roleId = conv?.standing_role_id ?? conv?.org_role_id;
   if (!conv || !roleId) return null;
   const role = await ctx.db.get(roleId);
@@ -909,11 +962,11 @@ export const restart = mutation({
 });
 export const setTrust = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), trust: v.string(), from_session: v.optional(v.string()) },
-  handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const setCaps = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), hands: v.optional(v.number()), wakes: v.optional(v.number()), tokens: v.optional(v.number()), from_session: v.optional(v.string()) },
-  handler: async (ctx, { api_token, ...args }) => performSetCaps(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, ...args }) => performSetCaps(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const wake = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), message: v.string(), from_session: v.optional(v.string()) },

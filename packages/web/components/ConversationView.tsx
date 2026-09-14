@@ -13860,17 +13860,18 @@ const ConversationViewInner = (
   const cachedUserMessages = useInboxStore(
     (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
   );
-  // Escape in an empty composer interrupts the agent. Only forward it while the
-  // agent is provably mid-turn: an idle session has nothing to interrupt, and a
-  // message still pending delivery is the dangerous case. On 2026-08-28 an
-  // Escape pressed seconds after send reached the daemon 400ms after it had
-  // injected that message and cancelled the turn the message had just started.
+  // Escape in an empty composer interrupts the agent. Every press on an owned,
+  // active conversation is forwarded and paints the "user interrupted" line at
+  // once (convCommand's optimistic branch). The web does NOT judge whether the
+  // agent is mid-turn: its live status is a windowed overlay that goes stale,
+  // and a press dropped on a stale "idle" never reached the agent at all. The
+  // daemon holds the facts and decides (cli/src/escapeInterrupt.ts); the press
+  // time rides along so an Escape aimed at the previous turn cannot cancel the
+  // one a queued message started after the press (the 2026-08-28 race).
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    const liveAgentStatus = useInboxStore.getState().sessions[convexConvId]?.agent_status as LiveAgentStatus | undefined;
-    if (!isActiveAgentStatus(liveAgentStatus)) return;
     setUserScrolled(false);
-    void convCommand(convexConvId, "sendEscapeToSession").catch((err) => {
+    void convCommand(convexConvId, "sendEscapeToSession", { pressed_at: Date.now() }).catch((err) => {
         if (isParkedDispatchError(err)) {
           toast.info("Escape queued — it will send when the connection recovers");
           return;

@@ -70,10 +70,11 @@ export function NativeBackend({
   const live = available ? pane : null;
   const [failed, setFailed] = useState<string | null>(null);
 
-  // Read inside the measure loop, which must not be re-created on every
-  // change: a new loop means a new rAF chain and a dropped frame of tracking.
-  const visible = useRef(true);
-  visible.current = focused;
+  // Focus is NOT a reason to hide. In a split, the pane beside the one being
+  // typed into is still on screen, and reading a page while writing next to
+  // it is the point of putting it there. Visibility is only "does the pane
+  // have area": a tab that is not the visible one is display:none, so its rect
+  // is empty and the check below hides the view without being told.
   const lastSent = useRef<string>("");
 
   const measure = useCallback(() => {
@@ -82,7 +83,6 @@ export function NativeBackend({
     const r = el.getBoundingClientRect();
     const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
     const show =
-      visible.current &&
       r.width > 0 &&
       r.height > 0 &&
       (typeof document === "undefined" || !document.hidden) &&
@@ -128,6 +128,9 @@ export function NativeBackend({
         url,
         rect: r ? { x: r.left, y: r.top, width: r.width, height: r.height } : undefined,
         visible: false,
+        // The offering session, so the shell's pane registry names who may
+        // drive this view from `cast browser` (lib/browserPane.ts).
+        session: source.kind === "url" ? source.session : undefined,
       })
       .then((answer) => {
         if (!mounted) return;
@@ -152,7 +155,8 @@ export function NativeBackend({
       lastSent.current = "";
     };
     // onTitle/onState are stable callbacks from the pane; the view is created
-    // per address, and a new address is a new page.
+    // per address, and a new address is a new page. The session rides the
+    // same route as the address, so it changes only when the address does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, paneId, url]);
 

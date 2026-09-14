@@ -202,11 +202,14 @@ export default defineSchema({
     // Sync backlog reported on each heartbeat. Lets the web show a "sync
     // stalled" warning while the daemon is alive but data isn't flowing.
     // count = logical ops (per-conversation), messages/conversations = honest
-    // backlog depth, oldest_pending_ms = how far behind the oldest queued item.
+    // backlog depth, oldest_pending_ms = how far behind the oldest queued item,
+    // sync_no_progress_ms = how long the queue has completed nothing. An old
+    // head with recent progress is a backlog draining in order, not a stall.
     daemon_pending_sync_count: v.optional(v.number()),
     daemon_oldest_pending_ms: v.optional(v.number()),
     daemon_pending_sync_messages: v.optional(v.number()),
     daemon_pending_sync_conversations: v.optional(v.number()),
+    daemon_sync_no_progress_ms: v.optional(v.number()),
     // Daemon boot time and ms its event loop was blocked in the last minute —
     // last-writer across machines, like daemon_last_seen. The web reads the
     // per-device twins on `devices` first and falls back to these only when a
@@ -302,6 +305,12 @@ export default defineSchema({
     // Opt-in features; default off. Enforced server-side at each feature's
     // access chokepoint (teamFeatures.requireTeamFeature), hidden client-side.
     features: v.optional(teamFeaturesValidator),
+    // The one team whose "community" chat channels are the product's public
+    // space (codecast.sh/community). Set by an operator
+    // (chat.designateCommunityTeam), never by a team's own members: the flag
+    // lets this team's admins publish rooms to every visitor, which no team
+    // may grant itself.
+    community: v.optional(v.boolean()),
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
@@ -2036,6 +2045,7 @@ export default defineSchema({
     oldest_pending_ms: v.optional(v.number()),
     pending_sync_messages: v.optional(v.number()),
     pending_sync_conversations: v.optional(v.number()),
+    sync_no_progress_ms: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
     // Set when work was queued for a REMOTE device that is offline (a cloud
     // host that put itself to sleep). The configured server waker or a local
@@ -5303,10 +5313,17 @@ export default defineSchema({
     // (docs/architecture/agent-channels.md C1): same access as "public", the
     // people in it default to notify level "mentions", agents are capped per
     // day (chat_agent_quota).
-    kind: v.optional(v.union(v.literal("public"), v.literal("private"), v.literal("dm"), v.literal("agents"))),
+    // "community" is the public face of the product: readable by anyone,
+    // signed in or not, and writable by every signed-in codecast user, member
+    // of the routing team or not. Only the one team flagged `community` may
+    // hold one (createChannel), and only its admins may open, rename or
+    // archive one — every other member of the public is a poster, never a
+    // manager. Listed by `by_kind_name` because the audience has no team.
+    kind: v.optional(v.union(v.literal("public"), v.literal("private"), v.literal("dm"), v.literal("agents"), v.literal("community"))),
     // ACCESS, workspaceKey-shaped: "team:<id>" for public, "restricted:<own id>"
-    // for private/dm. Stamped so the workspace redesign's predicate can adopt
-    // chat without a migration; chat's own gate is canAccessChannel.
+    // for private/dm, "public" for community. Stamped so the workspace
+    // redesign's predicate can adopt chat without a migration; chat's own gate
+    // is canAccessChannel.
     workspace: v.optional(v.string()),
     // Sorted member ids joined with ":" — the openDm idempotency key, so opening
     // the same conversation twice finds the same room. Set only when kind="dm".
@@ -5328,7 +5345,10 @@ export default defineSchema({
     // Prefix-matches serve "every channel in this team", so no separate by_team.
     .index("by_team_name", ["team_id", "name"])
     .index("by_client_id", ["client_id"])
-    .index("by_dm_key", ["dm_key"]),
+    .index("by_dm_key", ["dm_key"])
+    // The community rail: every channel the public can read, with no team to
+    // key on. Nothing else queries by kind.
+    .index("by_kind_name", ["kind", "name"]),
 
   // Who is inside a private channel or DM — the session_owners shape: one row
   // per (channel, member), provenance on the row, membership checked on

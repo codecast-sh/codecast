@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CdpConnection, cdpHttpUrl, listTargets, type CdpEndpoint } from "./cdp.js";
-import { engineSession, engineStateDir, isRealSession } from "./engine.js";
+import { engineSession, engineStateDir, isPaneSession, isRealSession } from "./engine.js";
+import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
 import { grantTab } from "./bridge/host.js";
@@ -25,6 +26,21 @@ export function readBoundTarget(session: string, stateDir = engineStateDir()): s
     return typeof t?.targetId === "string" && t.targetId ? t.targetId : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Mark the binding as the one being driven now. The watch server follows the
+ * most recently pinned binding across a session's browsers (watchSource.ts
+ * resolveEngineTab); the engine writes a binding once, so without this a
+ * session that moved back from its desktop pane to its Chrome tab would keep
+ * streaming the pane.
+ */
+export function touchBoundTarget(session: string, stateDir = engineStateDir(), now = new Date()): void {
+  try {
+    fs.utimesSync(path.join(stateDir, `${session}.target`), now, now);
+  } catch {
+    /* no binding yet: the engine writes one at attach */
   }
 }
 
@@ -57,8 +73,10 @@ export async function targetLiveness(endpoint: CdpEndpoint, targetId: string, ti
 /** The browser a session's pinned tab lives in, and how to create it there. */
 export interface PinnedTabBrowser {
   endpoint: CdpEndpoint;
-  /** `Target.createTarget` params: always a background tab, never a raise. */
-  create: Record<string, unknown>;
+  /** `Target.createTarget` params: always a background tab, never a raise.
+   *  Null for a browser where this CLI may not create anything: the desktop
+   *  app, whose panes only the human opens (desktopPane.ts). */
+  create: Record<string, unknown> | null;
 }
 
 /**
@@ -70,6 +88,12 @@ export interface PinnedTabBrowser {
  * courtesy and never starts one.
  */
 export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowser | null> {
+  if (isPaneSession(session)) {
+    // The binding itself is written by desktopPaneCtx, to the pane's exact
+    // target; this only says where that target lives.
+    const reg = liveDesktopPaneRegistry();
+    return reg ? { endpoint: reg.port, create: null } : null;
+  }
   if (isRealSession(session)) {
     // Named on the socket, so the host files the tab under this session and
     // lets only this session's engine discover it.
@@ -109,6 +133,7 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
       return false;
     }
   }
+  if (!browser.create) throw new Error("this session's desktop pane is gone — offer one with `cast browser pane <url>` and wait for the human to open it; an agent never opens a pane itself");
   if (!url) throw new Error("this session has no open page; use `cast browser open <url>` first. No blank tab was created.");
 
   const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);

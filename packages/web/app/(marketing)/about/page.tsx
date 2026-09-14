@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SITE_LINKS } from "@/lib/siteLinks";
 import { Logo } from "@/components/Logo";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
@@ -68,7 +69,7 @@ export default function AboutPage() {
               <ul className="space-y-2 text-sm text-[#657b83]">
                 <li><a href="https://github.com/codecast-sh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
                 <li><a href="https://x.com/codecastsh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Twitter</a></li>
-                <li><a href="https://discord.gg/S7V5Wnfq" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Discord</a></li>
+                <li><a href={SITE_LINKS.discord} className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Discord</a></li>
               </ul>
             </div>
           </div>
