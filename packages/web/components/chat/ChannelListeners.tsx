@@ -6,7 +6,8 @@ import { Bot, Check } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { orgRoleHref } from "../../lib/remarkChatMentions";
-import type { OrgRole, OrgTree } from "../org/orgTypes";
+import { channelListeners, orgRolesListenSig } from "../../lib/chatListeners";
+import type { OrgTree } from "../org/orgTypes";
 import "./chat.css";
 
 // "listening: N roles" — the channel header's account of which org roles read
