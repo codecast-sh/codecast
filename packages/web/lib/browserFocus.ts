@@ -19,7 +19,9 @@
 import type { ConvexReactClient } from "convex/react";
 import { getTerminalEndpoint, termHttpBase, type TerminalEndpoint } from "./terminal/endpoint";
 
-const FOCUS_REQUEST_TIMEOUT_MS = 15_000;
+// Outlasts the daemon's own patience with a busy bridge (focusHttp.ts
+// BRIDGE_FOCUS_TIMEOUT_MS, 30s) so a slow answer is still an answer.
+const FOCUS_REQUEST_TIMEOUT_MS = 40_000;
 // An open can start the bridge host, navigate, and carry logins.
 const REOPEN_REQUEST_TIMEOUT_MS = 75_000;
 
