@@ -12,7 +12,13 @@
 //   /browser?u=<url>&native=1   the user asked for the native view (desktop)
 
 export type BrowserSource =
-  | { kind: "url"; url: string }
+  // `session` is the agent session the page was offered by (the chip on the
+  // session header, ct-51075). It rides the path as `s=` so the desktop's
+  // native view can record who the pane is for: that is what lets that
+  // session's `cast browser` find and drive this exact view over the app's
+  // CDP port (packages/electron/browserPanes.js). A pane the human opened by
+  // hand has none, and no agent may claim it.
+  | { kind: "url"; url: string; session?: string }
   | { kind: "watch"; sessionUuid: string };
 
 export type BrowserBackendKind = "frame" | "stream" | "native";
@@ -323,9 +329,9 @@ export function readPaneMessage(
     // gesture would have built unframed, so a pane already showing it is
     // focused rather than doubled.
     const url = source?.kind === "url" ? source.url : null;
-    return typeof url === "string" && /^https?:\/\//i.test(url) && normalizeUrl(url)
-      ? { type: "codecast:open-pane", source: { kind: "url", url } }
-      : null;
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url) || !normalizeUrl(url)) return null;
+    const session = typeof source?.session === "string" && source.session ? source.session : undefined;
+    return { type: "codecast:open-pane", source: session ? { kind: "url", url, session } : { kind: "url", url } };
   }
   return null;
 }
@@ -411,7 +417,9 @@ export function parseBrowserRoute(path: string): BrowserSource | null {
   const u = params.get("u");
   if (!u) return null;
   const url = normalizeUrl(u);
-  return url ? { kind: "url", url } : null;
+  if (!url) return null;
+  const session = params.get("s");
+  return session ? { kind: "url", url, session } : { kind: "url", url };
 }
 
 /** True when this path asked for the native view (the user chose it). */
@@ -425,7 +433,10 @@ export function prefersNativeRoute(path: string): boolean {
 export function browserRoutePath(source: BrowserSource, opts?: { native?: boolean }): string {
   const params = new URLSearchParams();
   if (source.kind === "watch") params.set("watch", source.sessionUuid);
-  else params.set("u", source.url);
+  else {
+    params.set("u", source.url);
+    if (source.session) params.set("s", source.session);
+  }
   if (opts?.native) params.set("native", "1");
   return `${BROWSER_ROUTE}?${params.toString()}`;
 }

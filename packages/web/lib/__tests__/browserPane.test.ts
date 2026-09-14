@@ -87,6 +87,15 @@ describe("parseBrowserRoute / browserRoutePath", () => {
     expect(parseBrowserRoute(path)).toEqual({ kind: "watch", sessionUuid: "abc-123" });
   });
 
+  it("carries the offering session on the path, and only when there is one", () => {
+    const path = browserRoutePath({ kind: "url", url: "http://localhost:8765/", session: "509b4b48-c521-4352-bf19-eafa153745bb" });
+    expect(path).toBe("/browser?u=http%3A%2F%2Flocalhost%3A8765%2F&s=509b4b48-c521-4352-bf19-eafa153745bb");
+    expect(parseBrowserRoute(path)).toEqual({ kind: "url", url: "http://localhost:8765/", session: "509b4b48-c521-4352-bf19-eafa153745bb" });
+    // A pane the human opened by hand names no session: nothing may drive it.
+    expect(parseBrowserRoute("/browser?u=http%3A%2F%2Flocalhost%3A8765%2F")).toEqual({ kind: "url", url: "http://localhost:8765/" });
+    expect(browserRoutePath({ kind: "url", url: "http://localhost:8765/" })).not.toContain("s=");
+  });
+
   it("carries the native choice in the path so it survives a reload", () => {
     const path = browserRoutePath({ kind: "url", url: "https://github.com/" }, { native: true });
     expect(prefersNativeRoute(path)).toBe(true);
