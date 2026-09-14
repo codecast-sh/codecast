@@ -67,6 +67,33 @@ describe("file path mentions in prose", () => {
 });
 
 describe("hrefs", () => {
+  test("authored absolute Markdown destinations carry their line into Files", () => {
+    expect(parseFilePathHref("/Users/ashot/.codex/AGENTS.md:1042")).toEqual({
+      path: "/Users/ashot/.codex/AGENTS.md", line: 1042,
+    });
+    expect(parseFilePathHref("/home/ashot/project/main.ts:12:4")).toEqual({ path: "/home/ashot/project/main.ts", line: 12 });
+    expect(parseFilePathHref("/tmp/report.md:12-20")).toEqual({ path: "/tmp/report.md", line: 12 });
+    expect(parseFilePathHref("/Users/ashot/.codex/AGENTS.md")).toEqual({ path: "/Users/ashot/.codex/AGENTS.md" });
+  });
+
+  test("file destinations decode spaces once and preserve filename characters", () => {
+    expect(parseFilePathHref("/Users/ashot/My%20Project/My%20Report.md:3")).toEqual({ path: "/Users/ashot/My Project/My Report.md", line: 3 });
+    expect(parseFilePathHref("/Users/ashot/My Project/My Report.md:3")).toEqual({ path: "/Users/ashot/My Project/My Report.md", line: 3 });
+    expect(parseFilePathHref("/tmp/C++ & notes%23%3F.md:9")).toEqual({ path: "/tmp/C++ & notes#?.md", line: 9 });
+    expect(parseFilePathHref("/tmp/100%25%20ready%2520.md")).toEqual({ path: "/tmp/100% ready%20.md" });
+    expect(parseFilePathHref("/tmp/notes%3A12")).toEqual({ path: "/tmp/notes:12" });
+  });
+
+  test("web URLs and app routes never become filesystem destinations", () => {
+    for (const href of [
+      "https://example.com/Users/ashot/AGENTS.md:1042",
+      "//example.com/Users/ashot/AGENTS.md:1042",
+      "/tasks/ct-12", "/org/or-7", "/files?f=notes.md&l=3", "/a/report",
+      "/UsersGuide/page.md", "/Users/profile?tab=files", "/Users/profile#bio",
+      "#section", "mailto:ashot@example.com", "javascript:alert(1)", undefined,
+    ]) expect(parseFilePathHref(href)).toBeNull();
+  });
+
   test("without context the raw path rides in ?path=", () => {
     expect(filePathHref("lib/x.ts", 12, null)).toBe("/files?path=lib%2Fx.ts&l=12");
     expect(parseFilePathHref("/files?path=lib%2Fx.ts&l=12")).toEqual({ path: "lib/x.ts", line: 12 });

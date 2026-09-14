@@ -599,10 +599,28 @@ export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: st
 function takeOverBoot(): void {
   (window as any)[HANDOFF_PENDING_FLAG] = true;
   showHandoffScreen({ booted: false });
-  // Yield to the parser so the escape-hatch markup is in the DOM before the
-  // protocol launch interrupts the load. The document is a few kilobytes, so
-  // this costs about a millisecond.
-  setTimeout(() => openDesktop({ auto: true }), 0);
+  // Starting the protocol navigation stops the parser, and this runs from the
+  // top of <head>: launched on a zero-delay timer, the screen markup at the end
+  // of <body> was usually never parsed and the tab stayed blank.
+  afterDocumentParsed(() => openDesktop({ auto: true }));
+}
+
+/**
+ * Run `fn` once the parser has finished the document, or on the next task if
+ * it already has. Keyed on readyState leaving "loading", which happens before
+ * deferred module scripts run, so the app entry is never waited on.
+ */
+export function afterDocumentParsed(fn: () => void): void {
+  if (document.readyState !== "loading") {
+    setTimeout(fn, 0);
+    return;
+  }
+  const onChange = () => {
+    if (document.readyState === "loading") return;
+    document.removeEventListener("readystatechange", onChange);
+    fn();
+  };
+  document.addEventListener("readystatechange", onChange);
 }
 
 function preloadApp(urls: string[]): void {

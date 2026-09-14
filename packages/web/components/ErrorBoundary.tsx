@@ -3,7 +3,9 @@ import { RefreshCw } from "lucide-react";
 import { captureError } from "@/lib/analytics";
 import { describeError, errorSummary, rootError } from "@/lib/errorCause";
 import { showErrorToast } from "@/lib/errorToast";
-import { RELOAD_COUNT_KEY, MAX_AUTO_RELOADS } from "../lib/chunkReloadGuard";
+import { RELOAD_COUNT_KEY, MAX_AUTO_RELOADS, isChunkLoadError } from "../lib/chunkReloadGuard";
+import { isCallPanelWindow } from "@/lib/desktop";
+import { scheduleVoiceHostReload } from "../lib/voiceHostRecovery";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -19,26 +21,6 @@ interface ErrorBoundaryState {
   error: Error | null;
   showDetails: boolean;
   isChunk: boolean;
-}
-
-// Narrowly-scoped: errors that mean "the JS the browser has is incompatible
-// with what the server is serving" — typically a stale tab whose chunk hashes
-// no longer exist after a deploy, or a Vite dev-server HMR boundary failure.
-// Generic TypeErrors ("is not a function", "Cannot read properties of undefined")
-// are NOT included: they are ordinary code bugs, and auto-reloading on them
-// hides the real failure and produces the "needs multiple reloads to load"
-// symptom (the throttle then suppresses subsequent reloads, leaving a blank app).
-const CHUNK_LOAD_ERROR_PATTERNS = [
-  "Failed to fetch dynamically imported module",
-  "Importing a module script failed",
-  "error loading dynamically imported module",
-  "ChunkLoadError",
-  "Loading chunk",
-  "Loading CSS chunk",
-];
-
-function isChunkLoadError(msg: string): boolean {
-  return !!msg && CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
 }
 
 const _recentErrors = new Set<string>();
@@ -67,6 +49,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       const fullTrace = `${describeError(error)}\n\nComponent: ${label}${info.componentStack || ""}`;
       showErrorToast(`${label}: ${summary}`, fullTrace);
+    }
+
+    // The shell's voice window has nobody in it to press Retry: it reloads
+    // itself, backed off, whatever the error (lib/voiceHostRecovery).
+    if (isCallPanelWindow()) {
+      scheduleVoiceHostReload();
+      return;
     }
 
     if (isChunkLoadError(summary)) {
