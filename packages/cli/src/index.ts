@@ -4,7 +4,6 @@ import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
-import { planForkFanout } from "./forkFanout.js";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
@@ -65,7 +64,7 @@ import {
 } from "@codecast/shared/tasks";
 import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@codecast/shared/time";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
-import { matchOrgTarget, type OrgTarget } from "./orgTarget.js";
+import type { OrgTarget } from "./orgTarget.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -11030,6 +11029,8 @@ program
     // nobody to report back to. With two or more directions this thread takes
     // the first itself (planForkFanout) — the roster below tells the agent to
     // continue with it in place.
+    // Loaded inside the one action that plans a fan-out (boot graph guard).
+    const { planForkFanout } = await import("./forkFanout.js");
     const fanout = planForkFanout(directions, { allBranches: !!options.allBranches });
     if (options.cloud && directions.length === 0) {
       console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
@@ -12974,6 +12975,8 @@ function orgSessionLine(s: any): string {
   return `      ${c.dim}${s.short_id ?? String(s._id).slice(0, 7)}${c.reset} ${s.title || "(untitled)"} ${c.dim}· ${s.work_state}${s.subagent_count ? ` · ${s.subagent_count} subagents` : ""}${c.reset}`;
 }
 async function resolveOrgTarget(ref: string, ws: Workspace): Promise<OrgTarget> {
+  // Loaded inside the org verbs that resolve a target (boot graph guard).
+  const { matchOrgTarget } = await import("./orgTarget.js");
   const target = matchOrgTarget(await cliPost("/cli/org/tree", workspaceArgs(ws)), ref);
   if (target) return target;
   console.error(`No role or person matches "${ref}" in ${workspaceLabel(ws)}.`);

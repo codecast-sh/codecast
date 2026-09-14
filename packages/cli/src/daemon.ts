@@ -310,7 +310,6 @@ import {
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import { definitionLaunchFragment } from "./agentLaunch.js";
 import type { AgentClientId, AgentDefinitionSpec, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
@@ -5339,6 +5338,8 @@ async function executeRemoteCommand(
           // Tool flags are shell-escaped (deny rules carry parens and `*`) and
           // the prompt rides a 0600 file through `$(cat …)`, both appended
           // after the allowlist exactly like grok's rules fragment.
+          // Loaded inside the one command that launches from a definition (boot graph guard).
+          const { definitionLaunchFragment } = await import("./agentLaunch.js");
           const frag = definitionLaunchFragment(requestedDefinition, agentType, {
             dir: path.join(CONFIG_DIR, "agent-prompts"),
             key: conversationId || `launch-${Date.now()}`,

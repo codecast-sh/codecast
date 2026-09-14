@@ -37,7 +37,7 @@ import {
 } from "../terminal/terminalServer.js";
 import { readBody } from "../vault/vaultServer.js";
 import { ownerCandidates, tmuxPaneId } from "./watchServer.js";
-import { reopenBrowserTab, type ReopenDeps } from "./reopenTab.js";
+import type { ReopenDeps } from "./reopenTab.js";
 
 /** Why a focus request could not be honored; the web treats them all the same
  *  (fall back to opening the URL) but the distinction keeps logs debuggable. */
@@ -328,6 +328,8 @@ export function handleBrowserFocusHttp(
         },
         tmuxPaneId,
       );
+      // Loaded on the reopen route only (boot graph guard).
+      const { reopenBrowserTab } = await import("./reopenTab.js");
       const result = await reopenBrowserTab({ url: pageUrl, candidates }, deps.reopen);
       if (!result.ok) {
         opts.log(`[BROWSER] Could not reopen ${pageUrl}: ${result.reason}${result.detail ? ` (${result.detail})` : ""}`);
