@@ -78,7 +78,7 @@ export class FakeExtension {
   }
 
   /** Dial and handshake. Rejects when the host cannot prove it holds the token. */
-  async connect(port: number): Promise<this> {
+  async connect(port: number, hello: Record<string, unknown> = {}): Promise<this> {
     this.ws = await dial(port, "/ext", { origin: "chrome-extension://fakeextensionid" });
     const nonce = randomNonce();
     const welcome = new Promise<any>((resolve, reject) => {
@@ -93,6 +93,7 @@ export class FakeExtension {
         version: "9.9.9",
         protocol: BRIDGE_PROTOCOL,
         userAgent: "FakeChrome/1",
+        ...hello,
       }),
     );
     const w = await welcome;
@@ -103,6 +104,10 @@ export class FakeExtension {
     this.ws.on("message", (raw) => {
       const m = JSON.parse(String(raw));
       if (m.op === "ping") return;
+      if (m.op === "pong") {
+        this.seen.push(m);
+        return;
+      }
       this.seen.push(m);
       const reply = (extra: any) => this.ws.send(JSON.stringify({ id: m.id, ok: true, ...extra }));
       switch (m.op) {

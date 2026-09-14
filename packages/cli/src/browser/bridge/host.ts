@@ -56,12 +56,12 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer, WebSocket } from "ws";
-import { spawn } from "../../proc.js";
+import { spawn, spawnSync } from "../../proc.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import type { CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 
@@ -192,7 +192,14 @@ export function bridgeWsUrl(state: ProvenBridge): string {
   return `ws://127.0.0.1:${state.port}/devtools/browser/${state.token}`;
 }
 
-export type HostProbe = "alive" | "impostor" | "down";
+/**
+ * What a probe of the bridge port found. "busy" is a port that accepted the
+ * connection but did not answer in time: something is listening, and on a
+ * loaded machine that something is usually our own host with a starved
+ * event loop. It is not "down" — a caller that spawned a second host on a
+ * busy port only crashed it against EADDRINUSE (144 times in one log).
+ */
+export type HostProbe = "alive" | "impostor" | "down" | "busy";
 
 /**
  * What answers on the bridge port: a host that proved it holds our token, a
@@ -207,8 +214,9 @@ export async function probeHost(state: Pick<BridgeState, "port" | "token">, time
     const res = await fetch(`http://127.0.0.1:${state.port}/healthz?nonce=${nonce}`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return "down";
     body = await res.text();
-  } catch {
-    return "down";
+  } catch (err) {
+    const name = (err as { name?: unknown } | null)?.name;
+    return name === "TimeoutError" || name === "AbortError" ? "busy" : "down";
   }
   if (!body.startsWith("cast-bridge")) return "down";
   const proof = /\bproof=([0-9a-f]{64})\b/.exec(body)?.[1];
@@ -228,8 +236,26 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
     probe === "impostor"
       ? `something on 127.0.0.1:${state.port} answers like a bridge host but cannot prove it holds the token — ` +
           `stop it, or set CAST_BRIDGE_PORT to move the bridge`
-      : `no bridge host is answering on 127.0.0.1:${state.port}`,
+      : probe === "busy"
+        ? `the bridge host on 127.0.0.1:${state.port} did not answer within ${Math.round(timeoutMs / 1000)}s — the machine is busy; try again`
+        : `no bridge host is answering on 127.0.0.1:${state.port}`,
   );
+}
+
+/**
+ * A probe with patience for a busy host: re-asked, with a longer timeout
+ * each time, until it answers or `budgetMs` runs out. A refusal ("down") is
+ * final at once — nothing is listening, waiting would not change that.
+ */
+export async function probeHostPatiently(state: Pick<BridgeState, "port" | "token">, budgetMs = 15_000): Promise<HostProbe> {
+  const deadline = Date.now() + budgetMs;
+  let timeout = 1200;
+  let probe = await probeHost(state, timeout);
+  while (probe === "busy" && Date.now() < deadline) {
+    timeout = Math.min(timeout * 2, Math.max(300, deadline - Date.now()));
+    probe = await probeHost(state, timeout);
+  }
+  return probe;
 }
 
 /** The host's own stdout and stderr. Append-only, so a host that died says why. */
@@ -265,26 +291,78 @@ const respawnDetached: BridgeHostStarter = () => {
  * separate process. An impostor on the port is named rather than raced: a
  * host we start could not bind anyway.
  */
-export async function ensureBridgeHost(start: BridgeHostStarter = respawnDetached): Promise<ProvenBridge & { started: boolean }> {
+export async function ensureBridgeHost(
+  start: BridgeHostStarter = respawnDetached,
+  deps: { staleHostPids?: (port: number) => number[]; kill?: (pid: number) => void } = {},
+): Promise<ProvenBridge & { started: boolean }> {
   const state = ensureBridgeConfig();
-  const probe = await probeHost(state);
+  // Patient on purpose: a host whose loop is starved on a loaded machine
+  // reads as "busy", and the right move is to wait for it, never to spawn a
+  // second one against its port.
+  let probe = await probeHostPatiently(state);
   if (probe === "alive") return { ...state, proven: true, started: false };
-  if (probe === "impostor") return { ...(await proveBridgeHost(state)), started: false };
+  if (probe === "impostor") {
+    // A bridge host of ours that holds another token: left behind by a
+    // config this machine no longer has (a removed state file, a test that
+    // ran against the real home, a second CODECAST_DIR on the default port).
+    // It is our own program on our own port, so it is stopped and replaced
+    // rather than reported for a person to hunt down. Anything else on the
+    // port is not ours to touch and is named as before.
+    const stale = (deps.staleHostPids ?? bridgeHostPidsOnPort)(state.port);
+    if (!stale.length) return { ...(await proveBridgeHost(state)), started: false };
+    for (const pid of stale) {
+      try {
+        (deps.kill ?? ((p) => process.kill(p, "SIGTERM")))(pid);
+      } catch {}
+    }
+    const gone = Date.now() + 5_000;
+    while (Date.now() < gone && (await probeHost(state, 500)) !== "down") await sleep(150);
+    probe = await probeHost(state, 500);
+    if (probe !== "down") return { ...(await proveBridgeHost(state)), started: false };
+  } else if (probe !== "down") {
+    return { ...(await proveBridgeHost(state)), started: false };
+  }
 
   await start(state);
 
   // Generous on purpose: run from source, the detached host is a fresh bun
   // parsing the whole CLI, which on a loaded machine takes longer than the
-  // host itself needs to bind.
-  const deadline = Date.now() + 15_000;
+  // host itself needs to bind; and a host that has bound but answers late
+  // ("busy") is up, not absent. Each probe gets a few seconds, so a late
+  // answer still counts within the budget.
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (await isHostAlive(state, 500)) return { ...(readBridgeState() ?? state), proven: true, started: true };
-    await sleep(150);
+    const p = await probeHost(state, 3_000);
+    if (p === "alive") return { ...(readBridgeState() ?? state), proven: true, started: true };
+    if (p === "impostor") return { ...(await proveBridgeHost(state)), started: false };
+    if (p === "down") await sleep(150);
   }
   throw new Error(
-    `the bridge host did not come up on 127.0.0.1:${state.port} — ` +
-      `is another process on that port? Set CAST_BRIDGE_PORT to move it.`,
+    `the bridge host did not come up on 127.0.0.1:${state.port} within 30s — ` +
+      `its log is ${bridgeHostLogPath()}; is another process on that port? Set CAST_BRIDGE_PORT to move it.`,
   );
+}
+
+/**
+ * Pids of `cast … browser bridge-host` processes listening on the port: our
+ * own program, whichever config it was started from. `lsof` on macOS and
+ * Linux; a machine without it reports none, and the impostor is then named
+ * rather than stopped.
+ */
+export function bridgeHostPidsOnPort(port: number): number[] {
+  const out: number[] = [];
+  try {
+    const listing = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf-8", timeout: 5_000 }).stdout ?? "";
+    for (const line of listing.split("\n")) {
+      const pid = parseInt(line.trim(), 10);
+      if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) continue;
+      const cmd = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf-8", timeout: 3_000 }).stdout ?? "";
+      if (/\bbrowser bridge-host\b/.test(cmd)) out.push(pid);
+    }
+  } catch {
+    /* no lsof, or it timed out: nothing is stopped */
+  }
+  return out;
 }
 
 export function stopBridgeHost(): boolean {
@@ -341,11 +419,28 @@ export async function reloadExtension(state: ProvenBridge): Promise<void> {
  * then every 30 s), so a caller that just started the host, or just handed
  * the extension a token, asks here instead of declaring it absent at once.
  */
-export async function waitForExtension(state: ProvenBridge, timeoutMs: number): Promise<BridgeHostStatus> {
+export async function waitForExtension(
+  state: ProvenBridge,
+  timeoutMs: number,
+  opts: { note?: (line: string) => void; noteAfterMs?: number } = {},
+): Promise<BridgeHostStatus> {
   const deadline = Date.now() + timeoutMs;
+  const noteAt = Date.now() + (opts.noteAfterMs ?? 2_000);
+  let noted = false;
+  let last: BridgeHostStatus = { extensionConnected: false };
   for (;;) {
-    const status = await bridgeStatus(state);
-    if (status.extensionConnected || Date.now() >= deadline) return status;
+    try {
+      last = await bridgeStatus(state);
+    } catch (err) {
+      // A host too busy to answer /status in time is not an absent
+      // extension; the question is asked again until the budget is spent.
+      if (Date.now() >= deadline) throw err;
+    }
+    if (last.extensionConnected || Date.now() >= deadline) return last;
+    if (!noted && opts.note && Date.now() >= noteAt) {
+      noted = true;
+      opts.note(`waiting for the Chrome extension to reconnect (up to ${Math.round(timeoutMs / 1000)}s)…`);
+    }
     await sleep(250);
   }
 }
@@ -385,7 +480,17 @@ interface PendingExt {
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
 /** How long a fresh extension socket may stay silent before its hello is due. */
-const HELLO_TIMEOUT_MS = 5_000;
+const HELLO_TIMEOUT_MS = 15_000;
+
+/**
+ * How long the extension may go silent before its socket is declared dead.
+ * The worker pings every 20 s (background.js KEEPALIVE_MS) and answers ours
+ * at the same rate, so three quiet cycles is a worker that is gone while
+ * Chrome's network process still holds the TCP side open: without this,
+ * every command timed out against a socket nobody was reading, and a new
+ * worker's hello sat behind it.
+ */
+const EXTENSION_SILENCE_MS = 65_000;
 
 /** `castGroup` as a client may send it; anything else is treated as absent. */
 function parseGroup(raw: unknown): BridgeGroup | null {
@@ -407,18 +512,23 @@ function cdpError(id: number, message: string, code = -32000) {
 export function startBridgeHost(opts: {
   port: number;
   token: string;
-  /** The extension came (true) or went (false); the host process records it. */
-  onExtension?: (connected: boolean) => void;
+  /** The extension came (true) or went (false); the host process records it.
+   *  `detail` says which worker and why (hello) or how the socket ended (close). */
+  onExtension?: (connected: boolean, detail: string) => void;
   /** The session → tab partition a previous host left behind; pruned against
    *  Chrome's live tabs when the extension connects. */
   sessionTabs?: SessionTabs;
   /** Called with the partition whenever it changes, for the host process to persist. */
   onSessionTabs?: (tabs: SessionTabs) => void;
+  /** Keepalive cadence and the silence after which the extension socket is dropped; tests shorten both. */
+  pingIntervalMs?: number;
+  extensionSilenceMs?: number;
 }): Promise<RunningHost> {
   const { port, token, onExtension, onSessionTabs } = opts;
 
   let ext: WebSocket | null = null;
-  let extMeta: { version?: string; protocol?: number; userAgent?: string } = {};
+  let extHeardAt = 0;
+  let extMeta: { version?: string; protocol?: number; userAgent?: string; boot?: string; bootAt?: number } = {};
   let nextExtId = 1;
   const extPending = new Map<number, PendingExt>();
   const clients = new Set<Client>();
@@ -641,6 +751,7 @@ export function startBridgeHost(opts: {
   };
 
   const onExtMessage = (raw: string): void => {
+    extHeardAt = Date.now();
     let msg: any;
     try {
       msg = JSON.parse(raw);
@@ -655,6 +766,11 @@ export function startBridgeHost(opts: {
     }
     switch (msg.op) {
       case "pong":
+        return;
+      case "ping":
+        // The worker's own keepalive (background.js startKeepalive): traffic
+        // it originates is what Chrome counts, and the answer is traffic too.
+        if (ext) sendJson(ext, { op: "pong" });
         return;
       case "event": {
         // Fan out to every session bound to that tab, stamped with ITS id.
@@ -969,7 +1085,9 @@ export function startBridgeHost(opts: {
    * the current one nor drive anything.
    */
   const adoptExtension = (ws: WebSocket): void => {
-    const hello = setTimeout(() => ws.close(CLOSE_BAD_TOKEN, "no hello"), HELLO_TIMEOUT_MS);
+    // A silent socket is a slow worker, not a wrong token: the code says
+    // "try again", never "re-pair".
+    const hello = setTimeout(() => ws.close(CLOSE_HANDSHAKE_TIMEOUT, "no hello"), HELLO_TIMEOUT_MS);
     ws.on("error", () => {});
     ws.once("message", (raw) => {
       clearTimeout(hello);
@@ -987,13 +1105,31 @@ export function startBridgeHost(opts: {
       // extension does not have to wait out a dead socket's timeout.
       if (ext && ext !== ws) ext.close(1000, "replaced by a newer extension connection");
       ext = ws;
-      extMeta = { version: msg.version, protocol: msg.protocol, userAgent: msg.userAgent };
-      onExtension?.(true);
+      const boot = typeof msg.boot === "string" ? msg.boot : undefined;
+      const bootAt = typeof msg.bootAt === "number" ? msg.bootAt : undefined;
+      const sameWorker = boot !== undefined && boot === extMeta.boot;
+      extMeta = { version: msg.version, protocol: msg.protocol, userAgent: msg.userAgent, boot, bootAt };
+      // Which worker, how old, and why it connected: a new boot id means
+      // Chrome ended the previous worker; the same one means only the
+      // socket dropped.
+      const age = bootAt ? `${Math.round((Date.now() - bootAt) / 1000)}s old` : "age unknown";
+      const recent = Array.isArray(msg.recent) ? msg.recent.filter((r: unknown) => typeof r === "string").slice(-12) : [];
+      extHeardAt = Date.now();
+      onExtension?.(
+        true,
+        `worker ${boot ?? "?"} (${sameWorker ? "same worker, " : ""}${age}) via ${typeof msg.trigger === "string" ? msg.trigger : "?"}, v${msg.version ?? "?"}` +
+          (recent.length ? `; worker notes: ${recent.join(" | ")}` : ""),
+      );
       ws.on("message", (raw) => onExtMessage(String(raw)));
-      ws.on("close", () => {
+      ws.on("close", (code, reason) => {
         if (ext !== ws) return;
         ext = null;
-        onExtension?.(false);
+        // The code is what carries meaning here: 1006 is a socket that died
+        // without a close frame (Chrome ended the worker), 1001 a worker
+        // going away, 1000 our own replacement, 4408 the worker's connect
+        // deadline. The reason text is best effort (bun drops it).
+        const why = String(reason ?? "");
+        onExtension?.(false, `close ${code}${why ? ` ${why}` : ""}`);
         for (const [, p] of extPending) p.reject(new Error("the extension disconnected mid-command — check the cast bridge extension in Chrome"));
         extPending.clear();
         failAllClients("the extension disconnected");
@@ -1056,9 +1192,17 @@ export function startBridgeHost(opts: {
   // Application-level keepalive: protocol pings are invisible to the
   // extension's JavaScript, and it is JS-visible traffic that keeps an MV3
   // service worker alive. 20s sits well inside Chrome's 30s idle teardown.
+  const silenceMs = opts.extensionSilenceMs ?? EXTENSION_SILENCE_MS;
   const pinger = setInterval(() => {
-    if (ext && ext.readyState === WebSocket.OPEN) sendJson(ext, { op: "ping" });
-  }, 20_000);
+    if (!ext || ext.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - extHeardAt > silenceMs) {
+      // terminate, not close: a peer that is not reading will not answer a
+      // close frame either, and the close event is what frees `ext`.
+      ext.terminate();
+      return;
+    }
+    sendJson(ext, { op: "ping" });
+  }, opts.pingIntervalMs ?? 20_000);
 
   return new Promise((resolve, reject) => {
     httpServer.once("error", reject);
@@ -1084,8 +1228,9 @@ export function startBridgeHost(opts: {
 /** The `cast browser bridge-host` entry: run until told to stop. */
 export async function runBridgeHost(): Promise<void> {
   const state = ensureBridgeConfig();
-  if (await isHostAlive(state)) {
-    console.error(`a bridge host is already answering on 127.0.0.1:${state.port}`);
+  const standing = await probeHostPatiently(state);
+  if (standing === "alive" || standing === "busy") {
+    console.error(`a bridge host is already ${standing === "alive" ? "answering" : "listening (busy)"} on 127.0.0.1:${state.port}`);
     process.exit(0);
   }
   // Detached, this process's stderr is bridgeHostLogPath(): the only trace
@@ -1096,18 +1241,29 @@ export async function runBridgeHost(): Promise<void> {
   // of these two fields, and it clears the flag on the way out.
   const owner = { port: state.port, token: state.token, hostPid: process.pid };
   let connectedBefore = false;
-  const record = (connected: boolean): void => {
-    if (connectedBefore !== connected) log(connected ? "extension connected" : "extension disconnected");
+  const record = (connected: boolean, detail = ""): void => {
+    if (connectedBefore !== connected) log(`extension ${connected ? "connected" : "disconnected"}${detail ? `: ${detail}` : ""}`);
     connectedBefore = connected;
     updateBridgeHostState(owner, { extensionConnected: connected, ...(connected ? { extensionSeenAt: Date.now() } : {}) });
   };
-  const host = await startBridgeHost({
-    port: state.port,
-    token: state.token,
-    onExtension: record,
-    sessionTabs: state.sessionTabs,
-    onSessionTabs: (sessionTabs) => { updateBridgeHostState(owner, { sessionTabs }); },
-  });
+  let host: RunningHost;
+  try {
+    host = await startBridgeHost({
+      port: state.port,
+      token: state.token,
+      onExtension: record,
+      sessionTabs: state.sessionTabs,
+      onSessionTabs: (sessionTabs) => { updateBridgeHostState(owner, { sessionTabs }); },
+    });
+  } catch (err) {
+    // Lost the port to a host that bound between the probe and the listen:
+    // that host is the bridge, and this one has nothing to add but noise.
+    if ((err as { code?: string })?.code === "EADDRINUSE") {
+      console.error(`another bridge host bound 127.0.0.1:${state.port} first; leaving it to it`);
+      process.exit(0);
+    }
+    throw err;
+  }
   const current = readBridgeState();
   if (!current || current.port !== state.port || current.token !== state.token) {
     await host.close();
