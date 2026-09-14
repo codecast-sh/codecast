@@ -33,7 +33,16 @@ import { useInboxStore } from "../store/inboxStore";
 import { bridge, isDesktop, isDetachedTabWindow } from "./desktop";
 import { pathLabel, conversationTabPath, inboxTabSessionId } from "./pathLabel";
 import { interceptSettingsNav, isNonTabRoute, shouldUseTabRouting, tabNavigate } from "../src/compat/tabRouting";
-import { openBeside, panePath } from "./stage";
+
+// The stage (lib/stage.ts) is web only: it carries the pane UI and, through it,
+// every route page. The shared store imports this module, and the native app
+// bundles the store, so this module must not import the stage. The stage
+// registers its opener when it loads; a bundle without a stage falls back to
+// navigating, which is what "open beside" means on a screen with one pane.
+let splitOpener: ((path: string) => boolean) | null = null;
+export function registerSplitOpener(open: (path: string) => boolean): void {
+  splitOpener = open;
+}
 
 export type OpenTarget = "tab" | "window" | "split";
 
@@ -132,7 +141,7 @@ export function openIn(target: OpenTarget, path: string): void {
     // (narrow window, pane cap, a route with no pane form) the click still
     // means "go there": navigate the tab instead of dropping the gesture.
     queueMicrotask(() => {
-      if (!openBeside(panePath(path))) navigateHere(path);
+      if (!(splitOpener?.(path) ?? false)) navigateHere(path);
     });
     return;
   }

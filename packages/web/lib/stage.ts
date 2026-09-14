@@ -21,6 +21,7 @@ import { tabNavigate } from "../src/compat/tabRouting";
 import { isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { isDetachedTabWindow } from "./desktop";
+import { registerSplitOpener } from "./openIntent";
 
 // Dynamic on purpose: the tips module drags analytics into any import graph
 // that touches it, and this module sits under TabContent (every tab pays for
@@ -336,3 +337,7 @@ export function tabStageLayout(tab: Pick<AppTab, "layout">): StageNode | null {
 }
 
 export type { DropZone, SplitEdge };
+
+// The "open beside" target (lib/openIntent) is served from here so the store
+// side never imports the stage; see registerSplitOpener.
+registerSplitOpener((path) => openBeside(panePath(path)));

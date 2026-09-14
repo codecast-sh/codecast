@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
 import { leavesOf } from "@/store/stageSplit";
+// The split target is served by the stage, which registers itself on load.
+import "@/lib/stage";
 import {
   beginClickIntent,
   divertNavigation,
