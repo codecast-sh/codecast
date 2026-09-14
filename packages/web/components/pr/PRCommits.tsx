@@ -3,19 +3,24 @@ import { GitCommitHorizontal } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { relTimeShort } from "../../lib/utils";
 import type { PrCommitRow } from "../../lib/prView";
+import type { PRDetailsRead } from "../../hooks/usePRDetails";
+import { PRDetailsFrame } from "./PRDetailsFrame";
 
 // The Commits tab: the head branch, oldest first, as GitHub lists it. Each row
 // is a commit page away; the sha is monospace because that is what a person
 // copies from here.
 
-export function PRCommits({ repository, commits }: { repository: string; commits: PrCommitRow[] | undefined }) {
+export function PRCommits({ repository, commits, read }: { repository: string; commits: PrCommitRow[] | undefined; read?: PRDetailsRead }) {
+  return <PRDetailsFrame read={read} hasRows={!!commits?.length} label="Commits"><CommitRows repository={repository} commits={commits} /></PRDetailsFrame>;
+}
+
+function CommitRows({ repository, commits }: { repository: string; commits: PrCommitRow[] | undefined }) {
   const rows = commits ?? [];
   if (rows.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 px-8 text-center">
         <GitCommitHorizontal className="w-8 h-8 text-sol-text-dim/40" />
-        <p className="text-[13px] text-sol-text-muted">No commits have been read for this pull request yet</p>
-        <p className="text-[12px] text-sol-text-dim max-w-sm">They arrive with the next push, or with the files when the pull request is next synced.</p>
+        <p className="text-[13px] text-sol-text-muted">{commits ? "No commits on this pull request" : "Commits have not loaded yet"}</p>
       </div>
     );
   }

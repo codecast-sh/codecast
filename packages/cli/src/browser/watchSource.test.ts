@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { engineSessionKey, realSessionKey } from "./engine.js";
+import { engineSessionKey, paneSessionKey, realSessionKey } from "./engine.js";
 import { cdpWatchEngine, resolveEngineTab, type CdpEngineDeps } from "./watchSource.js";
 import type { InstanceState } from "./instance.js";
 
@@ -90,5 +90,44 @@ describe("cdpWatchEngine with the bridge", () => {
   test("the built-in driver's own claim still wins when the engine pinned nothing", () => {
     const engine = cdpWatchEngine(deps({ getState: () => ({ ...cloneState(), tabsBySession: { [OWNER]: "OWNED" } }) }));
     expect(engine.resolveTab([OWNER])).toEqual({ tabId: "OWNED" });
+  });
+});
+
+describe("the desktop pane as a third browser", () => {
+  const PANE = { endpoint: 9444, targets: new Set(["PANE1"]) };
+
+  test("the pane pin wins while it is the newest, and only while the registry still lists its target", () => {
+    pin(realSessionKey(engineSessionKey(OWNER)), "1E21CD78", 2_000);
+    pin(paneSessionKey(engineSessionKey(OWNER)), "PANE1", 3_000);
+    expect(resolveEngineTab([OWNER], { clone: CLONE, bridge: BRIDGE, pane: PANE }, dir)).toEqual({ tabId: "PANE1", endpoint: 9444 });
+    // The human closed the pane: the registry no longer vouches for it.
+    expect(resolveEngineTab([OWNER], { clone: CLONE, bridge: BRIDGE, pane: { endpoint: 9444, targets: new Set() } }, dir)?.tabId).toBe("1E21CD78");
+    // The app is not up at all.
+    expect(resolveEngineTab([OWNER], { clone: CLONE, bridge: BRIDGE, pane: null }, dir)?.tabId).toBe("1E21CD78");
+    // The session moved back to its Chrome tab (touchBoundTarget on each verb).
+    pin(realSessionKey(engineSessionKey(OWNER)), "1E21CD78", 4_000);
+    expect(resolveEngineTab([OWNER], { clone: CLONE, bridge: BRIDGE, pane: PANE }, dir)?.tabId).toBe("1E21CD78");
+  });
+
+  test("cdpWatchEngine streams the pane from the app's port, and an app with no pane for this session is 'no tab'", async () => {
+    pin(paneSessionKey(engineSessionKey(OWNER)), "PANE1", 3_000);
+    const dialed: unknown[] = [];
+    const engine = cdpWatchEngine({
+      getState: () => null,
+      getBridge: () => null,
+      getDesktopPane: () => PANE,
+      stateDir: dir,
+      connect: async (endpoint) => {
+        dialed.push(endpoint);
+        throw new Error("dialed");
+      },
+      listTargets: async () => [],
+    });
+    expect(engine.resolveTab([OWNER])).toEqual({ tabId: "PANE1" });
+    await expect(
+      engine.open("PANE1", { minIntervalMs: 300, shouldHold: () => false, quality: 50, maxWidth: 1, maxHeight: 1, signal: new AbortController().signal }, { onFrame() {}, onTab() {}, onGone() {} }),
+    ).rejects.toThrow("dialed");
+    expect(dialed).toEqual([9444]);
+    expect(engine.resolveTab(["session:someone-else"])).toEqual({ error: "no-tab" });
   });
 });

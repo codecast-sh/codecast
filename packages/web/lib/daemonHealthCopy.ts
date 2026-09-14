@@ -76,20 +76,32 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
         command: "cast status",
       };
     }
-    case "sync_stalled": {
-      const stalled = formatDuration(health.stalledMs);
+    case "sync_stalled":
+    case "syncing": {
       // Prefer the honest message count; fall back to logical ops for older
       // daemons that don't report it yet.
       const count = health.messages > 0 ? health.messages : health.conversations > 0 ? health.conversations : health.pending;
       const unit = health.messages > 0 ? "message" : health.conversations > 0 ? "conversation" : "operation";
+      const plural = count === 1 ? "" : "s";
       const convoNote =
         health.messages > 0 && health.conversations > 0
           ? ` across ${health.conversations} conversation${health.conversations === 1 ? "" : "s"}`
           : "";
+      if (health.kind === "syncing") {
+        // Same backlog, but ops are completing: name the depth and how far
+        // behind, and say it is moving, so nobody restarts a daemon that is
+        // catching up.
+        return {
+          colorVar: "--sol-blue",
+          label: `syncing · ${count} ${unit}${plural}`,
+          detail: `The CLI daemon is working through a backlog of ${count} ${unit}${plural}${convoNote}. The oldest has waited ${formatDuration(health.behindMs)}; the queue is still completing work, so this clears on its own.`,
+          command: "cast status",
+        };
+      }
       return {
         colorVar: "--sol-yellow",
-        label: `sync stalled · ${count} ${unit}${count === 1 ? "" : "s"}`,
-        detail: `The CLI daemon is online but ${count} ${unit}${count === 1 ? "" : "s"}${convoNote} ${count === 1 ? "has" : "have"} been waiting to sync for ${stalled}.`,
+        label: `sync stalled · ${count} ${unit}${plural}`,
+        detail: `The CLI daemon is online but ${count} ${unit}${plural}${convoNote} ${count === 1 ? "has" : "have"} been waiting to sync for ${formatDuration(health.stalledMs)}.`,
         command: "cast status",
       };
     }

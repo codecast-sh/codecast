@@ -21,10 +21,12 @@ import { browserHome } from "../profile.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { armRecorder } from "../observe.js";
 import { isRealSession, type EngineOptions } from "../engine.js";
+import { fmt } from "../../colors.js";
 import {
   bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeHostStarter,
   type BridgeHostStatus, type BridgeState, type ProvenBridge,
 } from "./host.js";
+import { discardPairingPage, launchRealChrome, realChromeRunning, wakeExtension } from "./realChrome.js";
 
 const cloneScope = new AsyncLocalStorage<boolean>();
 
@@ -35,11 +37,22 @@ export const withAdvancedClone = <T>(run: () => T): T => cloneScope.run(true, ru
 // Per-session state: which real tab is mine, and is real mode sticky
 // ---------------------------------------------------------------------------
 
+/**
+ * Which browser a session's ordinary verbs drive. `real` is the human's
+ * Chrome and the default; `clone` only ever comes from the advanced scope;
+ * `pane` is the desktop app's browser pane opened for this session
+ * (desktopPane.ts), chosen with `cast browser target pane`.
+ */
+export type StickyMode = "real" | "clone" | "pane";
+
 interface RealState {
   /** Real-Chrome target (see protocol.ts targetIdOfTab) each session works in. */
   tabsBySession?: Record<string, string>;
-  /** Sticky `cast browser target real` choices, keyed like tabsBySession. */
-  stickyBySession?: Record<string, "real" | "clone">;
+  /** Sticky `cast browser target <mode>` choices, keyed like tabsBySession. */
+  stickyBySession?: Record<string, StickyMode>;
+  /** The desktop pane (registry paneId) each session last drove, so a pane
+   *  the human closed is reported once as closed rather than as never had. */
+  paneBySession?: Record<string, string>;
 }
 
 function realStatePath(): string {
@@ -64,14 +77,32 @@ function writeRealState(state: RealState): void {
 /** Sessions with no key share one slot, same as the clone's activeTargetId. */
 const keyOf = (sessionKey: string | null): string => sessionKey ?? "global";
 
-export function setStickyTarget(sessionKey: string | null, mode: "real" | "clone"): void {
+export function setStickyTarget(sessionKey: string | null, mode: StickyMode): void {
   const s = readRealState();
   writeRealState({ ...s, stickyBySession: { ...(s.stickyBySession ?? {}), [keyOf(sessionKey)]: mode } });
 }
 
 /** The choice a session made with `cast browser target`, or null when it never did. */
-export function explicitTarget(sessionKey: string | null): "real" | "clone" | null {
+export function explicitTarget(sessionKey: string | null): StickyMode | null {
   return readRealState().stickyBySession?.[keyOf(sessionKey)] ?? null;
+}
+
+export function rememberDesktopPane(sessionKey: string | null, paneId: string): void {
+  const s = readRealState();
+  if (s.paneBySession?.[keyOf(sessionKey)] === paneId) return;
+  writeRealState({ ...s, paneBySession: { ...(s.paneBySession ?? {}), [keyOf(sessionKey)]: paneId } });
+}
+
+export function rememberedDesktopPane(sessionKey: string | null): string | null {
+  return readRealState().paneBySession?.[keyOf(sessionKey)] ?? null;
+}
+
+export function forgetDesktopPane(sessionKey: string | null): void {
+  const s = readRealState();
+  if (!s.paneBySession?.[keyOf(sessionKey)]) return;
+  const panes = { ...s.paneBySession };
+  delete panes[keyOf(sessionKey)];
+  writeRealState({ ...s, paneBySession: panes });
 }
 
 /** Has the extension ever proved itself to this machine's bridge host? */
@@ -92,17 +123,37 @@ export function extensionReady(): boolean {
 
 /**
  * Ordinary commands use the human's Chrome. Clone scope lasts one invocation.
+ * A session that chose its desktop pane keeps it until it chooses again or
+ * the pane is reported closed (desktopPane.ts resolveDesktopPane).
  */
-export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
+export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): StickyMode {
   if (isAdvancedClone()) return "clone";
+  if (explicitTarget(sessionKey) === "pane") return "pane";
   if (opts.settle) setStickyTarget(sessionKey, "real");
   return "real";
 }
 
-export function isRealMode(opts: { real?: boolean; clone?: boolean }, sessionKey: string | null): boolean {
+export interface TargetFlags {
+  real?: boolean;
+  clone?: boolean;
+  pane?: boolean;
+}
+
+export function isRealMode(opts: TargetFlags, sessionKey: string | null): boolean {
   if (opts.clone) throw new Error("The --clone shortcut is no longer supported. Ordinary browser commands use the human's Chrome; a disconnected extension is not permission to launch another browser.");
   if (opts.real) return true;
+  if (opts.pane) return false;
   return stickyTarget(sessionKey, { settle: true }) === "real";
+}
+
+/**
+ * Whether this verb drives the desktop pane: asked for with `--pane`, or the
+ * session's sticky choice. `--real` on the line overrides the sticky pane for
+ * one verb, the same way it overrides everything else.
+ */
+export function isPaneMode(opts: TargetFlags, sessionKey: string | null): boolean {
+  if (opts.real || opts.clone || isAdvancedClone()) return false;
+  return opts.pane === true || explicitTarget(sessionKey) === "pane";
 }
 
 /**
@@ -126,10 +177,11 @@ export function realModeHint(sessionKey: string | null): string | null {
  * accept unknown options and forward them to the engine, so these two must
  * be taken off the line here or the engine would receive them.
  */
-export function splitTargetFlags(args: string[]): { real?: boolean; clone?: boolean; args: string[] } {
+export function splitTargetFlags(args: string[]): TargetFlags & { args: string[] } {
   const real = args.includes("--real") || undefined;
   const clone = args.includes("--clone") || undefined;
-  return { real, clone, args: args.filter((a) => a !== "--real" && a !== "--clone") };
+  const pane = args.includes("--pane") || undefined;
+  return { real, clone, pane, args: args.filter((a) => a !== "--real" && a !== "--clone" && a !== "--pane") };
 }
 
 // ---------------------------------------------------------------------------
@@ -244,25 +296,79 @@ export function walledOffFromExtension(url: string): string | null {
   return null;
 }
 
-/** How long to wait for the extension to reconnect before it is declared absent. */
+/**
+ * The waits on the way to a connected extension, each the time the previous
+ * rung needs to work. The worker reconnects to a fresh host within seconds
+ * on its own (GRACE). When Chrome is not running at all, it is started, and
+ * a cold Chrome on a loaded machine takes a while to load its extensions
+ * (LAUNCH). When Chrome runs but the worker has not called in, the worker's
+ * own 30 s alarm (background.js) gets its chance first (ALARM), and only
+ * then is it woken from outside, which the worker answers within a few
+ * seconds of the page opening (WAKE).
+ */
 export const EXTENSION_RECONNECT_GRACE_MS = 8_000;
+export const EXTENSION_ALARM_MS = 35_000;
+export const EXTENSION_WAKE_WAIT_MS = 25_000;
+export const CHROME_LAUNCH_WAIT_MS = 60_000;
+
+export type ExtensionWaits = { grace: number; alarm: number; wake: number; launch: number };
+
+/** Test seams for the rungs, and where progress lines go. */
+export interface RealChromeDeps {
+  /** Start Chrome and wake the worker when they are needed (a verb); false reports only (status). */
+  repair?: boolean;
+  chromeRunning?: () => boolean;
+  launchChrome?: () => boolean;
+  /** Called with the outage key (the last extensionSeenAt); false when this outage was already woken. */
+  wakeExtension?: (outage: string) => boolean;
+  /** Progress, on stderr by default so a `--json` stdout stays clean. */
+  note?: (line: string) => void;
+  waits?: Partial<ExtensionWaits>;
+}
 
 /**
- * The bridge with its host up, and whether the extension is on it. A host
- * that is not running is started here, never reported: the extension can
- * only prove itself to a running host, and it reconnects to a new one on its
- * own within seconds (host.ts waitForExtension), so a disconnected extension
- * is given EXTENSION_RECONNECT_GRACE_MS to hear from it before the answer is
- * "not connected". Every question about the real Chrome's reachability goes
- * through here, whether it wants the answer (status) or a bridge to act on
+ * The bridge with its host up, and whether the extension is on it. Nothing
+ * on the way is reported when it can be done instead: a host that is not
+ * running is started; a Chrome that is not running is started, in the
+ * background; a worker that Chrome ended is given its own alarm's time to
+ * come back and then woken from its options page. Each rung runs only when
+ * the extension has paired with this machine before, because a wake needs
+ * the extension installed, and until then the setup steps are the answer.
+ * Every question about the real Chrome's reachability goes through here,
+ * whether it wants the answer (status) or a bridge to act on
  * (requireRealBridge). `start` is the test seam for bringing the host up.
  */
 export async function connectRealBridge(
   start?: BridgeHostStarter,
+  deps: RealChromeDeps = {},
 ): Promise<{ bridge: ProvenBridge & { started: boolean }; status: BridgeHostStatus }> {
   requireBridgeConfigured();
-  const bridge = await ensureBridgeHost(start);
-  const status = await waitForExtension(bridge, EXTENSION_RECONNECT_GRACE_MS);
+  const note = deps.note ?? ((line: string) => console.error(fmt.muted(`  ${line}`)));
+  const bridge = await ensureBridgeHost(start, { note });
+  const w: ExtensionWaits = { grace: EXTENSION_RECONNECT_GRACE_MS, alarm: EXTENSION_ALARM_MS, wake: EXTENSION_WAKE_WAIT_MS, launch: CHROME_LAUNCH_WAIT_MS, ...deps.waits };
+  let status = await waitForExtension(bridge, w.grace);
+  if (status.extensionConnected || !extensionPaired() || deps.repair === false) return { bridge, status };
+
+  if (!(deps.chromeRunning ?? realChromeRunning)()) {
+    note("Chrome is not running; starting it in the background and waiting for the extension…");
+    if ((deps.launchChrome ?? launchRealChrome)()) status = await waitForExtension(bridge, w.launch);
+    else note("no Chrome binary found to start");
+    return { bridge, status };
+  }
+
+  note(`the Chrome extension has not reconnected yet; giving it up to ${Math.round(w.alarm / 1000)}s…`);
+  status = await waitForExtension(bridge, Math.max(0, w.alarm - w.grace));
+  if (status.extensionConnected) return { bridge, status };
+  // One wake per outage machine wide (realChrome.ts takeWake): a session
+  // that finds this outage already woken waits instead of adding a tab.
+  const outage = String(readBridgeState()?.extensionSeenAt ?? 0);
+  if ((deps.wakeExtension ?? wakeExtension)(outage)) note("waking the extension from its options page (a tab opens in Chrome and closes itself)…");
+  else note("the extension was already woken for this outage; waiting on that…");
+  try {
+    status = await waitForExtension(bridge, w.wake);
+  } finally {
+    discardPairingPage();
+  }
   return { bridge, status };
 }
 
@@ -271,12 +377,15 @@ export async function connectRealBridge(
  * with the setup instructions, beats failing on the first verb with less
  * context — a host with no extension can only ever answer errors.
  */
-export async function requireRealBridge(start?: BridgeHostStarter): Promise<ProvenBridge> {
-  const { bridge, status } = await connectRealBridge(start);
+export async function requireRealBridge(start?: BridgeHostStarter, deps?: RealChromeDeps): Promise<ProvenBridge> {
+  const { bridge, status } = await connectRealBridge(start, deps);
   if (!status.extensionConnected) {
     throw new Error(
-      "the cast bridge extension is not connected to this machine's bridge host.\n" +
-        "  Open Chrome and check the extension is enabled (chrome://extensions).\n" +
+      (extensionPaired()
+        ? "the cast bridge extension did not connect to this machine's bridge host, after Chrome was started or the extension was woken.\n" +
+          "  Chrome's extension system is not answering: reload the extension at chrome://extensions, or restart Chrome.\n" +
+          "  (The wake opens the extension's options page as a tab once per outage; it closes itself.)\n"
+        : "the cast bridge extension has not been paired with this machine's bridge host.\n") +
         "  If it still does not connect, run `cast browser extension setup` to pair it again.\n" +
         "  Tell the human if it remains disconnected. No separate browser was started.",
     );

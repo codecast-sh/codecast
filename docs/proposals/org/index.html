@@ -342,13 +342,14 @@ tokens today: 41k of 400k · wakes: 6 of 40 · hands: 2 of 6
 <li><strong>Identity.</strong> One actor resolver on the server: writes from a role's standing session carry the role's bot user (task comments, status, assignments, plan entries, docs, updates, chat). Hands keep the host.</li>
 <li><strong>Pause</strong> is a delivery gate plus one interrupt per hand; <strong>restart</strong> keeps the conversation row so routines and pointers survive; the first frame after a restart carries the full brief and charter.</li>
 <li><strong>What a role never does.</strong> Write a charter. Grant itself anything. Answer a protected decision. Wake on its own writes. Post to a phone.</li>
+<li><strong>The one open safety question.</strong> A hand runs on its host's API token, and the server learns which session is calling from a session id the CLI sends. Naming another session grants nothing (ownership is checked), but a hand that omits its own id is indistinguishable from its host at a shell. Every human only gate therefore holds against a cooperative agent, not an adversarial one. Closing that needs a session scoped token minted by the daemon when it launches a pane, so the server reads the calling session from the credential. That is a decision for the founder (section 14) and the first item of the next slice.</li>
 </ul>
 <table><tr><th>Failure</th><th>Looks like</th><th>Prevented or visible</th></tr>
 <tr><td>Chatter loop</td><td>Two roles wake each other</td><td>Prevented: own and subordinate writes never enter the outbox; wake cap is the backstop</td></tr>
 <tr><td>Fabricated status</td><td>A brief claims a task is done</td><td>Prevented: facts are computed; narrative lines carry ids the page resolves</td></tr>
 <tr><td>Rubber stamping</td><td>The person taps the recommendation blindly</td><td>Visible: agreement per category is shown; grants come only from that record</td></tr>
 <tr><td>Stuck decision</td><td>Held by a paused or capped role</td><td>Prevented: routing skips roles that cannot act; a routing deadline escalates; people always see the card</td></tr>
-<tr><td>Self review</td><td>A role marks its own work done</td><td>Prevented: the status mutation requires an approve verdict from outside the role</td></tr>
+<tr><td>Self review</td><td>A role marks its own work done</td><td>Prevented: the status mutation requires an approve verdict from outside the role. The line's review station spawns as a reviewer of the task rather than a hand of the role, so the rule accepts it.</td></tr>
 <tr><td>Inbox flood</td><td>Every hand becomes a card</td><td>Prevented: subagents stay folded; hands appear under their role on the org page, and in the inbox only when they need a person</td></tr>
 </table>
 
@@ -356,8 +357,8 @@ tokens today: 41k of 400k · wakes: 6 of 40 · hands: 2 of 6
 <p><strong>07:00.</strong> Ashot opens /org on the phone. The anchor's line: three projects moved overnight, one decision addressed to you. Infra lead is red: blocked on a prod key, recommends option 2. Product lead is blue: two hands live. Sync lead is green: rollout 4/6.</p>
 <p><strong>07:04.</strong> One decision in the queue, sd-211, category production, held by Ashot from insertion, with the lead's recommendation and a note. He reads the page, answers 2. The answer lands on the hand that asked; the lead sees it as a passive fact in its next frame.</p>
 <p><strong>10:30.</strong> A task in Infrastructure moves to open. The lead wakes on the fold, assigns it to itself, and runs the line. Analyze writes five criteria. Implement works in a worktree and hands off with evidence. Verify passes. Review, on codex, approves four criteria and sends one back. Implement fixes it. Review approves. The task is done with a verdict from outside the role, and a draft PR is linked.</p>
-<p><strong>14:15.</strong> Two hands touch the same file. The overlap folds into the lead's next frame; it sends one hand an interrupt to finish first and tells the other to rebase.</p>
-<p><strong>17:30.</strong> Each lead's routine posts a digest to its project's updates. The anchor's routine reads the three briefs and posts the workspace summary to #general. Ashot's queue held one card all day.</p>
+<p><strong>14:15.</strong> A hand pins itself blocked on a missing key. The declaration is an immediate wake for its lead, which reads the handoff, answers from the runbook, and sends the hand one message. (File touch overlap between two hands is designed as a fold source and not yet built; the wake table in the contract marks it.)</p>
+<p><strong>17:30.</strong> Each lead's routine posts a digest to its project's updates, and the anchor's routine reads the three briefs and posts the workspace summary to #general. The rails for this exist (project updates of kind digest, routines delivered through the outbox); the routines themselves are armed at provisioning in the next slice. Ashot's queue held one card all day.</p>
 
 <h2 id="shipped"><span class="num">13</span>What is shipped, what is next</h2>
 <table><tr><th style="width:80px">Stream</th><th>What</th><th>State</th></tr>
@@ -380,6 +381,7 @@ tokens today: 41k of 400k · wakes: 6 of 40 · hands: 2 of 6
 <dt>Tokens or dollars as the first cost unit?</dt><dd>Recommended: tokens now, dollars when a price table exists. Tokens have a writer; dollars would be a guess.</dd>
 <dt>Should the line run through the DOT workflow engine or the orchestrate skill inside the role's session?</dt><dd>Recommended: the engine for the default line (inspectable, gated, restartable), the skill for judgment work a lead does itself.</dd>
 <dt>Mirror charters and the org definition into the repo?</dt><dd>Recommended: charters yes, through doc file sync, so charter edits can arrive as reviewed PRs. The chart itself stays in the database, because a file would drift from the projects list.</dd>
+<dt>Mint a session scoped token per pane so the server knows the calling session from the credential?</dt><dd>Recommended: yes, as the first item after this slice. Until then the human only rules are enforced against a declared session id, which stops mistakes but not a hand that lies about itself.</dd>
 <dt>Names for long lived roles?</dt><dd>Recommended: allow a display name in the charter, keep the handle as the identity, and show both on the node.</dd>
 </dl>
 

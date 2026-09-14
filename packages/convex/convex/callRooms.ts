@@ -66,7 +66,7 @@
 // so this module is the entire security boundary for who can listen in.
 import type { Doc, Id } from "./_generated/dataModel";
 import { createTeamFeedFilter, isTeamMember } from "./privacy";
-import { canAccessChannel, isRestricted } from "./chatAccess";
+import { canAccessChannel, isCommunity, isRestricted } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 // Key shapes, builders and lease timings are the shared contract
 // (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
@@ -558,8 +558,13 @@ export async function authorizeRoomMembership(
       return { ok: false, reason: "channel not found" };
     }
     // The chat room's own gate: team member, chat on for the team, and a
-    // membership row for private channels and group threads.
+    // membership row for private channels and group threads. A community
+    // room is open to every signed-in user for READING and POSTING, but a
+    // huddle is the team's own voice room: its members only.
     if (!(await canAccessChannel(ctx, userId, channel))) {
+      return { ok: false, reason: "not a member of this channel" };
+    }
+    if (isCommunity(channel) && !(await isTeamMember(ctx, userId, channel.team_id))) {
       return { ok: false, reason: "not a member of this channel" };
     }
     return { ok: true, teamId: channel.team_id, parsed };

@@ -1467,10 +1467,15 @@ export const listPRCommits = internalAction({
   args: { repository: v.string(), pr_number: v.number(), github_access_token: v.string() },
   handler: async (_ctx, args): Promise<PRCommit[]> => {
     const [owner, repo] = repoParts(args.repository);
-    const data = await ghFetch(
-      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/commits?per_page=100`,
-      args.github_access_token,
-    );
+    const data: any[] = [];
+    for (let page = 1; page <= 3; page++) {
+      const batch = await ghFetch(
+        `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/commits?per_page=100&page=${page}`,
+        args.github_access_token,
+      );
+      data.push(...batch);
+      if (batch.length < 100) break;
+    }
     return (data ?? []).map((c: any) => ({
       sha: c.sha as string,
       message: (c.commit?.message ?? "") as string,
@@ -1480,6 +1485,47 @@ export const listPRCommits = internalAction({
       committed_at: c.commit?.committer?.date ? new Date(c.commit.committer.date).getTime() : undefined,
       url: (c.html_url ?? undefined) as string | undefined,
     }));
+  },
+});
+
+export const listPRChecks = internalAction({
+  args: { repository: v.string(), sha: v.string(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<import("./lib/gitRefs").CheckEntry[]> => {
+    const [owner, repo] = repoParts(args.repository);
+    const base = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits/${encodeURIComponent(args.sha)}`;
+    const readPages = async (path: string, field: string) => {
+      const rows: any[] = [];
+      for (let page = 1; ; page++) {
+        const data = await ghFetch(`${base}/${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`, args.github_access_token);
+        const batch = data[field] ?? [];
+        rows.push(...batch);
+        if (batch.length < 100 || rows.length >= data.total_count) return rows;
+      }
+    };
+    const [runs, statuses] = await Promise.all([
+      readPages("check-runs?filter=latest", "check_runs"),
+      readPages("status", "statuses"),
+    ]);
+    return [
+      ...runs.map((run) => ({
+        name: run.name as string,
+        status: run.status as string,
+        conclusion: run.conclusion ?? undefined,
+        url: run.html_url ?? run.details_url ?? undefined,
+        updated_at: Date.parse(run.completed_at ?? run.started_at ?? "") || 0,
+        external_id: String(run.id),
+        suite_id: run.check_suite?.id == null ? undefined : String(run.check_suite.id),
+        app: run.app?.slug ?? undefined,
+      })),
+      ...statuses.map((status) => ({
+        name: status.context as string,
+        status: status.state === "pending" ? "in_progress" : "completed",
+        conclusion: status.state === "pending" ? undefined : status.state === "success" ? "success" : "failure",
+        url: status.target_url ?? undefined,
+        updated_at: Date.parse(status.updated_at ?? status.created_at ?? "") || 0,
+        external_id: `status:${status.context}`,
+      })),
+    ];
   },
 });
 

@@ -36,16 +36,16 @@ export function useSyncPullRequest(args: { repository: string; number: number } 
 
 // The PR page paints far more of a row than the timeline lane does, so it wakes
 // on its own signature rather than widening the lane's.
-const prDetailSig = (p: any) =>
+export const prDetailSig = (p: any) =>
   [
     p.title, p.state, p.draft, p.updated_at, p.merged_at ?? "", p.body,
     p.head_sha ?? "", p.mergeable_state ?? "", p.behind_by ?? "", p.review_decision ?? "",
-    p.checks_state ?? "", (p.checks ?? []).length, p.unresolved_review_count ?? "",
+    p.checks_state ?? "", JSON.stringify(p.checks), p.unresolved_review_count ?? "",
     (p.requested_reviewers ?? []).join(","), (p.linked_session_ids ?? []).join(","),
     (p.task_ids ?? []).join(","), (p.files ?? []).length,
     p.shepherd_state ?? "", p.shepherd_enabled ?? "", p.shepherd_conversation_id ?? "",
     p.shepherd_last_wake_at ?? "", p.shepherd_wake_count ?? "",
-    (p.labels ?? []).map((l: any) => l.name).join(","), (p.assignees ?? []).join(","), (p.commits ?? []).length,
+    (p.labels ?? []).map((l: any) => l.name).join(","), (p.assignees ?? []).join(","), JSON.stringify(p.commits), p.commits_count ?? "",
   ].join("|");
 
 export function usePullRequest(repository: string, number: number): any | undefined {

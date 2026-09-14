@@ -26,6 +26,7 @@ import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { useSyncPRExternalEvents, useExternalEvents } from "../../../../../hooks/useSyncExternalEvents";
 import { useCodeComments, useSyncPRCodeComments } from "../../../../../hooks/useSyncCodeComments";
 import { useSyncPullRequest, usePullRequest } from "../../../../../hooks/useSyncTimeline";
+import { usePRDetails } from "../../../../../hooks/usePRDetails";
 import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import {
@@ -139,6 +140,7 @@ function PRContent({
   const setShepherd = useMutation(api.prShepherd.setShepherd);
 
   const [tab, setTab] = useState<Tab>("conversation");
+  const details = usePRDetails(prId, pr?.head_sha, isAuthenticated && (tab === "commits" || tab === "checks") ? tab : null);
   const [composing, setComposing] = useState<{ file: string; anchor: DiffLineAnchor } | null>(null);
 
   // The review: where a new note goes (held, or out at once), remembered on
@@ -422,8 +424,11 @@ function PRContent({
                     {notes.length}
                   </span>
                 )}
-                {key === "commits" && (pr.commits?.length ?? 0) > 0 && (
-                  <span className="text-[11px] text-sol-text-dim">{pr.commits.length}</span>
+                {key === "commits" && (pr.commits_count ?? pr.commits?.length ?? 0) > 0 && (
+                  <span className="text-[11px] text-sol-text-dim">{pr.commits_count ?? pr.commits.length}</span>
+                )}
+                {key === "checks" && (pr.checks?.length ?? 0) > 0 && (
+                  <span className="text-[11px] text-sol-text-dim">{pr.checks.length}</span>
                 )}
                 <span className="opacity-0 group-hover:opacity-100 transition-opacity">
                   <KeyCap size="xs">{digit}</KeyCap>
@@ -494,8 +499,8 @@ function PRContent({
                   }
                 />
               ))}
-            {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} />}
-            {tab === "checks" && <PRChecks checks={pr.checks} />}
+            {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} read={details} />}
+            {tab === "checks" && <PRChecks checks={pr.checks} read={details} />}
           </div>
         </div>
 
