@@ -9,7 +9,8 @@ import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } f
 import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
-import { ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
+import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
+import { BUNDLED_SKILLS, ORCHESTRATION_BUNDLE } from "./bundledSkills.js";
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
@@ -1716,6 +1717,7 @@ function startDaemon(): void {
 // applies recommended defaults instead of blocking on prompts.
 async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
+  installCodecastSkills();
   installSessionRegisterHook();
   installStatusHook();
   await installStatusLineHook();
@@ -2279,88 +2281,76 @@ function installStateSnippet(update = false) {
 
 // installMessagingSnippet lives in ./snippets.ts (shared with the daemon).
 
-function installOrchestration(update = false): { installed: boolean; updated: boolean } {
-  const orchSrc = path.resolve(__dirname, "..", "orchestration");
-  if (!fs.existsSync(orchSrc)) {
-    return { installed: false, updated: false };
-  }
+/** Write an owned file unless it is already there byte for byte. A file that
+ *  exists is rewritten only on update, and only when the bytes differ, so a
+ *  refresh on an unchanged machine touches nothing. */
+function writeOwnedFile(dest: string, content: string, mode: number, update: boolean): boolean {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  if (fs.existsSync(dest) && (!update || fs.readFileSync(dest, "utf-8") === content)) return false;
+  fs.writeFileSync(dest, content, { mode });
+  return true;
+}
 
+// The orchestration files come from the bundle embedded in this binary
+// (bundledSkills.ts), never from a path beside the executable: a compiled
+// cast has no source tree next to it, and resolving one found nothing on
+// every release install.
+function installOrchestration(update = false): { installed: boolean; updated: boolean } {
   const claudeDir = path.join(os.homedir(), ".claude");
-  const orchDest = path.join(defaultConfigDir(), "orchestration");
   let anyChange = false;
 
-  // Copy skill
-  const skillSrc = path.join(orchSrc, "skills", "orchestrate", "SKILL.md");
-  const skillDest = path.join(os.homedir(), ORCH_SKILL_REL, "SKILL.md");
-  if (fs.existsSync(skillSrc)) {
-    fs.mkdirSync(path.dirname(skillDest), { recursive: true });
-    const srcContent = fs.readFileSync(skillSrc, "utf-8");
-    const destExists = fs.existsSync(skillDest);
-    if (!destExists || (update && fs.readFileSync(skillDest, "utf-8") !== srcContent)) {
-      fs.writeFileSync(skillDest, srcContent, { mode: 0o644 });
-      anyChange = true;
-    }
+  anyChange = writeOwnedFile(path.join(os.homedir(), ORCH_SKILL_REL, "SKILL.md"), ORCHESTRATION_BUNDLE.skill, 0o644, update) || anyChange;
+  for (const [file, body] of Object.entries(ORCHESTRATION_BUNDLE.agents)) {
+    anyChange = writeOwnedFile(path.join(claudeDir, "agents", file), body, 0o644, update) || anyChange;
   }
-
-  // Copy agents
-  const agentsSrc = path.join(orchSrc, "agents");
-  if (fs.existsSync(agentsSrc)) {
-    const agentsDir = path.join(claudeDir, "agents");
-    fs.mkdirSync(agentsDir, { recursive: true });
-    for (const file of fs.readdirSync(agentsSrc).filter(f => f.endsWith(".md"))) {
-      const src = path.join(agentsSrc, file);
-      const dest = path.join(agentsDir, file);
-      const srcContent = fs.readFileSync(src, "utf-8");
-      const destExists = fs.existsSync(dest);
-      if (!destExists || (update && fs.readFileSync(dest, "utf-8") !== srcContent)) {
-        fs.writeFileSync(dest, srcContent, { mode: 0o644 });
-        anyChange = true;
-      }
-    }
-  }
-
-  // Copy hook scripts
-  const scriptsSrc = path.join(orchSrc, "scripts");
-  if (fs.existsSync(scriptsSrc)) {
-    const scriptsDest = path.join(orchDest, "scripts");
-    fs.mkdirSync(scriptsDest, { recursive: true });
-    for (const file of fs.readdirSync(scriptsSrc).filter(f => f.endsWith(".sh"))) {
-      const src = path.join(scriptsSrc, file);
-      const dest = path.join(scriptsDest, file);
-      const srcContent = fs.readFileSync(src, "utf-8");
-      const destExists = fs.existsSync(dest);
-      if (!destExists || (update && fs.readFileSync(dest, "utf-8") !== srcContent)) {
-        fs.writeFileSync(dest, srcContent, { mode: 0o755 });
-        anyChange = true;
-      }
-    }
+  const scriptsDest = path.join(defaultConfigDir(), "orchestration", "scripts");
+  for (const [file, body] of Object.entries(ORCHESTRATION_BUNDLE.scripts)) {
+    anyChange = writeOwnedFile(path.join(scriptsDest, file), body, 0o755, update) || anyChange;
   }
 
   // Merge hooks into settings
-  const hooksSrc = path.join(orchSrc, "hooks.json");
-  if (fs.existsSync(hooksSrc)) {
-    const settingsPath = path.join(claudeDir, "settings.json");
-    let settings: any = {};
-    if (fs.existsSync(settingsPath)) {
-      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
-    }
-    if (!settings.hooks) settings.hooks = {};
-
-    const orchHooks = JSON.parse(fs.readFileSync(hooksSrc, "utf-8")).hooks;
-
-    for (const [event, handlers] of Object.entries(orchHooks) as [string, any][]) {
-      if (!settings.hooks[event]) settings.hooks[event] = [];
-      settings.hooks[event] = settings.hooks[event].filter((h: any) =>
-        !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
-      );
-      settings.hooks[event].push(...handlers);
-    }
-
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
-    anyChange = true;
+  const settingsPath = path.join(claudeDir, "settings.json");
+  let settings: any = {};
+  if (fs.existsSync(settingsPath)) {
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
   }
+  if (!settings.hooks) settings.hooks = {};
+  for (const [event, handlers] of Object.entries(ORCHESTRATION_BUNDLE.hooks)) {
+    if (!settings.hooks[event]) settings.hooks[event] = [];
+    settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+      !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+    );
+    settings.hooks[event].push(...handlers);
+  }
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+  anyChange = true;
 
   return { installed: anyChange && !update, updated: anyChange && update };
+}
+
+// The codecast skills are slash commands over the team's shared state
+// (/codecast-why, /codecast-conflicts, …). They ride the same paths as the
+// hooks: every onboarding, every `cast install` wizard or --all run, and every
+// refresh after an update. A single-slug install (`cast install memory`)
+// leaves them alone, so each snippet's install stays exactly its own files.
+function installCodecastSkills(update = true): { installed: number; updated: number } {
+  let installed = 0;
+  let updated = 0;
+  for (const skill of BUNDLED_SKILLS) {
+    const dest = path.join(os.homedir(), ".claude", "skills", skill.name, "SKILL.md");
+    const existed = fs.existsSync(dest);
+    if (!writeOwnedFile(dest, skill.body, 0o644, update)) continue;
+    if (existed) updated++; else installed++;
+  }
+  return { installed, updated };
+}
+
+function uninstallCodecastSkills(): void {
+  for (const name of CODECAST_SKILL_NAMES) {
+    const dir = path.join(os.homedir(), ".claude", "skills", name);
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+  }
 }
 
 // Re-install every ENABLED snippet + the harness hooks so a new binary's
@@ -2390,6 +2380,7 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
   else if (config.messaging_enabled) installMessagingSnippet(true);
   if (config.orch_enabled) installOrchestration(true);
+  installCodecastSkills();
   installSessionRegisterHook();
   installStatusHook();
   await installStatusLineHook();
@@ -9291,7 +9282,8 @@ program
       if (fs.existsSync(p)) fs.unlinkSync(p);
     }
 
-    // 4. Remove slash command
+    // 4. Remove slash command and skills
+    uninstallCodecastSkills();
     const commandFile = path.join(claudeDir, "commands", "codecast.md");
     if (fs.existsSync(commandFile)) {
       fs.unlinkSync(commandFile);
@@ -10101,6 +10093,7 @@ program
         if (s.enabledKey === "orch_enabled") uninstallOrchestration();
         else removeSnippetSection(s.enabledKey);
       }
+      uninstallCodecastSkills();
       // Stable is not in SNIPPET_CATALOG because it is a SessionStart hook,
       // but "all snippets" includes it in the UI and help text.
       applyStableMode(config, "off", false);
@@ -10190,6 +10183,10 @@ program
     }
 
     writeConfig(config);
+    const skills = installCodecastSkills();
+    if (skills.installed || skills.updated) {
+      console.log(`  ${icons.check} skills — ${BUNDLED_SKILLS.map((k) => `/${k.name}`).join(", ")} in ~/.claude/skills`);
+    }
     if (anyInstalled) {
       console.log(`\n${fmt.success("Done.")} Snippets installed in ${targetList}`);
     }
