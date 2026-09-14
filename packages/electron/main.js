@@ -71,7 +71,7 @@ const {
 } = require("./meetingDetector");
 const { createOsPermissions } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
-const { createBrowserPanes } = require("./browserPanes");
+const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
 
 let notificationRefs = [];
 
@@ -3010,7 +3010,13 @@ app.whenReady().then(() => {
   // (browserPanes.js). It manages its own views, its own session and its own
   // lifecycle — the shell hands it the pieces of Electron it needs and the
   // origin policy above, so only a first-party page can ask for a view.
-  createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, isTrusted: isTrustedOrigin }).install();
+  // The CDP port lets `cast browser` drive a pane's view directly; the panes
+  // registry (browserPanes.js, desktop-panes.json) tells it which target is
+  // which pane. No port, no registry.
+  createBrowserPanes({
+    WebContentsView, session, ipcMain, BrowserWindow, isTrusted: isTrustedOrigin,
+    cdpPort: CDP_PORT, registryPath: defaultPaneRegistryPath(),
+  }).install();
 
   // The web layer extends host policy: {permissions?: string[], hosts?: string[]}.
   // Reads back the effective policy so the web can gate on what the shell
