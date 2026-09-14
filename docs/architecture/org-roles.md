@@ -86,10 +86,10 @@ OrgRole = org_roles row + {
 }
 OrgAnchor = {
   anchor_id, name, bot_user_id, host_user_id, scope_type, team_id?, scope_user_id?,
-  conversation_id?, short_id?, work_state?: WorkState, status,
+  conversation_id?, short_id?, state?: WorkState, status,
 }
 OrgSession = {
-  _id, short_id, title, agent_type, work_state: WorkState, updated_at,
+  _id, short_id, title, agent_type, state: WorkState, updated_at,
   owner_user_id?, org_role_id?, subagent_count: number, is_anchor: boolean,
   project_path?, git_branch?,
 }
