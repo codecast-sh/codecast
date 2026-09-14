@@ -10,7 +10,13 @@
 // capture and a pre-paste mark) per window; a closed prompt releases at once.
 export const PROMPT_HOLD_MS = 45_000;
 
-const holds = new Map<string, number>();
+// `humans`: a person's typed message was refused too. Most prompts take a
+// typed message as their answer (an AskUserQuestion menu is declined and the
+// text typed at the prompt), so a hold normally lets human messages through.
+// A dialog no text can answer (an unnumbered select list) refuses them as
+// well, and without the hold each refusal re-pends the row, which re-fires the
+// subscription at once: a tight loop of claims and captures.
+const holds = new Map<string, { at: number; humans: boolean }>();
 let redrive: (() => void) | null = null;
 
 // The delivery scan to run when a hold is released; the daemon installs its
@@ -19,22 +25,24 @@ export function setPendingRedrive(fn: (() => void) | null): void {
   redrive = fn;
 }
 
-export function holdConversationForPrompt(conversationId: string, now: number = Date.now()): void {
-  holds.set(conversationId, now);
+export function holdConversationForPrompt(conversationId: string, opts: { humans?: boolean } = {}, now: number = Date.now()): void {
+  const live = promptHoldRemainingMs(conversationId, false, now) > 0 ? holds.get(conversationId) : undefined;
+  holds.set(conversationId, { at: now, humans: !!opts.humans || !!live?.humans });
 }
 
 // Milliseconds a scan should still skip this conversation; 0 when it may try
 // again (an expired hold is forgotten here, so a real prompt that stays open
-// costs one refused attempt per hold window, never a spent budget).
-export function promptHoldRemainingMs(conversationId: string, now: number = Date.now()): number {
-  const heldAt = holds.get(conversationId);
-  if (heldAt === undefined) return 0;
-  const remaining = PROMPT_HOLD_MS - (now - heldAt);
+// costs one refused attempt per hold window, never a spent budget). `human`
+// asks for a person's message, which only a hold that refused one skips.
+export function promptHoldRemainingMs(conversationId: string, human = false, now: number = Date.now()): number {
+  const hold = holds.get(conversationId);
+  if (hold === undefined) return 0;
+  const remaining = PROMPT_HOLD_MS - (now - hold.at);
   if (remaining <= 0) {
     holds.delete(conversationId);
     return 0;
   }
-  return remaining;
+  return human && !hold.humans ? 0 : remaining;
 }
 
 // The prompt closed (answered from the app, dismissed in the terminal): drop
