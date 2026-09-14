@@ -621,6 +621,14 @@ function DensityMenuOptions({ density, setDensity, guest }: { density: Conversat
     </>
   );
 }
+// Children render only while the header row is squeezed past level 4 (see
+// useSqueezeToFit and the .cq-sq4 tier): the overflow menu mounts its content
+// on open, so reading the row's attribute here sees the level at that moment.
+function SqueezedHeaderActions({ rowRef, children }: { rowRef: React.RefObject<HTMLElement | null>; children: React.ReactNode }) {
+  if (!rowRef.current?.matches('[data-squeeze~="4"]')) return null;
+  return <>{children}</>;
+}
+
 function recordVirtHeight(key: string, size: number) {
   if (size <= 0) return; // 0-height rows are already exact via the heuristic; don't cache
   if (VIRT_HEIGHT_CACHE.size >= VIRT_HEIGHT_CACHE_MAX && !VIRT_HEIGHT_CACHE.has(key)) {
@@ -12877,7 +12885,7 @@ const ConversationViewInner = (
   // The header row sheds chip detail level by level until the title fits
   // (see hooks/useSqueezeToFit and the .cq-sq* tiers in globals.css).
   const squeezeRowRef = useRef<HTMLDivElement>(null);
-  useSqueezeToFit(squeezeRowRef, 4);
+  useSqueezeToFit(squeezeRowRef, 6);
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
@@ -16650,7 +16658,7 @@ const ConversationViewInner = (
               // Simple view keeps the metadata cluster functional (it owns the
               // model picker) but pulls it back visually; the plan/task badges
               // drop away entirely.
-              <span data-cc-conv-meta data-simple-dim className="cq-header-collapse cq-sq3 contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+              <span data-cc-conv-meta data-simple-dim className="cq-sq3 contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -16665,12 +16673,12 @@ const ConversationViewInner = (
             )}
 
             {(conversation as any)?.active_plan && (
-              <span data-simple-hide className="cq-header-collapse cq-sq3 contents">
+              <span data-simple-hide className="cq-sq3 contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
             {(conversation as any)?.active_task && (
-              <span data-simple-hide className="cq-header-collapse cq-sq3 contents">
+              <span data-simple-hide className="cq-sq3 contents">
                 <TaskBadge task={(conversation as any).active_task} />
               </span>
             )}
@@ -16680,7 +16688,7 @@ const ConversationViewInner = (
                 live view. Server truth via the conversation's stamped run. */}
             {(conversation as any)?.is_workflow_primary && (conversation as any)?.workflow_run_id &&
               ["pending", "running", "paused"].includes((conversation as any)?.workflow_run_status) && (
-              <span data-simple-hide className="cq-header-collapse contents">
+              <span data-simple-hide className="cq-sq3 contents">
                 <Link
                   href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
@@ -16888,7 +16896,7 @@ const ConversationViewInner = (
                         setTimeout(() => localSearchInputRef.current?.focus(), 0);
                       }
                     }}
-                    className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${isLocalSearchOpen ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+                    className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${isLocalSearchOpen ? "text-sol-cyan" : "cq-sq4 text-sol-text-dim hover:text-sol-text-secondary"}`}
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -16899,7 +16907,7 @@ const ConversationViewInner = (
                 <DropdownMenu>
                   <ShortcutTooltip label={`View density: ${DENSITY_OPTIONS.find(o => o.value === density)!.label}`} action="conv.cycleDensity" hint="cycles" side="bottom">
                     <DropdownMenuTrigger asChild>
-                      <button className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
+                      <button className={`cq-sq4 p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
                         {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3.5 h-3.5" />; })()}
                       </button>
                     </DropdownMenuTrigger>
@@ -16912,7 +16920,7 @@ const ConversationViewInner = (
                 <ShortcutTooltip label="Copy link" action="conv.copyLink" side="bottom">
                   <button
                     onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
-                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    className="cq-sq4 p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -16923,7 +16931,7 @@ const ConversationViewInner = (
                 {chatOn && (
                   <button
                     onClick={() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" })}
-                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    className="cq-sq4 p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                     title="Send to chat"
                   >
                     <Forward className="w-3.5 h-3.5" />
@@ -16941,6 +16949,41 @@ const ConversationViewInner = (
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    {/* The icon actions the squeeze folded away (level 4 in
+                        globals.css) come back here as menu rows. Mounted on
+                        open, so it reads the row's current level. */}
+                    <SqueezedHeaderActions rowRef={squeezeRowRef}>
+                      <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        Search in conversation
+                      </DropdownMenuItem>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3 h-3 mr-1.5" />; })()}
+                          View density
+                          <MenuKeyCaps action="conv.cycleDensity" />
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="w-72">
+                          <DensityMenuOptions density={density} setDensity={setDensity} guest={guest} />
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                      <DropdownMenuItem onSelect={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                        </svg>
+                        Copy link
+                        <MenuKeyCaps action="conv.copyLink" />
+                      </DropdownMenuItem>
+                      {chatOn && (
+                        <DropdownMenuItem onSelect={() => setTimeout(() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" }))}>
+                          <Forward className="w-3 h-3 mr-1.5" />
+                          Send to chat
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuSeparator />
+                    </SqueezedHeaderActions>
                     {effectiveIsOwner && conversation?.session_id && (
                       <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
                         <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">

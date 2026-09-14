@@ -80,25 +80,35 @@
    a variable number of chips — branch, machine, huddle, tmux, files, a parent
    link — so no fixed width says when it is full. The hook measures the row and
    raises data-squeeze one level at a time until the content fits; each level
-   sheds the parts worth least at that point, and the title is the one item
-   that never gives way (it keeps a real floor below). Level 1 drops detail
-   inside chips (commit sha, ahead/behind, machine and owner names, message
-   count, session duration, the tmux copy sub-button). Level 2 drops the words
-   that icons already say (tmux, join, Parent, the session age) and narrows the
-   branch chip. Level 3 drops the metadata cluster, the plan/task badges and
-   the status word. Level 4 is the last resort: the action cluster wraps under
-   the title instead of being clipped. */
+   sheds the parts worth least at that point. The title comes last: through
+   the first three levels it keeps its natural width (flex-basis auto, no
+   shrink), so a title that does not fit registers as overflow and the chips
+   give way to it, instead of the title quietly truncating to whatever the
+   chips left over. Level 1 drops detail inside chips (commit sha, ahead/behind,
+   machine and owner names, message count, session duration, the tmux copy
+   sub-button). Level 2 drops the words that icons already say (tmux, join,
+   Parent, the session age) and narrows the branch chip. Level 3 drops the
+   metadata cluster, the plan/task badges and the status word. Level 4 folds
+   the plain icon actions (search, density, copy link, send to chat) into the
+   header's overflow menu, where the same items appear while folded. Level 5
+   lets the title shrink, down to a floor scaled to the header (cqi = the
+   header's width, the query container on [data-sv-convhead]) so it still
+   holds a readable run of words. Level 6 is the last resort: the action
+   cluster wraps under the title instead of being clipped. */
 [data-squeeze~="1"] .cq-sq1,
 [data-squeeze~="2"] .cq-sq2,
-[data-squeeze~="3"] .cq-sq3 { display: none !important; }
+[data-squeeze~="3"] .cq-sq3,
+[data-squeeze~="4"] .cq-sq4 { display: none !important; }
 [data-squeeze~="2"] .cq-sq2-tight { max-width: 9rem !important; }
-[data-squeeze~="4"].cq-squeeze-row { flex-wrap: wrap; row-gap: 4px; }
-/* The title wins: a floor scaled to the header (cqi = the header's width, the
-   query container on [data-sv-convhead]) so it holds a readable run of words
-   at every width instead of shrinking to nothing behind the chips. */
 [data-sv-convhead] .cq-squeeze-row .cc-panel__title {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+[data-sv-convhead] [data-squeeze~="5"] .cc-panel__title {
+  flex-shrink: 1;
   min-width: clamp(6rem, 32cqi, 22rem);
 }
+[data-squeeze~="6"].cq-squeeze-row { flex-wrap: wrap; row-gap: 4px; }
 
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
    once the header is too tight to show every pill on one row alongside the
