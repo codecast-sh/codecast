@@ -7,6 +7,12 @@ import { ensurePinnedTab, readBoundTarget, writeBoundTarget } from "../pinnedTab
 import { grantTab, writeBridgeState } from "./host.js";
 import { FakeExtension, testBridgeHost } from "./host.testutil.js";
 import { targetIdOfTab } from "./protocol.js";
+import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
+
+// Every write below lands under browserHome(); keep it out of the human's ~/.codecast.
+let codecastDir: IsolatedCodecastDir;
+beforeEach(() => { codecastDir = isolateCodecastDir("cast-tabiso-"); });
+afterEach(() => codecastDir.restore());
 
 let host: Awaited<ReturnType<typeof testBridgeHost>>;
 let extension: FakeExtension;
