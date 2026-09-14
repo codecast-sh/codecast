@@ -990,6 +990,7 @@ export const listDevices = query({
         oldest_pending_ms: d.oldest_pending_ms ?? undefined,
         pending_sync_messages: d.pending_sync_messages ?? undefined,
         pending_sync_conversations: d.pending_sync_conversations ?? undefined,
+        sync_no_progress_ms: d.sync_no_progress_ms ?? undefined,
         online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);

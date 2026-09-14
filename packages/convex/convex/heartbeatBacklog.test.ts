@@ -36,6 +36,9 @@ describe("backlogFieldsPatch", () => {
   });
 
   test("handles one field present and the other absent independently", () => {
+    expect(backlogFieldsPatch({ sync_no_progress_ms: 20_000 })).toEqual({
+      daemon_sync_no_progress_ms: 20_000,
+    });
     expect(backlogFieldsPatch({ pending_sync_messages: 9 })).toEqual({
       daemon_pending_sync_messages: 9,
     });
