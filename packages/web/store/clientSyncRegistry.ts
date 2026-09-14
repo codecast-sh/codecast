@@ -241,9 +241,15 @@ export const CLIENT_SYNC_REGISTRY = {
   // Decision stacks (D5): the viewer's open stacks with their progress. The
   // list is the complete visible set, so a snapshot; every stack verb is a
   // named mutation and the row echoes back through this feed.
+  // localFirst: reorder, remove and "group into a stack" flip the draft and
+  // ride named dispatch side effects (reorderStack / removeFromStack /
+  // createStackWith); the create stub is keyed by client_key so the server
+  // row supersedes it through altKey.
   decisionStacks: {
     persistence: { kind: "collection", key: "decisionStacks" },
     hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: { altKey: "client_key" },
     feeds: ["decisionStacks.listStacks"],
   },
   // "Handled without you": decisions a role answered under a grant in the
@@ -251,6 +257,7 @@ export const CLIENT_SYNC_REGISTRY = {
   handledDecisions: {
     persistence: { kind: "collection", key: "handledDecisions" },
     hydration: { phase: "deferred" },
+    localFirst: true,
     feeds: ["sessionDecisions.listHandledByRoles"],
   },
   // The decision document page's context (doc body, task, stack, ladder,

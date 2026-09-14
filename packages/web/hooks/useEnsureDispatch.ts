@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
+import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 import { recordHibernationDispatchError } from "../lib/hibernation";
 
@@ -62,6 +63,9 @@ export function useEnsureDispatch() {
         return;
       }
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
+      // An org edit the rail rejected has no echo coming: stop replaying its
+      // intent onto the tree, or the optimistic shape outlives the refusal.
+      dropRejectedOrgIntent(useInboxStore.getState(), action, args);
       // A permanent rejection is dropped from the outbox (no re-drive will
       // land it), so it's the user's only chance to hear their action didn't
       // take — record it for the platform's feedback surface to render.

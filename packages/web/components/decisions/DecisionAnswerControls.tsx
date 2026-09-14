@@ -82,7 +82,10 @@ export function DecisionAnswerControls({
 
   // Digits answer a single; on a multi they toggle; Enter submits a multi,
   // rank or form; t opens the typed answer; x dismisses. Capture phase, so
-  // the global shortcut layer cannot eat the digits first.
+  // the global shortcut layer cannot eat the digits first. Exactly one
+  // surface on screen may pass `keys`; stopImmediatePropagation is the belt
+  // for a second claimant on the same window (two open stacks would answer
+  // two decisions on one digit otherwise).
   useWatchEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
@@ -101,18 +104,18 @@ export function DecisionAnswerControls({
       if (e.key >= "1" && e.key <= "9") {
         const n = Number(e.key) - 1;
         if (n >= decision.options.length) return;
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); e.stopImmediatePropagation();
         if (kind === "single") answerSingle(n);
         else if (kind === "multi") setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]));
         return;
       }
-      if (e.key === "Enter" && kind !== "single") { e.preventDefault(); e.stopPropagation(); submit(); return; }
+      if (e.key === "Enter" && kind !== "single") { e.preventDefault(); e.stopImmediatePropagation(); submit(); return; }
       if ((e.key === "t" || e.key === "T") && kind === "single") {
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); e.stopImmediatePropagation();
         setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0);
         return;
       }
-      if ((e.key === "x" || e.key === "X") && onDismiss) { e.preventDefault(); e.stopPropagation(); onDismiss(); }
+      if ((e.key === "x" || e.key === "X") && onDismiss) { e.preventDefault(); e.stopImmediatePropagation(); onDismiss(); }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -143,15 +146,15 @@ export function DecisionAnswerControls({
   const body = useMemo(() => {
     if (kind === "single") {
       return (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
           {decision.options.map((o, n) => (
-            <button key={n} onClick={() => answerSingle(n)} className={btn(n === (recommendation ?? 0))} title={o.description}>
+            <button key={n} onClick={() => answerSingle(n)} className={`${btn(n === (recommendation ?? 0))} w-full sm:w-auto text-left`} title={o.description}>
               {keys && n < 9 && <KeyCap size="xs">{String(n + 1)}</KeyCap>}
               <span>{o.label.replace(" (Recommended)", "")}</span>
               {recTag(n)}{defaultTag(n)}
             </button>
           ))}
-          <button onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }} className={btn(false)}>
+          <button onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }} className={`${btn(false)} w-full sm:w-auto`}>
             {keys && <KeyCap size="xs">t</KeyCap>}<span>type an answer</span>
           </button>
         </div>

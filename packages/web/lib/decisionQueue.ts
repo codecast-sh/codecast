@@ -60,6 +60,10 @@ export type QueueItem = {
   // session row's count, "messages since the ask".
   askedMessageCount?: number;
   decisionId?: string;
+  // A role holds this row under a grant (docs/architecture/decisions-as-
+  // documents.md D2): the lead's to clear, so the badge and "waiting on you"
+  // leave it out while the queue still lists it under "With a lead".
+  heldByRole?: boolean;
   // AskUserQuestion answers ride poll keys; a confirmation dialog maps its
   // two options to Enter/Escape rather than 1/2.
   toolUseId?: string;
@@ -223,6 +227,11 @@ export function messagesSinceAsk(
   return n;
 }
 
+/** What a PERSON must answer: the queue minus the rows a lead holds. */
+export function waitingOnPerson(items: readonly QueueItem[]): QueueItem[] {
+  return items.filter((i) => !i.heldByRole);
+}
+
 export function sortQueue(items: QueueItem[]): QueueItem[] {
   return [...items].sort((a, b) => {
     const t = queueTier(a) - queueTier(b);
@@ -253,6 +262,7 @@ export function decisionQueueItems(
       createdAt: d.created_at,
       askedMessageCount: d.asked_message_count,
       decisionId: d._id,
+      heldByRole: d.holder?.kind === "role",
     });
   }
   return out;

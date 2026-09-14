@@ -1141,7 +1141,7 @@ export const showForCli = mutation({
     const row = await findDecision(ctx, args.decision_id);
     if (!row) return { error: "Decision not found" };
     if (!(await userMayRead(ctx, auth.userId, row))) return { error: "Unauthorized: not your decision" };
-    return { decision: cliRowShape(row), ...(await decisionContext(ctx, row)) };
+    return { decision: cliRowShape(row), ...(await decisionContext(ctx, row, auth.userId)) };
   },
 });
 

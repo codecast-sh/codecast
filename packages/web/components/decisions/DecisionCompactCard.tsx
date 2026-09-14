@@ -57,9 +57,9 @@ export function DecisionCompactCard({
           )}
           <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${decision.blocking ? "bg-sol-yellow animate-pulse" : "bg-sol-blue"}`} />
           <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-text-muted hover:text-sol-blue truncate max-w-[16rem]">
-            {session?.title || "Session"}
+            {session?.title || decision.session_title || "Session"}
           </Link>
-          {session?.project_path && <span className="truncate">{getProjectName(session.project_path)}</span>}
+          {(session?.project_path || decision.project_path) && <span className="truncate">{getProjectName(session?.project_path || decision.project_path!)}</span>}
           <span>· asked {formatTimeAgo(decision.created_at, now)}</span>
           {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
           {decision.category && (
