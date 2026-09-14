@@ -79,6 +79,61 @@ describe("computeDaemonHealth", () => {
     });
   });
 
+  it("reads a backlog with recent progress as syncing, not stalled", () => {
+    // 904 messages drained in order keep the head old for minutes. The daemon
+    // completed an op 20s ago, so the queue is moving: the chip says so in
+    // blue and does not ask for a restart.
+    const input = {
+      daemon_last_seen: NOW - 5000,
+      daemon_pending_sync_count: 12,
+      daemon_oldest_pending_ms: 9 * 60_000,
+      daemon_pending_sync_messages: 904,
+      daemon_pending_sync_conversations: 12,
+      daemon_sync_no_progress_ms: 20_000,
+    };
+    const health = computeDaemonHealth(input, NOW);
+    expect(health).toEqual({
+      kind: "syncing",
+      pending: 12,
+      messages: 904,
+      conversations: 12,
+      behindMs: 9 * 60_000,
+      noProgressMs: 20_000,
+    });
+    expect(describeDaemonHealth(health)).toMatchObject({
+      colorVar: "--sol-blue",
+      label: "syncing · 904 messages",
+      command: "cast status",
+    });
+    expect(describeDaemonHealth(health)?.detail).toContain("working through a backlog of 904 messages across 12 conversations");
+    expect(describeDaemonHealth(health)?.detail).toContain("oldest has waited 9 min");
+    // The echo of a sent message is still late while the daemon catches up.
+    expect(blocksDelivery(health)).toBe(true);
+
+    // Progress that stopped a stall window ago is a stall again.
+    expect(computeDaemonHealth({ ...input, daemon_sync_no_progress_ms: SYNC_STALL_AFTER_MS }, NOW).kind).toBe("sync_stalled");
+    // A daemon that never reports progress keeps the stall verdict.
+    const { daemon_sync_no_progress_ms: _omit, ...older } = input;
+    expect(computeDaemonHealth(older, NOW).kind).toBe("sync_stalled");
+    expect(computeDaemonHealth({ ...older, daemon_sync_no_progress_ms: null }, NOW).kind).toBe("sync_stalled");
+  });
+
+  it("a stuck queue outranks a draining one across machines", () => {
+    const draining = {
+      device_id: "a", label: "Laptop", last_seen: NOW - 1000, pending_sync_count: 12,
+      pending_sync_messages: 904, pending_sync_conversations: 12, oldest_pending_ms: 9 * 60_000,
+      sync_no_progress_ms: 20_000,
+    };
+    const stuck = {
+      device_id: "b", label: "Studio", last_seen: NOW - 1000, pending_sync_count: 1,
+      pending_sync_messages: 3, pending_sync_conversations: 1, oldest_pending_ms: 3 * 60_000,
+      sync_no_progress_ms: 3 * 60_000,
+    };
+    expect(deviceHealthInput(draining).daemon_sync_no_progress_ms).toBe(20_000);
+    expect(worstDaemonHealth([draining, stuck], NOW)).toMatchObject({ kind: "sync_stalled", device: "Studio" });
+    expect(worstDaemonHealth([draining], NOW)).toMatchObject({ kind: "syncing", behindMs: 9 * 60_000 });
+  });
+
   it("defaults message/conversation backlog to zero for older daemons", () => {
     // A daemon that predates the honest-backlog fields still reports a stall via
     // pending + oldest; the new counts just fall back to 0.
@@ -355,6 +410,7 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(isDegradedDaemonHealth({ kind: "overloaded", freezeMs: 1 })).toBe(true);
     expect(isDegradedDaemonHealth({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
     expect(isDegradedDaemonHealth({ kind: "sync_stalled", pending: 1, messages: 1, conversations: 1, stalledMs: 1 })).toBe(true);
+    expect(isDegradedDaemonHealth({ kind: "syncing", pending: 1, messages: 1, conversations: 1, behindMs: 1, noProgressMs: 0 })).toBe(true);
   });
 
   // The hour tier reports an SLO, not a live symptom. Letting it decide the

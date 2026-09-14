@@ -84,6 +84,12 @@ function createBridge({ ipcRenderer, argv = [], platform = process.platform }) {
     // app their handler (macOS confirms with its own dialog), and read back
     // whether it is.
     setAsDefaultClient: (scheme) => ipcRenderer.invoke("set-default-client", scheme),
+    // What the OS is actually doing with this app's notifications, a test that
+    // reports what happened rather than that it tried, and the OS settings
+    // pane for this app. Absent on older shells — gate on them.
+    getNotificationStatus: (opts) => ipcRenderer.invoke("notification-status", opts ?? null),
+    testNotification: (opts) => ipcRenderer.invoke("notification-test", opts ?? null),
+    openNotificationSettings: () => ipcRenderer.invoke("open-notification-settings"),
     isDefaultClient: (scheme) => ipcRenderer.invoke("is-default-client", scheme),
     checkForUpdate: (opts) => ipcRenderer.invoke("check-for-update", opts),
     // Resolves { shown } — false when main dropped it (duplicate from another
