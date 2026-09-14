@@ -7,7 +7,7 @@ import {
   performRetireRole,
   performUpdateRole,
 } from "./orgRoles";
-import { computeOrgTree } from "./org";
+import { computeOrgTree, stateOf } from "./org";
 
 // Org roles (docs/architecture/org-roles.md S2 to S5): the boundary rules, the
 // cycle guard, the session pointer, and the tree filing sessions under roles.
@@ -265,5 +265,67 @@ describe("org.tree", () => {
     // The subagent is counted, never emitted.
     const all = [...tree.people, ...tree.roles].flatMap((n: any) => n.sessions.map((s: any) => s.title));
     expect(all).not.toContain("Kid");
+  });
+});
+
+describe("org.tree standing state", () => {
+  // The 07:00 scene (docs/architecture/org-roles-standing.md): the phone
+  // shows the anchor's line, and each lead is coloured by its own declared
+  // status, not by a tally of its hands. The tree therefore carries the
+  // standing session's pinned state on the anchor row and on its role.
+  const anchorConv = "a".repeat(32);
+  const quietConv = "q".repeat(32);
+  const ANCHOR = "anchors_growth";
+  const QUIET = "anchors_infra";
+
+  test("a role and its anchor carry the standing session's line, status and stamp; a quiet standing row is read directly", async () => {
+    const db = fixtures({
+      org_roles: [
+        { _id: "role_growth", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+        { _id: "role_infra", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Infra", handle: "infra", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: QUIET, created_by: ME, created_at: 1, updated_at: 1 },
+        { _id: "role_bare", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Bare", handle: "bare", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+      ],
+      anchors: [
+        // Names its role; its standing row is recent, so the scan holds it.
+        { _id: ANCHOR, scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: "b".repeat(32), conversation_id: anchorConv, org_role_id: "role_growth", name: "Growth lead", status: "active", created_at: 1 },
+        // Named by its role only; its standing row is older than the scan
+        // window, so the tree must read it directly.
+        { _id: QUIET, scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: "c".repeat(32), conversation_id: quietConv, name: "Infra lead", status: "active", created_at: 1 },
+      ],
+      conversations: [
+        { _id: anchorConv, session_id: "s1", user_id: ME, team_id: TEAM, status: "active", title: "Growth lead", agent_type: "claude_code", message_count: 3, last_message_role: "assistant", updated_at: NOW - 500, anchor_id: ANCHOR,
+          thread_state: "Status: Rewriting the weekly review\nNext: post it Friday", thread_state_status: "working", thread_state_at: NOW - 400 },
+        { _id: quietConv, session_id: "s2", user_id: ME, team_id: TEAM, status: "active", title: "Infra lead", agent_type: "claude_code", message_count: 3, last_message_role: "assistant", updated_at: NOW - 40 * 24 * 60 * 60 * 1000, anchor_id: QUIET,
+          thread_state: "Rotating the prod key\nBlocked: needs the new key from Ashot", thread_state_status: "blocked", thread_state_at: NOW - 3_600_000 },
+      ],
+    });
+    const tree = await computeOrgTree(ctxOf(db), ME as any, TEAM, NOW);
+
+    const growthAnchor = tree.anchors.find((a: any) => a.anchor_id === ANCHOR)!;
+    expect(growthAnchor.state_line).toBe("Rewriting the weekly review"); // the label is dropped, the line stays
+    expect(growthAnchor.state_status).toBe("working");
+    expect(growthAnchor.state_at).toBe(NOW - 400);
+
+    const growth = tree.roles.find((r: any) => r.handle === "growth")!;
+    expect(growth.standing).toEqual({
+      conversation_id: anchorConv, short_id: undefined, state: growthAnchor.state,
+      state_line: "Rewriting the weekly review", state_status: "working", state_at: NOW - 400,
+    });
+
+    // The quiet standing row never entered the scan, yet its role and anchor
+    // still carry its state, and the role's colour is its own declared status.
+    const infra = tree.roles.find((r: any) => r.handle === "infra")!;
+    expect(infra.standing?.state_line).toBe("Rotating the prod key");
+    expect(infra.standing?.state_status).toBe("blocked");
+    expect(infra.standing?.state).toBeUndefined();
+    expect(tree.anchors.find((a: any) => a.anchor_id === QUIET)!.state_status).toBe("blocked");
+
+    // A role with no standing agent says so, rather than borrowing a hand's state.
+    expect(tree.roles.find((r: any) => r.handle === "bare")!.standing).toBeNull();
+  });
+
+  test("an unknown status word and an empty pinned state read as absent", () => {
+    expect(stateOf({ thread_state: "\n\n", thread_state_status: "purple" })).toEqual({ state_line: null, state_status: null, state_at: null });
+    expect(stateOf(null)).toEqual({ state_line: null, state_status: null, state_at: null });
   });
 });

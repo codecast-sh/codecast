@@ -23,7 +23,7 @@ beforeAll(() => {
     url: "https://local.codecast.sh/",
   });
   const g = globalThis as any;
-  for (const k of ["window", "document", "navigator", "location", "localStorage", "sessionStorage", "Element", "HTMLElement", "Node", "MutationObserver", "ResizeObserver", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "IS_REACT_ACT_ENVIRONMENT"]) {
+  for (const k of ["window", "document", "navigator", "location", "localStorage", "sessionStorage", "Element", "HTMLElement", "Node", "MutationObserver", "ResizeObserver", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "KeyboardEvent", "IS_REACT_ACT_ENVIRONMENT"]) {
     hadGlobals.set(k, { had: k in g, was: g[k] });
   }
   g.window = dom.window;
@@ -45,6 +45,8 @@ beforeAll(() => {
   g.getComputedStyle = dom.window.getComputedStyle;
   g.requestAnimationFrame = (fn: FrameRequestCallback) => dom.window.setTimeout(() => fn(0), 0) as unknown as number;
   g.cancelAnimationFrame = (id: number) => dom.window.clearTimeout(id);
+  // The pane re-raises a forwarded chord as a real keystroke on window.
+  g.KeyboardEvent = dom.window.KeyboardEvent;
   g.IS_REACT_ACT_ENVIRONMENT = true;
 });
 
@@ -64,6 +66,9 @@ let available = false;
 /** Whether this build exposes the app IPC at all (a browser tab does not). */
 let hasBridge = true;
 
+/** The shell's event callback, captured so a test can deliver one. */
+let deliver: ((e: Record<string, unknown>) => void) | null = null;
+
 mock.module("../../../lib/desktop", () => ({
   browserPaneBridge: () =>
     hasBridge
@@ -72,7 +77,12 @@ mock.module("../../../lib/desktop", () => ({
             sent.push({ cmd, payload });
             return { ok: true };
           },
-          on: () => () => {},
+          on: (cb: (e: Record<string, unknown>) => void) => {
+            deliver = cb;
+            return () => {
+              deliver = null;
+            };
+          },
         }
       : null,
 }));
@@ -80,11 +90,13 @@ mock.module("../../../hooks/useNativeBrowserPane", () => ({
   useNativeBrowserPane: () => available,
 }));
 mock.module("../../../lib/tabParams", () => ({ useTabContext: () => ({ leafId: "leaf-1", isActive: true }) }));
-mock.module("../../../lib/stage", () => ({ stageFocus: () => {} }));
+/** Leaves the stage was asked to focus. */
+let focusedLeaves: string[] = [];
+mock.module("../../../lib/stage", () => ({ stageFocus: (leafId: string) => focusedLeaves.push(leafId) }));
 
 const URL_UNDER_TEST = "https://github.com/";
 
-async function mount() {
+async function mount(overrides: { focused?: boolean; session?: string } = {}) {
   const React = await import("react");
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
@@ -98,8 +110,8 @@ async function mount() {
     await act(async () => {
       root.render(
         React.createElement(NativeBackend, {
-          source: { kind: "url", url: URL_UNDER_TEST },
-          focused: true,
+          source: overrides.session ? { kind: "url", url: URL_UNDER_TEST, session: overrides.session } : { kind: "url", url: URL_UNDER_TEST },
+          focused: overrides.focused ?? true,
           reloadToken: 0,
           onTitle: () => {},
           onUrl: () => {},
@@ -117,6 +129,8 @@ beforeEach(() => {
   sent = [];
   available = false;
   hasBridge = true;
+  deliver = null;
+  focusedLeaves = [];
 });
 
 describe("the native pane before the shell has answered", () => {
@@ -172,6 +186,24 @@ describe("once the shell answers that it has the view", () => {
     await act(async () => root.unmount());
   });
 
+  test("the create names the offering session, so the shell's registry knows who may drive the view", async () => {
+    // The chip put the session's uuid on the route (`&s=`, lib/browserPane.ts);
+    // the shell records it in desktop-panes.json and that session's
+    // `cast browser` finds this exact view (packages/cli/src/browser/desktopPane.ts).
+    available = true;
+    const session = "509b4b48-c521-4352-bf19-eafa153745bb";
+    const { root, act } = await mount({ session });
+    const create = sent.find((s) => s.cmd === "create");
+    expect(create).toBeDefined();
+    expect(create!.payload.session).toBe(session);
+    await act(async () => root.unmount());
+    // A pane the human opened by hand carries no session: nothing may drive it.
+    sent = [];
+    const bare = await mount();
+    expect(sent.find((s) => s.cmd === "create")!.payload.session).toBeUndefined();
+    await bare.act(async () => bare.root.unmount());
+  });
+
   test("an answer that lands after mount still opens the view", async () => {
     // The real sequence: the probe is a call into another process, so the
     // first render always happens without an answer.
@@ -201,5 +233,117 @@ describe("once the shell answers that it has the view", () => {
     sent = [];
     await act(async () => root.unmount());
     expect(sent.map((s) => s.cmd)).toContain("destroy");
+  });
+});
+
+describe("a native pane that is on screen but not focused", () => {
+  test("stays shown, because the person is reading it beside their work", async () => {
+    // The stage marks every leaf but the focused one inactive, so a pane
+    // beside the conversation being typed into mounts with focused=false.
+    // It is still on screen, and the page must stay visible there. Only an
+    // empty rect hides the view: a background tab is display:none.
+    available = true;
+    const proto = (window as any).HTMLElement.prototype;
+    const realRect = proto.getBoundingClientRect;
+    proto.getBoundingClientRect = function (this: Element) {
+      return this.hasAttribute("data-native-pane")
+        ? { left: 600, top: 32, right: 1100, bottom: 700, width: 500, height: 668, x: 600, y: 32, toJSON() {} }
+        : realRect.call(this);
+    };
+    try {
+      const { root, act } = await mount({ focused: false });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 30));
+      });
+      const bounds = sent.filter((s) => s.cmd === "bounds");
+      expect(bounds.length).toBeGreaterThan(0);
+      expect(bounds[bounds.length - 1].payload.visible).toBe(true);
+      await act(async () => root.unmount());
+    } finally {
+      proto.getBoundingClientRect = realRect;
+    }
+  });
+
+  test("a pane with no area is hidden, which is how a background tab hides", async () => {
+    available = true;
+    const { root, act } = await mount({ focused: true });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    // jsdom lays nothing out, so this div measures 0x0 like a display:none tab.
+    const bounds = sent.filter((s) => s.cmd === "bounds");
+    expect(bounds.length).toBeGreaterThan(0);
+    expect(bounds[bounds.length - 1].payload.visible).toBe(false);
+    await act(async () => root.unmount());
+  });
+});
+
+describe("keys the page was not allowed to keep", () => {
+  test("come back as the app's own keystroke, so the palette still opens", async () => {
+    // A native view holds keyboard focus, so the app never sees Cmd+K. The
+    // shell forwards it (browserPanes.js) and the pane re-raises it here.
+    // The app's shortcut listener is on window, in the capture phase, and
+    // matches on event.key — so that is exactly what has to arrive.
+    available = true;
+    const { root, act } = await mount();
+    const seen: Array<{ key: string; meta: boolean; ctrl: boolean }> = [];
+    const onKey = (e: KeyboardEvent) => seen.push({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey });
+    window.addEventListener("keydown", onKey, true);
+    try {
+      expect(deliver).not.toBeNull();
+      await act(async () => {
+        deliver!({ paneId: (sent[0].payload as any).paneId, event: "chord", key: "k" });
+      });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].key).toBe("k");
+      // One modifier, the platform's own: both would match nothing.
+      expect(seen[0].meta || seen[0].ctrl).toBe(true);
+      expect(seen[0].meta && seen[0].ctrl).toBe(false);
+    } finally {
+      window.removeEventListener("keydown", onKey, true);
+      await act(async () => root.unmount());
+    }
+  });
+
+  test("reload is the pane's own: it goes to the view, not to the app", async () => {
+    available = true;
+    const { root, act } = await mount();
+    const seen: string[] = [];
+    const onKey = (e: KeyboardEvent) => seen.push(e.key);
+    window.addEventListener("keydown", onKey, true);
+    try {
+      // Addressed to THIS pane: the component ignores another pane's events.
+      const paneId = (sent[0].payload as any).paneId;
+      sent = [];
+      await act(async () => {
+        deliver!({ paneId, event: "chord", key: "r" });
+      });
+      expect(seen).toEqual([]);
+      expect(sent.map((s) => s.cmd)).toContain("reload");
+    } finally {
+      window.removeEventListener("keydown", onKey, true);
+      await act(async () => root.unmount());
+    }
+  });
+});
+
+describe("a click inside the page", () => {
+  test("moves the stage's focus ring to this pane", async () => {
+    // The view takes OS focus on a click, and only the shell sees that. It
+    // reports it as a focus event; the pane turns it into a stage gesture so
+    // the ring follows the click like it does for any other pane.
+    available = true;
+    const { root, act } = await mount();
+    const paneId = (sent[0].payload as any).paneId;
+    await act(async () => {
+      deliver!({ paneId, event: "focus" });
+    });
+    expect(focusedLeaves).toEqual(["leaf-1"]);
+    // Another pane's focus is not this pane's business.
+    await act(async () => {
+      deliver!({ paneId: "someone-else", event: "focus" });
+    });
+    expect(focusedLeaves).toEqual(["leaf-1"]);
+    await act(async () => root.unmount());
   });
 });

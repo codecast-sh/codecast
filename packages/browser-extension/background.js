@@ -65,6 +65,7 @@
 importScripts("status.js");
 
 const PROTOCOL = 4;
+const DEFAULT_CAST_GROUP = { title: "Cast", color: "red" };
 
 let ws = null;
 let status = { state: "no-config", detail: "not paired yet" };
@@ -79,9 +80,15 @@ const BOOT = { id: randomHex(4), at: Date.now() };
 // Connection management
 // --------------------------------------------------------------------------
 
+let bridgeConfig = null;
+let configVersion = 0;
+
 async function getConfig() {
+  if (bridgeConfig) return bridgeConfig;
+  const version = configVersion;
   const { bridge } = await chrome.storage.local.get("bridge");
-  return bridge || null;
+  if (version !== configVersion) return getConfig();
+  return (bridgeConfig = bridge || null);
 }
 
 function setStatus(state, detail) {
@@ -175,6 +182,8 @@ function resetRetries() {
 }
 
 async function connect(trigger = "boot") {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  note(`connect via ${trigger}`);
   const cfg = await getConfig();
   if (!cfg || !cfg.token || !cfg.port) {
     setStatus("no-config", "not paired yet; run `cast browser extension setup` in a terminal");
@@ -187,9 +196,9 @@ async function connect(trigger = "boot") {
   // A token rejection stays on the badge until a host proves the token; the
   // attempt itself is silent so the badge does not flicker every 5 s.
   if (status.state !== "bad-token") setStatus("connecting", `127.0.0.1:${cfg.port}`);
-  note(`connect via ${trigger}`);
   const nonce = randomHex(32);
   let proven = false;
+  let proving = null;
   hostProven = false;
   const deadline = setTimeout(() => {
     if (proven || ws !== sock) return;
@@ -215,6 +224,7 @@ async function connect(trigger = "boot") {
   };
 
   sock.onmessage = async (e) => {
+    if (ws !== sock) return;
     let msg;
     try {
       msg = JSON.parse(e.data);
@@ -223,31 +233,40 @@ async function connect(trigger = "boot") {
     }
     // Nothing is executed for a host that has not proved it holds the token.
     if (!proven) {
-      if (msg.op !== "welcome") return;
-      if (sameHex(msg.proof, await hmacHex(cfg.token, nonce))) {
-        proven = true;
-        hostProven = true;
-        clearTimeout(deadline);
-        resetRetries();
-        startKeepalive();
-        note("proven");
-        setStatus("connected", `127.0.0.1:${cfg.port}`);
-      } else {
-        // Close first, then set the status: the close handler reads it.
-        note("host proof failed");
-        sock.close(4401, "host could not prove the token");
-        setStatus("bad-token", "the host on that port could not prove it holds the token; run `cast browser extension setup` again");
+      if (msg.op === "welcome") {
+        if (!proving) proving = (async () => {
+          const valid = sameHex(msg.proof, await hmacHex(cfg.token, nonce));
+          if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
+          if (valid) {
+            proven = true;
+            hostProven = true;
+            clearTimeout(deadline);
+            resetRetries();
+            startKeepalive();
+            note("proven");
+            setStatus("connected", `127.0.0.1:${cfg.port}`);
+          } else {
+            // Close first, then set the status: the close handler reads it.
+            note("host proof failed");
+            sock.close(4401, "host could not prove the token");
+            setStatus("bad-token", "the host on that port could not prove it holds the token; run `cast browser extension setup` again");
+          }
+        })();
+        await proving;
+        return;
       }
-      return;
+      if (!proving) return;
+      await proving;
+      if (!proven || ws !== sock) return;
     }
     if (msg.op === "ping") return send({ op: "pong" });
     if (msg.op === "pong") return;
     if (typeof msg.id !== "number") return;
     try {
       const result = await handle(msg);
-      send({ id: msg.id, ok: true, ...result });
+      if (ws === sock) send({ id: msg.id, ok: true, ...result });
     } catch (err) {
-      send({ id: msg.id, ok: false, error: String((err && err.message) || err) });
+      if (ws === sock) send({ id: msg.id, ok: false, error: String((err && err.message) || err) });
     }
   };
 
@@ -292,13 +311,19 @@ function send(msg) {
 }
 
 /** Drop the current socket and connect afresh, with the retry ladder reset. */
-function reconnect() {
+function reconnect(refreshConfig = true) {
+  if (refreshConfig) {
+    bridgeConfig = null;
+    configVersion++;
+  }
   if (ws) {
     try {
       ws.close();
     } catch {}
     ws = null;
   }
+  hostProven = false;
+  stopKeepalive();
   resetRetries();
   status = { state: "disconnected", detail: "" };
   connect("reconnect");
@@ -358,7 +383,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // human's window is as it was, unless it is the only tab there.
   if (msg && msg.op === "wake") {
     note("wake from the options page");
-    reconnect();
+    if (!hostProven || ws?.readyState !== WebSocket.OPEN) reconnect(false);
     const tab = sender && sender.tab;
     if (tab && tab.id !== undefined) {
       chrome.tabs
@@ -380,34 +405,26 @@ globalThis.__castReconnect = reconnect;
 // --------------------------------------------------------------------------
 
 async function handle(m) {
-  await groupsLoaded;
   switch (m.op) {
     case "ping":
       return { version: chrome.runtime.getManifest().version, protocol: PROTOCOL };
 
     case "tabs.list": {
-      await refreshGroups();
-      const tabs = await chrome.tabs.query({});
+      await loadOwnership();
+      const tabs = await bounded(chrome.tabs.query({}), "Chrome tabs.query", 8000);
       return { tabs: tabs.filter((t) => t.id !== undefined).map(describeTab) };
     }
 
     case "tabs.create": {
-      await groupsLoaded;
+      await loadOwnership();
+      const group = m.group || DEFAULT_CAST_GROUP;
       // Into the window that already holds this group, so cast tabs stay
       // together instead of a second group appearing per window.
-      const windowId = m.group ? windowOfOwnedGroup(m.group.title) : undefined;
-      // onCreated fires before create() resolves; a tab made here is owned from
-      // its first event, so the host never mistakes it for the human's.
-      creating++;
-      let t;
-      try {
-        t = await createTab({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
-      } finally {
-        creating--;
-      }
+      const windowId = windowOfOwnedGroup(group.title);
+      const t = await createTab({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
       ownedTabs.add(t.id);
       persistOwned();
-      if (m.group) await placeInGroup(t, m.group);
+      await placeInGroup(t, group);
       return { tabId: t.id };
     }
 
@@ -424,6 +441,10 @@ async function handle(m) {
     }
 
     case "attach":
+      if (m.owned === true) {
+        ownedTabs.add(m.tabId);
+        persistOwned();
+      }
       await attachTab(m.tabId);
       return {};
 
@@ -483,10 +504,10 @@ async function createTab(props) {
  * bounded, so a tab that cannot answer is reported as such within seconds.
  */
 const ATTACH_STEP_MS = 5000;
-function bounded(promise, what) {
+function bounded(promise, what, timeoutMs = ATTACH_STEP_MS) {
   let timer;
   const clock = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ATTACH_STEP_MS}ms (tab frozen or discarded)`)), ATTACH_STEP_MS);
+    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${timeoutMs}ms (Chrome busy or tab unresponsive)`)), timeoutMs);
   });
   return Promise.race([promise, clock]).finally(() => clearTimeout(timer));
 }
@@ -516,8 +537,10 @@ async function boundedCdp(tabId, method, params) {
 }
 
 async function attachTab(tabId) {
+  await loadOwnership();
+  const t = await chrome.tabs.get(tabId).catch(() => null);
+  if (ownedTabs.has(tabId) && t?.groupId === NO_GROUP) await placeInGroup(t, DEFAULT_CAST_GROUP);
   if (!attached.has(tabId)) {
-    const t = await chrome.tabs.get(tabId).catch(() => null);
     if (t && t.discarded) throw new Error("this tab was discarded by Chrome's memory saver; activate it once to wake it");
     try {
       await bounded(chrome.debugger.attach({ tabId }, "1.3"), "debugger.attach");
@@ -541,16 +564,19 @@ async function attachTab(tabId) {
   await bounded(
     Promise.all(["Page", "DOM", "Runtime", "Accessibility", "Network"].map((domain) => chrome.debugger.sendCommand({ tabId }, domain + ".enable", {}).catch(() => {}))),
     "domain enable",
+    20_000,
   );
   if (!borderScripts.has(tabId)) await bounded(installBorder(tabId), "overlay install");
 }
 
 async function detachTab(tabId) {
   if (attached.has(tabId)) {
-    attached.delete(tabId);
     markDriven(tabId, false);
-    await removeBorder(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {});
+    try {
+      await bounded(removeBorder(tabId), "overlay removal").catch(() => {});
+    } finally {
+      await bounded(chrome.debugger.detach({ tabId }), "debugger.detach").catch(() => {}).finally(() => attached.delete(tabId));
+    }
   }
 }
 
@@ -603,13 +629,20 @@ const indicators = new Map(); // groupId → indicator state (beginWork)
  */
 const ownedGroups = new Set();
 const ownedTabs = new Set(); // tabs this extension opened; the only ones that belong in an owned group
-const groupsLoaded = chrome.storage.session
-  .get(["ownedGroups", "ownedTabs"])
-  .then(({ ownedGroups: gids, ownedTabs: tids }) => {
-    for (const id of gids || []) ownedGroups.add(id);
-    for (const id of tids || []) ownedTabs.add(id);
-  })
-  .catch(() => {});
+let ownershipLoaded = null;
+function loadOwnership() {
+  if (!ownershipLoaded) {
+    ownershipLoaded = bounded(chrome.storage.session.get(["ownedGroups", "ownedTabs"]), "Chrome storage.session.get")
+      .then(({ ownedGroups: gids, ownedTabs: tids }) => {
+        for (const id of gids || []) ownedGroups.add(id);
+        for (const id of tids || []) ownedTabs.add(id);
+      }).catch(error => {
+        ownershipLoaded = null;
+        throw error;
+      });
+  }
+  return ownershipLoaded;
+}
 
 /** Both sets outlive this worker (session storage), so a restart keeps telling ours from the human's. */
 function persistOwned() {
@@ -1002,14 +1035,8 @@ chrome.debugger.onDetach.addListener((source) => {
 
 // Tab lifecycle, so the host can emit Target.targetCreated/Destroyed/InfoChanged
 // to clients that asked to discover targets — including tabs the human opens.
-/** tabs.create calls in flight; a tab that appears meanwhile is one of ours. */
-let creating = 0;
 chrome.tabs.onCreated.addListener((t) => {
   if (t.id !== undefined) {
-    if (creating > 0) {
-      ownedTabs.add(t.id);
-      persistOwned();
-    }
     tabGroupOf.set(t.id, t.groupId);
     send({ op: "tab", kind: "created", tab: describeTab(t) });
   }

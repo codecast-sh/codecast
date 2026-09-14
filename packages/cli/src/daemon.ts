@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { prepareTmuxDelivery, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -142,6 +142,7 @@ import {
   daemonPlistNeedsUpgrade,
   daemonLauncherMatchesCommand,
   daemonTickStale,
+  watchdogKillVerdict,
   DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
   EXIT_DO_NOT_RESTART,
@@ -150,10 +151,16 @@ import {
   watchdogHeartbeatStale,
   WATCHDOG_HEARTBEAT_FILENAME,
   WATCHDOG_PASS_STAMP_FILENAME,
+  WATCHDOG_LOG_FILENAME,
 } from "./supervision.js";
 import {
   clearDaemonExitStamp,
   consumeHangMarker,
+  peekHangMarker,
+  readWedgedPassStamp,
+  writeWedgedPassStamp,
+  clearWedgedPassStamp,
+  writeWatchdogKillMarker,
   createHangRecorder,
   noRestartReason,
   writeDaemonExitStamp,
@@ -203,6 +210,7 @@ export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
+import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -1066,6 +1074,7 @@ interface DaemonState {
   pendingSyncMessages?: number;
   pendingSyncConversations?: number;
   pendingSyncOldestMs?: number;
+  pendingSyncNoProgressMs?: number;
   timestamp?: number;
   authExpired?: boolean;
   authFailureCount?: number;
@@ -1527,6 +1536,17 @@ const messagesInFlight = new Map<string, { ts: number; conversationId: string }>
 // such an entry is vouched to the server (collectPastedInjectedIds, the
 // paste_verified stamp). A pre-paste entry exists solely for dedup.
 const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
+
+// The daemon's own clock at the newest delivery into a conversation, or null.
+// The escape handler compares it against the press time: an Escape pressed
+// before a paste was aimed at a turn the paste has since replaced.
+export function latestInjectionTsFor(conversationId: string): number | null {
+  let latest: number | null = null;
+  for (const entry of injectedMessageTs.values()) {
+    if (entry.conversationId === conversationId && (latest === null || entry.ts > latest)) latest = entry.ts;
+  }
+  return latest;
+}
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
 const INJECTION_DEDUP_TTL_MS = 60_000;
 const UNCONFIRMED_INJECTION_DEDUP_MAX_MS = 30 * 60_000;
@@ -2950,6 +2970,10 @@ async function syncHealthFields(): Promise<{
   oldest_pending_ms: number;
   pending_sync_messages: number;
   pending_sync_conversations: number;
+  // How long the sync has gone without completing anything. With the head's
+  // age this is what lets the web say "syncing" over a backlog that is
+  // draining and keep "stalled" for a queue that is stuck.
+  sync_no_progress_ms: number;
   daemon_started_at: number;
   loop_freeze_ms: number;
   loop_freeze_1h_ms: number;
@@ -2963,6 +2987,7 @@ async function syncHealthFields(): Promise<{
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
     pending_sync_messages: health?.messages ?? 0,
     pending_sync_conversations: health?.conversations ?? 0,
+    sync_no_progress_ms: health?.noProgressMs ?? 0,
     // Boot time and the loop freeze budget: the web reads these as "restarted,
     // catching up" and "under load" (see LoopFreezeLedger).
     daemon_started_at: daemonStartedAt,
@@ -3995,7 +4020,8 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
+    [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -5504,6 +5530,14 @@ async function executeRemoteCommand(
           error = "Missing conversation_id";
           break;
         }
+        // The web forwards every press and shows the interruption line at once;
+        // this handler holds the facts (see escapeInterrupt.ts) and decides.
+        const pressedAt = typeof parsed.pressed_at === "number" ? parsed.pressed_at : null;
+        const lastInjectedAt = latestInjectionTsFor(conversationId);
+        const skipEscape = (verdict: { action: "skip"; reason: string }, where: string): void => {
+          result = `escape_${verdict.reason}`;
+          log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
+        };
 
         const escapeThreadId = appServerConversations.get(conversationId) ?? persistedAppServerThreads.get(conversationId)?.threadId;
         if (escapeThreadId) {
@@ -5513,45 +5547,68 @@ async function executeRemoteCommand(
             persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
             persistAppServerThreadRegistrations();
           }
-          if (activeTurnId && codexAppServerInstance?.running) {
-            await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
-            result = "escape_interrupted";
-            log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
-          } else {
-            result = "escape_no_active_turn";
-            log(`[REMOTE] No active turn to interrupt on app-server thread ${escapeThreadId.slice(0, 8)}`);
+          // turn/start is the app-server's injection; its mark is this daemon's clock.
+          const turnStartedAt = turnStartedAtFor(escapeThreadId);
+          const verdict = decideEscape({
+            pressedAt,
+            now: Date.now(),
+            lastInjectedAt: Math.max(lastInjectedAt ?? 0, turnStartedAt ?? 0) || null,
+            turnActive: !!activeTurnId && !!codexAppServerInstance?.running,
+          });
+          if (verdict.action === "skip") {
+            skipEscape(verdict, `app-server thread ${escapeThreadId.slice(0, 8)}`);
+            break;
           }
+          await codexAppServerInstance!.turnInterrupt(escapeThreadId, activeTurnId!);
+          result = "escape_interrupted";
+          log(`[REMOTE] Interrupted app-server turn ${activeTurnId!.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
           break;
         }
 
-        const cache = readConversationCache();
-        const reverse = buildReverseConversationCache(cache);
-        const sessionId = reverse[conversationId];
+        const sessionId = await resolveCommandSessionId(conversationId);
         if (!sessionId) {
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        const agentType = detectSessionAgentType(sessionId);
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, agentType);
+        if (!tmuxTarget && !proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const hookStatus = lastHookStatus.get(sessionId)?.status;
+        let paneState: TmuxLiveState | null = null;
+        if (tmuxTarget) {
+          try {
+            ({ state: paneState } = await captureTmuxLiveState(tmuxTarget, glyphlessPromptPattern(agentType), 25));
+          } catch (captureErr) {
+            log(`[REMOTE] Escape: could not read pane ${tmuxTarget} (${captureErr instanceof Error ? captureErr.message : String(captureErr)}); judging by hook status ${hookStatus ?? "unknown"}`);
+          }
+        }
+        const verdict = decideEscape({
+          pressedAt,
+          now: Date.now(),
+          lastInjectedAt,
+          turnActive: turnLooksActive(hookStatus, paneState),
+        });
+        if (verdict.action === "skip") {
+          skipEscape(verdict, `session ${sessionId.slice(0, 8)} pane=${paneState ?? "none"} hook=${hookStatus ?? "unknown"}`);
+          break;
+        }
         if (tmuxTarget) {
           await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
           result = "escape_sent";
-          log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
-        } else if (!proc) {
-          error = `No running process for session ${sessionId.slice(0, 8)}`;
-        } else if (!MID_TURN_AGENT_STATUSES.has(lastHookStatus.get(sessionId)?.status ?? "")) {
-          // A SIGINT reaching claude at its prompt EXITS the process (observed
-          // 2026-08-28: pid 41092 died on an escape sent to an idle session). The
-          // signal is only an interrupt while a turn is running; otherwise there is
-          // nothing to interrupt and the honest answer is a no-op.
-          result = "escape_no_active_turn";
-          log(`[REMOTE] No active turn to interrupt for session ${sessionId.slice(0, 8)} (no tmux pane, skipping SIGINT)`);
+          log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget} (pane=${paneState ?? "unread"} hook=${hookStatus ?? "unknown"})`);
         } else {
+          // A SIGINT reaching claude at its prompt EXITS the process (observed
+          // 2026-08-28: pid 41092 died on an escape sent to an idle session), so
+          // the no-pane path only runs once the hook status proves a turn.
           try {
-            process.kill(proc.pid, "SIGINT");
+            process.kill(proc!.pid, "SIGINT");
             result = "escape_sent_sigint";
-            log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc.pid}`);
+            log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc!.pid}`);
           } catch (killErr) {
-            error = `Failed to send SIGINT to pid ${proc.pid}: ${killErr}`;
+            error = `Failed to send SIGINT to pid ${proc!.pid}: ${killErr}`;
           }
         }
         break;
@@ -12247,7 +12304,10 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number; multiSelect?: boolean };
+// `unnumbered`: the menu's rows carry no digits, so an answer must move the
+// highlight (selectHighlightedOption) rather than press a digit. `detail`: the
+// dialog's own explanatory text between its title and its options.
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number; multiSelect?: boolean; unnumbered?: boolean; detail?: string };
 
 // Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
 // renders as a box to the RIGHT of the options; tmux capture-pane flattens those
@@ -12502,7 +12562,76 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
     return { question, options: confirmOptions, isConfirmation: true };
   }
 
-  return null;
+  return parseSelectDialog(lines);
+}
+
+// Claude Code raises some dialogs of its own as a plain select list: no digits
+// on the rows and no key hint footer. The effort recommendation shown after a
+// session moves to Opus 5 (verified on 2.1.270) is one:
+//
+//   ────────────────────────────────────────
+//    We recommend Opus 5 at medium effort
+//
+//      Opus 5 at medium effort is faster and uses fewer tokens …
+//
+//      ❯ Keep high
+//        Switch Opus 5 to medium effort
+//
+// Neither path above matches it, and its ❯ read as a live composer, so every
+// delivery pasted into the dialog, never saw the paste land, and wrote it again
+// (four sessions stuck this way on 2026-09-14). Recognized by structure, not by
+// wording: an indented cursor row and its sibling rows at the label column are
+// the LAST text in the capture (a live composer and its footer always render
+// below scrolled content, so conversation text can never sit there), and a rule
+// caps the dialog above its title. The widget ignores digits (verified on the
+// trust dialog, the same widget), so answers move the highlight instead.
+const SELECT_CURSOR_ROW = /^( {2,})❯ (\S.*)$/;
+const DIALOG_TOP_RULE = /[─━═▔▁]{5,}/;
+
+export function parseSelectDialog(lines: string[]): InteractivePrompt | null {
+  let end = lines.length - 1;
+  while (end >= 0 && !lines[end].trim()) end--;
+  let start = end;
+  while (start > 0 && lines[start - 1].trim()) start--;
+  if (end - start < 1 || end - start > 8) return null;
+
+  const cursorRows = lines.slice(start, end + 1).filter((l) => SELECT_CURSOR_ROW.test(l));
+  if (cursorRows.length !== 1) return null;
+  const labelCol = SELECT_CURSOR_ROW.exec(cursorRows[0])![1].length + 2;
+  const options: Array<{ label: string; description?: string }> = [];
+  for (const raw of lines.slice(start, end + 1)) {
+    const row = raw.replace(/\s+$/, "");
+    const sibling = !row.slice(0, labelCol).trim() && /\S/.test(row[labelCol] ?? "");
+    if (!SELECT_CURSOR_ROW.test(row) && !sibling) return null;
+    const text = row.slice(labelCol);
+    if (/^\d+[.)]\s/.test(text)) return null;
+    // Two column rows ("Wait for limit to reset      Resets 2:50pm") keep the
+    // right column as the option's description.
+    const [label, ...rest] = text.split(/\s{3,}/);
+    options.push({ label: label.trim(), ...(rest.length ? { description: rest.join(" ").trim() } : {}) });
+  }
+
+  // Title and body: the rows between the dialog's top rule and its options.
+  // A capture that starts right below the rule (extractTmuxLiveRegion's live
+  // region) has no rule left in it, so the top of the text bounds it too.
+  const rows: string[] = [];
+  let capped = false;
+  for (let i = start - 1; i >= Math.max(0, start - 16); i--) {
+    const trimmed = lines[i].trim();
+    if (DIALOG_TOP_RULE.test(trimmed)) {
+      const fused = trimmed.replace(RULE_RUN_EDGE, "").trim();
+      if (fused) rows.unshift(fused);
+      capped = true;
+      break;
+    }
+    if (/^[❯›⏺●⎿]/.test(trimmed) || BOX_DRAWING_CHARS.test(trimmed)) return null;
+    rows.unshift(trimmed);
+  }
+  if (!capped && start - rows.length > 0) return null;
+  const paragraphs = rows.join("\n").split(/\n\s*\n/).map((p) => p.split("\n").join(" ").trim()).filter(Boolean);
+  if (paragraphs.length === 0) return null;
+  const [question, ...body] = paragraphs;
+  return { question, options, firstOptionIdx: start, unnumbered: true, ...(body.length ? { detail: body.join("\n\n") } : {}) };
 }
 
 // Claude Code's spend-limit interstitial — "What do you want to do?" over the
@@ -12653,6 +12782,7 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
   return [{
     question: prompt.question,
     ...(prompt.header ? { header: prompt.header } : {}),
+    ...(prompt.detail ? { detail: prompt.detail } : {}),
     options: prompt.options,
     ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
     ...(prompt.multiSelect ? { multiSelect: true } : {}),
@@ -12939,7 +13069,11 @@ async function checkForInteractivePrompt(
     // (this is how the "Disk headroom" poll shipped a garbled card). Poll briefly so
     // the deferral wins the flush race. A genuine non-JSONL menu (e.g. the `--model`
     // picker) never gains a pending tool_use, so it just costs this short settle.
-    if (!prompt.isConfirmation) {
+    // A confirmation or an unnumbered select list is the terminal's own dialog,
+    // never the agent's AskUserQuestion: no JSONL card to defer to, no agent
+    // prose buffered above it, no hook sidecar describing it.
+    const terminalDialog = !!(prompt.isConfirmation || prompt.unnumbered);
+    if (!terminalDialog) {
       for (let attempt = 0; attempt < 4; attempt++) {
         if (sessionHasPendingAskUserQuestion(sessionId)) {
           log(`Deferring to JSONL AskUserQuestion card for ${sessionId.slice(0, 8)} (skipping scraped duplicate)`);
@@ -12971,12 +13105,12 @@ async function checkForInteractivePrompt(
     // The assistant's reasoning that motivates this question is buffered out of the
     // JSONL until answered, so scrape it off the pane — without it the web user can't
     // judge the question. Empty for confirmations / bare slash menus (no preceding prose).
-    const prose = prompt.isConfirmation ? "" : extractAssistantProseAbovePrompt(paneContent);
+    const prose = terminalDialog ? "" : extractAssistantProseAbovePrompt(paneContent);
 
     // Prefer the hook's full tool_input (option descriptions + headers + multiSelect,
     // which the box-art-stripped scrape loses) when it's for THIS question; else fall
     // back to the scrape. Both self-correct to the real JSONL card once answered.
-    const sidecar = prompt.isConfirmation ? null : readAskUserQuestionInput(sessionId);
+    const sidecar = terminalDialog ? null : readAskUserQuestionInput(sessionId);
     const questions = resolveInteractiveQuestions(prompt, sidecar);
     if (prose) log(`Recovered ${prose.length} chars of buffered prose for ${sessionId.slice(0, 8)}'s question`);
 
@@ -13086,7 +13220,16 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // Nothing but the live footer renders below the box, so this can't pull in
     // scrollback (the reason the region is narrowed in the first place).
     const top = sepIdx[sepIdx.length - 2];
-    return tail.slice(top + 1).join("\n");
+    // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
+    // The running turn's only marker is now its own status line, rendered
+    // directly above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry
+    // that one line in when it is the nearest text above the box; it cannot be
+    // scrollback, because the finished form of the line reads differently and
+    // nothing else renders between the transcript and a live box.
+    let above = top - 1;
+    while (above >= 0 && !tail[above].trim()) above--;
+    const status = above >= 0 && CLAUDE_TURN_STATUS_LINE.test(tail[above]) ? [tail[above]] : [];
+    return [...status, ...tail.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
     // Modal or busy indicator: one separator, content lives below it.
@@ -13187,6 +13330,7 @@ export type TmuxLiveState =
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
+  | "menu"          // unnumbered select dialog (parseSelectDialog) — only a human answers it; press nothing, hold delivery
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
@@ -13214,6 +13358,11 @@ function newestPaintedFrame(region: string): string {
   return region;
 }
 
+// Claude Code's running-turn status line: a cycling asterisk glyph, a verb, an
+// ellipsis, then the elapsed time in parentheses. The finished form ("✻ Churned
+// for 0s · done 9:52 AM") has no "… (" and does not match.
+const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\((?:\d+m\s*)?\d+s\b/m;
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -13231,6 +13380,14 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // running", and the type-ahead paste busy allows is exactly what is unsafe here.
   if (/^\s*Resuming session[.…]/mi.test(newestPaintedFrame(region))) return "starting";
   if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
+  // Claude Code's own turn status line: a cycling asterisk glyph, a verb, an
+  // ellipsis, then the elapsed time in parentheses — "✶ Perambulating… (50s ·
+  // ↓ 161 tokens)". v2.1.270 prints no "esc to interrupt" anywhere on such a
+  // pane (the footer says "← for agents"), so without this rule a running turn
+  // with its composer painted read as idle (2026-09-14: the daemon skipped a
+  // user's Escape as "no active turn" while the pane showed this line). The
+  // finished form, "✻ Churned for 0s · done 9:52 AM", has no "… (" and stays idle.
+  if (CLAUDE_TURN_STATUS_LINE.test(region)) return "busy";
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
   // is also unique to the Rewind option list.
@@ -13309,6 +13466,10 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   if (numberedCursorRow && /Press enter to continue|Update available!/i.test(region)) {
     return "update_menu";
   }
+  // An unnumbered select dialog draws its highlight with the same ❯ glyph, so
+  // it must be recognized before the idle rule below: a paste lands in no
+  // composer there, and no key of ours is safe to press.
+  if (parseSelectDialog(region.split("\n"))) return "menu";
   const promptVisible = region.includes("❯") || region.includes("›");
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
@@ -14830,32 +14991,60 @@ export type TrustPromptStep =
  * "confirm" is returned ONLY when the highlight is provably on the affirmative
  * option. Everything uncertain returns "none", which presses nothing.
  */
+// › is codex's cursor glyph, and its options are numbered ("› 1. Yes,
+// continue"), so the pattern has to tolerate a number between the cursor and
+// the option text or the codex dialog reads as "no affirmative option" and we
+// press nothing forever (ct-49609). Claude numbers its options too on some
+// builds ("❯ 1. Yes, I trust this folder").
+const TRUST_AFFIRMATIVE_ROW = /^\s*[❯›>]?\s*(?:\d+[.)]\s*)?Yes\b/i;
+const isTrustAffirmativeRow = (line: string) => TRUST_AFFIRMATIVE_ROW.test(line);
+
 export function planTrustPromptStep(lines: string[]): TrustPromptStep {
-  // › is codex's cursor glyph, and its options are numbered ("› 1. Yes,
-  // continue"), so both patterns have to tolerate a number between the cursor
-  // and the option text or the codex dialog reads as "no affirmative option"
-  // and we press nothing forever (ct-49609). Claude numbers its options too on
-  // some builds ("❯ 1. Yes, I trust this folder").
+  return planHighlightStep(lines, isTrustAffirmativeRow);
+}
+
+/**
+ * The same decision for any option of any select list: `isTarget` names the
+ * row to land on. The bottom-most matching row wins, because a live dialog is
+ * the last thing painted and scrollback above it can repeat an option's words.
+ */
+export function planHighlightStep(lines: string[], isTarget: (line: string) => boolean): TrustPromptStep {
   const CURSOR = /^\s*[❯›>]\s*\S/;
-  const AFFIRMATIVE = /^\s*[❯›>]?\s*(?:\d+[.)]\s*)?Yes\b/i;
-  const yesIdx = lines.findIndex(l => AFFIRMATIVE.test(l));
-  if (yesIdx < 0) return { action: "none", reason: "no affirmative option on the pane" };
-  // The cursor NEAREST the affirmative option, not the first one on the pane:
+  let targetIdx = -1;
+  for (let i = lines.length - 1; i >= 0 && targetIdx < 0; i--) if (isTarget(lines[i])) targetIdx = i;
+  if (targetIdx < 0) return { action: "none", reason: "the option to select is not on the pane" };
+  // The cursor NEAREST the target option, not the first one on the pane:
   // codex prints "> You are in <cwd>" five lines above the menu, and reading
   // that as the highlight sent Down keystrokes at a dialog whose cursor was
   // already on "Yes". The menu's cursor is inside the option list, and the
-  // affirmative option is in that list, so proximity picks it (ct-49609).
+  // target option is in that list, so proximity picks it (ct-49609).
   const cursorIdx = lines.reduce(
-    (best, line, i) => (CURSOR.test(line) && (best < 0 || Math.abs(i - yesIdx) < Math.abs(best - yesIdx)) ? i : best),
+    (best, line, i) => (CURSOR.test(line) && (best < 0 || Math.abs(i - targetIdx) < Math.abs(best - targetIdx)) ? i : best),
     -1,
   );
   if (cursorIdx < 0) return { action: "none", reason: "cannot see which option is highlighted" };
-  if (cursorIdx === yesIdx) return { action: "confirm", option: lines[yesIdx].trim() };
-  const delta = yesIdx - cursorIdx;
+  if (cursorIdx === targetIdx) return { action: "confirm", option: lines[targetIdx].trim() };
+  const delta = targetIdx - cursorIdx;
   return { action: "move", key: delta > 0 ? "Down" : "Up", times: Math.abs(delta) };
 }
 
+// A select list row names this label: the cursor glyph and a right-hand
+// description column are chrome around it.
+export function selectRowHasLabel(line: string, label: string): boolean {
+  return line.replace(/^\s*[❯›>]?\s*/, "").split(/\s{3,}/)[0].trim() === label.trim();
+}
+
 export async function acceptTrustPrompt(target: string): Promise<boolean> {
+  const accepted = await selectHighlightedOption(target, isTrustAffirmativeRow, "the workspace trust dialog");
+  // The agent boots behind this dialog; give it a moment before the caller re-reads.
+  if (accepted) await new Promise(r => setTimeout(r, 1500));
+  return accepted;
+}
+
+// Read the list, move the highlight onto the target row, re-read to prove it
+// moved, and only then press Enter. If the highlight cannot be placed, press
+// NOTHING. Never confirming is recoverable; confirming the wrong option is not.
+export async function selectHighlightedOption(target: string, isTarget: (line: string) => boolean, dialog: string): Promise<boolean> {
   const capture = async (): Promise<string[]> => {
     const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
     return stdout.split("\n");
@@ -14868,22 +15057,22 @@ export async function acceptTrustPrompt(target: string): Promise<boolean> {
   };
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    const step = planTrustPromptStep(await capture());
+    const step = planHighlightStep(await capture(), isTarget);
     if (step.action === "none") {
-      log(`Not touching the trust dialog in ${target}: ${step.reason}`);
+      log(`Not touching ${dialog} in ${target}: ${step.reason}`);
       return false;
     }
     if (step.action === "confirm") {
-      log(`Accepting workspace trust prompt in ${target} (Enter on "${step.option}")`);
+      log(`Selecting "${step.option}" in ${dialog} in ${target} (Enter)`);
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 500));
       return true;
     }
     await press(step.key, step.times);
     await new Promise(r => setTimeout(r, 300));
-    // Loop re-reads and only confirms once the highlight is provably on "Yes".
+    // Loop re-reads and only confirms once the highlight is provably on the target.
   }
-  log(`Could not place the trust-dialog highlight on the affirmative option in ${target}; pressing nothing`);
+  log(`Could not place the highlight on the target option of ${dialog} in ${target}; pressing nothing`);
   return false;
 }
 
@@ -14914,6 +15103,18 @@ function machineInputGuard(content: string, capture: () => Promise<string>): (()
   };
 }
 
+// One read of a pane's live state, no keys sent. ensureTmuxReady loops on
+// this and presses corrective keys; the escape handler reads it once to learn
+// whether there is a turn to interrupt.
+export async function captureTmuxLiveState(target: string, glyphlessPattern: RegExp | null, captureLines: number): Promise<{ stdout: string; region: string; state: TmuxLiveState }> {
+  const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+  const region = glyphlessPattern ? stdout : extractTmuxLiveRegion(stdout);
+  const state = glyphlessPattern
+    ? classifyGlyphlessClientPaneState(stdout, glyphlessPattern)
+    : classifyTmuxLiveState(region);
+  return { stdout, region, state };
+}
+
 export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines = inspectPane ? 80 : 25): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
@@ -14929,17 +15130,15 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
 
   while (true) {
     let stdout: string;
+    let region: string;
+    let state: TmuxLiveState;
     try {
-      ({ stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]));
+      ({ stdout, region, state } = await captureTmuxLiveState(target, glyphlessPattern, captureLines));
     } catch (err) {
       if (inspectPane) throw new MachineInputBlockedError(`terminal capture failed: ${String(err)}`);
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
     inspectPane?.(stdout);
-    const region = glyphlessPattern ? stdout : extractTmuxLiveRegion(stdout);
-    const state = glyphlessPattern
-      ? classifyGlyphlessClientPaneState(stdout, glyphlessPattern)
-      : classifyTmuxLiveState(region);
 
     if (state === "idle") return { busy: false };
     if (state === "exited") {
@@ -14951,6 +15150,11 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // interrupted; Claude Code queues the pasted message and submits it when the
     // turn ends. verifyTmuxSubmitAfterPaste confirms it reached the queue.
     if (state === "busy") return { busy: true };
+
+    // A dialog only a person can answer: no key of ours is safe, and a paste
+    // lands in no composer. The delivery layer holds the message (see
+    // pendingPromptHold) until the scraped card is answered.
+    if (state === "menu") throw new Error("AGENT_STDIN_NOT_READY: terminal is waiting for a human answer");
 
     // Corrective states: cap total time and bail if our key didn't move the state.
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
@@ -15043,9 +15247,13 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
 // the next question) or merely moved the highlight (same question still up). See the
 // closed-loop in injectViaTmuxInner.
 async function paneInteractiveQuestion(target: string): Promise<string | null> {
+  return (await paneInteractivePrompt(target))?.question ?? null;
+}
+
+async function paneInteractivePrompt(target: string): Promise<InteractivePrompt | null> {
   try {
     const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"]);
-    return (parseInteractivePrompt(stdout) ?? parseInteractivePrompt(stdout, true))?.question ?? null;
+    return parseInteractivePrompt(stdout) ?? parseInteractivePrompt(stdout, true);
   } catch {
     return null;
   }
@@ -15620,7 +15828,7 @@ export async function awaitTmuxComposerPayload(
   throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
-type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number };
+type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
@@ -15645,7 +15853,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // opened a Shell-details overlay and wedged every later delivery
     // (2026-08-21). Menu gone: a free-text answer still delivers as a plain
     // message; a key-only answer is dropped as stale.
-    const liveMenu = await paneInteractiveQuestion(target);
+    const liveMenu = await paneInteractivePrompt(target);
     if (!liveMenu) {
       const fallbackText = (poll.text || pollDeclineText(poll) || "").trim();
       if (!fallbackText) {
@@ -15672,6 +15880,17 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
     const menuSteps = pollMenuSteps(poll);
     for (const step of menuSteps) {
+      // An unnumbered select list ignores digits (see parseSelectDialog), so the
+      // digit names an option: land the highlight on it and confirm it there.
+      // selectHighlightedOption presses Enter only once the highlight provably
+      // sits on that row, so a refusal pressed nothing and the retry is safe.
+      if (liveMenu.unnumbered && /^\d+$/.test(step.key)) {
+        const option = liveMenu.options[Number(step.key) - 1];
+        const selected = !!option && await selectHighlightedOption(
+          target, (line) => selectRowHasLabel(line, option.label), `the "${liveMenu.question}" dialog`);
+        if (!selected) throw new Error(`AGENT_STDIN_NOT_READY: could not select option ${step.key} of "${liveMenu.question}"`);
+        continue;
+      }
       // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
       // carry `preview`s renders side-by-side and the digit ONLY navigates — its
       // footer reads "Enter to select", so the answer never lands without a follow-up
@@ -15716,11 +15935,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const sanitized = prepareInjectedContent(content, { bracketed });
   const delivery = opts?.delivery ? await prepareTmuxDelivery(
     target, opts.delivery, tmuxExec,
-    async id => (await syncServiceRef?.getPendingMessageStatus(id)) === "delivered",
+    async id => syncServiceRef ? pendingMessageFinished(syncServiceRef, id) : false,
     opts.journal,
+    { settleMs: opts.receiptSettleMs },
   ) : null;
   if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
-  if (delivery?.prior?.phase === "verified") return;
+  if (delivery?.prior?.phase === "verified" && !delivery.unacknowledged) return;
+  let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const beforeInput = machineInputGuard(content, async () =>
@@ -15754,9 +15975,11 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // text counts: a collapsed "[Pasted text #1]" chip could be anyone's draft,
   // and submitting that would ack a message the agent never saw.
   let alreadyAtPrompt = false;
+  let liveState: TmuxLiveState = "unknown";
   try {
     const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
     alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
+    liveState = classifyTmuxLiveState(extractTmuxLiveRegion(stdout));
   } catch {}
 
   const paneTitleOf = async (): Promise<string | null> => {
@@ -15777,7 +16000,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // clock is both the knowable one and the strict one. An older turn mark is
   // someone else's either way.
   const paneTitleBefore = await paneTitleOf();
-  const pasteAt = delivery?.prior?.pasteAt ?? Date.now();
+  let pasteAt = prior?.pasteAt ?? Date.now();
 
   // The pane before the paste, for the post-submit verifier's before/after
   // comparison; empty when nothing was pasted, which is honest — every frame it
@@ -15788,18 +16011,42 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   if (alreadyAtPrompt) {
     delivery?.journal.begin(opts!.delivery!, delivery.generation, sanitized);
     log(`Composer in ${target} already holds this payload from an earlier attempt; submitting it instead of pasting again`);
-  } else if (delivery?.prior) {
-    if (delivery.prior.phase === "paste") {
-      gate = await awaitTmuxComposerPayload(target, sanitized, {
-        multiline: bracketed && sanitized.includes("\n"),
-        rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
-        allowRePaste: false,
-        budgetMs: opts?.gateBudgetMs,
-        exec,
-      });
-      if (gate !== "matched") throw new TmuxDeliveryUncertainError("the earlier paste is not visible");
+  } else if (prior && delivery) {
+    // An earlier attempt wrote this payload and it is not at the prompt. Wait
+    // for it while it may still be flushing. Once the receipt has settled with
+    // no echo, a prompt that renders without the payload proves it never
+    // reached the agent (2026-09-14: one paste lost under load held its pane
+    // for hours), so the receipt is dropped and the payload written again. A
+    // prompt we cannot see proves nothing and keeps the hold. After an Enter
+    // (a submit, or a verification the server never confirmed) the message
+    // may sit in a busy agent's queue, which echoes only when the turn takes
+    // it, so only an idle agent proves it is gone.
+    const settled = receiptSettled(prior, opts?.receiptSettleMs);
+    if (settled && prior.phase !== "paste" && liveState !== "idle") {
+      throw new TmuxDeliveryUncertainError("an unacknowledged submit waits for the agent to go idle");
     }
-  } else {
+    if (prior.phase === "paste" || settled) {
+      try {
+        gate = await awaitTmuxComposerPayload(target, sanitized, {
+          multiline: bracketed && sanitized.includes("\n"),
+          rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
+          allowRePaste: false,
+          budgetMs: opts?.gateBudgetMs,
+          exec,
+        });
+        if (gate !== "matched") throw new TmuxDeliveryUncertainError("the earlier paste is not visible");
+        if (prior.phase !== "paste") alreadyAtPrompt = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!settled || !/paste has not appeared intact|^AGENT_STDIN_NOT_READY: composer never showed/.test(message)) throw error;
+        log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript; writing it again`);
+        delivery.journal.release(opts!.delivery!.messageId);
+        prior = null;
+        pasteAt = Date.now();
+      }
+    }
+  }
+  if (!alreadyAtPrompt && !prior) {
     // Clear any stale input before pasting to prevent draft text from being
     // prepended to the injected message or submitted by the trailing Enter —
     // see drainTmuxComposer for why C-a/C-k cycles, and why an empty composer
@@ -15829,7 +16076,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       exec,
     });
   }
-  const retryingSubmit = delivery?.prior?.phase === "submit" && !alreadyAtPrompt;
+  const retryingSubmit = prior?.phase === "submit" && !alreadyAtPrompt;
   let pasteConfirmed = gate === "matched";
   const sendEnter = async () => {
     delivery?.journal.advance(opts!.delivery!.messageId, "submit");
@@ -25764,6 +26011,7 @@ async function main(): Promise<void> {
       pendingSyncMessages: health.messages,
       pendingSyncConversations: health.conversations,
       pendingSyncOldestMs: health.oldestPendingMs,
+      pendingSyncNoProgressMs: health.noProgressMs,
     });
   };
 
@@ -27567,8 +27815,10 @@ async function main(): Promise<void> {
         // The terminal is waiting for a human answer: a paste would answer it,
         // so the conversation is skipped until the prompt closes or the hold
         // window lapses (see pendingPromptHold). Not a retry, not an attempt.
-        // A human's own answer is never held: it is what closes the prompt.
-        const holdMs = isMachineDeliveredMessage(msg.content) ? promptHoldRemainingMs(msg.conversation_id) : 0;
+        // A human's answer to the card is never held: it is what closes the
+        // prompt. A human's typed message is held only when one was already
+        // refused (a dialog no text can answer); see pendingPromptHold.
+        const holdMs = parsePollMessage(msg.content) ? 0 : promptHoldRemainingMs(msg.conversation_id, !isMachineDeliveredMessage(msg.content));
         if (holdMs > 0) {
           logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - conv=${msg.conversation_id.slice(0, 12)} is waiting for a human answer (next try in ${Math.ceil(holdMs / 1000)}s)`);
           continue;
@@ -27737,7 +27987,7 @@ async function main(): Promise<void> {
             // spending the retry budget, skip the conversation for a short
             // hold, and re-drive when the prompt closes.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
-            holdConversationForPrompt(msg.conversation_id);
+            holdConversationForPrompt(msg.conversation_id, { humans: !isMachineDeliveredMessage(msg.content) });
             syncService.retryMessage(msg._id, { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
@@ -28233,8 +28483,11 @@ export async function runWatchdog(): Promise<void> {
 
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   const version = getVersion();
+  // The watchdog's own lines go to its own file, never daemon.log: daemon.log's
+  // mtime is the busy-grace evidence that the DAEMON ran JS, and a pass that
+  // wrote there refreshed the very stamp its next pass judged by.
   const logLine = (msg: string) => {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
+    try { fs.appendFileSync(path.join(CONFIG_DIR, WATCHDOG_LOG_FILENAME), `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
   };
   const daemonPlist = path.join(process.env.HOME || "", "Library", "LaunchAgents", `${DAEMON_LAUNCHD_LABEL}.plist`);
   const supervised = platform === "darwin" && fs.existsSync(daemonPlist);
@@ -28281,6 +28534,21 @@ export async function runWatchdog(): Promise<void> {
     }
   }
 
+  const sendWatchdogLog = async (level: string, message: string) => {
+    await fetch(`${siteUrl}/cli/log`, {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        level,
+        message,
+        cli_version: `${version}-watchdog`,
+        platform: process.platform,
+      }),
+    }).catch(() => {});
+  };
+
   // 2b. If process is alive, check if event loop is actually responsive.
   // The tick freezes during system sleep exactly like a wedged loop, and this
   // pass usually runs before the woken daemon's 30s stamp interval fires — so a
@@ -28293,26 +28561,56 @@ export async function runWatchdog(): Promise<void> {
   try { prevPass = parseInt(fs.readFileSync(passStampPath, "utf-8").trim(), 10) || 0; } catch {}
   try { fs.writeFileSync(passStampPath, String(passNow)); } catch {}
   const passGap = prevPass > 0 ? passNow - prevPass : null;
+  // A wedged verdict on ONE pass only arms; the kill needs the next pass to
+  // agree and the hang marker to show no self recovery in between (see
+  // watchdogKillVerdict in supervision.ts for why: three recorded stalls of 50
+  // to 138s that all resumed on their own). Any pass that is not wedged clears
+  // the arm, which is what keeps a sleep wake from ever counting as one of the two.
   if (daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
+      let logAgeMs: number | null = null;
+      let wedged = false;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
-        let logAgeMs: number | null = null;
         try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
-        if (daemonTickStale(staleness, passGap, logAgeMs)) {
-          logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
-          try { process.kill(daemonPid, 9); } catch {}
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          daemonAlive = false;
-        } else if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
-          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
-        } else {
-          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+        wedged = daemonTickStale(staleness, passGap, logAgeMs);
+      }
+      const verdict = watchdogKillVerdict({
+        wedged,
+        pid: daemonPid,
+        tick: lastTick,
+        now: passNow,
+        armed: readWedgedPassStamp(CONFIG_DIR),
+        marker: peekHangMarker(CONFIG_DIR),
+      });
+      if (verdict.action === "kill") {
+        clearWedgedPassStamp(CONFIG_DIR);
+        writeWatchdogKillMarker({ pid: daemonPid, unresponsiveMs: staleness, rule: verdict.rule, now: passNow }, CONFIG_DIR);
+        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s: ${verdict.rule} (${verdict.reason}), killing`);
+        await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_kill: pid=${daemonPid} frozen=${Math.round(staleness / 1000)}s rule="${verdict.rule}" ${verdict.reason}`);
+        try { process.kill(daemonPid, 9); } catch {}
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        daemonAlive = false;
+      } else if (verdict.action === "arm") {
+        writeWedgedPassStamp(verdict.stamp, CONFIG_DIR);
+        logLine(`Daemon PID ${daemonPid} tick stale ${Math.round(staleness / 1000)}s: ${verdict.reason}`);
+      } else {
+        clearWedgedPassStamp(CONFIG_DIR);
+        if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
+          if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
+            logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
+          } else {
+            logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+          }
         }
       }
     } catch {}
+  } else {
+    // No live daemon means no stall to count; a stale arm must not carry over
+    // to the pid that replaces it.
+    clearWedgedPassStamp(CONFIG_DIR);
   }
 
   // 3. Send heartbeat (keeps server aware even if daemon is dead)
@@ -28340,21 +28638,6 @@ export async function runWatchdog(): Promise<void> {
 
   // 3b. Check min_cli_version -- if daemon binary is outdated, update it
   // This catches cases where the daemon's own checkForForcedUpdate failed or killed the daemon
-  const sendWatchdogLog = async (level: string, message: string) => {
-    await fetch(`${siteUrl}/cli/log`, {
-      method: "POST",
-      signal: AbortSignal.timeout(10_000),
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_token: config.auth_token,
-        level,
-        message,
-        cli_version: `${version}-watchdog`,
-        platform: process.platform,
-      }),
-    }).catch(() => {});
-  };
-
   if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);

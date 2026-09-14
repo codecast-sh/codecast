@@ -1,5 +1,5 @@
 ---
-name: codecast-why
+name: cast-why
 description: Explain why a line of code is the way it is. Traces the line through cast blame to the codecast session that wrote it and the message where it was decided, then answers from the author's own reasoning. Use when asked why code looks like this, who wrote it and why, or what the intent behind a change was.
 argument-hint: "<file>:<line> [question]"
 ---
@@ -13,8 +13,8 @@ cast blame --porcelain <file>:<line>      # one line
 cast blame --porcelain -L <a>,<b> <file>  # a block; group the lines by session
 ```
 
-Each attributed line carries `codecast-session` (short id), `codecast-message`,
-`codecast-url`, `codecast-title` and `codecast-author` beside the git fields.
+Each attributed line carries `cast-session` (short id), `cast-message`,
+`cast-url`, `cast-title` and `cast-author` beside the git fields.
 A line with git fields only predates attribution: use the commit summary and
 `cast search "<summary or key identifiers>"` to find the session by hand, and
 say plainly when there is none.
@@ -22,7 +22,7 @@ say plainly when there is none.
 ## Read the reasoning
 
 ```bash
-cast read '<codecast-url>#msg-<codecast-message>' -c 6
+cast read '<cast-url>#msg-<cast-message>' -c 6
 ```
 
 Widen the window (`-c 20`) when the decision was made earlier than the edit.

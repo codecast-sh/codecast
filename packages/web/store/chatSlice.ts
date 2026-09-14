@@ -73,7 +73,7 @@ export type ChatChannelRow = {
    *  the client only shapes the surface (icon, naming, what the menu offers).
    *  "agents" is a public room whose expected posters are roles and sessions
    *  (docs/architecture/agent-channels.md C1). */
-  kind?: "public" | "private" | "dm" | "agents";
+  kind?: "public" | "private" | "dm" | "agents" | "community";
   /** ACCESS stamp (workspaceKey-shaped); the client never branches on it. */
   workspace?: string;
   /** `<teamId>:<sorted member ids>` — a DM's identity, and the client's source
@@ -1258,6 +1258,11 @@ let railCacheValue: ChatRailChannel[] = [];
  * Memoized on the collection refs: the rail is always mounted, and these maps
  * change far less often than the store around them.
  */
+/** Which rooms a rail shows. "team" is the active workspace's rooms; "community"
+ *  is the public site's rooms (kind "community"), whatever team routes them
+ *  and whether or not the viewer has a workspace at all. */
+export type ChatRailScope = "team" | "community";
+
 export function selectChatRail(
   state: ChatRailState,
   viewer: string,
@@ -1265,10 +1270,11 @@ export function selectChatRail(
    *  that team's channels; undefined is the PERSONAL workspace — and channels
    *  are team-tagged by construction, so personal shows none. Re-asserted at
    *  read time exactly like tasks/docs/plans, because the channel cache
-   *  accumulates across team switches. */
+   *  accumulates across team switches. Ignored in community scope. */
   teamId?: string | null,
+  scope: ChatRailScope = "team",
 ): ChatRailChannel[] {
-  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, viewer, teamId];
+  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, viewer, teamId, scope];
   if (key.length === railCacheKey.length && key.every((v, i) => v === railCacheKey[i])) {
     return railCacheValue;
   }
@@ -1297,7 +1303,9 @@ export function selectChatRail(
   for (const id in state.chatChannels) {
     const channel = state.chatChannels[id];
     if (channel.archived_at) continue;
-    if (!inActiveWorkspace({ team_id: channel.team_id ? String(channel.team_id) : undefined }, teamId ? String(teamId) : undefined)) continue;
+    if (scope === "community") {
+      if (channel.kind !== "community") continue;
+    } else if (!inActiveWorkspace({ team_id: channel.team_id ? String(channel.team_id) : undefined }, teamId ? String(teamId) : undefined)) continue;
     const read = readByChannel.get(id);
     const rail = railByChannel.get(id);
     const loaded = messagesByChannel.get(id);

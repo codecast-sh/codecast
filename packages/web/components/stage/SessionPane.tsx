@@ -7,8 +7,11 @@
 // map.
 
 import { lazy, memo, Suspense } from "react";
-import { useTrackedStore, getSessionRenderKey } from "../../store/inboxStore";
+import { useTrackedStore, useInboxStore, getSessionRenderKey } from "../../store/inboxStore";
 import { animatedHideSession } from "../../store/undoActions";
+import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { ConversationPlaceholder } from "../ConversationPlaceholder";
 import { ErrorBoundary } from "../ErrorBoundary";
 
 // Loaded on first use: the conversation renderer lives in the session-panel
@@ -32,11 +35,22 @@ export const SessionPane = memo(function SessionPane({
   /** A `#msg-<id>` deep link: the pane opens scrolled to that message. */
   targetMessageId?: string;
 }) {
-  const s = useTrackedStore([(st) => st.sessions[sessionId]]);
+  const s = useTrackedStore([
+    (st) => st.sessions[sessionId],
+    (st) => st.pending[`sessions:${sessionId}`]?.type === "exclude",
+  ]);
   const session = s.sessions[sessionId] ?? null;
+  const killed = s.pending[`sessions:${sessionId}`]?.type === "exclude";
+  // A row the store does not hold (a teammate's session, one outside the inbox
+  // window) loads here and lands in the store; the pane then paints from it.
+  const missing = useMissingSessionRow(session || killed ? null : sessionId);
+  useWatchEffect(() => {
+    if (missing) useInboxStore.getState().seedSession(missing);
+  }, [missing]);
   if (!session) {
-    // A pane for a row the store no longer holds (killed, pruned): say so
-    // honestly instead of painting an empty column.
+    if (!killed && missing !== null) return <ConversationPlaceholder id={sessionId} />;
+    // Killed here, or the server will not hand it over (deleted, private):
+    // say so honestly instead of painting an empty column.
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 text-xs text-sol-text-dim">
         <span>This session is no longer available</span>

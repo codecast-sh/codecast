@@ -466,6 +466,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           {whoIsAsking}
           {askedLine && <div className="-mt-2 mb-3">{askedLine}</div>}
           {question && <h1 className="text-xl text-sol-text leading-snug mb-4">{question}</h1>}
+          {poll?.question.detail && (
+            <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3 whitespace-pre-line">{poll.question.detail}</div>
+          )}
           {item.contextMd && (
             <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3">
               <MarkdownRenderer content={item.contextMd} />

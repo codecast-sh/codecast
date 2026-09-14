@@ -69,8 +69,8 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
 };
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
-import { FilterOptionList } from "./FilterDropdown";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
+import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
@@ -4131,17 +4131,6 @@ function SessionListPanelImpl({
     [sortedSessions],
   );
 
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
-  useWatchEffect(() => {
-    if (!viewMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) setViewMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [viewMenuOpen]);
-
   // "By label" view: every active non-pinned top-level session grouped by its
   // manual label; unlabeled sessions group by PROJECT — projects are a specific
   // kind of label, auto-derived from the directory. Pinned stays its own top
@@ -4881,43 +4870,13 @@ function SessionListPanelImpl({
               {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
             </button>
           </ShortcutTooltip>
-          {(() => {
-            const viewModeOptions = [
-              { key: "grouped", label: "By status", icon: List },
-              { key: "recent", label: "By updated", icon: Activity },
-              { key: "time", label: "By created", icon: Clock },
-              ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
-              ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
-              ...(scheduleRowsView.length > 0 ? [{ key: "trigger", label: "By trigger", icon: Zap }] : []),
-            ];
-            const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
-            const CurrentIcon = current.icon;
-            return (
-              <div ref={viewMenuRef} className="relative">
-                <ShortcutTooltip label={current.label} action="inbox.toggleFlatView" hint="cycles" side="bottom">
-                  <button
-                    onClick={() => setViewMenuOpen((o) => !o)}
-                    className={`flex items-center px-1 py-[3px] rounded-[5px] transition-colors ${
-                      viewMenuOpen ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim/70 hover:text-sol-text"
-                    }`}
-                  >
-                    <CurrentIcon className="w-3 h-3" />
-                    <ChevronDown className="w-2 h-2 opacity-60" />
-                  </button>
-                </ShortcutTooltip>
-                {viewMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
-                    <FilterOptionList
-                      options={viewModeOptions}
-                      value={viewMode}
-                      onChange={(mode) => s.setInboxViewMode(mode as InboxViewMode)}
-                      onPicked={() => setViewMenuOpen(false)}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+          <InboxViewMenu
+            value={viewMode}
+            onChange={s.setInboxViewMode}
+            hasLabels={visibleBuckets.length > 0}
+            hasPlans={hasPlanSessions}
+            hasTriggers={scheduleRowsView.length > 0}
+          />
           {totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}

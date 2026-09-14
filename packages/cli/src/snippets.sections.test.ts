@@ -739,10 +739,11 @@ const REAL_SECTIONS: Array<[string, SectionSpec, string]> = [
 ];
 
 describe("the shared table itself", () => {
-  test("every slug except orchestration carries its spec and body together", () => {
+  test("every slug except orchestration and skills carries its spec and body together", () => {
     for (const s of SNIPPET_CATALOG) {
-      if (s.slug === "orchestration") {
-        // Not markdown: it installs skills, agents and hooks.
+      if (s.slug === "orchestration" || s.slug === "skills") {
+        // Not markdown: orchestration installs a skill, agents and hooks;
+        // skills installs the cast-* SKILL.md files.
         expect(s.section).toBeUndefined();
         continue;
       }
@@ -827,10 +828,12 @@ describe("the refresh gates in index.ts", () => {
   //     never writes its version key (recorded in snippets.wiring.test.ts);
   //   - messaging's gate lives in ensureMessagingForMemory (./snippets.ts),
   //     which compares messaging_hash itself;
-  //   - orchestration installs no markdown at all.
+  //   - orchestration installs no markdown at all;
+  //   - skills installs SKILL.md files and byte-compares each on refresh
+  //     (writeOwnedFile), so a body edit lands with no version gate.
   // A new catalog entry lands in the gated list below by default, so its
   // author either wires a gate or moves it here with a reason.
-  const UNGATED = new Set(["forks", "messaging", "orchestration"]);
+  const UNGATED = new Set(["forks", "messaging", "orchestration", "skills"]);
 
   // Boolean assertions with a message, not toContain(indexSource): a failing
   // toContain prints the whole 700KB "received" source, burying the finding.
