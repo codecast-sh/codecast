@@ -3230,6 +3230,12 @@ export default defineSchema({
     // is "messages since the ask" — how far the session has run past the
     // question — correct even when the client hasn't loaded that far back.
     asked_message_count: v.optional(v.number()),
+    // Who asked, as a snapshot: the queue and the phone render the card from
+    // this row alone, and the sessions collection on that device may not hold
+    // the asking conversation (pruned, or a teammate's). Derived at render
+    // from the live session row when present (lib/liveEntities rule).
+    session_title: v.optional(v.string()),
+    project_path: v.optional(v.string()),
     // Last `cast decide edit`. created_at stays the ask time because the queue
     // ranks by age; this is what wakes a card whose text changed underneath it.
     updated_at: v.optional(v.number()),

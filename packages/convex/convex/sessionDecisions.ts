@@ -628,6 +628,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
         : {}),
       created_at: now,
       asked_message_count: conversation.message_count,
+      session_title: conversation.title,
+      project_path: conversation.project_path,
     });
     if (stack && !stack.decision_ids.includes(existing._id)) {
       await ctx.db.patch(stack._id, { decision_ids: [...stack.decision_ids, existing._id], updated_at: now });
@@ -684,6 +686,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     scope_keys: scopeKeys,
     created_at: now,
     asked_message_count: conversation.message_count,
+    session_title: conversation.title,
+    project_path: conversation.project_path,
   });
   for (const userId of people) {
     await ctx.db.insert("decision_inbox", { decision_id: id, user_id: userId, status: "pending", created_at: now });
@@ -1173,12 +1177,8 @@ export const resolve = mutation({
 // A person reopens an answer a role gave under a grant ("disagree" on the
 // Handled without you list). The row goes back to pending, held by the
 // people; the person's own answer is then scored against the role's.
-export const reopen = mutation({
-  args: { decision_id: v.id("session_decisions") },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    const row = await ctx.db.get(args.decision_id);
+export async function reopenCore(ctx: Ctx, userId: Id<"users">, decisionId: Id<"session_decisions">) {
+    const row: DecisionRow | null = await ctx.db.get(decisionId);
     if (!row) throw new Error("Decision not found");
     const people = (row.asked_user_ids ?? [row.user_id]).map(String);
     if (!people.includes(String(userId))) throw new Error("Unauthorized: not your decision");
@@ -1204,6 +1204,14 @@ export const reopen = mutation({
     const stack = row.stack_id ? await ctx.db.get(row.stack_id) : null;
     if (stack && stack.status === "done") await ctx.db.patch(stack._id, { status: "open", updated_at: now });
     return { reopened: true };
+}
+
+export const reopen = mutation({
+  args: { decision_id: v.id("session_decisions") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    return reopenCore(ctx, userId, args.decision_id);
   },
 });
 
@@ -1433,7 +1441,7 @@ async function userSummary(ctx: Ctx, userId: Id<"users">) {
 // Everything the document page renders around the row: the doc body, the
 // task, the stack, the ladder with role names, the people, the holder role,
 // and (on an answered row) whether the card may offer a grant.
-async function decisionContext(ctx: Ctx, row: DecisionRow) {
+async function decisionContext(ctx: Ctx, row: DecisionRow, viewerId: Id<"users">) {
   const doc = row.doc_id ? await ctx.db.get(row.doc_id) : null;
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   const stack = row.stack_id ? await ctx.db.get(row.stack_id) : null;
@@ -1449,7 +1457,10 @@ async function decisionContext(ctx: Ctx, row: DecisionRow) {
   const holder_role = row.holder?.kind === "role" ? await roleSummary(ctx, row.holder.id as Id<"org_roles">) : null;
   // The grant offer (D2): the person picked what a role recommended, and the
   // role has earned it in this category and scope.
-  let grant_offer: { role_id: Id<"org_roles">; role_name: string; category: string; scope_key: string; agreements: number; askers: number } | null = null;
+  // may_grant is the server's own rule (userCanAdminRole: the role's host,
+  // the personal scope owner, or an admin of the ROLE's team), so the card
+  // never guesses from the viewer's active team.
+  let grant_offer: { role_id: Id<"org_roles">; role_name: string; category: string; scope_key: string; agreements: number; askers: number; may_grant: boolean } | null = null;
   if (row.status === "answered" && row.answered_by?.kind === "user" && row.category && !isHumanOnlyCategory(row.category)) {
     const scopeKeys: string[] = (row as any).scope_keys ?? [];
     const now = Date.now();
@@ -1461,7 +1472,14 @@ async function decisionContext(ctx: Ctx, row: DecisionRow) {
         const h = agreementFor(history, hop.role_id, scopeKey);
         if (h.eligible && !(await activeGrantFor(ctx, [hop.role_id], row.category, [scopeKey], now))) {
           const role = await ctx.db.get(hop.role_id);
-          grant_offer = { role_id: hop.role_id, role_name: role?.name ?? "role", category: row.category, scope_key: scopeKey, ...h };
+          grant_offer = {
+            role_id: hop.role_id,
+            role_name: role?.name ?? "role",
+            category: row.category,
+            scope_key: scopeKey,
+            ...h,
+            may_grant: !!role && (await userCanAdminRole(ctx, viewerId, role)),
+          };
           break;
         }
       }
@@ -1489,7 +1507,7 @@ export const getWithDoc = query({
     if (!userId) return null;
     const row = await findDecision(ctx, args.decision_id);
     if (!row || !(await userMayRead(ctx, userId, row))) return null;
-    return { decision: row, ...(await decisionContext(ctx, row)) };
+    return { decision: row, ...(await decisionContext(ctx, row, userId)) };
   },
 });
 
