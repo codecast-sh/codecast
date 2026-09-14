@@ -5,6 +5,7 @@
 // follows, and retire. Every edit is a store action that paints in the same
 // tick and rides dispatch to the orgRoles mutation.
 import { useMemo, useState } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
 import { TriangleAlert, Hash, Trash2 } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -14,7 +15,7 @@ import { cn } from "../../../lib/utils";
 import { InlineEdit, ScopeEditor } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
-import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type ScopeOverlap, type TrustStage } from "./scopeTypes";
+import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -50,15 +51,24 @@ export type ScopeSettingsProps = {
   overlaps: ScopeOverlap[];
   hostName: string;
   model: string | null;
+  /** Today's counters, already checked against the UTC day by the header. */
+  counters: RoleCounters | null;
+  /** The header's Retire lands here with the confirmation open. */
+  armRetire?: boolean;
   onUpdate: (fields: OrgUpdateRoleInput) => void;
   onReparent: (target: OrgParentRef) => void;
   onRetire: () => void;
 };
 
-export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
-  const [confirmRetire, setConfirmRetire] = useState(false);
+export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, counters, armRetire, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
+  const [confirmRetire, setConfirmRetire] = useState(!!armRetire);
+  useWatchEffect(() => { if (armRetire) setConfirmRetire(true); }, [armRetire]);
   const caps: RoleCaps = role.caps ?? DEFAULT_CAPS;
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
+  // The server value moves under the tab (a `cast role caps`, another window,
+  // the echo after Save): the draft follows it, so Save never offers to write
+  // stale numbers back over the change that just landed.
+  useWatchEffect(() => { setCapsDraft(caps); }, [caps.hands_per_day, caps.wakes_per_day, caps.tokens_per_day]);
   const capsDirty = capsDraft.hands_per_day !== caps.hands_per_day || capsDraft.wakes_per_day !== caps.wakes_per_day || capsDraft.tokens_per_day !== caps.tokens_per_day;
   const trust: TrustStage = role.trust ?? "understand";
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
@@ -98,7 +108,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
       <Section title="Reports to" hint="Where the role's decisions escalate and whose brief reads its state line.">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>
+          {!canEdit && <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>}
           {canEdit && (
             <SelectBox
               value={currentKey}
@@ -152,7 +162,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
                 className="w-full h-8 rounded-md px-2 border text-[13px] tabular-nums outline-none bg-sol-bg-alt disabled:opacity-60"
                 style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text)" }}
               />
-              <span className="block text-[10px] mt-1 tabular-nums" style={{ color: "var(--sol-text-dim)" }}>today {role.counters?.[label] ?? 0}</span>
+              <span className="block text-[10px] mt-1 tabular-nums" style={{ color: "var(--sol-text-dim)" }}>today {counters?.[label] ?? 0}</span>
             </label>
           ))}
         </div>

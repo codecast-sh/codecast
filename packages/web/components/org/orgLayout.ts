@@ -85,12 +85,24 @@ type Branch = {
   height: number;
 };
 
-function stackFor(parent: OrgParentRef, bucket: { sessions: OrgSession[]; total: number; counts: StateCounts }, view: OrgLayoutView): Branch["stack"] {
+/**
+ * Every session id that any bucket in the tree files. A loaded page (view
+ * .expanded) can hold a row the tree meanwhile filed elsewhere (a move that
+ * echoed before the page pruned it); the tree's own bucket wins and the page
+ * copy is not drawn, so one session is never two nodes.
+ */
+function bucketedIds(tree: OrgTree): Set<string> {
+  const out = new Set<string>();
+  for (const b of [...tree.people, ...tree.roles]) for (const s of b.sessions) out.add(s._id);
+  return out;
+}
+
+function stackFor(parent: OrgParentRef, bucket: { sessions: OrgSession[]; total: number; counts: StateCounts }, view: OrgLayoutView, elsewhere: ReadonlySet<string>): Branch["stack"] {
   const id = parentNodeId(parent);
   const opened = id in view.expanded;
   const extra = view.expanded[id] ?? [];
   const seen = new Set(bucket.sessions.map((s) => s._id));
-  const loaded = [...bucket.sessions, ...extra.filter((s) => !seen.has(s._id))];
+  const loaded = [...bucket.sessions, ...extra.filter((s) => !seen.has(s._id) && !elsewhere.has(s._id))];
   const total = Math.max(bucket.total, loaded.length);
   if (loaded.length === 0 && total === 0) return null;
   const sessions = opened ? loaded : loaded.slice(0, ORG_STACK_VISIBLE);
@@ -114,6 +126,7 @@ function subtreeCount(b: Branch): number {
 }
 
 export function buildBranches(tree: OrgTree, view: OrgLayoutView): Branch[] {
+  const filed = bucketedIds(tree);
   // An anchor's bot is a team member too, but it is drawn as the anchor card,
   // never as a person: its one session is emitted under `anchors`.
   const botIds = new Set(tree.anchors.map((a) => a.bot_user_id));
@@ -158,7 +171,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView): Branch[] {
     const b: Branch = {
       id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h, role: r,
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view),
+      stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? r.total : 0;
@@ -178,7 +191,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView): Branch[] {
     const b: Branch = {
       id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h, person: p,
       children: collapsed ? [] : [...anchors.map(anchorBranch), ...kids.map(roleBranch)],
-      stack: collapsed ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view),
+      stack: collapsed ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? p.total : 0;

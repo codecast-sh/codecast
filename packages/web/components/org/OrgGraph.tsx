@@ -30,6 +30,7 @@ import { layoutOrgTree, parentRefOfNodeId, type OrgLayoutNode, type OrgLayoutVie
 import { AnchorCard, ClusterCard, PersonCard, RoleCard, SessionCard } from "./OrgNodeCards";
 import { computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
+import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 
 const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, anchor: AnchorCard, session: SessionCard, cluster: ClusterCard };
 
@@ -59,6 +60,9 @@ export type OrgGraphProps = {
   /** Width of the panel overlaying the right edge of the canvas (0 = closed).
    *  The fit uses the canvas left of it. */
   panelWidth?: number;
+  /** Which cards may be picked up. A card the page would refuse on drop is
+   *  not draggable at all, so nothing ever snaps back silently. */
+  canDrag?: (node: OrgLayoutNode) => boolean;
 };
 
 const DRAGGABLE = new Set(["session", "role"]);
@@ -76,7 +80,7 @@ function titleOf(n: OrgLayoutNode): string {
 
 function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTargetId: string | null, draggingId: string | null, loading: ReadonlySet<string>, handlers: {
   onToggleCollapse: (id: string) => void; onExpandCluster: (id: string) => void; onCollapseCluster: (id: string) => void;
-}): Node[] {
+}, canDrag?: (node: OrgLayoutNode) => boolean): Node[] {
   return layout.map((n) => {
     const base = {
       id: n.id,
@@ -84,7 +88,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
       position: { x: n.x, y: n.y },
       width: n.w,
       height: n.h,
-      draggable: DRAGGABLE.has(n.kind),
+      draggable: DRAGGABLE.has(n.kind) && (canDrag ? canDrag(n) : true),
       selectable: true,
       connectable: false,
       zIndex: n.id === draggingId ? 1000 : n.kind === "session" || n.kind === "cluster" ? 1 : 2,
@@ -104,7 +108,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0 } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, canDrag } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -116,8 +120,8 @@ function OrgGraphInner(props: OrgGraphProps) {
 
   const handlers = useMemo(() => ({ onToggleCollapse, onExpandCluster, onCollapseCluster }), [onToggleCollapse, onExpandCluster, onCollapseCluster]);
   const flowNodes = useMemo(
-    () => toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers),
-    [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers],
+    () => toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag),
+    [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag],
   );
   const flowEdges = useMemo<Edge[]>(
     () => layout.edges.map((e) => ({
@@ -232,6 +236,9 @@ function OrgGraphInner(props: OrgGraphProps) {
       if (subject?.kind === "session") return !sameParent(subject.parent, ref);
       if (subject?.kind === "role") {
         if (ref.kind === "role" && ref.role_id === subject.role._id) return false;
+        // Its own descendant would close a loop: the server refuses it, so the
+        // halo must not offer it.
+        if (orgRoleReparentMakesCycle(tree, subject.role._id, ref)) return false;
         return !sameParent(subject.role.reports_to, ref);
       }
       return true;
@@ -246,7 +253,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       return da - db;
     });
     return byId.get(candidates[0].id) ?? null;
-  }, [rf, byId]);
+  }, [rf, byId, tree]);
 
   const onNodeDragStart: OnNodeDrag = useCallback((_e, node) => { setDraggingId(node.id); }, []);
   const onNodeDrag: OnNodeDrag = useCallback((_e, node) => {

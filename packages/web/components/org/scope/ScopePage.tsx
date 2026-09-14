@@ -23,14 +23,17 @@ import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { useIsPhone } from "../../../hooks/useIsPhone";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { TaskListContent } from "../../../app/tasks/page";
 import { Avatar } from "../../tasks/TaskCommentStream";
-import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
+import { KeyCap, ShortcutTooltip } from "../../KeyboardShortcutsHelp";
+import { isMac } from "../../../shortcuts/registry";
+import { queryProblem, roleStanding, scopeQueryRef } from "../../../lib/scopePage";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { StateTally } from "../OrgNodeCards";
-import { ORG_STATE_META, parentName } from "../orgMeta";
+import { parentName } from "../orgMeta";
 import type { OrgAnchor, OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { ScopeFeed } from "./ScopeFeed";
 import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
@@ -80,15 +83,17 @@ export function ScopePageInner({ id }: { id: string }) {
   const projects = useWorkspaceCollection<ProjectItem>("projects");
   const plans = useWorkspaceCollection<PlanItem>("plans");
   const scopeIds = useScopeIds(role ? role.scope : null, plans);
-  // The root's scope is every project of the workspace: the server reads an
-  // empty scope as "nothing" unless a role names it, so name the projects.
+  // An empty scope is the whole workspace (F1), for the root and for a role
+  // alike: the server resolves a role's empty scope to nothing, so the page
+  // names every project for it.
   const scopeRef: ScopeRef | null = useMemo(() => {
-    if (role) return { role_id: role._id };
     if (!tree) return null;
-    return { scope: { project_ids: projects.map((p) => p._id), plan_ids: [] }, ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}) };
+    return scopeQueryRef(role, projects.map((p) => p._id), tree.workspace.kind === "team" ? tree.workspace.id : undefined);
   }, [role, tree, projects]);
-  const { data: summary } = useScopeSummary(scopeRef ?? "skip");
-  const { data: brief } = useRoleBrief(role?._id ?? null);
+  const { data: summary, error: summaryError, missing: summaryMissing } = useScopeSummary(scopeRef ?? "skip");
+  const { data: brief, error: briefError, missing: briefMissing } = useRoleBrief(role?._id ?? null);
+  const summaryProblem = queryProblem(summaryError, summaryMissing, "The board counts");
+  const briefProblem = queryProblem(briefError, briefMissing, "The brief");
 
   // -------- tabs in the URL, like the project page
   const tabParam = searchParams.get("tab") as TabKey | null;
@@ -111,11 +116,14 @@ export function ScopePageInner({ id }: { id: string }) {
   const store = useInboxStore.getState;
   const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1]) => { if (role) store().updateOrgRole(role._id, fields); }, [role, store]);
   const reparent = useCallback((target: OrgParentRef) => { if (role) store().reparentOrgRole(role._id, target); }, [role, store]);
+  useWatchEffect(() => { if (tab !== "settings") setRetireArmed(false); }, [tab]);
   const retire = useCallback(() => { if (!role) return; store().retireOrgRole(role._id); toast.success(`Retired ${role.name}`); router.push("/org"); }, [role, store, router]);
   const wakeMutation = useMutation(api.orgRoles.wake);
   const [wakeOpen, setWakeOpen] = useState(false);
   const [wakeText, setWakeText] = useState("");
   const [waking, setWaking] = useState(false);
+  // The header's Retire lands on Settings with the confirmation already open.
+  const [retireArmed, setRetireArmed] = useState(false);
   const sendWake = useCallback(async () => {
     if (!role || !wakeText.trim()) return;
     setWaking(true);
@@ -129,15 +137,23 @@ export function ScopePageInner({ id }: { id: string }) {
   }, [role, wakeText, wakeMutation]);
   const talk = useCallback(() => {
     if (!anchor?.conversation_id) return;
-    openLinked({ _id: anchor.conversation_id, short_id: anchor.short_id, title: anchor.name, agent_type: "claude_code" });
+    openLinked({ _id: anchor.conversation_id, short_id: anchor.short_id, title: anchor.name });
   }, [anchor, openLinked]);
 
   // -------- header facts
-  const standing = useInboxStore((st) => (anchor?.conversation_id ? st.sessions[anchor.conversation_id] : undefined));
+  // The standing session heartbeats about once a second; subscribe to the two
+  // fields the header branches on, never the row, so a heartbeat cannot
+  // re-render the page. updated_at is read raw: the "active N ago" clock is
+  // coarse (useCoarseNow) and a 30s stale read changes nothing it shows.
+  const standingId = anchor?.conversation_id;
+  const st = useTrackedStore([
+    (x) => (standingId ? (x.sessions[standingId] as any)?.model : undefined),
+    (x) => (standingId ? (x.sessions[standingId] as any)?.thread_state : undefined),
+  ]);
+  const standing = standingId ? st.sessions[standingId] : undefined;
   const model = (standing as any)?.model ?? null;
   const hostName = role ? tree?.people.find((p) => p.user_id === role.host_user_id)?.name ?? "the host" : tree?.workspace.name ?? "";
-  const workState = anchor?.state;
-  const stateMeta = workState ? ORG_STATE_META[workState] : null;
+  const stateMeta = roleStanding(anchor?.state);
   const trust: TrustStage = role?.trust ?? "understand";
   const caps = role?.caps ?? DEFAULT_CAPS;
   const counters = role?.counters && role.counters.day === todayUtc() ? role.counters : null;
@@ -195,7 +211,7 @@ export function ScopePageInner({ id }: { id: string }) {
               {!role && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}><AnchorGlyph className="w-3 h-3" /> root anchor</span>}
               {stateMeta && (
                 <span className="inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }}>
-                  <span className={cn("w-[6px] h-[6px] rounded-full", workState === "working" && "animate-pulse")} style={{ background: stateMeta.color }} />
+                  <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
                   {stateMeta.label}
                 </span>
               )}
@@ -246,7 +262,7 @@ export function ScopePageInner({ id }: { id: string }) {
               {role && canEdit && (
                 <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
               )}
-              {role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire from Settings, with a confirmation" onClick={() => setTab("settings")} />}
+              {role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); setTab("settings"); }} />}
             </div>
           )}
         </div>
@@ -258,6 +274,7 @@ export function ScopePageInner({ id }: { id: string }) {
           ) : (
             <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[13px]")} style={{ color: "var(--sol-text-dim)" }}>{role ? "No brief line yet." : "Everything in the workspace, as one scope."}</p>
           )}
+          {!summary && summaryProblem && !phone && <span className="shrink-0 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{summaryProblem}</span>}
           {summary && !phone && (
             <div className="shrink-0 flex items-center gap-2 text-[11px] tabular-nums" style={{ color: "var(--sol-text-muted)" }}>
               <Stat n={summary.tasks.open} label="open tasks" />
@@ -310,21 +327,21 @@ export function ScopePageInner({ id }: { id: string }) {
             {tab === "docs" && <ScopeDocsTab ids={scopeIds} />}
             {tab === "sessions" && <ScopeSessionsTab tree={tree} role={role} scope={scopeRef} />}
             {tab === "decisions" && <ScopeDecisionsTab ids={scopeIds} />}
-            {tab === "brief" && role && <ScopeBriefTab role={role} facts={brief?.facts ?? null} narrative={brief?.narrative ?? ""} canEdit={canEditBrief} backHref={backHref} />}
+            {tab === "brief" && role && <ScopeBriefTab role={role} facts={brief?.facts ?? null} factsProblem={briefProblem} narrative={brief?.narrative ?? ""} canEdit={canEditBrief} backHref={backHref} />}
             {tab === "charter" && role && <ScopeCharterTab role={role} charter={brief?.charter ?? role.charter ?? ""} canEdit={canEdit} backHref={backHref} onUpdateCharter={(v) => update({ charter: v })} />}
             {tab === "settings" && role && (
-              <ScopeSettings tree={tree} role={role} canEdit={canEdit} overlaps={summary?.overlaps ?? []} hostName={hostName} model={model} onUpdate={update} onReparent={reparent} onRetire={retire} />
+              <ScopeSettings tree={tree} role={role} canEdit={canEdit} overlaps={summary?.overlaps ?? []} hostName={hostName} model={model} counters={counters} armRetire={retireArmed} onUpdate={update} onReparent={reparent} onRetire={retire} />
             )}
           </div>
         </div>
       )}
 
-      {/* phone actions: a bottom bar so the header stays two lines */}
-      {phone && role && (
+      {/* phone actions: a bottom bar so the header stays two lines; the root keeps Talk */}
+      {phone && (
         <div className="shrink-0 border-t px-3 py-2 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: "var(--sol-bg)" }}>
           <ActionButton icon={MessageSquare} label="Talk" primary disabled={noStanding} tip={noStanding ? "No standing session yet" : "Open the standing session"} onClick={talk} grow />
-          <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet" : "Wake the role"} onClick={() => setWakeOpen(true)} grow />
-          {canEdit && <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip="" onClick={() => update({ status: paused ? "active" : "paused" })} grow />}
+          {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet" : "Wake the role"} onClick={() => setWakeOpen(true)} grow />}
+          {role && canEdit && <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip="" onClick={() => update({ status: paused ? "active" : "paused" })} grow />}
         </div>
       )}
 
@@ -346,7 +363,9 @@ export function ScopePageInner({ id }: { id: string }) {
           />
           <div className="flex items-center justify-end gap-2">
             <button type="button" onClick={() => setWakeOpen(false)} className="h-8 px-3 rounded-md text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-            <button type="button" disabled={waking || !wakeText.trim()} onClick={() => void sendWake()} className="h-8 px-3.5 rounded-md text-[12.5px] font-semibold disabled:opacity-50" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{waking ? "Waking…" : "Wake"}</button>
+            <button type="button" disabled={waking || !wakeText.trim()} onClick={() => void sendWake()} className="h-8 px-3.5 rounded-md text-[12.5px] font-semibold disabled:opacity-50 inline-flex items-center gap-1.5" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>
+              {waking ? "Waking…" : "Wake"} <span className="cc-bar-keys"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
+            </button>
           </div>
         </DialogContent>
       </Dialog>
