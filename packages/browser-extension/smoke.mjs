@@ -699,9 +699,11 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
   }
   check("cli: paired bridge host stopped before a fresh session's first verb", bridgeStopped);
   const shown = await cli(["browser", "target"]);
-  check("cli: paired Chrome remains the default with the host down", shown.code === 0 && /target:\s*\S*real/.test(shown.all) && /paired.*reconnect/.test(shown.all), shown.all.slice(0, 300));
+  check("cli: paired Chrome remains the default with the host down", shown.code === 0 && /target:\s*\S*real/.test(shown.all) && /human's Chrome/.test(shown.all), shown.all.slice(0, 300));
 
-  const open = await cli(["browser", "open", url]);
+  // A fresh host is a bun parsing the whole CLI from source: on a loaded
+  // machine that alone took over a minute, and the verb waits for it.
+  const open = await cli(["browser", "open", url], { timeoutMs: 150_000 });
   check(
     "cli: default open restarts the host and drives Chrome through the extension",
     open.code === 0 && /Cast Bridge Smoke/.test(open.all) && /real Chrome, via the extension/.test(open.all),

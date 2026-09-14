@@ -291,9 +291,12 @@ const respawnDetached: BridgeHostStarter = () => {
  * separate process. An impostor on the port is named rather than raced: a
  * host we start could not bind anyway.
  */
+/** How long a freshly started host gets to bind and answer: a bun parsing the whole CLI from source took 65 s at load 400. */
+export const HOST_START_WAIT_MS = 90_000;
+
 export async function ensureBridgeHost(
   start: BridgeHostStarter = respawnDetached,
-  deps: { staleHostPids?: (port: number) => number[]; kill?: (pid: number) => void } = {},
+  deps: { staleHostPids?: (port: number) => number[]; kill?: (pid: number) => void; note?: (line: string) => void } = {},
 ): Promise<ProvenBridge & { started: boolean }> {
   const state = ensureBridgeConfig();
   // Patient on purpose: a host whose loop is starved on a loaded machine
@@ -326,19 +329,27 @@ export async function ensureBridgeHost(
   await start(state);
 
   // Generous on purpose: run from source, the detached host is a fresh bun
-  // parsing the whole CLI, which on a loaded machine takes longer than the
-  // host itself needs to bind; and a host that has bound but answers late
-  // ("busy") is up, not absent. Each probe gets a few seconds, so a late
-  // answer still counts within the budget.
-  const deadline = Date.now() + 30_000;
+  // parsing the whole CLI, which on a loaded machine takes far longer than
+  // the host itself needs to bind; and a host that has bound but answers
+  // late ("busy") is up, not absent. Each probe gets a few seconds, so a
+  // late answer still counts within the budget. Waiting beats failing: a
+  // verb that gives up here hands the human a problem the next second
+  // would have solved.
+  const startedAt = Date.now();
+  const deadline = startedAt + HOST_START_WAIT_MS;
+  let noted = false;
   while (Date.now() < deadline) {
     const p = await probeHost(state, 3_000);
     if (p === "alive") return { ...(readBridgeState() ?? state), proven: true, started: true };
     if (p === "impostor") return { ...(await proveBridgeHost(state)), started: false };
     if (p === "down") await sleep(150);
+    if (!noted && deps.note && Date.now() - startedAt > 5_000) {
+      noted = true;
+      deps.note(`waiting for the bridge host to start (a fresh cast process, slow on a loaded machine; up to ${HOST_START_WAIT_MS / 1000}s)…`);
+    }
   }
   throw new Error(
-    `the bridge host did not come up on 127.0.0.1:${state.port} within 30s — ` +
+    `the bridge host did not come up on 127.0.0.1:${state.port} within ${HOST_START_WAIT_MS / 1000}s — ` +
       `its log is ${bridgeHostLogPath()}; is another process on that port? Set CAST_BRIDGE_PORT to move it.`,
   );
 }
@@ -845,12 +856,12 @@ export function startBridgeHost(opts: {
       case "Target.attachToTarget": {
         const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
         if (tabId === null) throw new Error("No target with given id found");
-        await extCall("attach", { tabId }, 20_000);
+        const t = (await listTabs()).find((x) => x.tabId === tabId);
+        await extCall("attach", { tabId, owned: !!t && isCast(t) }, 20_000);
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
         // Attaching by id is deliberate (a pinned tab restored from its
         // binding file, or an explicit --tab), so the session may see it.
-        const t = (await listTabs()).find((x) => x.tabId === tabId);
         if (client.session) remember(client.session, { tabId, url: t?.url ?? "" });
         // Attaching to a grouped tab adopts its group. The extension reports
         // a group only for groups it created itself (background.js

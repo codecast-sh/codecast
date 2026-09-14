@@ -38,6 +38,9 @@ export interface WorkflowNode {
   // session gets its own worktree (named after the graph and the bound task).
   agent?: string;
   isolated?: boolean;
+  // Session nodes: the hand reviews the bound task (the-line.md L3). It is
+  // spawned as the task's reviewer, never as the running role's hand.
+  reviewer?: boolean;
   // A named agent definition (cast agent ls): client, model, effort, tools
   // and prompt. Node-level agent/model/reasoning_effort override its parts.
   definition?: string;

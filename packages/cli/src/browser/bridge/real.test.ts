@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  bridgeEndpointIfConfigured, connectRealBridge, engineBrowserFor, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint,
+  bridgeEndpointIfConfigured, connectRealBridge, engineBrowserFor, requireRealBridge, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint,
   realTabOwnership, rememberRealTab, resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget, walledOffFromExtension,
 } from "./real.js";
 import * as http from "node:http";
@@ -299,6 +299,97 @@ describe("bringing the bridge up for a verb", () => {
     } finally {
       (ext as FakeExtension | null)?.ws.close();
       await (host as RunningHost | null)?.close();
+    }
+  });
+});
+
+describe("bringing Chrome and its extension back for a verb", () => {
+  const waits = { grace: 100, alarm: 400, wake: 2_000, launch: 2_000 };
+
+  test("Chrome not running: it is started in the background and the extension is waited for", async () => {
+    const host = await testBridgeHost();
+    writeBridgeState({ port: host.port, token: TEST_TOKEN, hostPid: process.pid, extensionSeenAt: 1 });
+    let ext: FakeExtension | null = null;
+    const calls: string[] = [];
+    try {
+      const { status } = await connectRealBridge(undefined, {
+        waits,
+        note: (l) => calls.push("note:" + l),
+        chromeRunning: () => false,
+        launchChrome: () => {
+          calls.push("launch");
+          setTimeout(() => {
+            ext = new FakeExtension([]);
+            ext.connect(host.port).catch(() => {});
+          }, 300);
+          return true;
+        },
+        wakeExtension: () => {
+          calls.push("wake");
+          return true;
+        },
+      });
+      expect(status.extensionConnected).toBe(true);
+      expect(calls.filter((c) => !c.startsWith("note:"))).toEqual(["launch"]);
+      expect(calls.some((c) => /starting it in the background/.test(c))).toBe(true);
+    } finally {
+      (ext as FakeExtension | null)?.ws.close();
+      await host.close();
+    }
+  });
+
+  test("Chrome running, worker silent: its alarm gets its window, then it is woken from the options page", async () => {
+    const host = await testBridgeHost();
+    writeBridgeState({ port: host.port, token: TEST_TOKEN, hostPid: process.pid, extensionSeenAt: 1 });
+    let ext: FakeExtension | null = null;
+    const calls: string[] = [];
+    const t0 = Date.now();
+    try {
+      const { status } = await connectRealBridge(undefined, {
+        waits,
+        note: () => {},
+        chromeRunning: () => true,
+        launchChrome: () => {
+          calls.push("launch");
+          return true;
+        },
+        wakeExtension: () => {
+          calls.push(`wake@${Date.now() - t0}`);
+          setTimeout(() => {
+            ext = new FakeExtension([]);
+            ext.connect(host.port).catch(() => {});
+          }, 200);
+          return true;
+        },
+      });
+      expect(status.extensionConnected).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatch(/^wake@/);
+      // Not before the alarm window: the worker is given its own chance first.
+      expect(parseInt(calls[0].split("@")[1], 10)).toBeGreaterThanOrEqual(waits.alarm - 50);
+    } finally {
+      (ext as FakeExtension | null)?.ws.close();
+      await host.close();
+    }
+  });
+
+  test("never paired: nothing is launched or woken; the setup steps are the answer", async () => {
+    const host = await testBridgeHost();
+    writeBridgeState({ port: host.port, token: TEST_TOKEN, hostPid: process.pid });
+    const calls: string[] = [];
+    try {
+      const { status } = await connectRealBridge(undefined, {
+        waits,
+        note: () => {},
+        chromeRunning: () => false,
+        launchChrome: () => (calls.push("launch"), true),
+        wakeExtension: () => (calls.push("wake"), true),
+      });
+      expect(status.extensionConnected).toBe(false);
+      expect(calls).toEqual([]);
+      await expect(requireRealBridge(undefined, { waits, note: () => {}, chromeRunning: () => false, launchChrome: () => true, wakeExtension: () => true })).rejects.toThrow(/has not been paired/);
+    } finally {
+      await host.close();
     }
   });
 });

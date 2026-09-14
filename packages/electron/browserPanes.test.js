@@ -46,8 +46,10 @@ class FakeWebContents extends EventEmitter {
   close() { this.destroyed = true; this.calls.push(["close"]); }
   setWindowOpenHandler(fn) { this.windowOpenHandler = fn; }
   isDevToolsOpened() { return this.devtools; }
-  openDevTools(opts) { this.devtools = true; this.calls.push(["openDevTools", opts]); }
-  closeDevTools() { this.devtools = false; this.calls.push(["closeDevTools"]); }
+  // Asynchronous, like Electron's: the devtools window exists a moment after
+  // the call, so isDevToolsOpened() still reads false on the same tick.
+  openDevTools(opts) { this.calls.push(["openDevTools", opts]); queueMicrotask(() => { this.devtools = true; }); }
+  closeDevTools() { this.calls.push(["closeDevTools"]); queueMicrotask(() => { this.devtools = false; }); }
   /** The events this pane's renderer received, as {event, ...} payloads. */
   events(name) {
     return this.sent
@@ -237,6 +239,25 @@ test("the renderer going away takes its views with it", () => {
   assert.ok(view.webContents.isDestroyed());
 });
 
+test("a host that is destroyed still takes its views with it", () => {
+  const r = rig();
+  const view = r.open();
+  // Electron's destroyed web contents throw on every property read, and the
+  // destroyed event is exactly when the shell hears about it. The pane must
+  // close anyway, or its renderer lives on invisible (measured in the rig:
+  // a github.com view survived its window).
+  const host = r.host;
+  host.destroyed = true;
+  Object.defineProperty(host, "id", {
+    get() {
+      throw new Error("Object has been destroyed");
+    },
+  });
+  host.emit("destroyed");
+  assert.equal(r.panes.panes.size, 0, "the pane record is gone");
+  assert.ok(view.webContents.isDestroyed(), "and so is its renderer");
+});
+
 test("a window closing destroys its panes", () => {
   const r = rig();
   r.open();
@@ -302,12 +323,16 @@ test("an aborted navigation is not an error the pane paints", () => {
   assert.equal(r.host.events("fail").length, 0);
 });
 
-test("devtools toggle per pane, detached so they never eat the split", () => {
+test("devtools toggle per pane, detached so they never eat the split", async () => {
   const r = rig();
   const view = r.open();
+  // The answer names the state asked for, even though the window opens a
+  // moment later: the strip must not read "closed" while devtools appear.
   assert.deepEqual(r.send("devtools", { paneId: "p1" }), { ok: true, open: true });
   assert.deepEqual(view.webContents.calls.at(-1), ["openDevTools", { mode: "detach" }]);
+  await Promise.resolve();
   assert.deepEqual(r.send("devtools", { paneId: "p1" }), { ok: true, open: false });
+  assert.deepEqual(view.webContents.calls.at(-1), ["closeDevTools"]);
 });
 
 test("history verbs move the view, and only when there is somewhere to go", () => {
@@ -355,4 +380,195 @@ test("the capabilities probe answers only a trusted caller, and names its comman
   for (const cmd of ["create", "navigate", "bounds", "destroy", "devtools"]) {
     assert.ok(caps.commands.includes(cmd), `${cmd} is part of the contract`);
   }
+});
+
+// ── The pane registry (what `cast browser` reads) ───────────────────────────
+
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { registryDocument, writeRegistryFile, REGISTRY_VERSION } = require("./browserPanes");
+
+/** A rig whose shell advertises a CDP port and whose views answer the
+ *  debugger's target question, the way Electron's do. */
+function registryRig({ cdpPort = 9444, targetIds = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pane-registry-"));
+  const file = path.join(dir, "browser", "desktop-panes.json");
+  const host = new FakeWebContents();
+  const win = new FakeWindow(host);
+  const handlers = new Map();
+  let minted = 0;
+  const panes = createBrowserPanes({
+    WebContentsView: class extends FakeView {
+      constructor(o) {
+        super(o);
+        if (targetIds) {
+          const id = `TARGET${++minted}`;
+          this.webContents.debugger = {
+            attached: false,
+            isAttached() { return this.attached; },
+            attach() { this.attached = true; },
+            detach() { this.attached = false; },
+            sendCommand: async (m) => (m === "Target.getTargetInfo" ? { targetInfo: { targetId: id } } : {}),
+          };
+        }
+      }
+    },
+    session: { fromPartition: (name) => ({ name, setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }) },
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+    BrowserWindow: { fromWebContents: (wc) => (wc === host ? win : null) },
+    isTrusted: () => true,
+    cdpPort,
+    registryPath: file,
+  });
+  panes.install();
+  const send = (cmd, payload) => handlers.get("app:browser-pane")({ sender: host }, cmd, payload);
+  const read = () => JSON.parse(fs.readFileSync(file, "utf-8"));
+  const mode = () => fs.statSync(file).mode & 0o777;
+  // Registry writes coalesce onto a microtask; the debugger answers a tick later.
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  return { panes, host, handlers, file, dir, send, read, mode, settle, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("registry: the document names the port, this pid and each pane's target, url and session", () => {
+  const panes = [
+    { paneId: "p1", hostId: 7, targetId: "T1", url: "https://example.com/", session: "509b4b48-c521-4352-bf19-eafa153745bb", view: { webContents: { isDestroyed: () => false } } },
+    { paneId: "p2", hostId: 7, targetId: null, url: null, session: null, view: { webContents: { isDestroyed: () => true } } },
+  ];
+  const doc = registryDocument(panes, { port: "9444", pid: 42, now: 1000 });
+  assert.deepEqual(doc, {
+    version: REGISTRY_VERSION,
+    port: 9444,
+    pid: 42,
+    updatedAt: 1000,
+    // The destroyed one is gone from the document: nothing can attach to it.
+    panes: [{ paneId: "p1", hostId: 7, targetId: "T1", url: "https://example.com/", session: "509b4b48-c521-4352-bf19-eafa153745bb" }],
+  });
+});
+
+test("registry: written 0600 in a 0700 directory, atomically, and removed when there is nothing to advertise", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pane-registry-"));
+  const file = path.join(dir, "browser", "desktop-panes.json");
+  try {
+    assert.equal(writeRegistryFile(file, { version: 1, port: 9444, panes: [] }), true);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+    assert.equal(fs.readdirSync(path.dirname(file)).length, 1, "no temp file left beside it");
+    assert.equal(writeRegistryFile(file, null), true);
+    assert.equal(fs.existsSync(file), false);
+    // A second removal is fine, and so is an unwritable path.
+    assert.equal(writeRegistryFile(file, null), true);
+    assert.equal(writeRegistryFile("/dev/null/nope/desktop-panes.json", { version: 1 }), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("registry: install writes an empty document, then create, navigate and destroy each rewrite it", async () => {
+  const r = registryRig();
+  try {
+    assert.deepEqual(r.read().panes, []);
+    assert.equal(r.read().port, 9444);
+    assert.equal(r.read().pid, process.pid);
+    assert.equal(r.mode(), 0o600);
+
+    r.send("create", { paneId: "p1", url: "https://example.com", session: "509b4b48-c521-4352-bf19-eafa153745bb" });
+    await r.settle();
+    let [pane] = r.read().panes;
+    assert.equal(pane.paneId, "p1");
+    assert.equal(pane.url, "https://example.com");
+    assert.equal(pane.session, "509b4b48-c521-4352-bf19-eafa153745bb");
+    assert.equal(pane.targetId, "TARGET1", "the debugger's answer is the CDP target id");
+    const view = r.panes.panes.get(`${r.host.id}:p1`).view;
+    assert.equal(view.webContents.debugger.attached, false, "the debugger is let go once the id is known");
+
+    r.send("navigate", { paneId: "p1", url: "https://example.org/x" });
+    await r.settle();
+    assert.equal(r.read().panes[0].url, "https://example.org/x");
+
+    // The page moved on its own (a redirect, a clicked link): the file follows.
+    view.webContents.emit("did-navigate", {}, "https://example.org/y");
+    await r.settle();
+    assert.equal(r.read().panes[0].url, "https://example.org/y");
+    view.webContents.emit("did-navigate-in-page", {}, "https://example.org/y#z", true);
+    await r.settle();
+    assert.equal(r.read().panes[0].url, "https://example.org/y#z");
+
+    r.send("destroy", { paneId: "p1" });
+    await r.settle();
+    assert.deepEqual(r.read().panes, []);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("registry: a pane nobody offered has no session, and a malformed session key is dropped", async () => {
+  const r = registryRig();
+  try {
+    r.send("create", { paneId: "p1", url: "https://example.com" });
+    r.send("create", { paneId: "p2", url: "https://example.com", session: "not a key; rm -rf" });
+    await r.settle();
+    const [a, b] = r.read().panes;
+    assert.equal(a.session, null);
+    assert.equal(b.session, null);
+    // A remount that now names the session (the offer chip re-opened it)
+    // records the owner without a new view.
+    r.send("create", { paneId: "p1", url: "https://example.com", session: "env-abc_1" });
+    await r.settle();
+    assert.equal(r.read().panes.find((p) => p.paneId === "p1").session, "env-abc_1");
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("registry: no CDP port means no file, and a stale one from an earlier run is removed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pane-registry-"));
+  const file = path.join(dir, "browser", "desktop-panes.json");
+  try {
+    writeRegistryFile(file, { version: 1, port: 9333, pid: 1, panes: [{ paneId: "old" }] });
+    const r = registryRig({ cdpPort: "" });
+    r.cleanup();
+    const again = createBrowserPanes({
+      WebContentsView: FakeView,
+      session: { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }) },
+      ipcMain: { handle() {} },
+      BrowserWindow: { fromWebContents: () => null },
+      isTrusted: () => true,
+      cdpPort: "",
+      registryPath: file,
+    });
+    again.install();
+    assert.equal(fs.existsSync(file), false);
+    // And the capabilities probe says so, so the web can tell an agent-drivable pane from one that is not.
+    const handlers = new Map();
+    createBrowserPanes({
+      WebContentsView: FakeView,
+      session: { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }) },
+      ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+      BrowserWindow: { fromWebContents: () => null },
+      isTrusted: () => true,
+    }).install();
+    assert.equal(handlers.get("app:browser-pane-capabilities")({ sender: {} }).drivable, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("registry: a view whose debugger will not attach is still listed, without a target id", async () => {
+  const r = registryRig({ targetIds: false });
+  try {
+    r.send("create", { paneId: "p1", url: "https://example.com", session: "s1" });
+    await r.settle();
+    assert.equal(r.read().panes[0].targetId, null);
+    assert.equal(r.read().panes[0].url, "https://example.com");
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("registry: a manager built without a path never writes anywhere", () => {
+  const r = rig();
+  r.open();
+  assert.equal(r.panes.registryPath, null);
+  assert.equal(r.panes.writeRegistry(), false);
 });

@@ -51,7 +51,7 @@ test("Linux provisioning ships the current CLI build entry, not stale index.js",
 });
 
 describe("idle watchdog and the daemon's activity stamp", () => {
-  const script = baseProvisionScript(20);
+  const script = baseProvisionScript(20).split("<<'IDLE'\n")[1]!.split("\nIDLE")[0]!;
   test("a fresh stamp keeps the box awake; a stale one lets it sleep", () => {
     expect(script).toContain("STAMP=/home/ubuntu/.codecast/host-active");
     expect(script).toContain('[ -f "$STAMP" ]');
