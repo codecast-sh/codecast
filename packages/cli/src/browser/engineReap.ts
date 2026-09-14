@@ -306,9 +306,10 @@ export async function closeTargetLater(targetId: string, endpoint: CdpEndpoint |
  */
 export async function closeSessionTab(key: string, binary: string | null = findEngine()): Promise<boolean> {
   const target = sessionTargetId(key);
+  if (!target) return false;
   const browser = await engineOptionsFor(key);
   let ok = false;
-  if (binary && browser) {
+  if (binary && browser && listEngineSessions().some((session) => session.key === key && session.running)) {
     const env = { ...process.env, AGENT_BROWSER_SESSION: key };
     const closedTab = runEngine(["tab", "close"], { ...browser, timeoutMs: 15_000 });
     if (closedTab.status !== 0 && target) await closeTargetLater(target, await sessionEndpoint(key));

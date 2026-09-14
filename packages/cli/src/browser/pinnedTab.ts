@@ -1,30 +1,6 @@
-/**
- * Pre-create a session's pinned tab in the background.
- *
- * When the engine daemon attaches with no tab bound to the session, it pins a
- * fresh one by sending `Target.createTarget` with no `background` flag — a
- * foreground create, which on macOS raises the whole Chrome app over whatever
- * the human is doing. Chrome honors `background: true` on the same call, so
- * cast creates the tab itself before the daemon's first attach and hands it
- * over through the engine's persisted tab binding file (`{session}.target` in
- * the daemon state dir, the same file engineReap reads). At attach the daemon
- * restores that binding instead of creating anything, and nothing is raised.
- *
- * This also covers a session coming back after a reap: its stale binding
- * points at a closed tab, which without this would put the daemon in the
- * tab_gone state and route the next `open` through a foreground `tab new`.
- * Rewriting the binding to a live background tab first keeps the whole path
- * quiet.
- *
- * Only when the session's daemon is not running: the binding file is read at
- * attach, so writing it under a live daemon changes nothing — and a live
- * daemon already owns a tab. Best effort throughout; without it the engine
- * still works, it just raises the window the way it always did.
- */
-
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CdpConnection, cdpHttpUrl, type CdpEndpoint } from "./cdp.js";
+import { CdpConnection, cdpHttpUrl, listTargets, type CdpEndpoint } from "./cdp.js";
 import { engineSession, engineStateDir, isRealSession } from "./engine.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
@@ -53,11 +29,11 @@ export function readBoundTarget(session: string, stateDir = engineStateDir()): s
 }
 
 /** Write the binding the way tab_binding.rs does: atomic, owner-only. */
-export function writeBoundTarget(session: string, targetId: string, stateDir = engineStateDir()): void {
+export function writeBoundTarget(session: string, targetId: string, stateDir = engineStateDir(), url = "about:blank"): void {
   fs.mkdirSync(stateDir, { recursive: true });
   const file = path.join(stateDir, `${session}.target`);
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify({ targetId, url: "about:blank", pinned: true }), { mode: 0o600 });
+  fs.writeFileSync(tmp, JSON.stringify({ targetId, url, pinned: true }), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -109,37 +85,39 @@ export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowse
   return { endpoint: state.port, create: { url: "about:blank", background: true } };
 }
 
-/**
- * Make sure the next daemon attach for this session finds a live bound tab,
- * creating one in the background if it must. Cheap when there is nothing to
- * do: one pid check under a live daemon, one HTTP probe under a live binding.
- */
-export async function ensurePinnedTab(session = engineSession()): Promise<void> {
-  try {
-    const browser = await pinnedTabBrowser(session);
-    if (!browser) return;
-    const bound = readBoundTarget(session);
-    // Real mode: the host keeps the session → tab partition in memory only,
-    // so hand it the binding again on every command. Cheap (one loopback
-    // POST), and it is what brings a session's tab back into view after the
-    // host was restarted — without it the engine would see no tab of its
-    // own and pin a fresh one, orphaning this one.
-    if (bound && typeof browser.endpoint !== "number" && browser.endpoint.token && browser.endpoint.session) {
-      await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true }).catch(() => {});
-    }
-    if (sessionDaemonPid(session)) return;
-    // Only a tab the browser says is gone is replaced; an unanswered check
-    // leaves the binding alone.
-    if (bound && (await targetLiveness(browser.endpoint, bound)) !== "gone") return;
+export async function ensurePinnedTab(session = engineSession(), url?: string): Promise<boolean> {
+  const browser = await pinnedTabBrowser(session);
+  if (!browser) throw new Error("the browser is unavailable; no tab was opened");
+  const bound = readBoundTarget(session);
+  // Real mode: the host keeps the session → tab partition in memory only,
+  // so hand it the binding again on every command. Cheap (one loopback
+  // POST), and it is what brings a session's tab back into view after the
+  // host was restarted — without it the engine would see no tab of its
+  // own and pin a fresh one, orphaning this one.
+  if (bound && typeof browser.endpoint !== "number" && browser.endpoint.token && browser.endpoint.session) {
+    await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true }).catch(() => {});
+  }
+  if (bound && sessionDaemonPid(session)) return false;
+  // Only a tab the browser says is gone is replaced; an unanswered check
+  // leaves the binding alone.
+  if (bound && (await targetLiveness(browser.endpoint, bound)) !== "gone") return false;
 
-    const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);
-    try {
-      const r = await conn.send<{ targetId: string }>("Target.createTarget", browser.create, undefined, 5_000);
-      if (r?.targetId) writeBoundTarget(session, r.targetId);
-    } finally {
-      conn.close();
+  if (isRealSession(session)) {
+    const [existing] = await listTargets(browser.endpoint);
+    if (existing) {
+      writeBoundTarget(session, existing.targetId, engineStateDir(), existing.url);
+      return false;
     }
-  } catch {
-    /* best effort */
+  }
+  if (!url) throw new Error("this session has no open page; use `cast browser open <url>` first. No blank tab was created.");
+
+  const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);
+  try {
+    const r = await conn.send<{ targetId: string }>("Target.createTarget", { ...browser.create, url, background: true }, undefined, 20_000);
+    if (!r?.targetId) throw new Error("the browser did not return the requested tab");
+    writeBoundTarget(session, r.targetId, engineStateDir(), url);
+    return true;
+  } finally {
+    conn.close();
   }
 }

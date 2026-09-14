@@ -60,6 +60,19 @@ describe("closeTargetLater", () => {
 });
 
 describe("closeSessionTab", () => {
+  test("an unbound session does not start an engine just to close a tab", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-reap-empty-"));
+    const prev = process.env.AGENT_BROWSER_SOCKET_DIR;
+    process.env.AGENT_BROWSER_SOCKET_DIR = stateDir;
+    try {
+      expect(await closeSessionTab("env-unbound-real", "/must-not-execute")).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_BROWSER_SOCKET_DIR;
+      else process.env.AGENT_BROWSER_SOCKET_DIR = prev;
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   test("with no engine, a -real session's tab is closed by its bound target id over the bridge", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-reap-state-"));
     const prev = process.env.AGENT_BROWSER_SOCKET_DIR;
