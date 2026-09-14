@@ -1,17 +1,26 @@
 import { describe, expect, it } from "bun:test";
 import {
+  appDocumentTitle,
   browserPathLabel,
   browserRoutePath,
   displayHost,
+  isAppOrigin,
   isBrowserRoutePath,
   isLoopbackUrl,
+  keepEmbedFlagOnUrl,
   normalizeUrl,
+  hasPaneHost,
   pageAddress,
+  paneSrc,
   parseBrowserRoute,
+  postToPaneHost,
   probeAddress,
   prefersNativeRoute,
+  readPaneMessage,
   rememberBrowserTitle,
   selectBackend,
+  withEmbedFlag,
+  withoutEmbedFlag,
 } from "../browserPane";
 
 describe("normalizeUrl", () => {
@@ -259,5 +268,188 @@ describe("probeAddress", () => {
       permissions: permissionsWith({ "local-network-access": "denied" }),
     });
     expect(verdict).toBe("unreachable");
+  });
+});
+
+describe("embed mode", () => {
+  // The pane frames the app inside the app, so the framed copy has to be told
+  // to render one route and no shell. These are the two halves of that: which
+  // addresses get told, and how the telling survives the app moving around.
+
+  function withWindow<T>(origin: string, run: () => T): T {
+    const had = "window" in globalThis;
+    const before = (globalThis as Record<string, unknown>).window;
+    (globalThis as Record<string, unknown>).window = { location: { origin, search: "" } };
+    try {
+      return run();
+    } finally {
+      if (had) (globalThis as Record<string, unknown>).window = before;
+      else delete (globalThis as Record<string, unknown>).window;
+    }
+  }
+
+  it("flags an address this app serves", () => {
+    expect(paneSrc("https://codecast.sh/inbox")).toBe("https://codecast.sh/inbox?embed=1");
+    expect(paneSrc("https://local.codecast.sh/tasks?p=x")).toBe(
+      "https://local.codecast.sh/tasks?p=x&embed=1",
+    );
+    // A prod link framed on a local checkout is still codecast inside codecast.
+    withWindow("http://localhost:3200", () => {
+      expect(isAppOrigin("https://codecast.sh/inbox")).toBe(true);
+      expect(paneSrc("http://localhost:3200/docs")).toBe("http://localhost:3200/docs?embed=1");
+    });
+  });
+
+  it("hands a foreign address to the frame exactly as given", () => {
+    // Byte for byte: a site's own query is its business, and re-serializing it
+    // is a change the pane has no reason to make.
+    expect(paneSrc("https://github.com/codecast/codecast?tab=readme")).toBe(
+      "https://github.com/codecast/codecast?tab=readme",
+    );
+    expect(paneSrc("http://localhost:3000/app#top")).toBe("http://localhost:3000/app#top");
+    expect(paneSrc("not a url")).toBe("not a url");
+  });
+
+  it("says the same thing twice in a row", () => {
+    const once = paneSrc("https://codecast.sh/inbox");
+    expect(paneSrc(once)).toBe(once);
+    expect(withEmbedFlag(withEmbedFlag("/inbox"))).toBe("/inbox?embed=1");
+  });
+
+  it("carries the flag on a bare path, keeping the rest of the address", () => {
+    expect(withEmbedFlag("/inbox?s=jx7abc#msg-4")).toBe("/inbox?s=jx7abc&embed=1#msg-4");
+    expect(withEmbedFlag("/tasks")).toBe("/tasks?embed=1");
+  });
+
+  it("takes the flag back off, and leaves an address without one alone", () => {
+    expect(withoutEmbedFlag("https://codecast.sh/inbox?embed=1")).toBe("https://codecast.sh/inbox");
+    expect(withoutEmbedFlag("/inbox?s=jx7abc&embed=1")).toBe("/inbox?s=jx7abc");
+    // Untouched, not merely equivalent: the strip shows what comes back here.
+    expect(withoutEmbedFlag("http://localhost:3000/a?u=http://x.test/y")).toBe(
+      "http://localhost:3000/a?u=http://x.test/y",
+    );
+  });
+
+  it("keeps the flag through the app rewriting its own URL", () => {
+    // Every navigation inside the frame writes a bare path. One wrap over the
+    // two history verbs covers all of them — the shell's own tab-path rewrite
+    // (`/inbox?s=<id>`), React Router, and the stage's split sync alike.
+    const written: (string | null | undefined)[] = [];
+    const history = {
+      pushState: (_s: unknown, _u: string, url?: string | URL | null) => written.push(url as string),
+      replaceState: (_s: unknown, _u: string, url?: string | URL | null) =>
+        written.push(url as string),
+    };
+    keepEmbedFlagOnUrl(history);
+    keepEmbedFlagOnUrl(history); // installing twice must not double-wrap
+    history.pushState(null, "", "/tasks");
+    history.replaceState(null, "", "/inbox?s=jx7abc");
+    history.pushState(null, "", "/inbox?s=jx7abc&embed=1");
+    history.replaceState(null, "", null);
+    expect(written).toEqual([
+      "/tasks?embed=1",
+      "/inbox?s=jx7abc&embed=1",
+      "/inbox?s=jx7abc&embed=1",
+      null,
+    ]);
+  });
+});
+
+describe("gestures from a pane's page", () => {
+  // A codecast page framed in a pane has no stage, so it posts its pane
+  // gestures up and the framing window places them. Both ends are pinned here:
+  // what goes out and to whom, and what the framing window agrees to act on.
+
+  function framedWindow(origin: string, ancestor?: string) {
+    const posted: { message: unknown; target: string }[] = [];
+    const parent = { postMessage: (message: unknown, target: string) => posted.push({ message, target }) };
+    const win = { parent, location: { origin, ancestorOrigins: ancestor ? [ancestor] : undefined } };
+    return { win, posted };
+  }
+
+  it("posts the gesture to the framing window, addressed to an app origin", () => {
+    const { win, posted } = framedWindow("https://local.codecast.sh", "https://local.codecast.sh");
+    const source = { kind: "url" as const, url: "http://localhost:8765" };
+    expect(postToPaneHost({ type: "codecast:open-pane", source }, win)).toBe(true);
+    expect(postToPaneHost({ type: "codecast:open-beside", path: "/tasks/ct-1" }, win)).toBe(true);
+    expect(posted).toEqual([
+      { message: { type: "codecast:open-pane", source }, target: "https://local.codecast.sh" },
+      { message: { type: "codecast:open-beside", path: "/tasks/ct-1" }, target: "https://local.codecast.sh" },
+    ]);
+  });
+
+  it("addresses a prod page framed on a local checkout to the local window", () => {
+    const { win, posted } = framedWindow("https://codecast.sh", "https://local.codecast.sh");
+    postToPaneHost({ type: "codecast:open-beside", path: "/docs" }, win);
+    expect(posted[0].target).toBe("https://local.codecast.sh");
+  });
+
+  it("never addresses a foreign site that frames a codecast page", () => {
+    const { win, posted } = framedWindow("https://codecast.sh", "https://evil.example");
+    postToPaneHost({ type: "codecast:open-beside", path: "/docs" }, win);
+    // Its own origin: the browser drops the message, because the parent is not it.
+    expect(posted[0].target).toBe("https://codecast.sh");
+  });
+
+  it("is not a pane's page without a framing window, or outside embed mode", () => {
+    const top = { parent: null as unknown, location: { origin: "https://codecast.sh" } };
+    top.parent = top;
+    expect(hasPaneHost(top)).toBe(false);
+    expect(postToPaneHost({ type: "codecast:open-beside", path: "/docs" }, top)).toBe(false);
+    // The default reads PANE_EMBED, which is false outside a framed document.
+    expect(hasPaneHost()).toBe(false);
+    expect(postToPaneHost({ type: "codecast:open-beside", path: "/docs" })).toBe(false);
+  });
+
+  const frame = {};
+  const event = (data: unknown, origin = "https://codecast.sh", source: unknown = frame) => ({
+    data,
+    origin,
+    source,
+  });
+
+  it("acts only on a message from its own frame, on an app origin", () => {
+    const beside = { type: "codecast:open-beside", path: "/tasks/ct-1" };
+    expect(readPaneMessage(event(beside), frame)).toEqual(beside);
+    expect(readPaneMessage(event(beside, "https://local.codecast.sh"), frame)).toEqual(beside);
+    // A foreign page in the frame (the pane navigated to a site) is not the app.
+    expect(readPaneMessage(event(beside, "http://localhost:8765"), frame)).toBeNull();
+    expect(readPaneMessage(event(beside, "null"), frame)).toBeNull();
+    // Another pane's frame, or no frame mounted: not this pane's gesture.
+    expect(readPaneMessage(event(beside, "https://codecast.sh", {}), frame)).toBeNull();
+    expect(readPaneMessage(event(beside), null)).toBeNull();
+  });
+
+  it("acts only on a payload the app itself would send", () => {
+    const pane = (source: unknown) => readPaneMessage(event({ type: "codecast:open-pane", source }), frame);
+    expect(pane({ kind: "url", url: "http://localhost:8765" })).toEqual({
+      type: "codecast:open-pane",
+      source: { kind: "url", url: "http://localhost:8765" },
+    });
+    expect(pane({ kind: "watch", sessionUuid: "abc-123" })).toEqual({
+      type: "codecast:open-pane",
+      source: { kind: "watch", sessionUuid: "abc-123" },
+    });
+    expect(pane({ kind: "url", url: "javascript:alert(1)" })).toBeNull();
+    expect(pane({ kind: "url", url: "localhost:8765" })).toBeNull();
+    expect(pane({ kind: "watch", sessionUuid: "" })).toBeNull();
+    expect(pane(null)).toBeNull();
+
+    const beside = (path: unknown) => readPaneMessage(event({ type: "codecast:open-beside", path }), frame);
+    expect(beside("//evil.example/x")).toBeNull();
+    expect(beside("https://evil.example/x")).toBeNull();
+    expect(beside(42)).toBeNull();
+    expect(readPaneMessage(event({ type: "something-else", path: "/docs" }), frame)).toBeNull();
+    expect(readPaneMessage(event("codecast:open-beside"), frame)).toBeNull();
+  });
+});
+
+describe("appDocumentTitle", () => {
+  it("prefixes the app in a window, and gives a pane's strip the bare title", () => {
+    expect(appDocumentTitle("Fix the auth race", false)).toBe("codecast | Fix the auth race");
+    expect(appDocumentTitle(null, false)).toBe("codecast");
+    expect(appDocumentTitle("Fix the auth race", true)).toBe("Fix the auth race");
+    // Empty, so the strip falls back to its own label rather than showing "codecast".
+    expect(appDocumentTitle(null, true)).toBe("");
   });
 });

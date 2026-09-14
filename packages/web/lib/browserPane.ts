@@ -126,6 +126,211 @@ export function pageAddress(url: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Embed mode: the app, framed inside one of its own panes
+// ---------------------------------------------------------------------------
+//
+// A pane can be pointed at codecast itself — someone types the address, an
+// agent offers a codecast link, a published page links back. Framed as it
+// stands, the app draws its whole shell a second time: a nav rail, a tab bar
+// and a session rail, nested inside a pane of the app they belong to.
+//
+// So a framed codecast route carries a flag, and the shell that reads it
+// renders the route alone. The flag rides the URL because the iframe's `src`
+// is the only channel that exists before the framed document boots.
+
+export const EMBED_PARAM = "embed";
+
+/** Hosts that serve this same app. `window.location.origin` covers the usual
+ *  case; these two cover the cross-environment one, so a prod link framed on a
+ *  local checkout is still codecast inside codecast. */
+const APP_HOSTS = new Set(["codecast.sh", "local.codecast.sh"]);
+
+/** True when this address is served by the app doing the framing. */
+export function isAppOrigin(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (typeof window !== "undefined" && window.location && u.origin === window.location.origin) {
+    return true;
+  }
+  return APP_HOSTS.has(u.hostname.toLowerCase());
+}
+
+const RELATIVE_BASE = "https://pane.invalid";
+
+/** Edit a URL's query without touching anything else about it, and without
+ *  rewriting the string at all when the edit changes nothing — a re-serialized
+ *  address differs from the one a person typed even when it means the same. */
+function rewriteQuery(url: string, edit: (params: URLSearchParams) => boolean): string {
+  const absolute = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
+  let u: URL;
+  try {
+    u = new URL(url, absolute ? undefined : RELATIVE_BASE);
+  } catch {
+    return url;
+  }
+  if (!edit(u.searchParams)) return url;
+  return absolute ? u.toString() : u.pathname + u.search + u.hash;
+}
+
+/** The same address, flagged as a pane's page. Takes a full URL or a bare path,
+ *  and says the same thing twice in a row. */
+export function withEmbedFlag(url: string): string {
+  return rewriteQuery(url, (params) => {
+    if (params.get(EMBED_PARAM) === "1") return false;
+    params.set(EMBED_PARAM, "1");
+    return true;
+  });
+}
+
+/** The address without the flag: what a person reads in the strip, and what a
+ *  route stores. The flag is how the pane talks to itself, not part of the
+ *  page's identity. */
+export function withoutEmbedFlag(url: string): string {
+  return rewriteQuery(url, (params) => {
+    if (!params.has(EMBED_PARAM)) return false;
+    params.delete(EMBED_PARAM);
+    return true;
+  });
+}
+
+/** What a frame actually loads. A codecast route gets the flag; every other
+ *  address is loaded exactly as it was given. */
+export function paneSrc(url: string): string {
+  return isAppOrigin(url) ? withEmbedFlag(url) : url;
+}
+
+/**
+ * True when THIS document is a pane's page.
+ *
+ * Read once per document, never from a hook: the app rewrites its own address
+ * as you move around it, and a shell that re-read the flag would grow its
+ * chrome back mid-session on the first navigation. Cached on globalThis so a
+ * hot reload cannot answer differently from the boot that built the tree.
+ */
+export const PANE_EMBED: boolean = ((globalThis as Record<string, unknown>).__codecastPaneEmbed ??=
+  typeof window !== "undefined" &&
+  !!window.location &&
+  new URLSearchParams(window.location.search).get(EMBED_PARAM) === "1") as boolean;
+
+type HistoryLike = {
+  pushState: (state: unknown, unused: string, url?: string | URL | null) => void;
+  replaceState: (state: unknown, unused: string, url?: string | URL | null) => void;
+  __embedFlagKept?: boolean;
+};
+
+/**
+ * Keep the flag on the address while the framed app navigates itself.
+ *
+ * Every navigation inside the app writes the whole URL — React Router's own
+ * history, the stage's `syncUrl`, the inbox's session select — and each writer
+ * passes a bare path, so the first click inside the frame would drop the flag
+ * and the reload after it would bring the full shell back inside the pane.
+ * Wrapping the two history verbs once covers every writer, including any added
+ * later, and it runs only in a document that was loaded as a pane's page.
+ */
+export function keepEmbedFlagOnUrl(history?: HistoryLike): void {
+  const h = history ?? (typeof window !== "undefined" ? (window.history as HistoryLike) : null);
+  if (!h || h.__embedFlagKept) return;
+  h.__embedFlagKept = true;
+  for (const verb of ["pushState", "replaceState"] as const) {
+    const original = h[verb].bind(h);
+    h[verb] = (state: unknown, unused: string, url?: string | URL | null) =>
+      original(state, unused, url == null ? url : withEmbedFlag(String(url)));
+  }
+}
+
+// The one import-time side effect in this file, and it cannot fire outside an
+// embedded document: PANE_EMBED is false in the app, in a test and on a server.
+if (PANE_EMBED) keepEmbedFlagOnUrl();
+
+/** The document title a route writes. A pane's page gives the bare title: the
+ *  pane strip reads it, and the strip already says which app it is in. */
+export function appDocumentTitle(title: string | null, embedded: boolean = PANE_EMBED): string {
+  if (embedded) return title ?? "";
+  return title ? `codecast | ${title}` : "codecast";
+}
+
+// ---------------------------------------------------------------------------
+// Gestures from a pane's page
+// ---------------------------------------------------------------------------
+//
+// A pane's page has no stage of its own; the window framing it does. So a
+// gesture that places a pane (a localhost pill, "open beside" on a link) is
+// posted up to that window, which places the pane on its own stage. Without
+// this the gesture would navigate the frame away from the page it shows.
+
+export type PaneMessage =
+  | { type: "codecast:open-pane"; source: BrowserSource }
+  | { type: "codecast:open-beside"; path: string };
+
+type PaneWindow = {
+  parent: { postMessage: (message: unknown, targetOrigin: string) => void } | unknown;
+  location: { origin: string; ancestorOrigins?: ArrayLike<string> };
+};
+
+const thisPaneWindow = (): PaneWindow | null =>
+  PANE_EMBED && typeof window !== "undefined" ? (window as unknown as PaneWindow) : null;
+
+/** True when this document is a pane's page with a window framing it, so pane
+ *  gestures belong to that window's stage. */
+export function hasPaneHost(win: PaneWindow | null = thisPaneWindow()): boolean {
+  return !!win && win.parent !== win;
+}
+
+/**
+ * Hand a gesture to the window framing this pane's page. False when this
+ * document is not a pane's page, and the caller places the pane itself.
+ *
+ * The message goes only to an app origin: the framing window when Chrome names
+ * it and it serves this app (a prod page framed on a local checkout), else this
+ * document's own origin. A foreign site that frames a codecast page hears
+ * nothing.
+ */
+export function postToPaneHost(message: PaneMessage, win: PaneWindow | null = thisPaneWindow()): boolean {
+  if (!win || !hasPaneHost(win)) return false;
+  const framing = win.location.ancestorOrigins?.[0];
+  const target = framing && isAppOrigin(framing) ? framing : win.location.origin;
+  (win.parent as Window).postMessage(message, target);
+  return true;
+}
+
+/** A pane gesture posted by THIS frame's page, or null. The sender must be the
+ *  frame itself, still on an app origin, and the payload must be one this
+ *  window would have produced: an http(s) page or an in-app path. */
+export function readPaneMessage(
+  event: { origin: string; data: unknown; source: unknown },
+  frame: unknown,
+): PaneMessage | null {
+  if (!frame || event.source !== frame || !isAppOrigin(event.origin)) return null;
+  const data = event.data as Record<string, unknown> | null;
+  if (!data || typeof data !== "object") return null;
+  if (data.type === "codecast:open-beside") {
+    const path = data.path;
+    return typeof path === "string" && path.startsWith("/") && !path.startsWith("//")
+      ? { type: "codecast:open-beside", path }
+      : null;
+  }
+  if (data.type === "codecast:open-pane") {
+    const source = data.source as Record<string, unknown> | null;
+    if (source?.kind === "watch" && typeof source.sessionUuid === "string" && source.sessionUuid) {
+      return { type: "codecast:open-pane", source: { kind: "watch", sessionUuid: source.sessionUuid } };
+    }
+    // Passed on as sent, not normalized: the host builds the same path the
+    // gesture would have built unframed, so a pane already showing it is
+    // focused rather than doubled.
+    const url = source?.kind === "url" ? source.url : null;
+    return typeof url === "string" && /^https?:\/\//i.test(url) && normalizeUrl(url)
+      ? { type: "codecast:open-pane", source: { kind: "url", url } }
+      : null;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Probing an address
 // ---------------------------------------------------------------------------
 

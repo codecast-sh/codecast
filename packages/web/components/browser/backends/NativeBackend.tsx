@@ -20,7 +20,7 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { browserPaneBridge, type BrowserPaneEvent } from "../../../lib/desktop";
 import { useNativeBrowserPane } from "../../../hooks/useNativeBrowserPane";
-import { isLoopbackUrl } from "../../../lib/browserPane";
+import { displayHost, isLoopbackUrl } from "../../../lib/browserPane";
 import { paneIsCovered, watchOverlays } from "../../../lib/nativeOverlayGuard";
 import { stageFocus } from "../../../lib/stage";
 import { useTabContext } from "../../../lib/tabParams";
@@ -60,6 +60,14 @@ export function NativeBackend({
   const host = useRef<HTMLDivElement>(null);
   const available = useNativeBrowserPane();
   const pane = useMemo(() => browserPaneBridge(), []);
+  // The bridge, but only once the shell has ANSWERED that it has the view.
+  // The route can force this backend onto a build without one (`&native=1` on
+  // an older desktop), and the capability probe resolves a tick after boot, so
+  // the bridge existing proves nothing. Every effect below gates on this
+  // rather than on the bridge: ungated, a pane would ask a shell that cannot
+  // answer, and would still put back, forward and devtools in the strip over
+  // a card saying the view is unavailable.
+  const live = available ? pane : null;
   const [failed, setFailed] = useState<string | null>(null);
 
   // Read inside the measure loop, which must not be re-created on every
@@ -70,7 +78,7 @@ export function NativeBackend({
 
   const measure = useCallback(() => {
     const el = host.current;
-    if (!el || !pane) return;
+    if (!el || !live) return;
     const r = el.getBoundingClientRect();
     const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
     const show =
@@ -84,8 +92,8 @@ export function NativeBackend({
     const signature = `${show}:${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
     if (signature === lastSent.current) return;
     lastSent.current = signature;
-    void pane.send("bounds", { paneId, rect, visible: show });
-  }, [pane, paneId]);
+    void live.send("bounds", { paneId, rect, visible: show });
+  }, [live, paneId]);
 
   // One rAF chain, started by anything that can move the pane and running just
   // long enough to follow an animation to its end.
@@ -107,14 +115,14 @@ export function NativeBackend({
   // unmounted with its view still up would leave a page floating over the
   // stage, owned by nothing.
   useWatchEffect(() => {
-    if (!pane || !url) return;
-    let live = true;
+    if (!live || !url) return;
+    let mounted = true;
     setFailed(null);
     onTitle(null);
     onState({ kind: "loading" });
     const el = host.current;
     const r = el?.getBoundingClientRect();
-    void pane
+    void live
       .send("create", {
         paneId,
         url,
@@ -122,7 +130,7 @@ export function NativeBackend({
         visible: false,
       })
       .then((answer) => {
-        if (!live) return;
+        if (!mounted) return;
         const ok = (answer as { ok?: boolean })?.ok !== false;
         if (!ok) {
           const reason = (answer as { reason?: string })?.reason ?? "unknown";
@@ -134,23 +142,23 @@ export function NativeBackend({
         chase();
       })
       .catch(() => {
-        if (!live) return;
+        if (!mounted) return;
         setFailed("bridge");
         onState({ kind: "error", message: "The desktop shell did not answer" });
       });
     return () => {
-      live = false;
-      void pane.send("destroy", { paneId });
+      mounted = false;
+      void live.send("destroy", { paneId });
       lastSent.current = "";
     };
     // onTitle/onState are stable callbacks from the pane; the view is created
     // per address, and a new address is a new page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane, paneId, url]);
+  }, [live, paneId, url]);
 
   // Everything that can move, cover or reveal the pane.
   useWatchEffect(() => {
-    if (!pane || !url || typeof window === "undefined") return;
+    if (!live || !url || typeof window === "undefined") return;
     const el = host.current;
     const ro = new ResizeObserver(chase);
     if (el) ro.observe(el);
@@ -168,7 +176,7 @@ export function NativeBackend({
       if (chasing.current) cancelAnimationFrame(chasing.current);
       chasing.current = 0;
     };
-  }, [pane, url, chase]);
+  }, [live, url, chase]);
 
   // The tab this pane lives in became the visible one, or stopped being it.
   // Not a rect change, so nothing else would notice.
@@ -179,14 +187,14 @@ export function NativeBackend({
   // The strip's reload button and Cmd+R both land here.
   const firstReload = useRef(reloadToken);
   useWatchEffect(() => {
-    if (!pane || reloadToken === firstReload.current) return;
-    void pane.send("reload", { paneId });
-  }, [pane, paneId, reloadToken]);
+    if (!live || reloadToken === firstReload.current) return;
+    void live.send("reload", { paneId });
+  }, [live, paneId, reloadToken]);
 
   // What the shell sees about the page, translated into what the pane shows.
   useWatchEffect(() => {
-    if (!pane) return;
-    return pane.on((e: BrowserPaneEvent) => {
+    if (!live) return;
+    return live.on((e: BrowserPaneEvent) => {
       if (e.paneId !== paneId) return;
       switch (e.event) {
         case "title":
@@ -216,17 +224,17 @@ export function NativeBackend({
           // The page had keyboard focus, so the app never saw these. Reload is
           // this pane's own; the others are re-raised as the keystroke they
           // were, and the app's own handlers take them from there.
-          if (e.key === "r") void pane.send("reload", { paneId });
+          if (e.key === "r") void live.send("reload", { paneId });
           else raiseChord(e.key ?? "");
           break;
       }
     });
-  }, [pane, paneId, leafId, url, onTitle, onUrl, onState]);
+  }, [live, paneId, leafId, url, onTitle, onUrl, onState]);
 
   // Back, forward and this pane's own devtools, in the pane's strip.
   useWatchEffect(() => {
     if (!onActions) return;
-    if (!pane || !url) {
+    if (!live || !url) {
       onActions([]);
       return;
     }
@@ -234,35 +242,35 @@ export function NativeBackend({
       {
         icon: <ChevronLeft className="w-3.5 h-3.5" />,
         label: "Back to the previous page",
-        onClick: () => void pane.send("back", { paneId }),
+        onClick: () => void live.send("back", { paneId }),
       },
       {
         icon: <ChevronRight className="w-3.5 h-3.5" />,
         label: "Forward to the next page",
-        onClick: () => void pane.send("forward", { paneId }),
+        onClick: () => void live.send("forward", { paneId }),
       },
       {
         icon: <Code2 className="w-3.5 h-3.5" />,
         label: "Open developer tools for this pane",
-        onClick: () => void pane.send("devtools", { paneId }),
+        onClick: () => void live.send("devtools", { paneId }),
       },
     ];
     onActions(actions);
     return () => onActions([]);
-  }, [onActions, pane, paneId, url]);
+  }, [onActions, live, paneId, url]);
 
-  if (!pane || !available || failed) {
+  if (!live || failed) {
     return (
       <PaneCard
         icon={<MonitorOff className="w-5 h-5" />}
-        host={url || undefined}
+        host={url ? displayHost(url) : undefined}
         headline={
-          pane && available
+          live
             ? "The native view could not be opened here"
             : "The native view needs the desktop app"
         }
         detail={
-          pane && available
+          live
             ? "The shell refused this window a view. Open the page in your browser from the strip above."
             : "It draws the page outside the app, so sites that refuse to be embedded still open. In a browser tab, use the frame or open the page in a window of its own."
         }

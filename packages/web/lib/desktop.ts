@@ -1,5 +1,6 @@
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate } from "./notificationGate";
+import { PANE_EMBED } from "./browserPane";
 
 declare global {
   interface Window {
@@ -459,6 +460,15 @@ export function isDesktopShell(): boolean {
 // both. Checked by the tab router, TabBar, DashboardLayout and the store.
 export function isDetachedTabWindow(): boolean {
   return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isTabWindow === true;
+}
+
+// This document shows a route but does not OWN the tab shell: a detached tab
+// window, or the app framed as a browser pane's page (PANE_EMBED). Both render
+// one route with no tab shell, both hydrate the SHARED tabs, and neither may
+// write them — the window that owns the shell does. Every "keep your hands off
+// the tabs" check asks this rather than naming one of the two.
+export function borrowsTabShell(): boolean {
+  return isDetachedTabWindow() || PANE_EMBED;
 }
 
 // ---------------------------------------------------------------------------

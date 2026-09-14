@@ -96,6 +96,33 @@ export function isNonTabRoute(path: string): boolean {
  */
 export const DEFAULT_TAB_PATH = "/inbox";
 
+/**
+ * A real navigation from outside React: write the history entry, then fire the
+ * popstate that browser back and forward fire, so React Router matches the new
+ * URL and every popstate listener sees the move. Hook-free, so the store, the
+ * stage and a document with no tab shell of its own can all call it. False
+ * where there is no History API to write to.
+ */
+export function routerNavigate(
+  path: string,
+  mode: "push" | "replace" = "push",
+  state: unknown = null,
+): boolean {
+  if (
+    typeof window === "undefined" ||
+    typeof window.history?.pushState !== "function" ||
+    typeof window.dispatchEvent !== "function"
+  ) {
+    return false;
+  }
+  if (mode === "push") window.history.pushState(state, "", path);
+  else window.history.replaceState(state, "", path);
+  window.dispatchEvent(
+    typeof PopStateEvent === "function" ? new PopStateEvent("popstate", { state }) : new Event("popstate"),
+  );
+  return true;
+}
+
 export function shellTabPath(path: string | null | undefined): string {
   if (!path || typeof path !== "string") return DEFAULT_TAB_PATH;
   return isNonTabRoute(path) ? DEFAULT_TAB_PATH : path;

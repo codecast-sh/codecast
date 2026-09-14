@@ -14,11 +14,8 @@
 
 import { useContext } from "react";
 import { useConvex } from "convex/react";
-import { Columns2, Copy, ExternalLink } from "lucide-react";
-import { toast } from "sonner";
-import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../ui/context-menu";
-import { openBrowserPane } from "../../lib/stage";
-import { copyToClipboard } from "../../lib/utils";
+import { ContextMenu, useContextMenu } from "../ui/context-menu";
+import { browserPaneMenuItems } from "../../lib/browserPaneMenuItems";
 import { prefetchBrowserFocusEndpoint } from "../../lib/browserFocus";
 import type { BrowserTabRef } from "../castCommand";
 import { BrowserSessionContext, BROWSER_ROW_PILL, useBrowserTabActions, type BrowserTabActionState } from "../../hooks/useBrowserTabActions";
@@ -127,26 +124,7 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
           visit to the same address with your own session, which is what you
           want when you are checking the agent's work rather than its steps. */}
       <ContextMenu state={menu}>
-        {(url) => (
-          <>
-            <CtxItem icon={Columns2} onSelect={() => openBrowserPane({ kind: "url", url })}>
-              Preview this page in a pane
-            </CtxItem>
-            <CtxItem
-              icon={ExternalLink}
-              onSelect={() => window.open(url, "_blank", "noopener,noreferrer")}
-            >
-              Open in a browser tab
-            </CtxItem>
-            <CtxSeparator />
-            <CtxItem
-              icon={Copy}
-              onSelect={() => void copyToClipboard(url).then(() => toast.success("Address copied"))}
-            >
-              Copy address
-            </CtxItem>
-          </>
-        )}
+        {(url) => browserPaneMenuItems(url, { paneLabel: "Preview this page in a pane" })}
       </ContextMenu>
       {state.kind === "offer" && (
         <button
