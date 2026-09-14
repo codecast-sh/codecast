@@ -25,10 +25,16 @@ describe("taskPeople", () => {
     expect(assignee).toBeNull();
   });
 
-  test("reports the assignee even when they created the task", () => {
-    const { creator, assignee } = taskPeople({ user_id: ME._id, assignee: ME._id });
+  test("reports the assignee even when they created the task, and says they are one person", () => {
+    const { creator, assignee, samePerson } = taskPeople({ user_id: ME._id, assignee: ME._id });
     expect(creator?.name).toBe("Ashot");
     expect(assignee?.name).toBe("Ashot");
+    expect(samePerson).toBe(true);
+  });
+
+  test("two different people are never folded into one", () => {
+    expect(taskPeople({ user_id: ADA._id, assignee: ME._id }).samePerson).toBe(false);
+    expect(taskPeople({ user_id: ME._id }).samePerson).toBe(false);
   });
 
   test("resolves a teammate from the roster", () => {
