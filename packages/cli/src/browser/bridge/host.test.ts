@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
 import { probeHost, startBridgeHost, type RunningHost } from "./host.js";
+import { CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
 import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
@@ -159,6 +160,39 @@ describe("bridge host auth", () => {
     expect(seen[0]).toMatch(/^up: worker ab12 \(4s old\) via alarm, v9\.9\.9$/);
     expect(seen[1]).toMatch(/^down: close 4000/);
   });
+
+  test("an extension that goes silent is dropped after the silence budget, and a new worker is accepted", async () => {
+    // Chrome can end a service worker while its network process keeps the TCP
+    // side open: the host then holds a socket nobody reads. FakeExtension never
+    // answers a ping, so with a short budget it is exactly that worker.
+    const seen: string[] = [];
+    host = await startBridgeHost({
+      port: await freePort(),
+      token: TOKEN,
+      pingIntervalMs: 40,
+      extensionSilenceMs: 150,
+      onExtension: (up, detail) => seen.push(`${up ? "up" : "down"}: ${detail}`),
+    });
+    const dead = await new FakeExtension([]).connect(host.port, { boot: "dead" });
+    expect(host.extensionConnected()).toBe(true);
+    const closed = closeCode(dead.ws, 3000);
+    await closed;
+    expect(host.extensionConnected()).toBe(false);
+    expect(seen.at(-1)).toMatch(/^down:/);
+    // The next worker's hello is not stuck behind the corpse.
+    await new FakeExtension([]).connect(host.port, { boot: "fresh" });
+    expect(host.extensionConnected()).toBe(true);
+    expect(seen.at(-1)).toMatch(/^up: worker fresh/);
+  });
+
+  test("a silent hello is closed with the handshake code, never the bad-token code", async () => {
+    const h = await freshHost();
+    // Not a FakeExtension: a raw socket that never says hello.
+    const ws = await dial(h.port, "/ext", { origin: "chrome-extension://fakeextensionid" });
+    // HELLO_TIMEOUT_MS is 15 s in production; the assertion is on the code, so
+    // it only needs the close, however long the host takes.
+    expect(await closeCode(ws, 20_000)).toBe(CLOSE_HANDSHAKE_TIMEOUT);
+  }, 25_000);
 
   test("a reconnect from the same worker is told apart from a new one", async () => {
     const seen: string[] = [];
@@ -403,6 +437,24 @@ describe("bridge host as a CDP endpoint", () => {
     await conn.send("Target.closeTarget", { targetId });
     expect(ext.tabs.length).toBe(0);
     conn.close();
+  });
+
+  test("attach restores known agent ownership without claiming a human tab", async () => {
+    host = await startBridgeHost({
+      port: await freePort(), token: TOKEN,
+      sessionTabs: { "env-restored-real": [{ tabId: 7, url: "https://example.com/7" }] },
+    });
+    const ext = await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(host.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(host.port));
+    try {
+      await conn.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+      await conn.send("Target.attachToTarget", { targetId: targetIdOfTab(8), flatten: true });
+      expect(ext.seen.filter((m) => m.op === "attach").map(({ tabId, owned }) => ({ tabId, owned }))).toEqual([
+        { tabId: 7, owned: true }, { tabId: 8, owned: false },
+      ]);
+    } finally {
+      conn.close();
+    }
   });
 
   test("createTarget forwards background and castGroup, and strips castGroup from what the client sees", async () => {

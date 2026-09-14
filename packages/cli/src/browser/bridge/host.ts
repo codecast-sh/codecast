@@ -845,12 +845,12 @@ export function startBridgeHost(opts: {
       case "Target.attachToTarget": {
         const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
         if (tabId === null) throw new Error("No target with given id found");
-        await extCall("attach", { tabId }, 20_000);
+        const t = (await listTabs()).find((x) => x.tabId === tabId);
+        await extCall("attach", { tabId, owned: !!t && isCast(t) }, 20_000);
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
         // Attaching by id is deliberate (a pinned tab restored from its
         // binding file, or an explicit --tab), so the session may see it.
-        const t = (await listTabs()).find((x) => x.tabId === tabId);
         if (client.session) remember(client.session, { tabId, url: t?.url ?? "" });
         // Attaching to a grouped tab adopts its group. The extension reports
         // a group only for groups it created itself (background.js

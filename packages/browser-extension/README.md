@@ -101,9 +101,21 @@ cast browser target                            # prints the current choice
 ```
 
 Once the extension is paired, your Chrome stays the default even when the
-bridge host or extension disconnects. A command starts the bridge host if
-needed and waits up to eight seconds for the extension to reconnect. If it
-cannot connect, it reports the problem and how to reconnect. `--clone` uses
+bridge host or extension disconnects, and a command repairs what it can
+before it reports anything. It starts the bridge host if none is running,
+stopping a stale host of ours that holds an old token. It waits eight
+seconds for the extension, which reconnects to a fresh host on its own. If
+Chrome is not running, it starts Chrome in the background (no window on
+macOS) and waits up to a minute for the extension to load. If Chrome runs
+but the extension's worker has not called in, it gives the worker's own
+30 second alarm its chance, then opens the extension's options page with
+`#wake`, which starts the worker; the page closes itself. Only when all of
+that fails does the command report the problem and how to reconnect. The
+extension side never gives up either: it retries every five seconds while
+its worker lives, its alarm retries every thirty seconds after Chrome ends
+the worker, and a token rejection keeps the alarm going rather than waiting
+for a person. Nothing rotates the token except `cast browser extension
+revoke`. `--clone` uses
 the agent browser for one command; `target clone` opts the session out and
 `target real` switches it back. `cast browser target` says which browser is
 selected and why. Real mode is a second engine session, keyed `<session>-real`, on

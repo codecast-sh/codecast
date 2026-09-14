@@ -12,7 +12,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPri
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, isStashHidden } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -1442,7 +1442,7 @@ export function planStuckMessageHeal(
 
 const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
-// The cron only revives a stranded message when its session is live AND idle — i.e. ready to
+// The cron only revives a stranded message when its session is live AND settled — i.e. ready to
 // receive it right now. A user message is NEVER dropped: if the session is busy, blocked, stopped,
 // resuming, or gone, the message is left untouched and revived on a later tick once the session
 // recovers (becomes idle). This readiness gate is what keeps a backlog from stampeding the daemon
@@ -1465,7 +1465,7 @@ async function liveAndReadyConversationIds(
   for (const s of sessions) {
     if (!s.conversation_id) continue;
     live.add(s.conversation_id.toString());
-    if (s.agent_status === "idle") ready.add(s.conversation_id.toString());
+    if (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status)) ready.add(s.conversation_id.toString());
   }
   return { ready, live };
 }
@@ -1727,7 +1727,7 @@ export const diagnoseStuckMessages = internalQuery({
         live: now - s.last_heartbeat < HEARTBEAT_ALIVE_MS,
         pid: s.pid,
       }));
-      const ready = sess.some((s) => s.live && s.agent_status === "idle");
+      const ready = sess.some((s) => s.live && (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status)));
       out.push({
         msg_id: m._id,
         status: m.status,

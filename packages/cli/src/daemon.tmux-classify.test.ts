@@ -206,8 +206,10 @@ describe("extractTmuxLiveRegion", () => {
     const region = extractTmuxLiveRegion(BUSY_WITH_INPUT_BOX_PANE);
     expect(region).toContain("❯");
     expect(region).toContain("esc to interrupt");
-    // Still no scrollback bleed — the spinner line above the box stays out.
-    expect(region).not.toContain("Dilly-dallying");
+    // The turn's own status line directly above the box rides in (since
+    // v2.1.270 it is the only busy marker on the pane); the transcript above
+    // it is scrollback and stays out.
+    expect(region).toContain("Dilly-dallying");
     expect(region).not.toContain("Reading the delivery path");
   });
 });
@@ -236,6 +238,26 @@ describe("classifyTmuxLiveState", () => {
   test("busy: spinner glyph or 'esc to interrupt'", () => {
     const region = extractTmuxLiveRegion(BUSY_SPINNER_PANE);
     expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  // Claude Code v2.1.270: no "esc to interrupt" anywhere, the footer says
+  // "← for agents", and the only sign of the running turn is its own status
+  // line above the composer. Read as idle, the daemon skipped a user's Escape
+  // (2026-09-14). The finished form of that line must still read idle.
+  test("busy on Claude Code's own turn status line with no 'esc to interrupt'", () => {
+    const running = `⏺ Bash(until [ -f /tmp/never ]; do sleep 2; done)
+
+✶ Perambulating… (50s · ↓ 161 tokens)
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  claude2 · session 14%, resets in 4h 55m · week 53%, resets in 4d 19h
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(running))).toBe("busy");
+    const finished = running.replace("✶ Perambulating… (50s · ↓ 161 tokens)", "✻ Churned for 1s · done 10:22 AM");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
   });
 
   test("busy even when the input box is visible (the storm bug)", () => {

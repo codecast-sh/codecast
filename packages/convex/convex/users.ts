@@ -303,6 +303,7 @@ export const daemonHeartbeat = mutation({
     oldest_pending_ms: v.optional(v.number()),
     pending_sync_messages: v.optional(v.number()),
     pending_sync_conversations: v.optional(v.number()),
+    sync_no_progress_ms: v.optional(v.number()),
     daemon_started_at: v.optional(v.number()),
     loop_freeze_ms: v.optional(v.number()),
     // The loop freeze budget: blocked ms over the trailing hour, the worst
@@ -500,6 +501,7 @@ export const daemonHeartbeat = mutation({
         ...(args.oldest_pending_ms !== undefined ? { oldest_pending_ms: args.oldest_pending_ms } : {}),
         ...(args.pending_sync_messages !== undefined ? { pending_sync_messages: args.pending_sync_messages } : {}),
         ...(args.pending_sync_conversations !== undefined ? { pending_sync_conversations: args.pending_sync_conversations } : {}),
+        ...(args.sync_no_progress_ms !== undefined ? { sync_no_progress_ms: args.sync_no_progress_ms } : {}),
         // Absolute time of this machine's last HID event, on the server clock.
         // Left untouched when the daemon doesn't report idle (Linux, or a daemon
         // predating this): a frozen last_input_at simply goes stale, which reads

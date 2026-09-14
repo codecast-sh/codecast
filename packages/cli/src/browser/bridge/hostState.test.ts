@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
 import * as http from "node:http";
-import { bridgeStatePath, ensureBridgeHost, readBridgeState, updateBridgeHostState, writeBridgeState } from "./host.js";
+import { bridgeStatePath, ensureBridgeHost, readBridgeState, startBridgeHost, updateBridgeHostState, writeBridgeState, type RunningHost } from "./host.js";
 import { BRIDGE_PROTOCOL, bridgeProof } from "./protocol.js";
 import { freePort } from "../instance.js";
 
@@ -83,3 +83,73 @@ test("a host that is slow to answer is waited for, never doubled", async () => {
     slow.close();
   }
 }, 20_000);
+
+test("a bridge host of ours holding another token is stopped and replaced, never reported", async () => {
+  // A host left behind by a config this machine no longer has: our program,
+  // our port, the wrong token. The impostor probe finds it; the pid lookup
+  // says it is ours; it is stopped and a host with the current token started.
+  const port = await freePort();
+  writeBridgeState({ port, token: owner.token });
+  let stale: RunningHost | null = await startBridgeHost({ port, token: "some-other-token" });
+  const killed: number[] = [];
+  let started: RunningHost | null = null;
+  try {
+    const bridge = await ensureBridgeHost(
+      async (state) => {
+        started = await startBridgeHost({ port: state.port, token: state.token });
+      },
+      {
+        staleHostPids: () => [4242],
+        kill: (pid) => {
+          killed.push(pid);
+          void stale?.close();
+          stale = null;
+        },
+      },
+    );
+    expect(killed).toEqual([4242]);
+    expect(bridge.started).toBe(true);
+    expect(bridge.port).toBe(port);
+  } finally {
+    await (stale as RunningHost | null)?.close();
+    await (started as RunningHost | null)?.close();
+  }
+}, 20_000);
+
+test("a server on the port that is not ours is named, not stopped", async () => {
+  const port = await freePort();
+  writeBridgeState({ port, token: owner.token });
+  const squatter = await startBridgeHost({ port, token: "squatter" });
+  const killed: number[] = [];
+  try {
+    await expect(ensureBridgeHost(() => {}, { staleHostPids: () => [], kill: (pid) => killed.push(pid) })).rejects.toThrow(/cannot prove it holds the token/);
+    expect(killed).toEqual([]);
+  } finally {
+    await squatter.close();
+  }
+});
+
+test("a host that binds at once but answers late after a start is waited for", async () => {
+  // The started host takes 4 s to answer its first probe: a bun parsing the
+  // CLI on a loaded machine. The old 500 ms probes read that as down for the
+  // whole budget; each probe now gets seconds, so a late answer counts.
+  const port = await freePort();
+  writeBridgeState({ port, token: owner.token });
+  let slow: http.Server | null = null;
+  try {
+    const bridge = await ensureBridgeHost(async () => {
+      slow = http.createServer((req, res) => {
+        const nonce = new URL(req.url ?? "/", "http://127.0.0.1").searchParams.get("nonce") ?? "";
+        setTimeout(() => {
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.end(`cast-bridge protocol=${BRIDGE_PROTOCOL} proof=${bridgeProof(owner.token, "healthz", nonce)}`);
+        }, 2_000);
+      });
+      await new Promise<void>((r) => slow!.listen(port, "127.0.0.1", r));
+    });
+    expect(bridge.started).toBe(true);
+  } finally {
+    (slow as http.Server | null)?.closeAllConnections?.();
+    (slow as http.Server | null)?.close();
+  }
+}, 40_000);
