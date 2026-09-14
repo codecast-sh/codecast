@@ -81,7 +81,8 @@ function fixtures(extra: Record<string, any[]> = {}) {
   });
 }
 
-const ctxOf = (db: any) => ({ db }) as any;
+// A signed in human: scope edits refuse anonymous callers (refuseUnlessHuman).
+const ctxOf = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: String(ME) }) } }) as any;
 
 async function roleWithScope(db: any, handle: string, scope: { project_ids: any[]; plan_ids: any[] }, reports_to?: any) {
   return performCreateRole(ctxOf(db), ME as any, { name: handle, handle, team_id: TEAM, scope, reports_to });
