@@ -6,6 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import * as net from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
@@ -130,6 +131,44 @@ describe("bridge host auth", () => {
     expect(await probeHost({ port: h.port, token: TOKEN })).toBe("alive");
     expect(await probeHost({ port: h.port, token: "x".repeat(64) })).toBe("impostor");
     expect(await probeHost({ port: await freePort(), token: TOKEN })).toBe("down");
+  });
+
+  test("a port that accepts but never answers is busy, not down", async () => {
+    // A starved host on a loaded machine looks exactly like this: the
+    // kernel completes the connection, the process never gets to the request.
+    const silent = net.createServer(() => {});
+    const port = await freePort();
+    await new Promise<void>((r) => silent.listen(port, "127.0.0.1", r));
+    try {
+      expect(await probeHost({ port, token: TOKEN }, 300)).toBe("busy");
+    } finally {
+      silent.close();
+    }
+  });
+
+  test("the extension's own ping is answered, and the log names the worker and the close", async () => {
+    const seen: string[] = [];
+    host = await startBridgeHost({ port: await freePort(), token: TOKEN, onExtension: (up, detail) => seen.push(`${up ? "up" : "down"}: ${detail}`) });
+    const ext = await new FakeExtension([]).connect(host.port, { boot: "ab12", bootAt: Date.now() - 4_000, trigger: "alarm" });
+    ext.ws.send(JSON.stringify({ op: "ping" }));
+    const deadline = Date.now() + 2000;
+    while (!ext.seen.some((m) => m.op === "pong") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    expect(ext.seen.some((m) => m.op === "pong")).toBe(true);
+    ext.ws.close(4000, "worker going away");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(seen[0]).toMatch(/^up: worker ab12 \(4s old\) via alarm, v9\.9\.9$/);
+    expect(seen[1]).toMatch(/^down: close 4000/);
+  });
+
+  test("a reconnect from the same worker is told apart from a new one", async () => {
+    const seen: string[] = [];
+    host = await startBridgeHost({ port: await freePort(), token: TOKEN, onExtension: (up, detail) => seen.push(`${up ? "up" : "down"}: ${detail}`) });
+    const first = await new FakeExtension([]).connect(host.port, { boot: "aaaa", bootAt: Date.now(), trigger: "boot" });
+    first.ws.close();
+    await new Promise((r) => setTimeout(r, 100));
+    await new FakeExtension([]).connect(host.port, { boot: "aaaa", bootAt: Date.now(), trigger: "retry" });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(seen.at(-1)).toMatch(/^up: worker aaaa \(same worker, \ds old\) via retry/);
   });
 
   test("rejects a correct token when the upgrade carries a web-page Origin", async () => {
