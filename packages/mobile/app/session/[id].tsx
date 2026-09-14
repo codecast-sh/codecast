@@ -695,7 +695,7 @@ const _askUserSentState = new Map<string, string>();
 
 function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string }) {
   const Theme = useTheme();
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; detail?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const [sentLabel, setSentLabel] = useState<string | undefined>(() => _askUserSentState.get(tool.id));
@@ -752,6 +752,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
               </RNView>
             )}
             <RNText style={styles.questionText}>{q.question}</RNText>
+            {!!q.detail && <RNText style={styles.optionDescription}>{q.detail}</RNText>}
             <RNView style={[styles.optionsRow, hasDescriptions && styles.optionsColumn]}>
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(' (Recommended)', '');
