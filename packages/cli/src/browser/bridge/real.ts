@@ -86,19 +86,13 @@ export function extensionReady(): boolean {
 
 /**
  * Which browser a session's verbs act on. An explicit `cast browser target`
- * wins. Otherwise the human's Chrome is the default once the extension is
- * paired, including while disconnected. With `settle` a real default is
- * written down as the session's choice, so a session that started in the
- * human's Chrome stays there if the extension drops; a clone default is not
- * written, so a session waiting on the clone moves over the moment the
- * extension is paired, which is the reason the human paired it.
+ * wins. Otherwise the human's Chrome is always the default.
  */
 export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
   const chosen = explicitTarget(sessionKey);
   if (chosen) return chosen;
-  const mode = extensionPaired() || extensionReady() ? "real" : "clone";
-  if (opts.settle && mode === "real") setStickyTarget(sessionKey, mode);
-  return mode;
+  if (opts.settle) setStickyTarget(sessionKey, "real");
+  return "real";
 }
 
 /** Does this invocation act on the real Chrome? Flag beats sticky beats default. */
@@ -144,7 +138,7 @@ export function splitTargetFlags(args: string[]): { real?: boolean; clone?: bool
 export function requireBridgeConfigured(): BridgeState {
   const state = readBridgeState();
   if (!state?.token) {
-    throw new Error("the extension bridge is not set up — run `cast browser extension setup` first");
+    throw new Error("the extension bridge is not set up — the human must run `cast browser extension setup` in their Chrome. No separate browser was started.");
   }
   return state;
 }
@@ -281,7 +275,7 @@ export async function requireRealBridge(start?: BridgeHostStarter): Promise<Prov
       "the cast bridge extension is not connected to this machine's bridge host.\n" +
         "  Open Chrome and check the extension is enabled (chrome://extensions).\n" +
         "  If it still does not connect, run `cast browser extension setup` to pair it again.\n" +
-        "  To use the agent browser explicitly, add --clone or run `cast browser target clone`.",
+        "  Tell the human if it remains disconnected. No separate browser was started.",
     );
   }
   return bridge;

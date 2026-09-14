@@ -104,9 +104,9 @@
   "browser": {
     "config": {
       "browser_enabled": true,
-      "browser_version": "12"
+      "browser_version": "13"
     },
-    "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },

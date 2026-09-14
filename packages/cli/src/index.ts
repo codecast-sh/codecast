@@ -66,6 +66,7 @@ import {
 import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@codecast/shared/time";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import { matchOrgTarget, type OrgTarget } from "./orgTarget.js";
+import { registerOrgInitCommands } from "./orgInit.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -1324,11 +1325,35 @@ function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
   return { blocked: true, restarted: false };
 }
 
-async function showStatus(): Promise<void> {
+async function showStatus(options: { network?: boolean; json?: boolean } = {}): Promise<void> {
   const pid = getDaemonPid();
   const launchdStatus = getMacLaunchdDaemonStatus();
   const config = readConfig();
   const state = readDaemonState();
+  const { collectNetworkStatus, daemonConnectionStatus, networkStatusRows } = await import("./networkStatus.js");
+  const connection = daemonConnectionStatus(!!pid, state);
+  const network = () => collectNetworkStatus(config, options.network !== false);
+  const { getStuckSyncs } = await import("./syncHealth.js");
+  const stuckSyncs = getStuckSyncs();
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      version: getVersion(),
+      daemon: { pid, connection, stateUpdatedAt: state?.timestamp ?? null, lastHeartbeatAt: state?.lastHeartbeatTick ?? null },
+      sync: {
+        lastSyncAt: state?.lastSyncTime ?? null,
+        pendingMessages: state?.pendingSyncMessages ?? 0,
+        pendingOperations: state?.pendingQueueSize ?? 0,
+        pendingConversations: state?.pendingSyncConversations ?? 0,
+        oldestPendingMs: state?.pendingSyncOldestMs ?? 0,
+        stuck: await stuckSyncs,
+        mode: config?.sync_mode ?? "all",
+        projects: config?.sync_projects ?? [],
+      },
+      network: await network(),
+    }, null, 2));
+    return;
+  }
 
   console.log("");
 
@@ -1342,7 +1367,7 @@ async function showStatus(): Promise<void> {
     row("Auth", fmt.warning("expired"));
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast auth")} ${fmt.muted("to re-authenticate")}`);
   } else if (config?.auth_token) {
-    row("Auth", fmt.success(icons.check + " authenticated"));
+    row("Auth", fmt.value("token saved"));
     if (config.user_id) {
       row("User", fmt.id(config.user_id));
     }
@@ -1429,13 +1454,17 @@ async function showStatus(): Promise<void> {
     }
   }
 
-  const convexConnected = pid && (state?.connected ?? false);
-  row("Convex", convexConnected ? fmt.success(icons.check + " connected") : fmt.muted(icons.cross + " disconnected"));
+  row("WebSocket", connection.status === "connected" ? fmt.success(connection.detail) : fmt.warning(connection.detail));
+  if (state?.timestamp && pid) row("State updated", fmt.muted(formatRelativeTime(state.timestamp)));
 
   console.log("");
+  console.log(`  ${fmt.muted(options.network === false ? "Network (live checks disabled)" : "Network (live check, up to 3 seconds)")}`);
+  for (const [label, detail, status] of networkStatusRows(await network())) {
+    row(label, status === "ok" ? fmt.success(detail) : status === "error" || status === "slow" ? fmt.warning(detail) : fmt.muted(detail));
+  }
+  console.log("");
 
-  const { getStuckSyncs } = await import("./syncHealth.js");
-  const stuck = await getStuckSyncs();
+  const stuck = await stuckSyncs;
   if (stuck.length > 0) {
     const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
     row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
@@ -4974,7 +5003,9 @@ program
 
 program
   .command("status")
-  .description("Show daemon status, connection state, and sync information")
+  .description("Show daemon, network connection, latency, and sync information")
+  .option("--no-network", "Skip live DNS and backend checks")
+  .option("--json", "Print status and network diagnostics as JSON")
   .action(showStatus);
 
 program
@@ -13118,6 +13149,11 @@ org
     }
     if (feed.next_cursor) console.log(`${c.dim}more: --cursor ${feed.next_cursor}${c.reset}`);
   });
+
+// Org init, update, inputs and apply (docs/architecture/org-init.md): the
+// analyzer prompt and the apply loop live in orgInit.ts; they attach to the
+// org group above.
+registerOrgInitCommands(program, { cliPost, readWorkspace, workspaceArgs, workspaceLabel });
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is

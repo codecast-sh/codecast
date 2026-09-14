@@ -174,11 +174,19 @@ export function makeBridgeFocusEngine(deps: BridgeFocusDeps): FocusEngine {
   };
 }
 
+// The bridge host and the extension answer through a Chrome that may be
+// busy: a proof that normally lands in tens of milliseconds took 9s on a
+// loaded machine (load average 330, 2026-09-13), and the default 1.2s proof
+// and 5s list turned every "open tab" click into "tab not found" — the
+// bridge threw, and "unreachable" ranks below the clone's honest miss. Same
+// patience the watch stream dials with (watchSource.ts realCdpDeps).
+const BRIDGE_FOCUS_TIMEOUT_MS = 30_000;
+
 export const bridgeFocusEngine: FocusEngine = makeBridgeFocusEngine({
   readState: readBridgeState,
   isPidAlive,
-  prove: (state) => proveBridgeHost(state),
-  listTargets,
+  prove: (state) => proveBridgeHost(state, BRIDGE_FOCUS_TIMEOUT_MS),
+  listTargets: (ep) => listTargets(ep, BRIDGE_FOCUS_TIMEOUT_MS),
   realChromePid: () => realChromePid(),
 });
 
@@ -224,14 +232,18 @@ export function focusBrowserTabBlocking(query: string): Promise<FocusResult> {
 }
 
 /**
- * Ask every engine for its tabs at once, then take the first engine in order
- * that has the tab. Listing is where the time goes (a `ps` pass, a bridge
- * proof, a `/json/list` from a loaded Chrome), and a tab in the human's
- * Chrome sits behind the LAST engine — asked in sequence the route took
- * ~1.6s on a busy machine, long enough for the web to give up on the click.
- * The reported failure is the most hopeful one seen: a stopped engine beside
- * a running one that merely lacks the tab reads as "tab-not-found", not
- * "browser-stopped".
+ * Ask every engine for its tabs at once; the first engine to REPORT the tab
+ * wins, and the others are not waited for. A CDP target id is unique across
+ * browsers, so whichever engine finds it has found the tab, and order only
+ * matters for the failure report. Listing is where the time goes — a `ps`
+ * pass over 1,500 processes (8s on a loaded machine), a bridge proof, a
+ * `/json/list` from a busy Chrome — and a tab in the human's Chrome sits
+ * behind the last engine: asked in sequence, or waited for together, the
+ * route outlived the web's patience and the click did nothing.
+ *
+ * When no engine has it, the reported failure is the most hopeful one seen:
+ * a stopped engine beside a running one that merely lacks the tab reads as
+ * "tab-not-found", not "browser-stopped".
  */
 export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDeps()): Promise<FocusResult> {
   let reason: FocusFailure = "browser-stopped";
@@ -240,10 +252,32 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
     if (rank[r] > rank[reason]) reason = r;
   };
 
-  const listed = await Promise.all(
-    deps.engines.map((engine) => engine.listTabs().then((tabs) => ({ engine, tabs }), () => ({ engine, tabs: null }))),
-  );
-  for (const { engine, tabs } of listed) {
+  // Listings settle in arrival order onto a queue the loop below drains, so
+  // a fast engine that has the tab is acted on while a slow one is still
+  // scanning.
+  type Listed = { engine: FocusEngine; tabs: FocusTab[] | null };
+  const queue: Listed[] = [];
+  let wake: (() => void) | null = null;
+  let pending = deps.engines.length;
+  for (const engine of deps.engines) {
+    engine.listTabs().then(
+      (tabs) => queue.push({ engine, tabs }),
+      () => queue.push({ engine, tabs: null }),
+    ).finally(() => {
+      pending -= 1;
+      wake?.();
+    });
+  }
+
+  while (queue.length || pending) {
+    if (!queue.length) {
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      wake = null;
+      continue;
+    }
+    const { engine, tabs } = queue.shift()!;
     if (tabs === null) {
       worse("browser-unreachable");
       continue;

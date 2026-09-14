@@ -548,6 +548,18 @@ export default defineSchema({
     // with the text. Drives the status chip on the panel and the row tint on
     // the inbox card; absent on rows written before it existed.
     thread_state_status: v.optional(v.string()),
+    // The page an agent offered as a pane (`cast browser pane <url>`). One
+    // latest offer, never a list: an agent that started three dev servers is
+    // telling the reader about the newest, and a queue of dead addresses reads
+    // worse than the freshest answer. `opened_at` is set the moment the reader
+    // opens or dismisses the chip, which is what keeps a handled offer handled
+    // on every other device.
+    browser_pane_offer: v.optional(v.object({
+      url: v.string(),
+      title: v.optional(v.string()),
+      offered_at: v.number(),
+      opened_at: v.optional(v.number()),
+    })),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
@@ -3170,6 +3182,10 @@ export default defineSchema({
     scope_keys: v.optional(v.array(v.string())),
     // A person reopened a granted answer: the grant and the answer it gave, so
     // the person's own answer can be scored as an agreement or an override.
+    // Set by `cast org apply` (orgInit.performApplyDecision) once an org
+    // proposal's answer was acted on, so a second run skips the row.
+    applied_at: v.optional(v.number()),
+    applied_note: v.optional(v.string()),
     reopened_from: v.optional(
       v.object({ grant_id: v.id("decision_grants"), answer_index: v.optional(v.number()), at: v.number() })
     ),
