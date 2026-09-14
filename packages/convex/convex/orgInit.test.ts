@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { ANALYSIS_CAPS, computeAnalysisInputs, performApplyDecision } from "./orgInit";
-import { orgProposalBlock } from "@codecast/shared/contracts";
+import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
 // bounded and access checked, and applying an answered proposal is idempotent.

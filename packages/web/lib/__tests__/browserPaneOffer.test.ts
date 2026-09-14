@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PANE_OFFER_TTL_MS } from "@codecast/shared/contracts";
+import { PANE_OFFER_TTL_MS } from "@codecast/shared/contracts/browserPaneOffer";
 import { paneOfferDecision, paneOfferLabel, paneOfferHint } from "../browserPaneOffer";
 
 const NOW = 1_700_000_000_000;

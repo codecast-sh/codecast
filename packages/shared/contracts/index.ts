@@ -82,10 +82,11 @@ export * from "./prRefs";
 export * from "./triggerEvents";
 export * from "./fence";
 export * from "./triggerPrecheck";
-// Org proposals: the fenced block `cast org init` decisions carry and `cast org apply` reads back.
-export * from "./orgProposal";
-// An agent offering a page as a pane (`cast browser pane <url>`): the stored
-// offer, and the URL normalization the CLI, Convex and the chip must agree on.
-export * from "./browserPaneOffer";
+// Not re-exported here, imported by path: orgProposal (the fenced block
+// `cast org init` decisions carry) and browserPaneOffer (an agent offering a
+// page as a pane). Both sit off the CLI boot graph on purpose
+// (bench/bootGraph.guard.test.ts): the barrel is on every entry's static
+// graph, so a re-export here is paid by `cast --help`.
 
 export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "./sessionSnooze";
+export * from "./unattended";

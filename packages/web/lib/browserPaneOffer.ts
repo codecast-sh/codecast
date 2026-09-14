@@ -5,7 +5,7 @@
 // and so the one judgement call in the feature (may a preference open a pane on
 // the reader's behalf?) is written once, in a place a test can pin.
 
-import { PANE_OFFER_TTL_MS, type BrowserPaneOffer } from "@codecast/shared/contracts";
+import { PANE_OFFER_TTL_MS, type BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { displayHost, isLoopbackUrl } from "./browserPane";
 
 export type PaneOfferDecision = {
