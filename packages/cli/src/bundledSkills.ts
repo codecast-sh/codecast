@@ -28,6 +28,10 @@ import whySkill from "../skills/codecast-why/SKILL.md" with { type: "text" };
 import conflictsSkill from "../skills/codecast-conflicts/SKILL.md" with { type: "text" };
 import secondOpinionSkill from "../skills/codecast-second-opinion/SKILL.md" with { type: "text" };
 import standupSkill from "../skills/codecast-standup/SKILL.md" with { type: "text" };
+import pickupSkill from "../skills/codecast-pickup/SKILL.md" with { type: "text" };
+import handoffSkill from "../skills/codecast-handoff/SKILL.md" with { type: "text" };
+import planSkill from "../skills/codecast-plan/SKILL.md" with { type: "text" };
+import shipSkill from "../skills/codecast-ship/SKILL.md" with { type: "text" };
 
 export interface OrchestrationHookEntry {
   matcher?: string;
@@ -62,4 +66,8 @@ export const BUNDLED_SKILLS: readonly BundledSkill[] = [
   { name: "codecast-conflicts", body: conflictsSkill },
   { name: "codecast-second-opinion", body: secondOpinionSkill },
   { name: "codecast-standup", body: standupSkill },
+  { name: "codecast-pickup", body: pickupSkill },
+  { name: "codecast-handoff", body: handoffSkill },
+  { name: "codecast-plan", body: planSkill },
+  { name: "codecast-ship", body: shipSkill },
 ];

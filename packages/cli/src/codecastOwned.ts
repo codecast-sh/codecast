@@ -39,6 +39,10 @@ export const CODECAST_SKILL_NAMES = [
   "codecast-conflicts",
   "codecast-second-opinion",
   "codecast-standup",
+  "codecast-pickup",
+  "codecast-handoff",
+  "codecast-plan",
+  "codecast-ship",
 ] as const;
 
 /** The agent definitions the orchestration snippet installs under ~/.claude/agents/. */

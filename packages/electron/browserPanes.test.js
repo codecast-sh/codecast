@@ -46,8 +46,10 @@ class FakeWebContents extends EventEmitter {
   close() { this.destroyed = true; this.calls.push(["close"]); }
   setWindowOpenHandler(fn) { this.windowOpenHandler = fn; }
   isDevToolsOpened() { return this.devtools; }
-  openDevTools(opts) { this.devtools = true; this.calls.push(["openDevTools", opts]); }
-  closeDevTools() { this.devtools = false; this.calls.push(["closeDevTools"]); }
+  // Asynchronous, like Electron's: the devtools window exists a moment after
+  // the call, so isDevToolsOpened() still reads false on the same tick.
+  openDevTools(opts) { this.calls.push(["openDevTools", opts]); queueMicrotask(() => { this.devtools = true; }); }
+  closeDevTools() { this.calls.push(["closeDevTools"]); queueMicrotask(() => { this.devtools = false; }); }
   /** The events this pane's renderer received, as {event, ...} payloads. */
   events(name) {
     return this.sent
@@ -302,12 +304,16 @@ test("an aborted navigation is not an error the pane paints", () => {
   assert.equal(r.host.events("fail").length, 0);
 });
 
-test("devtools toggle per pane, detached so they never eat the split", () => {
+test("devtools toggle per pane, detached so they never eat the split", async () => {
   const r = rig();
   const view = r.open();
+  // The answer names the state asked for, even though the window opens a
+  // moment later: the strip must not read "closed" while devtools appear.
   assert.deepEqual(r.send("devtools", { paneId: "p1" }), { ok: true, open: true });
   assert.deepEqual(view.webContents.calls.at(-1), ["openDevTools", { mode: "detach" }]);
+  await Promise.resolve();
   assert.deepEqual(r.send("devtools", { paneId: "p1" }), { ok: true, open: false });
+  assert.deepEqual(view.webContents.calls.at(-1), ["closeDevTools"]);
 });
 
 test("history verbs move the view, and only when there is somewhere to go", () => {

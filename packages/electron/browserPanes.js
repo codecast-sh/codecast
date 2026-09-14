@@ -378,9 +378,13 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
     devtools: (_host, _payload, pane) => {
       const wc = pane?.view.webContents;
       if (!wc) return { ok: false };
-      if (wc.isDevToolsOpened()) wc.closeDevTools();
-      else wc.openDevTools({ mode: "detach" });
-      return { ok: true, open: wc.isDevToolsOpened() };
+      // Answer with the state being asked for. openDevTools is asynchronous:
+      // isDevToolsOpened() still reads false straight after the call (measured
+      // in the rig), so reading it back reports an opening window as closed.
+      const open = !wc.isDevToolsOpened();
+      if (open) wc.openDevTools({ mode: "detach" });
+      else wc.closeDevTools();
+      return { ok: true, open };
     },
     focus: (_host, _payload, pane) => {
       pane?.view.webContents.focus();
