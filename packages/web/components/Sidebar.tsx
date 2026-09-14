@@ -17,6 +17,7 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useDecisionQueue } from "../hooks/useDecisionQueue";
+import { waitingOnPerson } from "../lib/decisionQueue";
 import { useChatUnread, useChatRail, useChatMembers, useOpenDm, supersededChannelId } from "../hooks/useChatSync";
 import { useThreadUnread } from "../hooks/useThreadsSync";
 import { ChannelContextMenu } from "./chat/ChannelMenu";
@@ -324,7 +325,8 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   // queue also carries sessions parked on an AskUserQuestion or permission
   // prompt. Counting only decisions hid this row at zero while the queue still
   // had work — removing the only way in. One hook defines "pending" for both.
-  const pending = useDecisionQueue().length;
+  // Minus the rows a lead holds under a grant: those are the lead's to clear.
+  const pending = waitingOnPerson(useDecisionQueue()).length;
   if (pending === 0) return null;
   return (
     <Link

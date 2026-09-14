@@ -293,7 +293,7 @@ export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
           <ul className="space-y-1">
             {facts.hands.map((h) => (
               <li key={h._id}>
-                <button type="button" onClick={() => openLinked({ _id: h._id, short_id: h.short_id, title: h.title, agent_type: "claude_code" })} className="w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-xl hover:bg-sol-bg-highlight/70">
+                <button type="button" onClick={() => openLinked({ _id: h._id, short_id: h.short_id, title: h.title })} className="w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-xl hover:bg-sol-bg-highlight/70">
                   <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: h.state === "needs_input" ? "var(--sol-yellow)" : h.state === "working" ? "var(--sol-green)" : h.state === "done" ? "var(--sol-cyan)" : h.state === "dormant" ? "var(--sol-blue)" : "var(--sol-text-dim)" }} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{h.title || "Untitled"}</span>
@@ -325,10 +325,12 @@ export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
   );
 }
 
-export function ScopeBriefTab({ role, facts, narrative, canEdit, backHref }: { role: OrgRole; facts: BriefFacts | null; narrative: string; canEdit: boolean; backHref: string }) {
+export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, backHref }: { role: OrgRole; facts: BriefFacts | null; factsProblem: string | null; narrative: string; canEdit: boolean; backHref: string }) {
   return (
     <div className="space-y-5">
-      {facts ? <BriefFactsBlock facts={facts} /> : <div className="h-20 rounded-xl animate-pulse" style={{ background: "color-mix(in srgb, var(--sol-border) 14%, transparent)" }} aria-busy />}
+      {facts ? <BriefFactsBlock facts={facts} /> : (
+        <p className="px-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>{factsProblem ?? "Facts load when the connection returns."}</p>
+      )}
       <section>
         <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Narrative · the role's own words</h3>
         {role.brief_doc_id ? (

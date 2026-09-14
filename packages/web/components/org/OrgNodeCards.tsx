@@ -37,16 +37,25 @@ export function StateBar({ counts, className }: { counts: StateCounts; className
   );
 }
 
-/** The five number tally: "3 · 2 · 0 · 4 · 1", each number in its state colour. */
-export function StateTally({ counts, dim }: { counts: StateCounts; dim?: boolean }) {
+/**
+ * The state tally. With `labels` each count carries its word ("231 needs
+ * input · 2 working"): the form for the one place per surface that teaches
+ * the colours (the org header, the scope board line). Without, dots only, for
+ * a cluster card sitting under its parent's StateBar; zero counts are then
+ * dropped rather than faded, so nothing is drawn that cannot be read.
+ */
+export function StateTally({ counts, dim, labels }: { counts: StateCounts; dim?: boolean; labels?: boolean }) {
+  const shown = labels ? ORG_STATE_ORDER : ORG_STATE_ORDER.filter((k) => (counts[k] ?? 0) > 0);
   return (
-    <span className="inline-flex items-center gap-1.5 tabular-nums text-[10.5px] font-medium">
-      {ORG_STATE_ORDER.map((k) => (
+    <span className="inline-flex items-center gap-1.5 tabular-nums text-[10.5px] font-medium whitespace-nowrap">
+      {shown.map((k) => (
         <span key={k} className="inline-flex items-center gap-[3px]" title={ORG_STATE_META[k].label}>
-          <span className="w-[6px] h-[6px] rounded-full" style={{ background: ORG_STATE_META[k].color, opacity: (counts[k] ?? 0) === 0 ? 0.25 : 1 }} />
+          <span className="w-[6px] h-[6px] rounded-full" style={{ background: ORG_STATE_META[k].color, opacity: (counts[k] ?? 0) === 0 ? 0.3 : 1 }} />
           <span style={{ color: (counts[k] ?? 0) === 0 || dim ? "var(--sol-text-dim)" : "var(--sol-text-secondary)" }}>{counts[k] ?? 0}</span>
+          {labels && <span className="font-normal" style={{ color: (counts[k] ?? 0) === 0 ? "var(--sol-text-dim)" : "var(--sol-text-muted)" }}>{ORG_STATE_META[k].label}</span>}
         </span>
       ))}
+      {shown.length === 0 && <span style={{ color: "var(--sol-text-dim)" }}>none</span>}
     </span>
   );
 }
@@ -125,19 +134,22 @@ function CollapseToggle({ collapsed, hidden, onClick }: { collapsed: boolean; hi
 
 export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean; hidden: number; overflow: number };
 
-/** "+174 · 60 waiting · 4 working": what the stack does not draw, and what in
- *  the whole set needs a human or is live. Nothing when everything is drawn. */
+/** "+174 · 60 needs input · 4 working": what the stack does not draw, and
+ *  what in the whole set needs a human or is live. The state words come from
+ *  ORG_STATE_META so this card, the anchor card, the panel chip and the inbox
+ *  never name one state two ways. Nothing when everything is drawn. */
 export function OverflowTally({ overflow, counts }: { overflow: number; counts: StateCounts }) {
   if (overflow <= 0) return null;
-  const parts = [`+${overflow}`];
-  if ((counts.needs_input ?? 0) > 0) parts.push(`${counts.needs_input} waiting`);
-  if ((counts.working ?? 0) > 0) parts.push(`${counts.working} working`);
+  const parts: { text: string; color?: string }[] = [{ text: `+${overflow}` }];
+  for (const k of ["needs_input", "working"] as const) {
+    if ((counts[k] ?? 0) > 0) parts.push({ text: `${counts[k]} ${ORG_STATE_META[k].label}`, color: ORG_STATE_META[k].color });
+  }
   return (
     <span className="inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }}>
       {parts.map((p, i) => (
-        <span key={p} className="inline-flex items-center gap-1">
+        <span key={p.text} className="inline-flex items-center gap-1">
           {i > 0 && <span aria-hidden>·</span>}
-          <span style={{ color: p.endsWith("waiting") ? "var(--sol-yellow)" : p.endsWith("working") ? "var(--sol-green)" : undefined }}>{p}</span>
+          <span style={{ color: p.color }}>{p.text}</span>
         </span>
       ))}
     </span>

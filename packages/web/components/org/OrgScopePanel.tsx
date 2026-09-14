@@ -17,6 +17,7 @@ import { SelectBox } from "../ui/select-box";
 import { cn } from "../../lib/utils";
 import { StateBar, StateTally } from "./OrgNodeCards";
 import { ORG_STATE_META, parentName } from "./orgMeta";
+import { OrgButton } from "./OrgButton";
 import type { OrgLayoutNode } from "./orgLayout";
 import { parentNodeId } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
@@ -414,9 +415,9 @@ function SessionPanel({ tree, session, parent, canEdit, onOpenSession, onMove, o
         {parent.kind === "role" && owner && <span style={{ color: "var(--sol-text-dim)" }}>· owned by {owner.name}</span>}
       </div>
       <div className="mt-5 flex items-center gap-2">
-        <button type="button" onClick={() => onOpenSession(session._id)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>
+        <OrgButton primary onClick={() => onOpenSession(session._id)}>
           <ExternalLink className="w-3.5 h-3.5" /> Open session
-        </button>
+        </OrgButton>
         {canEdit && (
           <button type="button" onClick={() => onMove({ kind: "session", id: session._id, title: session.title || session.short_id })} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[12px] font-medium hover:bg-sol-bg-highlight/60" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}>
             <ArrowRightLeft className="w-3.5 h-3.5" /> Move to…
@@ -454,9 +455,9 @@ function AnchorPanel({ tree, anchor, onOpenSession }: { tree: OrgTree; anchor: O
       <SectionLabel>Hosted by</SectionLabel>
       <div className="text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{host?.name ?? "—"}</div>
       {anchor.conversation_id && (
-        <button type="button" onClick={() => onOpenSession(anchor.conversation_id!)} className="mt-5 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-semibold" style={{ background: "var(--sol-orange)", color: "var(--sol-bg)" }}>
+        <OrgButton primary className="mt-5" onClick={() => onOpenSession(anchor.conversation_id!)}>
           <ExternalLink className="w-3.5 h-3.5" /> Open its session
-        </button>
+        </OrgButton>
       )}
     </>
   );

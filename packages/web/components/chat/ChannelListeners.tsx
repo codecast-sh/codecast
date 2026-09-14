@@ -26,24 +26,20 @@ import "./chat.css";
 
 export type ListenersChannel = { id: string; kind?: string; isPrivate?: boolean };
 
-/** Roles following this channel, and the ones the viewer may point at it. */
-function channelListeners(tree: OrgTree | null, channelId: string, viewerId: string) {
-  const roles = (tree?.roles ?? []).filter((r) => r.status !== "retired");
-  const me = tree?.people.find((p) => p.is_me) ?? tree?.people.find((p) => p.user_id === viewerId);
-  const isAdmin = me?.role === "admin" || me?.role === "owner" || tree?.workspace.kind === "user";
-  const administers = (r: OrgRole) => isAdmin || r.host_user_id === (me?.user_id ?? viewerId);
-  const listening = roles.filter((r) => (r.follow_channel_ids ?? []).includes(channelId));
-  const mine = roles.filter(administers);
-  return { listening, mine };
-}
-
 export function ChannelListeners({ channel }: { channel: ListenersChannel }) {
-  const tree = useTrackedStore([(s) => s.orgTree, (s) => s.currentUser?._id]);
-  const viewerId = String(tree.currentUser?._id ?? "");
-  const orgTree = tree.orgTree as OrgTree | null;
+  // The tree ref churns with every session heartbeat in the org; the header
+  // only branches on roles and the viewer's grant, so it wakes on THAT
+  // signature (lib/chatListeners) and reads the tree from the tracked state.
+  const s = useTrackedStore([(st) => orgRolesListenSig(st.orgTree), (st) => st.currentUser?._id]);
+  const viewerId = String(s.currentUser?._id ?? "");
+  const orgTree = s.orgTree as OrgTree | null;
+  const sig = orgRolesListenSig(orgTree);
   const { listening, mine } = useMemo(
     () => channelListeners(orgTree, channel.id, viewerId),
-    [orgTree, channel.id, viewerId],
+    // Keyed on the signature, not the ref: a re-render for some other reason
+    // must not recompute over an unchanged tree.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sig, channel.id, viewerId],
   );
   const [open, setOpen] = useState(false);
   const hostRef = useRef<HTMLSpanElement | null>(null);

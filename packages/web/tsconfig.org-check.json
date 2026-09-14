@@ -1,6 +1,10 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": true, "incremental": false, "composite": false },
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "composite": false
+  },
   "include": [],
   "files": [
     "/Users/ashot/src/codecast/packages/web/app/org/page.tsx",
@@ -20,6 +24,13 @@
     "/Users/ashot/src/codecast/packages/web/components/CommandPalette.tsx",
     "/Users/ashot/src/codecast/packages/web/components/RoutePane.tsx",
     "/Users/ashot/src/codecast/packages/web/src/routes.manifest.ts",
-    "/Users/ashot/src/codecast/packages/web/src/App.tsx"
+    "/Users/ashot/src/codecast/packages/web/src/App.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/orgPager.ts",
+    "/Users/ashot/src/codecast/packages/web/components/org/orgPager.test.ts",
+    "/Users/ashot/src/codecast/packages/web/components/org/OrgButton.tsx",
+    "/Users/ashot/src/codecast/packages/web/components/org/HireRoleDialog.tsx",
+    "/Users/ashot/src/codecast/packages/web/store/__tests__/orgSlice.intents.test.ts",
+    "/Users/ashot/src/codecast/packages/web/hooks/useEnsureDispatch.ts",
+    "/Users/ashot/src/codecast/packages/web/hooks/useIsPhone.ts"
   ]
 }

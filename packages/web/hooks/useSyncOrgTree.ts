@@ -18,8 +18,10 @@ export function isMissingFunctionError(error: Error | undefined): boolean {
 
 export function useSyncOrgTree(): { tree: OrgTree | null; ready: boolean; error?: Error; missing: boolean } {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  // A team stub id (createTeam in flight) is not a Convex id; skip until it resolves.
-  const teamArg = activeTeamId && isConvexId(activeTeamId) ? { team_id: activeTeamId } : {};
+  // A team stub id (createTeam in flight) is not a Convex id. Skip until it
+  // resolves: falling back to `{}` would load the PERSONAL tree into the slot
+  // and show the user's own org under the team they just created.
+  const teamArg = !activeTeamId ? {} : isConvexId(activeTeamId) ? { team_id: activeTeamId } : "skip";
   const { ready, error } = useSyncCollection("orgTree", api.org.tree, teamArg);
   const tree = useInboxStore((s) => s.orgTree);
   return { tree, ready, error, missing: isMissingFunctionError(error) };

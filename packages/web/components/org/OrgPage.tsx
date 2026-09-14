@@ -14,6 +14,9 @@ import { createOrgSlice, orgRoleReparentMakesCycle, type OrgUpdateRoleInput } fr
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useOrgSessionsUnder } from "../../hooks/useOrgSessionsUnder";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
+import { useIsPhone } from "../../hooks/useIsPhone";
+import { isConvexId } from "../../lib/entityLinks";
+import { toast } from "sonner";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
 import { SessionMenuItems } from "../menus/ObjectContextMenus";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
@@ -24,39 +27,29 @@ import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
 import { OrgScopePanel, type OrgSessionsSource } from "./OrgScopePanel";
 import { HireRoleDialog } from "./HireRoleDialog";
 import { StateTally } from "./OrgNodeCards";
+import { OrgButton } from "./OrgButton";
 import { layoutOrgTree, parentNodeId, parentRefOfNodeId, ORG_STACK_VISIBLE, type OrgLayoutNode, type OrgLayoutView } from "./orgLayout";
+import { firstServerCursor, moveExpandedSession } from "./orgPager";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "./orgFixture";
 import { sortOrgSessions, sameParent, type OrgParentRef, type OrgSession, type OrgTree, EMPTY_COUNTS } from "./orgTypes";
 
 const PAGE = 8;
-const MOBILE_MAX_WIDTH = 768;
+const ORG_PREVIEW_ENABLED = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("preview") === "1";
 /** The desktop panel overlays the canvas; the graph fits to what is left. */
 const PANEL_W = 380;
 
 type MoveSubject = { kind: "session" | "role"; id: string; title: string };
 
-function useIsPhone(): boolean {
-  const [phone, setPhone] = useState(() => typeof window !== "undefined" && window.innerWidth < MOBILE_MAX_WIDTH);
-  useMountEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH - 1}px)`);
-    const on = () => setPhone(mq.matches);
-    on();
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  });
-  return phone;
-}
-
 // ---------------------------------------------------------------- sessionsUnder pager
 
 /** One mounted loader per requested page; reports rows up once and unmounts. */
 function SessionsUnderPager({ parentId, teamId, cursor, onPage, preview }: {
-  parentId: string; teamId?: string; cursor?: string; preview: boolean;
+  parentId: string; teamId?: string; cursor: string; preview: boolean;
   onPage: (parentId: string, rows: OrgSession[], next?: string) => void;
 }) {
   const parent = useMemo(() => parentRefOfNodeId(parentId)!, [parentId]);
-  const { data } = useOrgSessionsUnder(
-    !preview ? { parent, ...(teamId ? { team_id: teamId } : {}), ...(cursor ? { cursor } : {}), limit: PAGE } : "skip",
+  const { data, error } = useOrgSessionsUnder(
+    !preview ? { parent, ...(teamId ? { team_id: teamId } : {}), cursor, limit: PAGE } : "skip",
   );
   // One shot: the page unmounts this loader when the page lands, so the
   // report must never be cancelled by a re-render in between.
@@ -67,15 +60,23 @@ function SessionsUnderPager({ parentId, teamId, cursor, onPage, preview }: {
       // The fixture pages itself so the expand gesture can be exercised offline.
       done.current = true;
       const all = sortOrgSessions(ORG_FIXTURE_ALL_SESSIONS.filter((s) => parent.kind === "user" ? s.owner_user_id === parent.user_id && !s.org_role_id : s.org_role_id === parent.role_id));
-      const start = cursor ? Number(cursor) : PAGE;
+      const start = Number(cursor);
       const rows = all.slice(start, start + PAGE);
       setTimeout(() => onPage(parentId, rows, start + PAGE < all.length ? String(start + PAGE) : undefined), 250);
+      return;
+    }
+    if (error) {
+      // A terminal error must still settle the request, or the cluster card
+      // reads "Loading…" forever. Close the cursor so the click does not loop.
+      done.current = true;
+      toast.error("Could not load more sessions");
+      onPage(parentId, [], undefined);
       return;
     }
     if (!data) return;
     done.current = true;
     onPage(parentId, (data.sessions ?? []) as OrgSession[], data.next_cursor ?? undefined);
-  }, [data, preview, parentId, cursor, onPage, parent]);
+  }, [data, error, preview, parentId, cursor, onPage, parent]);
   return null;
 }
 
@@ -90,17 +91,25 @@ export function OrgPageInner() {
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
   const activeTeamId = s.clientState.ui?.active_team_id as string | undefined;
 
-  // Until the backend ships org.tree (the query answers "Could not find public
-  // function"), the page runs on the fixture and edits apply to a local copy
-  // through the SAME slice bodies the store uses.
-  const preview = missing && !storeTree;
+  // A client ahead of a backend deploy (CLAUDE.md: web ships on push, Convex
+  // when a person runs deploy.sh) answers "Could not find public function".
+  // That is an honest empty state, never invented people with real names.
+  // The fixture is a DEV preview only (`?preview=1`), for design work offline;
+  // its edits apply to a local copy through the SAME slice bodies the store uses.
+  const preview = ORG_PREVIEW_ENABLED && !storeTree;
   const [previewTree, setPreviewTree] = useState<OrgTree>(ORG_FIXTURE);
-  const tree: OrgTree | null = preview ? previewTree : storeTree;
+  // The slot holds one tree. After a workspace switch it still holds the
+  // previous workspace's until the new answer lands; a tree that names another
+  // workspace is not this page's data, so paint the skeleton for that round
+  // trip instead of a foreign org. Personal = the viewer's own user id.
+  const wantedWorkspace = activeTeamId && isConvexId(activeTeamId) ? activeTeamId : meId;
+  const treeMatches = !storeTree || !wantedWorkspace || storeTree.workspace.id === wantedWorkspace;
+  const tree: OrgTree | null = preview ? previewTree : treeMatches ? storeTree : null;
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState<Record<string, OrgSession[]>>({});
   const [cursors, setCursors] = useState<Record<string, string | null>>({});
-  const [requests, setRequests] = useState<Record<string, { cursor?: string }>>({});
+  const [requests, setRequests] = useState<Record<string, { cursor: string }>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showMiniMap, setShowMiniMap] = useState(false);
   const [pendingMove, setPendingMove] = useState<OrgReparentRequest | null>(null);
@@ -134,6 +143,8 @@ export function OrgPageInner() {
     return !!r && (isAdmin || r.host_user_id === (me?.user_id ?? meId));
   }, [tree, isAdmin, me, meId]);
   const canMoveSession = useCallback((sess: OrgSession) => isAdmin || sess.owner_user_id === (me?.user_id ?? meId), [isAdmin, me, meId]);
+  /** Which cards may be picked up at all: no drag that would only snap back. */
+  const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
 
   // -------- sessions under a parent: tree bucket + loaded pages
   const sessionsUnder = useCallback((parentId: string): OrgSession[] => {
@@ -159,7 +170,9 @@ export function OrgPageInner() {
     }
     if (cursors[parentId] === null || requests[parentId]) return;
     setExpanded((e) => (parentId in e ? e : { ...e, [parentId]: [] }));
-    setRequests((r) => ({ ...r, [parentId]: { cursor: cursors[parentId] ?? undefined } }));
+    // The server pages by offset and the tree's payload IS page one, so the
+    // first request starts past what the tree already carries (orgPager.ts).
+    setRequests((r) => ({ ...r, [parentId]: { cursor: firstServerCursor(cursors[parentId], sessionsUnder(parentId).length) } }));
   }, [cursors, requests, expanded, sessionsUnder]);
   const onPage = useCallback((parentId: string, rows: OrgSession[], next?: string) => {
     setExpanded((e) => {
@@ -185,27 +198,42 @@ export function OrgPageInner() {
   const toggleCollapse = useCallback((id: string) => {
     setCollapsed((c) => { const n = new Set(c); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }, []);
+  /** A session by id, from the tree's top N or from any loaded page. */
+  const findSession = useCallback((conversationId: string): OrgSession | null => {
+    if (!tree) return null;
+    for (const b of [...tree.people, ...tree.roles]) { const s = b.sessions.find((x) => x._id === conversationId); if (s) return s; }
+    for (const rows of Object.values(expanded)) { const s = rows.find((x) => x._id === conversationId); if (s) return s; }
+    return null;
+  }, [tree, expanded]);
   const openSession = useCallback((conversationId: string) => {
-    const row = tree ? [...tree.people, ...tree.roles].flatMap((b) => b.sessions).find((x) => x._id === conversationId) : null;
+    const row = findSession(conversationId);
     if (preview) return;
     openLinked({ _id: conversationId, title: row?.title, short_id: row?.short_id, agent_type: row?.agent_type, updated_at: row?.updated_at ?? Date.now(), is_active: row?.state === "working" });
-  }, [tree, preview, openLinked]);
+  }, [findSession, preview, openLinked]);
 
   const requestMove = useCallback((req: OrgReparentRequest) => {
     if (!tree) return;
     if (req.subject.kind === "role" && orgRoleReparentMakesCycle(tree, req.subject.id, req.target)) { setResetKey((k) => k + 1); return; }
     if (req.subject.kind === "session") {
-      const sess = [...tree.people, ...tree.roles].flatMap((b) => b.sessions).find((x) => x._id === req.subject.id);
+      const sess = findSession(req.subject.id);
       if (!sess || !canMoveSession(sess)) { setResetKey((k) => k + 1); return; }
     } else if (!canEditRole(req.subject.id)) { setResetKey((k) => k + 1); return; }
     setPendingMove(req);
-  }, [tree, canMoveSession, canEditRole]);
+  }, [tree, canMoveSession, canEditRole, findSession]);
   const commitMove = useCallback((req: OrgReparentRequest) => {
-    if (req.subject.kind === "session") run("reparentOrgSession", req.subject.id, req.target);
-    else run("reparentOrgRole", req.subject.id, req.target);
+    if (req.subject.kind === "session") {
+      // The row may live only in a loaded page (beyond the tree's top N): hand
+      // it to the slice so counts move, and move it between the page's own
+      // lists so it is drawn once, under the target.
+      const row = findSession(req.subject.id);
+      setExpanded((e) => moveExpandedSession(e, req.subject.id, parentNodeId(req.target), row));
+      run("reparentOrgSession", req.subject.id, req.target, row);
+    } else {
+      run("reparentOrgRole", req.subject.id, req.target);
+    }
     setPendingMove(null);
     setResetKey((k) => k + 1);
-  }, [run]);
+  }, [run, findSession]);
   const cancelMove = useCallback(() => { setPendingMove(null); setResetKey((k) => k + 1); }, []);
 
   const currentParentOf = useCallback((subject: MoveSubject): OrgParentRef | null => {
@@ -261,20 +289,25 @@ export function OrgPageInner() {
             Org
             {tree && <span className="text-[13px] font-normal mt-1 truncate" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>/ {tree.workspace.name || (tree.workspace.kind === "user" ? "personal" : "team")}</span>}
           </h1>
-          <p className="mt-1.5 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>
-            Who reports to whom: people, the roles they created, standing anchors, every session. Drag a card to move it.
+          <p className="mt-1.5 text-[12.5px] truncate" style={{ color: "var(--sol-text-muted)" }}>
+            <span className="hidden sm:inline">Who reports to whom: people, the roles they created, standing anchors, every session. Drag a card to move it.</span>
+            <span className="sm:hidden">Who reports to whom. Drag a card to move it.</span>
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {stats && (
-            <div className="hidden sm:flex items-center gap-2">
-              <HeaderStat icon={Users} value={stats.people} label="people" />
-              <HeaderStat icon={Briefcase} value={stats.roles} label="roles" tint="var(--sol-violet)" />
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:flex items-center gap-2">
+                <HeaderStat icon={Users} value={stats.people} label="people" />
+                <HeaderStat icon={Briefcase} value={stats.roles} label="roles" tint="var(--sol-violet)" />
+              </div>
               <div className="flex items-center gap-2 h-[34px] px-3 rounded-lg border" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
                 <span className="text-[14px] font-semibold tabular-nums">{stats.sessions}</span>
                 <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>sessions</span>
-                <span className="w-px h-4" style={{ background: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} />
-                <StateTally counts={stats.counts} />
+                <span className="hidden md:inline w-px h-4" style={{ background: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} />
+                {/* The header is the one place the tally is labelled in words;
+                    the cluster cards reuse the dots under a StateBar that sets the context. */}
+                <span className="hidden md:inline"><StateTally counts={stats.counts} labels /></span>
               </div>
             </div>
           )}
@@ -299,7 +332,7 @@ export function OrgPageInner() {
       {preview && (
         <div className="shrink-0 px-4 sm:px-6 py-1.5 text-[11.5px] flex items-center gap-2 border-b" style={{ background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)", borderColor: "color-mix(in srgb, var(--sol-yellow) 25%, transparent)", color: "var(--sol-text-muted)" }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--sol-yellow)" }} />
-          Preview data: the org backend is not deployed yet. Edits here stay on this page.
+          Preview data (dev only, ?preview=1). Edits here stay on this page.
         </div>
       )}
 
@@ -318,6 +351,7 @@ export function OrgPageInner() {
               onExpandCluster={loadMore}
               onCollapseCluster={collapseCluster}
               onReparentRequest={requestMove}
+              canDrag={canDrag}
               onNodeContextMenu={(e, n) => menu.open(e, n, { force: true })}
               onOpenSession={openSession}
               resetKey={resetKey}
@@ -325,7 +359,13 @@ export function OrgPageInner() {
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">
-              {!ready && !tree ? (
+              {missing && !tree ? (
+                <div className="text-center max-w-xs px-6">
+                  <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-text-dim)" }} />
+                  <div className="text-sm font-medium">The org backend is not deployed yet</div>
+                  <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>This page will fill in on its own once it is.</p>
+                </div>
+              ) : !ready && !tree ? (
                 <div className="flex flex-col items-center gap-3" style={{ color: "var(--sol-text-dim)" }}>
                   <Network className="w-8 h-8 animate-pulse" style={{ color: "var(--sol-violet)" }} />
                   <span className="text-sm">Drawing the tree…</span>
@@ -384,7 +424,7 @@ export function OrgPageInner() {
 
       {/* pagers */}
       {Object.entries(requests).map(([pid, r]) => (
-        parentRefOfNodeId(pid) ? <SessionsUnderPager key={`${pid}:${r.cursor ?? ""}`} parentId={pid} cursor={r.cursor} teamId={activeTeamId} onPage={onPage} preview={preview} /> : null
+        parentRefOfNodeId(pid) ? <SessionsUnderPager key={`${pid}:${r.cursor ?? ""}`} parentId={pid} cursor={r.cursor} teamId={activeTeamId && isConvexId(activeTeamId) ? activeTeamId : undefined} onPage={onPage} preview={preview} /> : null
       ))}
 
       {/* confirm popover */}
@@ -461,7 +501,7 @@ function MoveConfirm({ req, onConfirm, onCancel }: { req: OrgReparentRequest; on
         </div>
         <div className="mt-2.5 flex items-center justify-end gap-1.5">
           <button type="button" onClick={onCancel} className="h-7 px-2.5 rounded-md text-[12px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-          <button type="button" data-primary onClick={onConfirm} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>Move</button>
+          <OrgButton primary data-primary onClick={onConfirm} size="sm">Move</OrgButton>
         </div>
       </div>
     </>
