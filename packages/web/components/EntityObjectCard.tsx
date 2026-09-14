@@ -726,9 +726,7 @@ export function ObjectCardFrame({
               <div className="mt-2.5 flex items-center justify-between border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-1.5">
                 <span className="font-mono text-[10px] text-sol-text-dim">{footerId}</span>
                 <span className="flex items-center gap-3">
-                  <RevealButton target={reveal} className={`text-[10px] text-sol-text-muted ${accent.hoverText} hover:underline`}>
-                    Show full page here
-                  </RevealButton>
+                  <RevealButton target={reveal} withLabel className={`text-[10px] text-sol-text-muted ${accent.hoverText} hover:underline`} />
                   <Link
                     href={href}
                     onClick={openObject}
