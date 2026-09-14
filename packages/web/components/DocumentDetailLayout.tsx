@@ -82,6 +82,9 @@ interface DocumentDetailLayoutProps {
   /** Mount in edit mode. Defaults true: editing IS the doc surface; the
    *  quotable read view is the opt-in Review mode. */
   defaultEditing?: boolean;
+  /** Mounted inside another page (a role's brief on the scope page): no back
+   *  link and no close, since the host page owns navigation. */
+  embedded?: boolean;
 }
 
 export function DocumentDetailLayout({
@@ -105,6 +108,7 @@ export function DocumentDetailLayout({
   contentReady = true,
   ownerConversationId,
   defaultEditing = true,
+  embedded = false,
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
@@ -169,12 +173,14 @@ export function DocumentDetailLayout({
           icons can no longer share one line — e.g. a narrow split-pane doc view. */}
       <div ref={titlebarRef} className="cc-panel__head justify-between">
         <div className="flex items-center gap-3">
-          <Link
-            href={backHref}
-            className="text-sol-text-dim hover:text-sol-cyan transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Link>
+          {!embedded && (
+            <Link
+              href={backHref}
+              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Link>
+          )}
           {topBarLeft}
         </div>
         <div className="flex items-center gap-1 ml-auto">
@@ -208,7 +214,7 @@ export function DocumentDetailLayout({
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the
               affordance stays identical either way. */}
-          <SlotActions slot="primary" onClose={() => router.push(backHref)} />
+          {!embedded && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
           {metaContent && (
             <button
               onClick={() => setShowMeta(!showMeta)}
