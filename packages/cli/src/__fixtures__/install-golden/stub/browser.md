@@ -1,8 +1,8 @@
 
 ## Browser
 
-Drive a real Chrome (cast browser). Adds `cast browser` so agents can use the web: open a page, read it as text with a handle on every button and field, click, type, screenshot, and read the console and network log while debugging a site. It drives a real Chrome started from a COPY of your profile, so it is signed in to what you are signed in to — your own Chrome is never touched, and `cast browser start --fresh` gives a signed-out one instead. Nothing launches until an agent runs `cast browser start`.
+Use your Chrome through the Cast extension. Adds `cast browser` for opening pages, reading, clicking, typing, screenshots, and debugging in your own Chrome through the Cast extension. Agents use their own background tabs, created only for an explicit URL; checks never create blank tabs. All ordinary commands, including `start`, use your Chrome; a missing or disconnected extension never launches a separate browser. The separate agent Chrome is a last resort requiring your explicit permission, never a shortcut for verification, unattended work, or sign-in trouble. Old browser overrides and another agent's brief do not authorize a separate browser; ordinary commands always use your Chrome.
 
 Run `cast guide browser` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
-<!-- cast @VERSION@ -->
+<!-- cast 1.1.132 -->
 <!-- /codecast-browser -->

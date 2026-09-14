@@ -70,7 +70,7 @@ export interface Surface {
 }
 
 /** What `targetFlags(br.command(...))` (bridge/commands.ts) adds to a verb. */
-const TARGET_FLAGS = ["--real", "--clone"];
+const TARGET_FLAGS = ["--real"];
 
 /**
  * Verbs and their flags, from `br.command(...)` chains and the passthrough
@@ -195,8 +195,8 @@ describe("readSurface", () => {
 
   test("flags registered through targetFlags count as registered", () => {
     const s = readSurface(`targetFlags(br.command("shot [path]")).option("--full", "x").action(() => {});`);
-    expect([...s.shot].sort()).toEqual(["--clone", "--full", "--real"]);
-    const builtin = readSurface(`br.command("shot").option("--real", "x").option("--clone", "y").action(() => {});`);
+    expect([...s.shot].sort()).toEqual(["--full", "--real"]);
+    const builtin = readSurface(`br.command("shot").option("--real", "x").action(() => {});`);
     expect(surfaceDrift(builtin, s)).toEqual({ verbsLost: [], flagsLost: {} });
   });
 

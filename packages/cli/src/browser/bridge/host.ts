@@ -108,6 +108,16 @@ export function writeBridgeState(state: BridgeState): void {
   fs.renameSync(tmp, bridgeStatePath());
 }
 
+export function updateBridgeHostState(
+  owner: Pick<BridgeState, "port" | "token"> & { hostPid: number },
+  patch: Partial<Pick<BridgeState, "extensionConnected" | "extensionSeenAt" | "sessionTabs">>,
+): boolean {
+  const current = readBridgeState();
+  if (!current || current.port !== owner.port || current.token !== owner.token || current.hostPid !== owner.hostPid) return false;
+  writeBridgeState({ ...current, ...patch });
+  return true;
+}
+
 function defaultPort(): number {
   const env = parseInt(process.env.CAST_BRIDGE_PORT ?? "", 10);
   return Number.isFinite(env) && env > 0 ? env : BRIDGE_DEFAULT_PORT;
@@ -763,8 +773,8 @@ export function startBridgeHost(opts: {
         if (group) client.group = group;
         const tabId = r.tabId as number;
         castTabs.add(tabId);
+        if (client.session) remember(client.session, { tabId, url: String(params?.url ?? "about:blank") });
         const created = (await listTabs()).find((t) => t.tabId === tabId);
-        if (client.session) remember(client.session, { tabId, url: created?.url ?? "" });
         if (created) announce(created);
         return { targetId: targetIdOfTab(tabId) };
       }
@@ -1080,23 +1090,30 @@ export async function runBridgeHost(): Promise<void> {
   }
   // Detached, this process's stderr is bridgeHostLogPath(): the only trace
   // a host leaves of why it is no longer running.
-  const log = (line: string): void => console.error(`${new Date().toISOString()} ${line}`);
+  const log = (line: string): void => console.error(`${new Date().toISOString()} [host ${process.pid} port ${state.port}] ${line}`);
   // The state file is how every short-lived CLI process learns, without a
   // round trip, whether the extension is here: the host is the only writer
   // of these two fields, and it clears the flag on the way out.
+  const owner = { port: state.port, token: state.token, hostPid: process.pid };
+  let connectedBefore = false;
   const record = (connected: boolean): void => {
-    const cur = readBridgeState() ?? state;
-    if (!!cur.extensionConnected !== connected) log(connected ? "extension connected" : "extension disconnected");
-    writeBridgeState({ ...cur, extensionConnected: connected, ...(connected ? { extensionSeenAt: Date.now() } : {}) });
+    if (connectedBefore !== connected) log(connected ? "extension connected" : "extension disconnected");
+    connectedBefore = connected;
+    updateBridgeHostState(owner, { extensionConnected: connected, ...(connected ? { extensionSeenAt: Date.now() } : {}) });
   };
   const host = await startBridgeHost({
     port: state.port,
     token: state.token,
     onExtension: record,
     sessionTabs: state.sessionTabs,
-    onSessionTabs: (sessionTabs) => writeBridgeState({ ...(readBridgeState() ?? state), sessionTabs }),
+    onSessionTabs: (sessionTabs) => { updateBridgeHostState(owner, { sessionTabs }); },
   });
-  writeBridgeState({ ...state, hostPid: process.pid, startedAt: Date.now(), extensionConnected: false });
+  const current = readBridgeState();
+  if (!current || current.port !== state.port || current.token !== state.token) {
+    await host.close();
+    throw new Error("bridge configuration changed during startup; the stale host stopped");
+  }
+  writeBridgeState({ ...current, hostPid: process.pid, startedAt: Date.now(), extensionConnected: false });
   log(`bridge host pid ${process.pid} listening on 127.0.0.1:${state.port}`);
   const shutdown = async (why: string, code = 0) => {
     log(`stopping: ${why}`);

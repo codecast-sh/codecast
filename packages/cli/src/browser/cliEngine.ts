@@ -35,14 +35,15 @@ import {
 } from "./engine.js";
 import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
 import { grantTab } from "./bridge/host.js";
-import { cdpHttpUrl } from "./cdp.js";
-import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
+import { cdpHttpUrl, listTargets } from "./cdp.js";
+import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
-import { ensurePinnedTab } from "./pinnedTab.js";
+import { ensurePinnedTab, pinnedTabBrowser } from "./pinnedTab.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
+import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { readState, stopInstance, writeState } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -76,8 +77,6 @@ function die(msg: string, hint?: string): never {
 // The session, and the browser it attaches to
 // ---------------------------------------------------------------------------
 
-/** Which browser a command was asked for: `--real` / `--clone`, or nothing
- *  and the session's sticky choice (`cast browser target`) decides. */
 export interface TargetChoice {
   real?: boolean;
   clone?: boolean;
@@ -92,6 +91,7 @@ export interface TargetChoice {
 const CLONE_ONLY: Record<string, string> = {
   grant: "the extension cannot grant site permissions in the human's Chrome",
   login: "the human's Chrome already holds their logins; a sign-in there is the human's own",
+  sync: "the human's Chrome already has its own cookies",
 };
 
 /**
@@ -105,13 +105,13 @@ function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint:
   if (!why || !real) return null;
   return {
     message: `\`${verb}\` drives the agent browser only: ${why}`,
-    hint: `cast browser ${verb} --clone …, or \`cast browser target clone\``,
+    hint: "Continue in the human's Chrome. Sign-ins and permission prompts there need the human; a separate browser requires their permission.",
   };
 }
 
 /**
  * Options every engine call carries: this session, and the browser it drives.
- * Real mode (bridge/real.ts isRealMode) is the default once paired: a
+ * Real mode (bridge/real.ts isRealMode) is the ordinary default: a
  * second engine session, keyed `<session>-real`, on the bridge host's socket;
  * the daemon resets its tab when a session's flags change, so the two never
  * share a key. The human's Chrome is already running with its own logins;
@@ -140,9 +140,6 @@ async function ctxFor(verb: string, choice: TargetChoice): Promise<Ctx> {
   return ctx(choice);
 }
 
-/** The choice a commander command was invoked with: its parsed `--real` /
- *  `--clone` options, or the same flags left raw among a passthrough verb's
- *  arguments. */
 function targetChoiceOf(cmd: Command): TargetChoice {
   const o = cmd.opts() as TargetChoice;
   const raw = splitTargetFlags(cmd.args);
@@ -151,8 +148,7 @@ function targetChoiceOf(cmd: Command): TargetChoice {
 
 /**
  * A passthrough verb's browser and its own arguments, from a raw argument
- * list that may carry `--real` / `--clone`: the one place the flags come off
- * the line and the browser is chosen from them.
+ * list that may carry `--real` or the retired `--clone` flag, which is rejected.
  */
 async function targetOf(verb: string, args: string[]): Promise<{ ctx: Ctx; args: string[] }> {
   const t = splitTargetFlags(args);
@@ -164,7 +160,8 @@ async function targetOf(verb: string, args: string[]): Promise<{ ctx: Ctx; args:
  * a session's browsing begins, so it starts the browser when there is none —
  * quietly, behind the human's windows, reusing the profile clone.
  */
-async function ensureBrowser(): Promise<void> {
+async function ensureBrowser(c: Ctx): Promise<void> {
+  if (isRealSession(c.session)) return;
   const state = readState();
   if (state && isPidAlive(state.pid)) return;
   await startLocalBrowser({ ...DEFAULT_START, quiet: true });
@@ -245,9 +242,7 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
 const CAST_HELP_EXTRAS = `Cast additions:
   #e42 and @e42 both work as element refs (they come from \`cast browser snapshot\`)
   --no-shot      Skip the automatic screenshot after a page-changing command
-  --no-capture   Skip the failure context (console, network, screenshot) when a step fails
-
-The engine's full guide: cast browser skills get core --full`;
+  --no-capture   Skip the failure context (console, network, screenshot) when a step fails`;
 
 /** Hand-written help for `text`: its selector form is ours (it fans out to two
  *  engine verbs), so no single engine help page describes it. */
@@ -526,21 +521,24 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     const deny = url ? refuseNavigation(url, owner, "open") : null;
     if (deny) die(deny.message, deny.hint);
     const wall = real && url ? walledOffFromExtension(url) : null;
-    if (wall) die(wall, "the human opens this page in their own Chrome; hand them the URL and the steps. The agent browser can drive it (--clone) only if they ask.");
+    if (wall) die(wall, "the human opens this page in their own Chrome; hand them the URL and the steps.");
     // The real Chrome is the human's, already running; its bridge came up in
     // ctx. The clone is ours to start.
-    if (!real) await ensureBrowser();
+    await ensureBrowser(o);
     // The pre-action hook ran before the browser existed on a cold start;
     // now that it does, bind this session's tab quietly (pinnedTab.ts).
-    await ensurePinnedTab(session);
+    const created = await ensurePinnedTab(session, url && (/^[a-z]+:/i.test(url) ? url : `https://${url}`));
+    if (created) args = args.filter((arg) => arg !== "--new-tab");
     // `open` is where a session's browsing begins, so it is also where tabs
     // whose sessions have died get closed (engineReap.ts) — throttled, and
     // never this session's own.
-    const swept = describeReap(await reapEngineOrphans({ keep: session }));
+    const swept = real ? "" : describeReap(await reapEngineOrphans({ keep: session }));
     if (swept) console.log(fmt.muted(`  ${swept}`));
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
     if (url && !real) await carryLogins(url);
+  } else {
+    await ensurePinnedTab(session);
   }
 
   // `read <url>` fetches that URL, so the same site policy that gates `open`
@@ -735,7 +733,7 @@ async function loginAsPerson(url: string | undefined, waitSeconds: number, choic
     const code = await runVerb("open", [url], o, { quiet: true });
     if (code !== 0) return code;
   } else {
-    await ensureBrowser();
+    await ensureBrowser(o);
     await ensurePinnedTab(o.session);
   }
   const tab = currentTab(o);
@@ -1083,6 +1081,7 @@ async function runFlow(
       // the real Chrome cannot take fails here, before anything touches it.
       const refused = cloneOnlyRefusal(verb, isRealSession(c.session));
       if (refused) throw new Error(`${refused.message} (${refused.hint})`);
+      if (verb !== "open") await ensurePinnedTab(c.session);
       if (verb === "shot") {
         const si = args.findIndex((a) => a === "-s" || a === "--selector");
         const selector = si >= 0 ? args[si + 1] : undefined;
@@ -1115,7 +1114,7 @@ async function runFlow(
       if (!o.keepGoing) break;
     }
   }
-  printFooter(c, "batch", auditOwner());
+  if (!failed) printFooter(c, "batch", auditOwner());
   console.log(fmt.muted(`  ${steps.length} step${steps.length === 1 ? "" : "s"} in ${((Date.now() - started) / 1000).toFixed(1)}s${failed ? `, ${failed} failed` : ""}`));
   return failed ? 1 : 0;
 }
@@ -1131,6 +1130,7 @@ export function engineFailureMessage(stderr: string, stdout: string): string {
 // ---------------------------------------------------------------------------
 
 export function registerEngineCommands(br: Command, deps: PublishDeps): void {
+  registerAdvancedClone(br, (program) => registerEngineCommands(program.command("browser"), deps));
   auditOwner = () => ownerKey(deps.detectCurrentSessionId);
   registerAuditCommand(br, auditOwner);
   registerBridgeCommands(br, { me: auditOwner });
@@ -1141,10 +1141,11 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // first (pinnedTab.ts). Verbs that never touch this session's page skip it,
   // and a clone-only verb asked for the real Chrome dies in ctxFor before a
   // tab is pinned in a browser it will then refuse.
-  const NO_TAB_NEEDED = new Set(["start", "stop", "profiles", "shots", "dialogs", "audit", "target", "bridge-host"]);
+  // `pane` offers a page to the reader over the backend and never opens a tab.
+  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tabs", "start", "stop", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane"]);
   br.hook("preAction", async (_thisCommand, actionCommand) => {
     const verb = actionCommand.name();
-    if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br) return;
+    if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br || actionCommand.args.some((arg) => arg === "--help" || arg === "-h")) return;
     await ensurePinnedTab((await ctxFor(verb, targetChoiceOf(actionCommand))).session);
   });
 
@@ -1186,22 +1187,24 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   diff snapshot            only what changed since your last snapshot
   wait --text/--url/--fn   wait for the state you mean, not a fixed delay
   eval                     JavaScript in the page; promises are awaited (--stdin heredoc, --file <path>)
-  grant                    camera/mic/clipboard permission for this origin — no prompt, no restart
   shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot)
 
-Your Chrome is the default once the extension is paired, including after restarts:
+The human's Chrome is always the default, including before pairing and after restarts:
 
   target                   show which browser this session uses and why
-  target clone             opt this session into the agent browser; target real switches back
-  --real / --clone         override the browser for one verb
+  target real              restore this session to the human's Chrome
+  start                    connect to the extension; never silently launches a separate Chrome
+  status / tabs            inspect without creating a tab; page actions need an open URL first
   show                     bring this session's tab to the front of the human's screen — only when
                            they asked to see it or must act in it themselves (a sign-in, a prompt)
   open <url>               a tab of its own there, in the "Cast" tab group;
+                           created directly at the URL, without a blank setup tab;
                            act only on tabs you opened. Needs the extension paired once by
                            the human: cast browser extension setup
-                           Commands wait for reconnect; --clone explicitly uses the agent browser.
+                           Commands wait for reconnect, then report what needs fixing.
+                           They never fall back to a separate browser.
 
-\`cast browser help <command>\` documents every flag; \`cast browser skills get core --full\` is the engine's full guide.`,
+\`cast browser help <command>\` documents the command's flags.`,
   );
 
   // Escape hatch: the engine gains verbs faster than this table does, and an
@@ -1298,10 +1301,11 @@ frames are superseded before anyone reads them.`,
       process.exit(await loginAsPerson(url, Math.max(0, parseInt(o.wait, 10) || 0), o));
     });
 
-  br.command("sync [url]")
+  targetFlags(br.command("sync [url]"))
     .description("Carry your Chrome's current logins into the running agent browser: one site, or every site with no URL (Google excepted — it signs in on its own)")
-    .action(async (url: string | undefined) => {
-      await ensureBrowser();
+    .action(async (url: string | undefined, o: TargetChoice) => {
+      const c = await ctxFor("sync", o);
+      await ensureBrowser(c);
       const state = readState();
       if (!state || state.remote || !state.sourceProfile) die("no local browser started from your Chrome profile", "`cast browser start` (without --fresh) first");
       const target = url ? (/^[a-z]+:/i.test(url) ? url : `https://${url}`) : null;
@@ -1321,7 +1325,7 @@ frames are superseded before anyone reads them.`,
     .option("--all", "Every agent session's tab in the browser, not only this session's")
     .action(async (o: TargetChoice & { all?: boolean }) => {
       const c = await ctx(o);
-      if (o.all && isRealSession(c.session)) {
+      if (isRealSession(c.session)) {
         // The host's HTTP face lists every tab with cast's own annotations;
         // the engine's own list is scoped to this session on purpose.
         let bridge;
@@ -1332,7 +1336,7 @@ frames are superseded before anyone reads them.`,
         }
         const res = await fetch(cdpHttpUrl({ port: bridge.port, token: bridge.token }, "/json/list"), { signal: AbortSignal.timeout(5000) });
         if (!res.ok) die(`bridge host answered ${res.status}`);
-        const tabs = ((await res.json()) as Array<{ id: string; title: string; url: string; cast?: boolean; sessions?: string[] }>).filter((t) => t.cast);
+        const tabs = ((await res.json()) as Array<{ id: string; title: string; url: string; cast?: boolean; sessions?: string[] }>).filter((t) => t.cast && (o.all || t.sessions?.includes(c.session)));
         if (!tabs.length) console.log(fmt.muted("  no agent tabs in your Chrome"));
         for (const t of tabs) {
           const mine = (t.sessions ?? []).includes(c.session);
@@ -1405,7 +1409,7 @@ A script that throws prints the page's exception and exits 1.`;
       const t = await targetOf("eval", scriptArgs);
       const c = t.ctx;
       scriptArgs = t.args;
-      await ensureBrowser();
+      await ensureBrowser(c);
       await ensurePinnedTab(c.session);
       let stdinBody: string | null = null;
       if (scriptArgs.includes("--stdin")) {
@@ -1453,7 +1457,7 @@ sessions' tabs).`,
     )
     .action(async (permissions: string[] = [], o: { origin?: string; reset?: boolean } & TargetChoice) => {
       const c = await ctxFor("grant", o);
-      await ensureBrowser();
+      await ensureBrowser(c);
       await ensurePinnedTab(c.session);
       const out = await grantPermissions(permissions, c, o);
       console.log(`${out.ok ? OK : BAD} ${out.output}`);
@@ -1503,16 +1507,18 @@ sessions' tabs).`,
 
   // ---------------------------------------------------------------- lifecycle
 
-  br.command("start")
-    .description("Get the browser ready (installs the engine on first use)")
+  targetFlags(br.command("start"))
+    .description("Connect to the human's Chrome through the extension")
+    .addHelpText("after", BROWSER_START_HELP)
     .option("--profile <dir>", "Chrome profile to inherit logins from (see `cast browser profiles`)")
     .option("--fresh", "Start signed out of everything")
     .option("--resync", "Re-copy the profile even if a clone already exists")
     .option("--headless", "Run without a visible window")
     .option("--fake-media", "Fake camera/mic devices (test pattern + tone) — for machines without real ones; permission prompts are auto-accepted")
-    .option("--size <WxH>", "Window size", DEFAULT_START.size)
+    .option("--size <WxH>", "Window size for the separate browser")
     .option("--remote [host]", "Run the browser on a remote host (see `cast browser hosts`)")
-    .action(async (o: Partial<StartOptions>) => {
+    .action(async (o: Partial<StartOptions> & TargetChoice) => {
+      const real = await prepareRealBrowserStart(o, auditOwner()).catch((err) => die((err as Error).message));
       let install;
       try {
         install = ensureEngine();
@@ -1520,6 +1526,7 @@ sessions' tabs).`,
         die((err as Error).message);
       }
       if (install.installed) console.log(`${OK} browser engine installed (${ENGINE_PACKAGE})`);
+      if (real) return;
 
       const session = engineSession();
       const swept = describeReap(await reapEngineOrphans({ force: true, keep: session }));
@@ -1555,10 +1562,11 @@ sessions' tabs).`,
         console.log(`  profile: ${state.sourceProfile ? `${state.sourceProfile} (logins inherited; Google is its own — \`cast browser login\` once)` : "fresh — signed out"}`);
       }
       if (!alive) return;
-      const res = runEngine(["tab", "list"], c);
-      if (res.status === 0 && res.stdout.trim()) {
+      const browser = await pinnedTabBrowser(c.session);
+      const tabs = browser ? await listTargets(browser.endpoint) : [];
+      if (tabs.length) {
         console.log(`  tabs (→ is this session's):`);
-        for (const line of res.stdout.trim().split("\n")) console.log(`    ${line}`);
+        for (const tab of tabs) console.log(`    [${tab.targetId}] ${tab.title || tab.url} - ${tab.url}`);
       }
       const others = listEngineSessions().filter((x) => x.running && x.key !== c.session);
       if (others.length) {
@@ -1572,10 +1580,12 @@ sessions' tabs).`,
     .option("--wipe", "With --all: also remove the cloned profile")
     .action(async (o: { all?: boolean; wipe?: boolean } & TargetChoice) => {
       const { session } = await ctx(o);
+      if (isRealSession(session) && (o.all || o.wipe)) die("Ordinary browser commands cannot stop or wipe a separate browser.");
       // Detach the engine and close the tab it was pinned to; the browser
       // stays for everyone else.
       await closeSessionTab(session);
       console.log(`${OK} closed this session's tab`);
+      if (isRealSession(session)) return;
       const swept = describeReap(await reapEngineOrphans({ force: true, keep: o.all ? null : session, idleMs: o.all ? 0 : undefined }));
       if (swept) console.log(fmt.muted(`  ${swept}`));
       if (o.all) {
@@ -1623,6 +1633,7 @@ sessions' tabs).`,
         const tag = p.lastUsed ? fmt.muted(" (you used this last)") : "";
         console.log(`${mark} ${p.dir.padEnd(12)} ${fmt.highlight(p.name)}${p.email ? fmt.muted(` <${p.email}>`) : ""}${tag}`);
       }
-      console.log(fmt.muted(`\n  * = what agents use. Change it with: cast browser stop --all && cast browser start --profile "<dir>"`));
+      console.log(fmt.muted("\n  * = the separate browser's profile, used only when explicitly selected. Normal commands use the human's Chrome."));
     });
+  hideCloneControls(br);
 }
