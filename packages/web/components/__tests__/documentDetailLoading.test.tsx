@@ -42,6 +42,13 @@ mock.module("../workspace/Slot", () => ({
 mock.module("../editor/CollabDocEditor", () => ({
   CollabDocEditor: () => <div data-stub="collab-editor" />,
 }));
+// Belt and braces for the editor stub above: the sync library's tiptap entry
+// imports `@tiptap/pm/collab`, which no bun environment resolves (tiptap 3's pm
+// package has no collab export), so the real editor module can never load
+// under bun test. On CI the editor stub alone did not keep it out.
+mock.module("@convex-dev/prosemirror-sync/tiptap", () => ({
+  useTiptapSync: () => ({ isLoading: false, initialContent: null, extension: null, create: async () => {} }),
+}));
 // Spread, not replaced: `mock.module` is process-global, and a sibling test
 // imports `matchScore` off this module.
 const realMentions = { ...(await import("../../hooks/useMentionQuery")) };
