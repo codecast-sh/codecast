@@ -439,6 +439,11 @@ test("the OS notification surface: cached status, the settings pane, and no fals
   // default, because that is exactly the lie the renderer's
   // Notification.permission tells.
   const status = await el.handlers.get("notification-status")({}, null);
+  // The surface is macOS only; on another OS the honest answer is "unsupported".
+  if (process.platform !== "darwin") {
+    expect(status).toMatchObject({ status: "unsupported", verdict: null, canOpenSettings: false });
+    return;
+  }
   expect(status).toMatchObject({ status: "unknown", verdict: null, canOpenSettings: true });
   expect(api.notificationStatus().status).toBe("unknown");
 
