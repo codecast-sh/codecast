@@ -603,7 +603,10 @@ async function boundConversations(ctx: any, task: any): Promise<any[]> {
   const out: any[] = [];
   for (const id of task.conversation_ids ?? []) {
     const conv = await ctx.db.get(id);
-    if (conv && String(conv.active_task_id) === String(task._id)) out.push(conv);
+    if (!conv || String(conv.active_task_id) !== String(task._id)) continue;
+    // A session started to review this task judges the work; it never does it.
+    if (String(conv.review_of_task_id ?? "") === String(task._id)) continue;
+    out.push(conv);
   }
   return out;
 }
@@ -618,8 +621,14 @@ const roleOf = (conv: any): string | undefined =>
  * done only on an approve verdict from outside: not a session bound to the
  * task, not a hand of the role, not the role's standing session. People and
  * sessions with no role are unaffected. A verdict a person wrote (no
- * conversation behind it) counts as outside every role. Reads the verdict
- * being written in this call first, then the stored one.
+ * conversation behind it) counts as outside every role.
+ *
+ * The verdict's author and the closer are judged apart. When the caller is
+ * writing the verdict in this call (the review station approving and
+ * closing at once), the caller is the reviewer: it is held to the reviewer
+ * checks, not counted among the sessions doing the work. A session the spawn
+ * route stamped review_of_task_id carries no role, so its approve passes; a
+ * hand of the role approving its own role's work still fails the role check.
  */
 export async function enforceIndependentReview(
   ctx: any,
@@ -630,7 +639,10 @@ export async function enforceIndependentReview(
 ): Promise<void> {
   if (nextStatus !== "done" || task.status === "done") return;
   const bound = await boundConversations(ctx, task);
-  const inside = [...bound, ...(actor ? [actor] : [])];
+  const actorIsAuthor = !!actor && !!pendingVerdict && String(pendingVerdict.by_conversation_id ?? "") === String(actor._id);
+  // The reviewer is not among the sessions doing the work; a closer that is
+  // not the reviewer is.
+  const inside = actorIsAuthor || !actor ? bound : [...bound, actor];
   const roleIds = new Set(inside.map(roleOf).filter((r): r is string => !!r));
   if (roleIds.size === 0) return;
   const roleList = [...roleIds].join(", ");
@@ -645,7 +657,7 @@ export async function enforceIndependentReview(
   if (!verdict.by_conversation_id) return;
   const byId = String(verdict.by_conversation_id);
   if (inside.some((c) => String(c._id) === byId)) refuse("on a verdict from a session doing the work");
-  const reviewer = await ctx.db.get(verdict.by_conversation_id);
+  const reviewer = actorIsAuthor ? actor : await ctx.db.get(verdict.by_conversation_id);
   const reviewerRole = roleOf(reviewer);
   if (reviewerRole && roleIds.has(reviewerRole)) refuse("on a verdict from a session of the same role");
 }
@@ -1863,8 +1875,6 @@ export const addComment = mutation({
       .first();
     if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
-    const user = await ctx.db.get(auth.userId);
-
     const conv = args.conversation_id
       ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
       : null;
@@ -1873,11 +1883,13 @@ export const addComment = mutation({
       ? conv._id : undefined;
 
     // A post from inside a session is an agent's: no actor, so the owner's
-    // thread lights up. A person running the CLI by hand is the actor. A
-    // role's standing session signs as the role (lib/actor).
+    // thread lights up. A person running the CLI by hand is the actor. The
+    // name is the server resolved identity (lib/actor): a role's standing
+    // session signs as the role, everyone else as the token's owner. The
+    // author argument is accepted for older CLIs and never read.
     const actor = await resolveActor(ctx, auth.userId, conv);
     const id = await insertTaskComment(ctx, task._id, {
-      author: args.author || (actor.kind === "role" ? actor.name : undefined) || user?.name || "unknown",
+      author: actor.name || "unknown",
       text: args.text,
       conversation_id,
       comment_type: args.comment_type || "note",
@@ -2874,6 +2886,10 @@ export const webUpdate = mutation({
     sort_order: v.optional(v.number()),
     // Short id of the canonical task; empty string clears the link.
     duplicate_of: v.optional(v.string()),
+    // A person's review verdict from the board (the-line.md L3). A web write
+    // has no session behind it, so the verdict counts as outside every role.
+    review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
+    review_note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2965,10 +2981,28 @@ export const webUpdate = mutation({
       updates.attempt_count = (task.attempt_count || 0) + 1;
       updates.last_attempted_at = now;
     }
+    if (args.review_verdict) {
+      updates.review_verdict = {
+        verdict: args.review_verdict,
+        at: now,
+        ...(args.review_note ? { note: args.review_note } : {}),
+      };
+    } else if (nextStatus === "done" && task.status === "in_review") {
+      // Dragging a task out of In Review into Done is the person's approve:
+      // that column holds work waiting on exactly this judgement.
+      updates.review_verdict = { verdict: "approve", at: now, note: "closed from the board" };
+    }
 
     // Close-guard: refuses done/dropped on a parent with open subtasks unless
     // resolved; returns the subtree to cascade-close. Runs before any write.
     const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
+    // The board is held to the same independent review rule as the CLI
+    // (the-line.md L3); the caller is a person, so its verdict is outside.
+    await enforceIndependentReview(ctx, task, null, nextStatus, updates.review_verdict);
+    for (const id of cascadeIds) {
+      const child = await ctx.db.get(id);
+      if (child) await enforceIndependentReview(ctx, child, null, nextStatus, undefined);
+    }
 
     const resolvedAssignee = updates.assignee || args.assignee;
     // Record history for changed fields
@@ -2977,6 +3011,7 @@ export const webUpdate = mutation({
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
+    if (updates.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", updates.review_verdict.verdict]);
     if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
     const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
     if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);

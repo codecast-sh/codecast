@@ -722,8 +722,9 @@ export const addComment = mutation({
       content: args.content,
     };
     if (args.session_id) entry.session_id = args.session_id;
-    if (args.author) entry.author = args.author;
-    else if (actor.kind === "role" && actor.name) entry.author = actor.name;
+    // The name is the server resolved identity; the author argument is
+    // accepted for older CLIs and never read.
+    if (actor.name) entry.author = actor.name;
     if (args.rationale) entry.rationale = args.rationale;
     if (args.path_or_url) entry.path_or_url = args.path_or_url;
 
