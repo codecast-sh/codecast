@@ -40,7 +40,7 @@ test("the stage is an ordinary window: no float, no click-through, resizable", (
   const { win } = openCallWindow(rig);
   assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [false, { visibleOnFullScreen: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [false, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), true);
   win.emit("ready-to-show");
   assert.equal(win.did("show").length, 1);
@@ -54,7 +54,7 @@ test("every circle size floats over the work, lets the mouse through and cannot 
     rig.handlers.get("set-call-window-size")(sender, size);
     assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"], size);
     assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }], size);
-    assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }], size);
+    assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }], size);
     assert.equal(win.isResizable(), false, size);
   }
 });
@@ -359,7 +359,7 @@ test("the strip is a shape: bottom-right corner, floating, taking the mouse, nev
   assert.equal(rig.handlers.get("set-call-window-size")(sender, "walkie"), "walkie");
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
   // One rem in, five rem up from the bottom-right of the 1600x1000 work area.
   const [w, h] = win.getContentSize();
@@ -606,7 +606,7 @@ test("the ring shape is pinned above everything at the top-right of the cursor's
   assert.equal(rig.handlers.get("set-call-window-size")(sender, "ring"), "ring");
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "screen-saver"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
   // The rig's cursor is at 400,400 on a 1600x1000 work area.
   const [w] = win.getContentSize();

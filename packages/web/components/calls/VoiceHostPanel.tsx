@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -193,8 +193,18 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   // reveals and hides the window to match; this component never asks for
   // either by name. A build that answers null has no shapes at all, and says
   // so once rather than leaving a window that silently never changes.
+  //
+  // A LAYOUT effect, deliberately. The shape's own surface mounts in the same
+  // commit and reports how big the window has to be from a passive effect
+  // (useFloatingCircles), and React runs a child's passive effect before a
+  // parent's — so from a plain effect here the size report reached the shell
+  // FIRST, while the window was still in its previous shape. The shell refuses
+  // a resize in the idle shape, so the report was dropped, the faces came up
+  // in the seed-sized window with the row cut off at both ends, and stayed so
+  // until a hover re-sent the size. Layout effects run before every passive
+  // effect, parent or child, so the ask is on the wire before the report.
   const warned = useRef(false);
-  useWatchEffect(() => {
+  useLayoutEffect(() => {
     void setCallWindowSize(view).then((landed) => {
       if (landed || warned.current) return;
       warned.current = true;

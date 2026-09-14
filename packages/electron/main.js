@@ -702,7 +702,7 @@ ipcMain.handle("set-always-on-top", (e, on) => {
     // Only the wall wears the pin. Every other shape's float is its own.
     if (callWindowSize === "wall") {
       win.setAlwaysOnTop(pinned, "floating");
-      win.setVisibleOnAllWorkspaces(pinned, { visibleOnFullScreen: true });
+      win.setVisibleOnAllWorkspaces(pinned, WORKSPACES_OPTS);
     }
     return pinned;
   }
@@ -793,6 +793,16 @@ const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380
 // (set-call-window-content-size); this only keeps the first frame from being a
 // full-screen sheet of invisible glass.
 const CALL_CIRCLES_SIZE = { width: 112, height: 112 };
+// Every floating window follows the person between desktops with these
+// options, and NEVER with `visibleOnFullScreen`. On macOS that flag makes
+// Electron call app.dock.hide() on every application — it turns the whole
+// process into a background helper (LSUIElement), which deactivates the app:
+// the main window lost focus and the dock icon vanished each time the faces
+// or the strip appeared over the work. What the flag buys is showing over
+// ANOTHER app's full-screen space, and that is not worth the app losing the
+// keyboard to its own overlay. `skipTransformProcessType` is the documented
+// way to keep the process what it is.
+const WORKSPACES_OPTS = { visibleOnFullScreen: false, skipTransformProcessType: true };
 // What the strip is born as: the width it was designed at inside the app, and
 // a height the renderer corrects on its first measure.
 const CALL_WALKIE_SIZE = { width: 420, height: 140 };
@@ -1040,9 +1050,8 @@ function applyCallWindowSize(win, size, { reveal = true } = {}) {
   }
   win.setResizable(chrome.resizable);
   win.setAlwaysOnTop(chrome.alwaysOnTop, chrome.level || "floating");
-  // Follow the person between desktops and stay visible over a full-screen app
-  // — the two places a minimized call is most needed and least reachable.
-  win.setVisibleOnAllWorkspaces(chrome.visibleOnAllWorkspaces, { visibleOnFullScreen: true });
+  // Follow the person between desktops.
+  win.setVisibleOnAllWorkspaces(chrome.visibleOnAllWorkspaces, WORKSPACES_OPTS);
   // `forward: true` is what keeps the renderer receiving mouse MOVES while it
   // ignores clicks — without it the window would go deaf the moment the pointer
   // left a circle and could never learn that it came back.
@@ -1979,7 +1988,7 @@ function createMeetingOfferWindow() {
   // Over a fullscreen meeting app — which is exactly where the person is when
   // this card matters.
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
   win.loadURL(`${currentBaseUrl}/meeting-offer`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -2079,7 +2088,7 @@ function createCallRingWindow() {
   // Over a fullscreen app — which is exactly where somebody is when a ring
   // they cannot see arrives.
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
   win.loadURL(`${currentBaseUrl}/call-ring`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);

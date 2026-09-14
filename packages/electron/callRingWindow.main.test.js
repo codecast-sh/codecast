@@ -65,7 +65,7 @@ test("it is born over everything, and out of the way", () => {
   // Over a fullscreen app, and on whichever desktop the person is on — which
   // is exactly where somebody is when a ring they cannot see arrives.
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "screen-saver"]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   // It rings on a timer; a throttled one would stretch the ring period past
   // the invite's own TTL.
   assert.equal(win.options.webPreferences.backgroundThrottling, false);
