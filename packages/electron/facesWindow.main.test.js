@@ -49,7 +49,7 @@ test("the faces shape is a circle shape: floating, click-through, at the call ci
   assert.deepEqual(win.last("setPosition"), [77, 33]);
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
   // Revealed without taking the keyboard: a glance kept beside the work.
   assert.equal(win.did("showInactive").length, 1);

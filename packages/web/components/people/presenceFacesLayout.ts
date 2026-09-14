@@ -1,9 +1,9 @@
 // How the idle presence overlay lays itself out: which faces float, how big,
 // and how big the see-through window has to be to hold them.
 //
-// The overlay is the wall's own layout at floating sizes — presence still sets
-// the size, so the biggest circle over your work is still the person most
-// worth a word — plus the one thing a floating row cannot borrow from the
+// The overlay is the wall's own layout — presence still sets the ORDER, so the
+// first circle over your work is still the person most worth a word — at one
+// floating size, plus the one thing a floating row cannot borrow from the
 // wall: a cap. A wall has a window to scroll in; a row of circles floating
 // over somebody's work must never grow past a glance.
 //
@@ -18,18 +18,24 @@ import {
 import type { Wall, WallFace, WallTier } from "./peopleWallLayout";
 
 /**
- * Face sizes for the overlay: between the wall's (a window of its own) and the
- * strip's (one 48px row). The overlay hangs over real work, so every pixel is
- * occlusion — but a face also has to read as a person across a desk, which the
- * strip's 20px circles do not. `gone` is typed so the table is total; offline
- * people are drawn only when the everyone toggle asks for them.
+ * The face size for the overlay, ONE size for every tier: between the wall's
+ * (a window of its own) and the strip's (one 48px row). The overlay hangs
+ * over real work, so every pixel is occlusion — but a face also has to read
+ * as a person across a desk, which the strip's 20px circles do not.
+ *
+ * One size, not the wall's presence-graded five: a row of circles that
+ * differ in diameter read as a puzzle — people asked why a teammate had
+ * shrunk — and the row's height bounced with every presence change. Presence
+ * still orders the row and still tones each face (people.css); it no longer
+ * sizes it. Typed per tier so the wall's layout takes it unchanged.
  */
+export const OVERLAY_FACE_SIZE = 60;
 export const OVERLAY_FACE_PX: Record<WallTier, number> = {
-  loud: 72,
-  here: 60,
-  idle: 46,
-  away: 38,
-  gone: 32,
+  loud: OVERLAY_FACE_SIZE,
+  here: OVERLAY_FACE_SIZE,
+  idle: OVERLAY_FACE_SIZE,
+  away: OVERLAY_FACE_SIZE,
+  gone: OVERLAY_FACE_SIZE,
 };
 
 /** The most circles the overlay will float. Thirteenth teammate onward folds
