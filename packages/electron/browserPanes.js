@@ -52,6 +52,94 @@ const CAPABILITIES_CHANNEL = "browser-pane-capabilities";
 //   k  the command palette
 const APP_CHORD_KEYS = new Set(["l", "r", "k"]);
 
+// ---------------------------------------------------------------------------
+// The pane registry: how `cast browser` finds a pane on the app's CDP port.
+//
+// The app already opens a Chrome DevTools Protocol port on loopback (main.js,
+// CODECAST_CDP_PORT; 9333 from source). Every WebContents in the app is a
+// target on that port, a pane's view included, so an agent can drive the very
+// view the human is looking at with no screencast and no second browser. What
+// the port does not say is WHICH target is which pane, or which session the
+// human opened it for. This file says that: one JSON document under the CLI's
+// own config dir, rewritten whenever a pane is created, navigates or goes.
+//
+// Why a file and not an HTTP endpoint on the app. An endpoint would be a new
+// listener with a new token to mint, store and check, and it would still only
+// be as safe as the CDP port beside it — a process that can reach the port can
+// already drive every window. The port is the boundary the app has accepted;
+// the file adds nothing to the boundary, only a name for what is behind it.
+// It is 0600 in a 0700 directory, same as the CLI's other browser state, and
+// it carries this process's pid so a reader can tell a stale file from a live
+// app without dialing the port.
+//
+// No port, no file: a packaged app without CODECAST_CDP_PORT cannot be driven,
+// so it advertises nothing, and removes what an earlier run left behind.
+const REGISTRY_VERSION = 1;
+const REGISTRY_FILE = "desktop-panes.json";
+
+/** Where the CLI keeps browser state: `$CODECAST_DIR/browser`, else
+ *  `~/.codecast/browser` (packages/cli/src/browser/profile.ts browserHome). */
+function defaultRegistryPath() {
+  const os = require("os");
+  const path = require("path");
+  const root = process.env.CODECAST_DIR || path.join(process.env.HOME || os.homedir(), ".codecast");
+  return path.join(root, "browser", REGISTRY_FILE);
+}
+
+/**
+ * The document the registry holds for a set of panes. Pure, so the shape is
+ * testable apart from the file: `panes` are the manager's records, and only
+ * the fields an agent needs to find and own a view go out.
+ */
+function registryDocument(panes, { port, pid = process.pid, now = Date.now() } = {}) {
+  return {
+    version: REGISTRY_VERSION,
+    port: Number(port),
+    pid,
+    updatedAt: now,
+    panes: [...panes]
+      .filter((p) => !(p.view?.webContents?.isDestroyed?.() ?? false))
+      .map((p) => ({
+        paneId: p.paneId,
+        hostId: p.hostId,
+        targetId: p.targetId ?? null,
+        url: p.url ?? null,
+        session: p.session ?? null,
+      })),
+  };
+}
+
+/**
+ * Write the registry atomically, owner-only. A null document removes the file
+ * (no port to advertise). Never throws: the registry is a courtesy to the CLI,
+ * and a full disk must not take the pane down with it.
+ */
+function writeRegistryFile(file, doc) {
+  const fs = require("fs");
+  const path = require("path");
+  try {
+    if (!doc) {
+      fs.rmSync(file, { force: true });
+      return true;
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A session key as the registry stores it: the CLI's owner ids are uuids and
+ *  harness ids, so anything outside that alphabet is not one. */
+function cleanSessionKey(session) {
+  if (typeof session !== "string") return null;
+  const s = session.trim();
+  return /^[A-Za-z0-9_.:%-]{1,80}$/.test(s) ? s : null;
+}
+
 /**
  * Where a pane's rect lands in the window, in the coordinates a view wants.
  *
@@ -96,7 +184,14 @@ function isEmptyBounds(b) {
  * than restated here: only a first-party codecast page may open a view, or any
  * site could ask the shell to browse for it.
  */
-function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, isTrusted }) {
+function createBrowserPanes({
+  WebContentsView, session, ipcMain, BrowserWindow, isTrusted,
+  // The CDP port the app listens on, or nothing when it does not (the
+  // registry above), and where the registry lands. No path, no registry at
+  // all: the shell opts in (main.js passes defaultRegistryPath()), so a
+  // manager built anywhere else — a test — never touches the real file.
+  cdpPort = null, registryPath = null,
+}) {
   /** key `${hostWebContentsId}:${paneId}` → pane record. */
   const panes = new Map();
   /** Hosts we have already wired lifecycle listeners onto. */
@@ -105,6 +200,52 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
 
   function key(hostId, paneId) {
     return `${hostId}:${paneId}`;
+  }
+
+  // One write per tick however many panes changed in it: a navigation fires
+  // several events for one page, and a window closing drops every pane at
+  // once. The first change schedules, the rest ride along.
+  let registryPending = false;
+  function scheduleRegistry() {
+    if (registryPending) return;
+    registryPending = true;
+    queueMicrotask(() => {
+      registryPending = false;
+      writeRegistry();
+    });
+  }
+
+  /** The registry as of now. Exposed on the manager so a shell shutting down
+   *  can flush it, and so tests read exactly what the CLI would. */
+  function writeRegistry() {
+    if (!registryPath) return false;
+    const port = Number(cdpPort);
+    return writeRegistryFile(registryPath, port > 0 ? registryDocument(panes.values(), { port }) : null);
+  }
+
+  /**
+   * The CDP target id of a view. Electron does not expose it, but its own
+   * debugger speaks the protocol to the same target: attach, ask the target
+   * about itself, detach. The id is fixed for the life of the WebContents, so
+   * this happens once per pane. Multi-client is a Chromium guarantee, so an
+   * agent already attached from outside is not disturbed. A shell whose
+   * debugger cannot attach leaves the id null and the CLI matches by URL.
+   */
+  async function resolveTargetId(pane) {
+    const wc = pane.view.webContents;
+    const dbg = wc?.debugger;
+    if (!dbg || typeof dbg.attach !== "function") return null;
+    try {
+      if (!dbg.isAttached?.()) dbg.attach("1.3");
+      const info = await dbg.sendCommand("Target.getTargetInfo");
+      return info?.targetInfo?.targetId ?? null;
+    } catch {
+      return null;
+    } finally {
+      try {
+        dbg.detach();
+      } catch {}
+    }
   }
 
   /**
@@ -183,18 +324,23 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
    * and hang over whatever is there now.
    */
   function watchHost(host) {
-    if (hosts.has(host.id)) return;
-    hosts.add(host.id);
+    // Read once, now. Electron throws on ANY property of destroyed web
+    // contents, and `drop` runs from the destroyed event itself: reading
+    // host.id there threw before the views were closed, and every pane of a
+    // closed window lived on as an invisible renderer process.
+    const hostId = host.id;
+    if (hosts.has(hostId)) return;
+    hosts.add(hostId);
     const drop = () => {
-      hosts.delete(host.id);
-      destroyAllFor(host);
+      hosts.delete(hostId);
+      destroyAllFor(hostId);
     };
     host.once("destroyed", drop);
     host.on("render-process-gone", drop);
     host.on("did-navigate", drop);
     const win = BrowserWindow.fromWebContents(host);
     if (win && !win.isDestroyed()) {
-      const refresh = () => applyAllFor(host.id);
+      const refresh = () => applyAllFor(hostId);
       for (const event of ["minimize", "restore", "show", "hide", "resize", "move"]) {
         win.on(event, refresh);
       }
@@ -211,9 +357,18 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
     wc.on("page-favicon-updated", (_e, favicons) => send("favicon", { favicon: favicons?.[0] ?? null }));
     wc.on("did-start-loading", () => send("loading", { loading: true }));
     wc.on("did-stop-loading", () => send("loading", { loading: false }));
-    wc.on("did-navigate", (_e, url) => send("url", { url, inPage: false }));
+    // The registry follows the page, not the request: a redirect or a link
+    // the person clicked changes what an agent finds at the target.
+    wc.on("did-navigate", (_e, url) => {
+      pane.url = url;
+      scheduleRegistry();
+      send("url", { url, inPage: false });
+    });
     wc.on("did-navigate-in-page", (_e, url, isMainFrame) => {
-      if (isMainFrame) send("url", { url, inPage: true });
+      if (!isMainFrame) return;
+      pane.url = url;
+      scheduleRegistry();
+      send("url", { url, inPage: true });
     });
     wc.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
       // -3 is ABORTED: a navigation the page itself replaced. Reporting it
@@ -263,13 +418,22 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
     }
   }
 
-  function create(host, { paneId, url, rect, visible }) {
+  // `session` is the agent session the human opened this pane for (the offer
+  // it came from, ct-51075), and it is what lets that session's `cast browser`
+  // find its own view in the registry. A pane nobody offered has none, and no
+  // agent may claim it.
+  function create(host, { paneId, url, rect, visible, session: sessionKey }) {
     const k = key(host.id, paneId);
     const existing = panes.get(k);
     if (existing) {
       if (url && isLoadableUrl(url) && url !== existing.url) navigate(existing, url);
       if (rect) existing.rect = rect;
       if (visible !== undefined) existing.wanted = visible !== false;
+      const owner = cleanSessionKey(sessionKey);
+      if (owner && owner !== existing.session) {
+        existing.session = owner;
+        scheduleRegistry();
+      }
       apply(existing);
       return { ok: true, reused: true };
     }
@@ -297,6 +461,8 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
       rect: rect ?? { x: 0, y: 0, width: 0, height: 0 },
       wanted: visible !== false,
       visible: true,
+      session: cleanSessionKey(sessionKey),
+      targetId: null,
     };
     panes.set(k, pane);
     watchHost(host);
@@ -307,6 +473,14 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
     setVisible(pane, false);
     if (url) navigate(pane, url);
     apply(pane);
+    // Advertised twice: at once with what is known, and again with the target
+    // id when the debugger answers, so the CLI never waits on the shell.
+    scheduleRegistry();
+    void resolveTargetId(pane).then((targetId) => {
+      if (!targetId || panes.get(k) !== pane) return;
+      pane.targetId = targetId;
+      scheduleRegistry();
+    });
     return { ok: true, reused: false };
   }
 
@@ -314,13 +488,18 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
     if (!isLoadableUrl(url)) return { ok: false, reason: "bad-url" };
     pane.url = url;
     pane.view.webContents.loadURL(url);
+    scheduleRegistry();
     return { ok: true };
   }
 
   function destroy(pane) {
     panes.delete(key(pane.hostId, pane.paneId));
-    const win = BrowserWindow.fromWebContents(pane.host);
+    scheduleRegistry();
+    // The host may already be gone (this runs from its destroyed event), and
+    // asking Electron for its window then throws. The view must close either
+    // way: that is the whole point of the call.
     try {
+      const win = BrowserWindow.fromWebContents(pane.host);
       if (win && !win.isDestroyed()) win.contentView.removeChildView(pane.view);
     } catch {}
     try {
@@ -378,9 +557,13 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
     devtools: (_host, _payload, pane) => {
       const wc = pane?.view.webContents;
       if (!wc) return { ok: false };
-      if (wc.isDevToolsOpened()) wc.closeDevTools();
-      else wc.openDevTools({ mode: "detach" });
-      return { ok: true, open: wc.isDevToolsOpened() };
+      // Answer with the state being asked for. openDevTools is asynchronous:
+      // isDevToolsOpened() still reads false straight after the call (measured
+      // in the rig), so reading it back reports an opening window as closed.
+      const open = !wc.isDevToolsOpened();
+      if (open) wc.openDevTools({ mode: "detach" });
+      else wc.closeDevTools();
+      return { ok: true, open };
     },
     focus: (_host, _payload, pane) => {
       pane?.view.webContents.focus();
@@ -433,18 +616,28 @@ function createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, 
       // What the renderer may ask for. A build that grows a command says so
       // here rather than making the web side guess from a version number.
       commands: Object.keys(COMMANDS),
+      // Whether an agent can drive a pane from the CLI: only with a port.
+      drivable: Number(cdpPort) > 0,
     }));
+    // A fresh app has no panes yet: say so, or the CLI reads last run's file
+    // (which names this pid's predecessor) until the first pane opens.
+    writeRegistry();
   }
 
-  return { install, handle, destroyAllFor, panes, PANE_PARTITION };
+  return { install, handle, destroyAllFor, panes, PANE_PARTITION, writeRegistry, registryPath };
 }
 
 module.exports = {
   createBrowserPanes,
   paneViewBounds,
   isEmptyBounds,
+  registryDocument,
+  writeRegistryFile,
+  defaultRegistryPath,
   PANE_PARTITION,
   CHANNEL,
   CAPABILITIES_CHANNEL,
   APP_CHORD_KEYS,
+  REGISTRY_VERSION,
+  REGISTRY_FILE,
 };
