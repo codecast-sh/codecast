@@ -24,6 +24,7 @@
   "dependencies": {
     "@codecast/web": "workspace:*",
     "@tanstack/react-virtual": "^3.13.18",
+    "@tiptap/pm": "^3.20.4",
     "convex": "^1.31.6",
     "e2b": "^2.24.0",
     "nanoid": "^5.1.7",
