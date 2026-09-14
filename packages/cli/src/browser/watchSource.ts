@@ -16,7 +16,8 @@
 
 import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "./cdp.js";
 import { sessionTarget, type SessionTarget } from "./engineReap.js";
-import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
+import { engineSessionKey, engineStateDir, paneSessionKey, realSessionKey } from "./engine.js";
+import { desktopPanePins } from "./desktopPaneRegistry.js";
 import { readState, type InstanceState } from "./instance.js";
 import { readBridgeState } from "./bridge/host.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -121,6 +122,12 @@ export interface CdpEngineDeps {
   getBridge?(): CdpEndpoint | null;
   /** Where the engine keeps its per-session `.target` files (engine.ts). */
   stateDir?: string;
+  /**
+   * The desktop app's CDP endpoint and the pane targets its registry vouches
+   * for (desktopPaneRegistry.ts), or null when the app is not up. Read off a
+   * file, like the rest: this runs on the owner poll.
+   */
+  getDesktopPane?(): DesktopPaneBrowser | null;
   connect(endpoint: CdpEndpoint): Promise<CdpConnection>;
   listTargets(endpoint: CdpEndpoint): Promise<CdpTarget[]>;
 }
@@ -132,9 +139,17 @@ export function liveBridgeEndpoint(): CdpEndpoint | null {
   return { port: state.port, token: state.token };
 }
 
+/** The app's endpoint plus the targets a pane pin may point at. A pin whose
+ *  target the registry no longer lists is a closed pane, and does not count. */
+export interface DesktopPaneBrowser {
+  endpoint: CdpEndpoint;
+  targets: Set<string>;
+}
+
 const realCdpDeps: CdpEngineDeps = {
   getState: readState,
   getBridge: liveBridgeEndpoint,
+  getDesktopPane: desktopPanePins,
   // A loaded Chrome answers /json/version slowly (8s measured with three
   // busy renderers); the default 10s dial then fails the watch on the very
   // machines where someone most wants to see what the agent is doing.
@@ -153,20 +168,24 @@ const realCdpDeps: CdpEngineDeps = {
  */
 export function resolveEngineTab(
   candidates: string[],
-  browsers: { clone: CdpEndpoint | null; bridge: CdpEndpoint | null },
+  browsers: { clone: CdpEndpoint | null; bridge: CdpEndpoint | null; pane?: DesktopPaneBrowser | null },
   stateDir: string,
 ): { tabId: string; endpoint: CdpEndpoint } | null {
   let best: { target: SessionTarget; endpoint: CdpEndpoint } | null = null;
   for (const cand of candidates) {
     const key = engineSessionKey(cand);
-    const pins: Array<[CdpEndpoint | null, string]> = [
-      [browsers.clone, key],
-      [browsers.bridge, realSessionKey(key)],
+    // The desktop pane is the third browser (engine.ts paneSessionKey), on
+    // the same footing: its pin counts while the pane is still open.
+    const pins: Array<[CdpEndpoint | null, string, Set<string> | null]> = [
+      [browsers.clone, key, null],
+      [browsers.bridge, realSessionKey(key), null],
+      [browsers.pane?.endpoint ?? null, paneSessionKey(key), browsers.pane?.targets ?? null],
     ];
-    for (const [endpoint, engineKey] of pins) {
+    for (const [endpoint, engineKey, allowed] of pins) {
       if (!endpoint) continue;
       const target = sessionTarget(engineKey, stateDir);
-      if (target && (!best || target.mtimeMs > best.target.mtimeMs)) best = { target, endpoint };
+      if (!target || (allowed && !allowed.has(target.targetId))) continue;
+      if (!best || target.mtimeMs > best.target.mtimeMs) best = { target, endpoint };
     }
   }
   return best ? { tabId: best.target.targetId, endpoint: best.endpoint } : null;
@@ -423,11 +442,13 @@ export function cdpWatchEngine(deps: CdpEngineDeps = realCdpDeps): WatchEngine {
       const state = deps.getState();
       const clone: CdpEndpoint | null = state ? state.port : null;
       const bridge = deps.getBridge?.() ?? null;
+      const pane = deps.getDesktopPane?.() ?? null;
       // The engine path keeps no tabsBySession: each session's daemon records
       // the tab it is pinned to in its own target file, keyed by the owner
-      // key flattened into an engine session name (engine.ts) — in the clone
-      // or, with the `-real` suffix, in the human's Chrome via the bridge.
-      const pinned = resolveEngineTab(candidates, { clone, bridge }, deps.stateDir ?? engineStateDir());
+      // key flattened into an engine session name (engine.ts) — in the clone,
+      // with the `-real` suffix in the human's Chrome via the bridge, or with
+      // the `-pane` suffix in the desktop app's pane over the app's own port.
+      const pinned = resolveEngineTab(candidates, { clone, bridge, pane }, deps.stateDir ?? engineStateDir());
       if (pinned) {
         endpointByTab.set(pinned.tabId, pinned.endpoint);
         return { tabId: pinned.tabId };
@@ -439,7 +460,8 @@ export function cdpWatchEngine(deps: CdpEngineDeps = realCdpDeps): WatchEngine {
       }
       // With no clone but a live bridge, "no browser" would be a lie: the
       // human's Chrome is right there, this session just has no tab in it.
-      if (own.error === "no-browser" && bridge) return { error: "no-tab" };
+      // The same for a desktop app that is up: it has panes, not this one's.
+      if (own.error === "no-browser" && (bridge || pane)) return { error: "no-tab" };
       return own;
     },
     open(tabId, opts, handlers) {

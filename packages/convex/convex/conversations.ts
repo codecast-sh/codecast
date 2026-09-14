@@ -49,7 +49,7 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
-import { normalizePaneUrl } from "@codecast/shared/contracts";
+import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
@@ -12289,9 +12289,16 @@ export const backfillDenormalizedFields = internalMutation({
 // and tests that reach it through this module.
 export { requireSessionCommandTarget };
 
+// Escape pressed in an empty composer. The client forwards every press and
+// paints the interruption line at once; the daemon decides whether there is a
+// turn to interrupt (cli/src/escapeInterrupt.ts). `pressed_at` is the client's
+// clock at the press: the daemon skips a press that predates a message it
+// delivered afterwards, so an Escape aimed at the previous turn cannot cancel
+// the one a queued message just started.
 export const sendEscapeToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    pressed_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -12302,7 +12309,10 @@ export const sendEscapeToSession = mutation({
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
       command: "escape",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        ...(args.pressed_at !== undefined ? { pressed_at: args.pressed_at } : {}),
+      }),
       created_at: Date.now(),
     });
   },

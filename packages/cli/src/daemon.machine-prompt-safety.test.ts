@@ -147,6 +147,7 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
+    CLAUDE_TURN_STATUS_LINE: /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\((?:\d+m\s*)?\d+s\b/m,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
     tmuxTargetLocks: new Map(), TMUX_LOCK_WAIT_MS: 60000, hibernationInFlight: new Map(),
     Date: class extends Date {
@@ -193,7 +194,7 @@ function fixture(transport = "tmux", cached = true) {
     const names = [
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
-      "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "assertMachinePromptAbsent", "machineInputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
       "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",

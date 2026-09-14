@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { ANALYSIS_CAPS, computeAnalysisInputs, performApplyDecision } from "./orgInit";
-import { orgProposalBlock } from "@codecast/shared/contracts";
+import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
 // bounded and access checked, and applying an answered proposal is idempotent.
@@ -205,6 +205,29 @@ describe("cast org apply", () => {
     expect(await performApplyDecision(ctx, ME as any, "sd-10", { provision: false })).toMatchObject({ status: "skipped", note: expect.stringContaining("already applied") });
     const roles = await db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", TEAM)).collect();
     expect(roles.map((r: any) => r.handle).sort()).toEqual(["growth", "landing"]);
+  });
+
+  test("a handle the person already gave a role by hand is refused, never adopted", async () => {
+    const db = fixtures({
+      org_roles: [
+        { _id: "org_roles_hand", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth (mine)", handle: "growth", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words.", status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+      ],
+      session_decisions: [
+        proposalDecision("sd_a", "sd-40", { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, charter: "Owns growth.", caps: { wakes_per_day: 12 } }, { status: "answered", answer_index: 0 }),
+      ],
+    });
+    const ctx = ctxOf(db);
+    const r = await performApplyDecision(ctx, ME as any, "sd-40", { provision: false });
+    expect(r).toMatchObject({ status: "error", error: expect.stringContaining("@growth is already or-3 (Growth (mine))") });
+    expect(r.error).toContain("pick another handle, or skip");
+    // The hand made role is untouched: scope, parent, charter and caps.
+    const hand = await db.get("org_roles_hand" as any);
+    expect(hand).toMatchObject({ scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words." });
+    expect(hand.caps).toBeUndefined();
+    // Not stamped: answering with a new handle makes the same decision apply.
+    expect((await db.get("sd_a" as any)).applied_at).toBeUndefined();
+    const roles = await db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", TEAM)).collect();
+    expect(roles.length).toBe(1);
   });
 
   test("a decision without a proposal block, or applied by a plain member, is refused as a value", async () => {

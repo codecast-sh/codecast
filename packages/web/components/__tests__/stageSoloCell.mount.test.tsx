@@ -26,7 +26,7 @@ afterAll(() => {
   restoreGlobals();
 });
 
-const tab = (): AppTab => ({ id: "t1", title: "A", path: "/nowhere", createdAt: 0 });
+const tab = (): AppTab => ({ id: "t1", title: "A", path: "/tasks/nowhere/deep", createdAt: 0 });
 const activeTab = () => useInboxStore.getState().tabs.find((t) => t.id === "t1")!;
 
 beforeEach(() => {
@@ -53,7 +53,7 @@ test("the first split keeps the origin cell and the page inside it", async () =>
     expect(pageSlot).not.toBeNull();
     expect(origin.querySelector("[draggable]")).toBeNull();
 
-    await act(() => { openBeside("/elsewhere", { reuse: true }); });
+    await act(() => { openBeside("/docs/elsewhere/deep", { reuse: true }); });
 
     expect(cells().map((c) => c.dataset.stageLeaf)).toEqual([seedLeafId("t1"), besideLeafId("t1")]);
     // Same element, same page wrapper: nothing remounted.
@@ -62,14 +62,14 @@ test("the first split keeps the origin cell and the page inside it", async () =>
     // The cell became a split pane: it got its strip, it kept focus.
     expect(origin.querySelector("[draggable]")).not.toBeNull();
     expect(origin.className).toBe("stage-cell stage-cell--focused");
-    expect(activeTab().path).toBe("/nowhere");
+    expect(activeTab().path).toBe("/tasks/nowhere/deep");
 
     // A second Option-click re-points the target pane; still the same origin.
-    await act(() => { openBeside("/third", { reuse: true }); });
+    await act(() => { openBeside("/plans/third/deep", { reuse: true }); });
     expect(cells().length).toBe(2);
     expect(cells()[0]).toBe(origin);
     expect(origin.querySelector(".flex-1")).toBe(pageSlot);
-    expect(activeTab().layout && (activeTab().layout as any).children[1].path).toBe("/third");
+    expect(activeTab().layout && (activeTab().layout as any).children[1].path).toBe("/plans/third/deep");
   } finally {
     await act(() => root.unmount());
   }

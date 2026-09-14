@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { ORG_INIT_HONESTY_RULES, buildOrgAnalyzerPrompt, summarizeInputs } from "./orgInit";
-import { ORG_PROPOSAL_FENCE, ORG_PROPOSAL_OPTIONS, extractOrgProposal } from "@codecast/shared/contracts";
+import { ORG_INIT_HONESTY_RULES } from "./orgInit";
+import { buildOrgAnalyzerPrompt, summarizeInputs } from "./orgInitRun";
+import { ORG_PROPOSAL_FENCE, ORG_PROPOSAL_OPTIONS, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 
 // The analyzer prompt (docs/architecture/org-init.md O2): principle level,
 // with the three honesty rules, the steps, and the block `cast org apply`

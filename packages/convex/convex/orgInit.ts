@@ -21,15 +21,15 @@ import {
 } from "./orgRoles";
 import { capsFor, countersFor, trustOf, utcDay } from "./orgEvents";
 import { findDecision } from "./sessionDecisions";
+import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import {
-  extractRepoFromRemoteUrl,
   applyProposalChanges,
   extractOrgProposal,
   orgProposalVerdict,
   type OrgProjectChange,
   type OrgProposal,
   type OrgRoleProposal,
-} from "@codecast/shared/contracts";
+} from "@codecast/shared/contracts/orgProposal";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -37,7 +37,7 @@ import {
 //
 // The analyzer never writes: it proposes as a decision stack, and nothing is
 // created until a person answers. `applyDecision` is the one writer; it is
-// idempotent per decision (applied_at) and per role (handle, provision).
+// idempotent per decision (applied_at); a handle already live is a refusal, never an adoption.
 
 type Ctx = { db: any };
 
@@ -342,16 +342,16 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
 async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean }): Promise<ApplyResult> {
   const handle = p.handle.trim().toLowerCase();
   const charter = [p.charter?.trim(), note ? `Changes asked for by the person who approved this role:\n${note}` : undefined].filter(Boolean).join("\n\n") || undefined;
-  // Idempotent per role: a crash between create and applied_at leaves a live
-  // role with this handle; adopt it rather than refusing the decision forever.
-  let role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle) ?? null;
-  let created = false;
-  if (!role) {
-    const scope = await resolveProposalScope(ctx, boundary, p.scope);
-    const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
-    role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter });
-    created = true;
-  }
+  // A live role with this handle is never adopted: it may be one the person
+  // made by hand with its own scope and charter, and the proposal would be
+  // silently discarded. The mutation is atomic, so a crash between create and
+  // the applied_at stamp cannot leave a half-applied role behind; the only way
+  // to get here is a real clash, and the person picks another handle or skips.
+  const taken = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle);
+  if (taken) return { status: "error", error: `@${handle} is already ${taken.short_id} (${taken.name}); answer with changes to pick another handle, or skip` };
+  const scope = await resolveProposalScope(ctx, boundary, p.scope);
+  const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
+  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day });
   let provisioned = false;
   if (opts.provision) {
@@ -361,7 +361,7 @@ async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: O
   }
   return {
     status: "applied",
-    note: `${created ? "created" : "adopted existing"} @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : ""}`,
+    note: `created @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : ""}`,
     role: { id: String(role._id), short_id: role.short_id, handle: role.handle },
   };
 }
