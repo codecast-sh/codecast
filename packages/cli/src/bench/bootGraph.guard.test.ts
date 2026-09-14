@@ -123,8 +123,18 @@ describe("command groups stay off the boot graph", () => {
     // are worth more than the sum of their parts (1+4+1+2 = 8 files apart, 11
     // together), because the two codex modules share reach that only leaves
     // when both of them do.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(209);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2867);
+    //
+    // 214 files and 2,990 KB after the 2026-09-13 release sweep: six new
+    // leaves, none of them a command group. taskPulse.ts (the decide default
+    // reads the session's task pulse from sync helpers, so it stays eager),
+    // userFiles.ts under parser.ts (files an agent sends ride the transcript
+    // parse), shared/files/index.ts under syncService.ts (the media table those
+    // files use) and three contracts the shared barrel now carries
+    // (agentDefinitions, forkSeed, liveActivity). The command-only modules the
+    // sweep added load at their use sites instead: forkFanout.ts inside
+    // `cast fork`, orgTarget.ts inside the org verbs that resolve a target.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(214);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2990);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -143,7 +153,14 @@ describe("command groups stay off the boot graph", () => {
     // by daemon.ts directly. Holding a prompt the daemon has not delivered yet
     // is the daemon's own work, so it is a leaf it legitimately gained rather
     // than a subsystem arriving sideways.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(291);
+    // 300 after the 2026-09-13 release sweep: nine leaves that are the daemon's
+    // own work or the shared contracts index.ts also gained. tmuxDeliveryJournal.ts
+    // and tmuxSessionLookup.ts (delivery repair), agentLaunch.ts through
+    // taskScheduler.ts (the scheduler launches hands from definitions),
+    // messagePreparationValidation.ts under the ingest client, userFiles.ts,
+    // shared/files and the three contracts. reopenTab.ts left the graph at the
+    // same time: focusHttp.ts loads it on the reopen route only.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(300);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
