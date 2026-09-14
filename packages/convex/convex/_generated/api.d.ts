@@ -165,6 +165,7 @@ import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissions from "../permissions.js";
 import type * as plans from "../plans.js";
 import type * as prCli from "../prCli.js";
+import type * as prDetails from "../prDetails.js";
 import type * as prShepherd from "../prShepherd.js";
 import type * as presencePolicy from "../presencePolicy.js";
 import type * as presenceState from "../presenceState.js";
@@ -393,6 +394,7 @@ declare const fullApi: ApiFromModules<{
   permissions: typeof permissions;
   plans: typeof plans;
   prCli: typeof prCli;
+  prDetails: typeof prDetails;
   prShepherd: typeof prShepherd;
   presencePolicy: typeof presencePolicy;
   presenceState: typeof presenceState;
