@@ -1,26 +1,23 @@
 ---
 name: codecast-why
-description: Explain why a line of code is the way it is. Follows the line through cast blame to the codecast session that wrote it and the message where it was decided, then answers from the author's own reasoning. Use when asked why code looks like this, who wrote it, what the intent behind a change was, or before changing a line whose purpose is unclear.
+description: Explain why a line of code is the way it is. Traces the line through cast blame to the codecast session that wrote it and the message where it was decided, then answers from the author's own reasoning. Use when asked why code looks like this, who wrote it and why, or what the intent behind a change was.
 argument-hint: "<file>:<line> [question]"
 ---
 
-`git blame` says who and when. This skill answers why, with the conversation
-that produced the line as evidence. Never guess at intent when the history is
-one command away.
+`git blame` answers who. This answers why, with the conversation that produced the line.
 
 ## Find the session
 
 ```bash
-cast blame --porcelain <file>:<line>          # one line
-cast blame --porcelain -L <from>,<to> <file>  # a block; group lines by session
+cast blame --porcelain <file>:<line>      # one line
+cast blame --porcelain -L <a>,<b> <file>  # a block; group the lines by session
 ```
 
-Each line carries the git commit and, when codecast attributed it, these keys:
-`codecast-session` (short id), `codecast-message` (the message that made the
-change), `codecast-url`, `codecast-title`, `codecast-author`. Lines with no
-codecast keys predate attribution or came from a hand edit: fall back to the
-commit summary and `cast search "<summary words>"` to find the session anyway,
-and say that the link is inferred.
+Each attributed line carries `codecast-session` (short id), `codecast-message`,
+`codecast-url`, `codecast-title` and `codecast-author` beside the git fields.
+A line with git fields only predates attribution: use the commit summary and
+`cast search "<summary or key identifiers>"` to find the session by hand, and
+say plainly when there is none.
 
 ## Read the reasoning
 
@@ -28,19 +25,20 @@ and say that the link is inferred.
 cast read '<codecast-url>#msg-<codecast-message>' -c 6
 ```
 
-That is the window around the exact message. The decision is usually a few
-messages earlier than the edit, so widen `-c` until you see the user's ask or
-the agent's reasoning. For a block written by several sessions, read each and
-put them in time order: the last one explains the current shape, the earlier
-ones explain what it replaced.
+Widen the window (`-c 20`) when the decision was made earlier than the edit.
+The message is where the file was written; the why is usually a few turns
+before it, in the user's ask or in the assistant's plan. For a block written by
+several sessions, read each and note the order: the later session may have
+changed the intent of the earlier one.
 
 ## Answer
 
-Lead with the intent in the author's words, quoted and attributed to the
-session's short id (it renders as a live reference). Then, only when the
-history shows it: the alternative that was rejected and why, what else depended
-on the choice, and whether a later session changed it. Close with
-`cast link <session> <line>` so the reader can open the moment.
+Lead with the intent in the author's words, quoted, with the session short id
+so it renders as a live reference. Then, only if the history shows them: the
+alternatives considered, what depended on this choice, and whether a later
+session changed it. Mint a link the reader can open with
+`cast link <session> <message line>`.
 
-If the history is silent, say so plainly. An honest "the transcript shows the
-edit but not the reason" beats a plausible story.
+Do not guess. If the transcript does not contain a reason, say the line is
+attributed but unexplained, and offer what the surrounding code suggests as a
+separate, clearly marked inference.
