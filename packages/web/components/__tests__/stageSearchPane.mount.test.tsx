@@ -50,7 +50,12 @@ test("navigating the active tab to /search?q=… renders the search page in the 
   try {
     await act(() => root.render(<MemoryRouter><Nest.Provider value={true}><Stage /></Nest.Provider></MemoryRouter>));
     await act(() => { tabNavigate("/search?q=deploy", "push"); });
-    const ok = await settle(container, 'input[placeholder^="Search every session"]');
+    // The input mounts first and takes the query on a later effect; wait for the value too.
+    const sel = 'input[placeholder^="Search every session"]';
+    let ok = await settle(container, sel);
+    for (let i = 0; ok && i < 30 && (container.querySelector(sel) as HTMLInputElement).value !== "deploy"; i++) {
+      await act(() => new Promise<void>((r) => setTimeout(r, 100)));
+    }
     expect(ok).toBe(true);
     expect((container.querySelector('input[placeholder^="Search every session"]') as HTMLInputElement).value).toBe("deploy");
   } finally {
