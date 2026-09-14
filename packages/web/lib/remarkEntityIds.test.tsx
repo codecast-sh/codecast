@@ -41,6 +41,12 @@ const { MemoryRouter } = await import("react-router");
 const { default: ReactMarkdown } = await import("react-markdown");
 const { entityRemarkPlugins } = await import("./remarkEntityIds");
 const { EntityAwareLink, EntityAwareCode } = await import("../components/EntityIdPill");
+const { JSDOM } = await import("jsdom");
+const { act } = await import("react");
+const { createRoot } = await import("react-dom/client");
+const { replaceGlobals } = await import("../test-helpers/globals");
+const { useInboxStore } = await import("../store/inboxStore");
+const { leavesOf } = await import("../store/stageSplit");
 
 const MD_COMPONENTS = { a: EntityAwareLink, code: EntityAwareCode } as const;
 
@@ -55,6 +61,63 @@ function render(markdown: string): string {
     </MemoryRouter>,
   );
 }
+
+describe("authored local file links", () => {
+  test("the reported browser instructions link renders through FilePathLink", () => {
+    const html = render("[browser instructions](/Users/ashot/.codex/AGENTS.md:1042)");
+    expect(html).toContain('href="/files?path=%2FUsers%2Fashot%2F.codex%2FAGENTS.md&amp;l=1042"');
+    expect(html).toContain('class="fs-link"');
+    expect(html).toContain('title="Open /Users/ashot/.codex/AGENTS.md in Files"');
+    expect(html).toContain('>browser instructions</a>');
+  });
+
+  test("angle-bracket and encoded space destinations keep the path and label", () => {
+    for (const destination of ["</Users/ashot/My Project/My Report.md:3>", "/Users/ashot/My%20Project/My%20Report.md:3"]) {
+      const html = render(`[My Report](${destination})`);
+      expect(html).toContain('href="/files?path=%2FUsers%2Fashot%2FMy+Project%2FMy+Report.md&amp;l=3"');
+      expect(html).toContain('>My Report</a>');
+    }
+  });
+
+  test("remote links retain their URL and external-link behavior", () => {
+    const html = render("[instructions](https://example.com/Users/ashot/AGENTS.md:1042)");
+    expect(html).toContain('href="https://example.com/Users/ashot/AGENTS.md:1042"');
+    expect(html).toContain('target="_blank"');
+    expect(html).not.toContain('class="fs-link"');
+  });
+
+  test("clicking the reported link opens Files beside the conversation with its line", async () => {
+    const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "https://codecast.test/conversation/jx707h3" });
+    const restore = replaceGlobals({
+      window: Object.assign(dom.window, { innerWidth: 1400 }),
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    const { tabs, activeTabId } = useInboxStore.getState();
+    const container = dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    try {
+      useInboxStore.setState({ tabs: [{ id: "file-link-test", title: "Conversation", path: "/conversation/jx707h3", createdAt: 0 }], activeTabId: "file-link-test" });
+      await act(() => root.render(
+        <MemoryRouter>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS}>
+            {"[browser instructions](/Users/ashot/.codex/AGENTS.md:1042)"}
+          </ReactMarkdown>
+        </MemoryRouter>,
+      ));
+      await act(() => container.querySelector<HTMLAnchorElement>("a")!.click());
+      expect(leavesOf(useInboxStore.getState().tabs[0].layout!).map((leaf) => leaf.path)).toEqual([
+        "/conversation/jx707h3",
+        "/files?path=%2FUsers%2Fashot%2F.codex%2FAGENTS.md&l=1042",
+      ]);
+    } finally {
+      await act(() => root.unmount());
+      useInboxStore.setState({ tabs, activeTabId });
+      restore();
+      dom.window.close();
+    }
+  }, 15_000);
+});
 
 describe("doc transclusion (![[doc:…]])", () => {
   test("standalone embed renders the doc body in full", () => {

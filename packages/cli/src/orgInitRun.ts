@@ -6,7 +6,7 @@
 import * as fs from "fs";
 import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
-import { ORG_PROPOSAL_FENCE, ORG_PROPOSAL_OPTIONS, orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
+import { ORG_PROPOSAL_FENCE, ORG_PROPOSAL_OPTIONS, extractOrgProposal, orgProposalBlock, type OrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 const EXAMPLE_ROLE = orgProposalBlock({
@@ -24,10 +24,43 @@ const EXAMPLE_PROJECTS = orgProposalBlock({ kind: "projects", changes: [{ op: "c
 const EXAMPLE_MOVE = orgProposalBlock({ kind: "move", handle: "growth", scope_add: ["pr-15"], scope_remove: [], reports_to: "@product", reason: "pr-15 has no owner and its sessions run on growth's repo" });
 const EXAMPLE_RETIRE = orgProposalBlock({ kind: "retire", handle: "ops", reason: "no scope event in 21 days, no hands, no wakes" });
 
+// The stack title the analyzer is told to create. One builder for the prompt
+// and the guard in runAnalyzer, so a second init finds the first one's stack.
+export function orgStackTitle(mode: OrgInitMode, workspace: string): string {
+  return mode === "init" ? `Adopt the org for ${workspace}` : `Org update for ${workspace}`;
+}
+
+// An open org stack for this workspace, from the rows /cli/stack/ls returns
+// (open stacks in every boundary the caller belongs to). Init and update block
+// each other: two analyzers proposing the same org would post duplicate role
+// decisions, and applying both is safe only by accident of the handle clash.
+export function findOpenOrgStack(
+  stacks: Array<{ short_id: string; title: string; team_id?: string | null; scope_user_id?: string | null; status?: string; pending?: number; total?: number }> | null | undefined,
+  boundary: { team_id?: string },
+  workspace: string,
+): { short_id: string; title: string; pending: number; total: number } | null {
+  const titles = new Set([orgStackTitle("init", workspace), orgStackTitle("update", workspace)]);
+  const hit = (stacks ?? []).find((s) =>
+    (s.status ?? "open") === "open" &&
+    titles.has(s.title) &&
+    (boundary.team_id ? s.team_id === boundary.team_id : !s.team_id));
+  return hit ? { short_id: hit.short_id, title: hit.title, pending: hit.pending ?? 0, total: hit.total ?? 0 } : null;
+}
+
+// Apply order: a role may own a project the same stack proposes to create, so
+// project changes go first; roles keep the stack's order (the prompt posts a
+// parent before its children); moves and retirements act on roles that exist
+// by then. The sort is stable, so ties keep their stack order.
+const APPLY_RANK: Record<OrgProposal["kind"], number> = { projects: 0, role: 1, move: 2, retire: 3 };
+export function orderForApply<T extends { context_md?: string | null }>(decisions: T[]): T[] {
+  const rank = (d: T) => { const p = extractOrgProposal(d.context_md); return p ? APPLY_RANK[p.kind] : 4; };
+  return decisions.map((d, i) => ({ d, i, r: rank(d) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.d);
+}
+
 export function buildOrgAnalyzerPrompt(opts: { mode: OrgInitMode; workspace: string; teamFlag?: string; apply: boolean; summary: OrgInitSummary }): string {
   const { mode, workspace, summary } = opts;
   const team = opts.teamFlag ? ` --team ${JSON.stringify(opts.teamFlag)}` : "";
-  const stackTitle = mode === "init" ? `Adopt the org for ${workspace}` : `Org update for ${workspace}`;
+  const stackTitle = orgStackTitle(mode, workspace);
   const roots = summary.git_roots.length ? summary.git_roots.map((r) => `  - ${r}`).join("\n") : "  (no git roots seen on recent sessions)";
 
   const purpose = mode === "init"
@@ -131,6 +164,7 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+
 export function summarizeInputs(inputs: any): OrgInitSummary {
   return {
     projects: inputs?.projects?.length ?? 0,
@@ -142,6 +176,7 @@ export function summarizeInputs(inputs: any): OrgInitSummary {
     git_roots: (inputs?.git_roots ?? []).map((g: any) => g.git_root).filter(Boolean),
   };
 }
+
 
 export async function showInputs(deps: OrgInitDeps, options: any): Promise<void> {
   const ws = await deps.readWorkspace(options.team);
@@ -166,9 +201,22 @@ export async function runAnalyzer(deps: OrgInitDeps, mode: OrgInitMode, options:
   const ws = await deps.readWorkspace(options.team);
   const inputs = await deps.cliPost("/cli/org/analysis-inputs", deps.workspaceArgs(ws));
   if (!inputs) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
+  const workspace = inputs.workspace.name || deps.workspaceLabel(ws);
+  // One proposal at a time per workspace. An analyzer parked on a usage limit
+  // after `cast stack create` looks dead from the queue; it is not, and a
+  // second run would mint a second stack. --here mints one too, so it is
+  // guarded the same way.
+  const listed = await deps.cliPost("/cli/stack/ls", {});
+  const open = findOpenOrgStack(listed?.stacks, deps.workspaceArgs(ws), workspace);
+  if (open) {
+    fail(
+      `${open.short_id} "${open.title}" is still open (${open.pending} of ${open.total} unanswered), so a second proposal is not started.\n` +
+      `Answer it, then \`cast org apply ${open.short_id}\`; or close it with \`cast stack show ${open.short_id}\` and \`cast decide cancel\` on its members before running this again.`,
+    );
+  }
   const prompt = buildOrgAnalyzerPrompt({
     mode,
-    workspace: inputs.workspace.name || deps.workspaceLabel(ws),
+    workspace,
     teamFlag: options.team,
     apply: !!options.apply,
     summary: summarizeInputs(inputs),
@@ -182,7 +230,7 @@ export async function applyStack(deps: OrgInitDeps, stackRef: string, options: a
   if (!/^ds-\d+$/.test(stackRef)) fail(`Usage: cast org apply ds-N (got ${stackRef})`);
   const shown = await deps.cliPost("/cli/stack/show", { stack: stackRef });
   if (shown?.error) fail(shown.error);
-  const decisions: any[] = shown.decisions ?? [];
+  const decisions: any[] = orderForApply(shown.decisions ?? []);
   const results: any[] = [];
   for (const d of decisions) {
     const ref = d.short_id ?? d._id;
@@ -198,5 +246,5 @@ export async function applyStack(deps: OrgInitDeps, stackRef: string, options: a
   const applied = results.filter((r) => r.status === "applied").length;
   const pending = results.filter((r) => r.status === "unanswered").length;
   const errors = results.filter((r) => r.status === "error").length;
-  console.log(`${fmt.success(`${applied} applied`)}${pending ? `, ${pending} unanswered` : ""}${errors ? `, ${fmt.error(`${errors} failed`)}` : ""} of ${results.length} in ${shown.stack?.short_id ?? stackRef}${pending ? fmt.muted(" — rerun after the rest are answered") : ""}`);
+  console.log(`${fmt.success(`${applied} applied`)}${pending ? `, ${pending} unanswered` : ""}${errors ? `, ${fmt.error(`${errors} failed`)}` : ""} of ${results.length} in ${shown.stack?.short_id ?? stackRef}${pending || errors ? fmt.muted(` — rerun cast org apply ${shown.stack?.short_id ?? stackRef} after ${pending ? "the rest are answered" : ""}${pending && errors ? " and " : ""}${errors ? "the failed ones are answered again with changes" : ""}`) : ""}`);
 }

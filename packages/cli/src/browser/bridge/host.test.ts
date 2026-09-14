@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
 import { probeHost, startBridgeHost, type RunningHost } from "./host.js";
+import { CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
 import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
@@ -160,6 +161,39 @@ describe("bridge host auth", () => {
     expect(seen[1]).toMatch(/^down: close 4000/);
   });
 
+  test("an extension that goes silent is dropped after the silence budget, and a new worker is accepted", async () => {
+    // Chrome can end a service worker while its network process keeps the TCP
+    // side open: the host then holds a socket nobody reads. FakeExtension never
+    // answers a ping, so with a short budget it is exactly that worker.
+    const seen: string[] = [];
+    host = await startBridgeHost({
+      port: await freePort(),
+      token: TOKEN,
+      pingIntervalMs: 40,
+      extensionSilenceMs: 150,
+      onExtension: (up, detail) => seen.push(`${up ? "up" : "down"}: ${detail}`),
+    });
+    const dead = await new FakeExtension([]).connect(host.port, { boot: "dead" });
+    expect(host.extensionConnected()).toBe(true);
+    const closed = closeCode(dead.ws, 3000);
+    await closed;
+    expect(host.extensionConnected()).toBe(false);
+    expect(seen.at(-1)).toMatch(/^down:/);
+    // The next worker's hello is not stuck behind the corpse.
+    await new FakeExtension([]).connect(host.port, { boot: "fresh" });
+    expect(host.extensionConnected()).toBe(true);
+    expect(seen.at(-1)).toMatch(/^up: worker fresh/);
+  });
+
+  test("a silent hello is closed with the handshake code, never the bad-token code", async () => {
+    const h = await freshHost();
+    // Not a FakeExtension: a raw socket that never says hello.
+    const ws = await dial(h.port, "/ext", { origin: "chrome-extension://fakeextensionid" });
+    // HELLO_TIMEOUT_MS is 15 s in production; the assertion is on the code, so
+    // it only needs the close, however long the host takes.
+    expect(await closeCode(ws, 20_000)).toBe(CLOSE_HANDSHAKE_TIMEOUT);
+  }, 25_000);
+
   test("a reconnect from the same worker is told apart from a new one", async () => {
     const seen: string[] = [];
     host = await startBridgeHost({ port: await freePort(), token: TOKEN, onExtension: (up, detail) => seen.push(`${up ? "up" : "down"}: ${detail}`) });
@@ -262,22 +296,19 @@ describe("bridge host as a CDP endpoint", () => {
 
     // The human's tabs cannot be shared, and a tab that does not exist is named as such.
     expect((await fetch(grantUrl("env-b", targetIdOfTab(7)), { method: "POST" })).status).toBe(403);
-    // A session vouching for its own pinned tab (`own`, from the engine's
-    // binding file) is taken at its word even when the host has no memory of
-    // the tab — the case after a host restart. From then on it is an agent tab.
-    expect((await fetch(grantUrl("env-d", targetIdOfTab(7)) + "&own=1", { method: "POST" })).status).toBe(200);
+    expect((await fetch(grantUrl("env-d", targetIdOfTab(7)) + "&own=1", { method: "POST" })).status).toBe(403);
     const d = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "env-d" });
-    expect((await d.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([targetIdOfTab(7)]);
-    expect((await fetch(grantUrl("env-b", targetIdOfTab(7)), { method: "POST" })).status).toBe(200);
+    expect((await d.send("Target.getTargets")).targetInfos).toEqual([]);
+    expect((await fetch(grantUrl("env-b", targetIdOfTab(7)), { method: "POST" })).status).toBe(403);
     d.close();
     expect((await fetch(grantUrl("env-b", targetIdOfTab(4242)), { method: "POST" })).status).toBe(404);
     expect((await fetch(grantUrl("", ta), { method: "POST" })).status).toBe(400);
     expect((await fetch(grantUrl("env-b", ta))).status).toBe(405);
 
-    // Attaching by id is deliberate (a pinned tab restored from its binding
-    // file): the session sees the tab from then on.
     const c = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "env-c" });
     expect((await c.send("Target.getTargets")).targetInfos).toEqual([]);
+    await expect(c.send("Target.attachToTarget", { targetId: tb, flatten: true })).rejects.toThrow("not granted");
+    expect((await fetch(grantUrl("env-c", tb), { method: "POST" })).status).toBe(200);
     await c.send("Target.attachToTarget", { targetId: tb, flatten: true });
     expect((await c.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId)).toEqual([tb]);
     for (const x of [a, b, c, tool]) x.close();
@@ -403,6 +434,24 @@ describe("bridge host as a CDP endpoint", () => {
     await conn.send("Target.closeTarget", { targetId });
     expect(ext.tabs.length).toBe(0);
     conn.close();
+  });
+
+  test("attach restores known agent ownership without claiming a human tab", async () => {
+    host = await startBridgeHost({
+      port: await freePort(), token: TOKEN,
+      sessionTabs: { "env-restored-real": [{ tabId: 7, url: "https://example.com/7" }] },
+    });
+    const ext = await new FakeExtension([FakeExtension.tab(7), FakeExtension.tab(8)]).connect(host.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(host.port));
+    try {
+      await conn.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+      await conn.send("Target.attachToTarget", { targetId: targetIdOfTab(8), flatten: true });
+      expect(ext.seen.filter((m) => m.op === "attach").map(({ tabId, owned }) => ({ tabId, owned }))).toEqual([
+        { tabId: 7, owned: true }, { tabId: 8, owned: false },
+      ]);
+    } finally {
+      conn.close();
+    }
   });
 
   test("createTarget forwards background and castGroup, and strips castGroup from what the client sees", async () => {

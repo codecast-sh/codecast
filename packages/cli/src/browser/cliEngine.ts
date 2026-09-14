@@ -30,17 +30,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
-  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isRealSession,
+  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isPaneSession, isRealSession,
   realSessionKey, runEngine, runEngineJson,
 } from "./engine.js";
-import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
+import { engineBrowserFor, isPaneMode, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
+import { desktopPaneCtx, DesktopPaneUnavailable, PANE_TAB_NOTE } from "./desktopPane.js";
 import { grantTab } from "./bridge/host.js";
 import { cdpHttpUrl, listTargets } from "./cdp.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
-import { ensurePinnedTab, pinnedTabBrowser } from "./pinnedTab.js";
+import { ensurePinnedTab, pinnedTabBrowser, touchBoundTarget } from "./pinnedTab.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
@@ -80,6 +81,8 @@ function die(msg: string, hint?: string): never {
 export interface TargetChoice {
   real?: boolean;
   clone?: boolean;
+  /** The desktop app's pane opened for this session (desktopPane.ts). */
+  pane?: boolean;
 }
 
 /**
@@ -124,7 +127,23 @@ function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint:
  */
 async function ctx(choice: TargetChoice = {}): Promise<Ctx> {
   const session = engineSession();
-  if (!isRealMode(choice, auditOwner())) return { session };
+  const owner = auditOwner();
+  if (isPaneMode(choice, owner)) {
+    // The desktop pane: a `-pane` session key on the app's own CDP socket,
+    // pinned to the pane the human opened for this session. A pane that was
+    // closed is said once, and the verb goes on in the session's ordinary
+    // browser; a session that never had one, or a machine without the app,
+    // stops here with the one thing an agent can do about it.
+    try {
+      return await desktopPaneCtx(owner);
+    } catch (err) {
+      const unavailable = err instanceof DesktopPaneUnavailable ? err : null;
+      if (!unavailable || unavailable.reason !== "closed") die((err as Error).message, unavailable?.hint);
+      console.log(`${fmt.warning("!")} ${unavailable.message} — continuing in the human's Chrome`);
+      choice = { ...choice, pane: false };
+    }
+  }
+  if (!isRealMode(choice, owner)) return { session };
   try {
     return await engineBrowserFor(realSessionKey(session), await requireRealBridge());
   } catch (err) {
@@ -143,7 +162,7 @@ async function ctxFor(verb: string, choice: TargetChoice): Promise<Ctx> {
 function targetChoiceOf(cmd: Command): TargetChoice {
   const o = cmd.opts() as TargetChoice;
   const raw = splitTargetFlags(cmd.args);
-  return { real: o.real || raw.real, clone: o.clone || raw.clone };
+  return { real: o.real || raw.real, clone: o.clone || raw.clone, pane: o.pane || raw.pane };
 }
 
 /**
@@ -161,7 +180,7 @@ async function targetOf(verb: string, args: string[]): Promise<{ ctx: Ctx; args:
  * quietly, behind the human's windows, reusing the profile clone.
  */
 async function ensureBrowser(c: Ctx): Promise<void> {
-  if (isRealSession(c.session)) return;
+  if (isRealSession(c.session) || isPaneSession(c.session)) return;
   const state = readState();
   if (state && isPidAlive(state.pid)) return;
   await startLocalBrowser({ ...DEFAULT_START, quiet: true });
@@ -515,6 +534,16 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   const { session } = o;
   const owner = auditOwner();
   const real = isRealSession(session);
+  // The desktop pane is the human's view: nothing is started, carried or
+  // reaped for it, and the engine only ever drives the target it was pinned to.
+  const pane = isPaneSession(session);
+  // Whichever browser this verb drives is the one the watch stream follows.
+  touchBoundTarget(session);
+
+  if (verb === "tab" && real) {
+    const ref = args[/^(close|switch)$/.test(args[0] ?? "") ? 1 : 0];
+    if (ref && /^[0-9a-f]{8}$/i.test(ref)) await grantTab(await requireRealBridge(), session, ref.toUpperCase());
+  }
 
   if (verb === "open") {
     const url = args.find((a) => !a.startsWith("--"));
@@ -532,11 +561,11 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // `open` is where a session's browsing begins, so it is also where tabs
     // whose sessions have died get closed (engineReap.ts) — throttled, and
     // never this session's own.
-    const swept = real ? "" : describeReap(await reapEngineOrphans({ keep: session }));
+    const swept = real || pane ? "" : describeReap(await reapEngineOrphans({ keep: session }));
     if (swept) console.log(fmt.muted(`  ${swept}`));
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
-    if (url && !real) await carryLogins(url);
+    if (url && !real && !pane) await carryLogins(url);
   } else {
     await ensurePinnedTab(session);
   }
@@ -562,19 +591,7 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
       const find = (tabs: ReturnType<typeof engineTabs>) =>
         tabs.find((t) => t.targetId.toLowerCase().startsWith(q)) ??
         tabs.find((t) => (t.url ?? "").toLowerCase().includes(q));
-      let hit = find(engineTabs(o));
-      // Not one of this session's tabs. In real mode a session sees only its
-      // own; naming another agent's tab by id is the deliberate share, so ask
-      // the host to grant it (it refuses the human's tabs) and look again.
-      if (!hit && isRealSession(session) && /^[0-9a-f]{8}$/i.test(ref)) {
-        try {
-          await grantTab(await requireRealBridge(), session, ref.toUpperCase());
-          hit = find(engineTabs(o));
-          if (hit) console.log(fmt.muted(`  sharing tab ${ref.toUpperCase()} with this session`));
-        } catch (err) {
-          die((err as Error).message);
-        }
-      }
+      const hit = find(engineTabs(o));
       if (hit) args = [...args.slice(0, at), hit.tabId || hit.targetId, ...args.slice(at + 1)];
     }
   }
@@ -674,6 +691,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
   // The tab line names a tab in the human's own Chrome: say so, after the
   // id, where the web's tab parser (browserFocus.ts) does not read.
   if (lines.length && isRealSession(o.session)) lines[lines.length - 1] += fmt.muted(REAL_TAB_NOTE);
+  if (lines.length && isPaneSession(o.session)) lines[lines.length - 1] += fmt.muted(PANE_TAB_NOTE);
   for (const line of verb === "open" ? lines.slice(-1) : lines) console.log(line);
   if (NAVIGATING_VERBS.has(verb)) {
     const url = (tabs.find((t) => t.active) ?? tabs[0])?.url ?? "";
@@ -809,7 +827,7 @@ async function showToPerson(choice: TargetChoice): Promise<number> {
   const tab = currentTab(o);
   if (!tab) die("this session has no tab to show", "open a page first: cast browser open <url>");
   const raised = await raiseTabForPerson(tab.targetId);
-  const where = isRealSession(o.session) ? "your Chrome" : "the agent browser (a separate window from your Chrome)";
+  const where = isPaneSession(o.session) ? "the desktop app's pane" : isRealSession(o.session) ? "your Chrome" : "the agent browser (a separate window from your Chrome)";
   if (raised.ok) console.log(`${OK} brought the tab to the front in ${where}: ${tab.url}`);
   else console.log(`${fmt.warning("!")} could not bring the tab to the front (${raised.reason}); it is ${tab.url} in ${where}`);
   printFooter(o, "show", auditOwner());
@@ -1081,7 +1099,7 @@ async function runFlow(
       // the real Chrome cannot take fails here, before anything touches it.
       const refused = cloneOnlyRefusal(verb, isRealSession(c.session));
       if (refused) throw new Error(`${refused.message} (${refused.hint})`);
-      if (verb !== "open") await ensurePinnedTab(c.session);
+      if (verb !== "open" && verb !== "tab") await ensurePinnedTab(c.session);
       if (verb === "shot") {
         const si = args.findIndex((a) => a === "-s" || a === "--selector");
         const selector = si >= 0 ? args[si + 1] : undefined;
@@ -1142,7 +1160,7 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // and a clone-only verb asked for the real Chrome dies in ctxFor before a
   // tab is pinned in a browser it will then refuse.
   // `pane` offers a page to the reader over the backend and never opens a tab.
-  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tabs", "start", "stop", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane"]);
+  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tab", "tabs", "start", "stop", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane"]);
   br.hook("preAction", async (_thisCommand, actionCommand) => {
     const verb = actionCommand.name();
     if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br || actionCommand.args.some((arg) => arg === "--help" || arg === "-h")) return;
@@ -1350,6 +1368,7 @@ frames are superseded before anyone reads them.`,
       // Only this session's tabs are listed, and in real mode they sit among
       // the human's own: name where they are.
       if (code === 0 && isRealSession(c.session)) console.log(fmt.muted(`  in your real Chrome, via the cast extension${ownerKey() ? " — the other tabs there are the human's; `--all` lists the other agents'" : ""}`));
+      if (code === 0 && isPaneSession(c.session)) console.log(fmt.muted("  the desktop app's pane opened for this session, driven over the app's CDP port"));
       process.exit(code);
     });
 
@@ -1543,22 +1562,26 @@ sessions' tabs).`,
       const state = readState();
       const c = await ctx(o);
       const real = isRealSession(c.session);
+      const pane = isPaneSession(c.session);
       // Real mode has no managed browser behind it: the human's Chrome is
-      // the browser, and the bridge is what can be up or down.
-      if (!binary || (!state && !real)) {
+      // the browser, and the bridge is what can be up or down. A pane's
+      // browser is the desktop app, already answering on its port.
+      if (!binary || (!state && !real && !pane)) {
         console.log(`${fmt.muted(icons.dot)} not set up yet — run \`cast browser start\``);
         return;
       }
       let alive = true;
       if (real) {
         console.log(`${OK} real Chrome via the bridge on ${new URL(c.cdp!).host} — \`cast browser extension status\` says whether it is connected`);
+      } else if (pane) {
+        console.log(`${OK} the desktop app's pane over its CDP port ${new URL(c.cdp!).host} — the human opened it for this session`);
       } else if (state) {
         alive = isPidAlive(state.pid);
         console.log(`${alive ? OK : BAD} browser ${alive ? "up" : "gone"} — pid ${state.pid}, CDP 127.0.0.1:${state.port}${state.headless ? ", headless" : ""}${state.fakeMedia ? ", fake media devices" : ""}`);
       }
       console.log(`  engine: ${ENGINE_PACKAGE} ${engineVersion() ?? "?"}  ${fmt.muted(binary)}`);
       console.log(`  session: ${c.session}`);
-      if (!real && state) {
+      if (!real && !pane && state) {
         console.log(`  profile: ${state.sourceProfile ? `${state.sourceProfile} (logins inherited; Google is its own — \`cast browser login\` once)` : "fresh — signed out"}`);
       }
       if (!alive) return;
@@ -1580,12 +1603,13 @@ sessions' tabs).`,
     .option("--wipe", "With --all: also remove the cloned profile")
     .action(async (o: { all?: boolean; wipe?: boolean } & TargetChoice) => {
       const { session } = await ctx(o);
-      if (isRealSession(session) && (o.all || o.wipe)) die("Ordinary browser commands cannot stop or wipe a separate browser.");
+      if ((isRealSession(session) || isPaneSession(session)) && (o.all || o.wipe)) die("Ordinary browser commands cannot stop or wipe a separate browser.");
       // Detach the engine and close the tab it was pinned to; the browser
-      // stays for everyone else.
+      // stays for everyone else. A pane is the human's: only the engine lets
+      // go of it, and the pane stays where they put it.
       await closeSessionTab(session);
-      console.log(`${OK} closed this session's tab`);
-      if (isRealSession(session)) return;
+      console.log(isPaneSession(session) ? `${OK} let go of the desktop pane; it stays open for the human` : `${OK} closed this session's tab`);
+      if (isRealSession(session) || isPaneSession(session)) return;
       const swept = describeReap(await reapEngineOrphans({ force: true, keep: o.all ? null : session, idleMs: o.all ? 0 : undefined }));
       if (swept) console.log(fmt.muted(`  ${swept}`));
       if (o.all) {

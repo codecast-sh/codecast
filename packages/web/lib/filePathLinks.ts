@@ -39,6 +39,7 @@ const TOKEN = String.raw`(${ABS}|${HOME}|${REL})${LINE}`;
 /** Global scanner for text nodes (mdast-util-find-and-replace wants a /g regex). */
 export const FILE_PATH_SCAN_RE = new RegExp(`${BEFORE}${TOKEN}${AFTER}`, "g");
 const WHOLE_RE = new RegExp(`^${TOKEN}$`);
+const ABS_HREF_RE = new RegExp(String.raw`^(/(?:${ABS_ROOTS})(?:/[^?#\r\n]*?)?)${LINE}$`);
 
 const TRAILING_PUNCT = /[.,;:!?]+$/;
 const EXTENSION = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
@@ -125,7 +126,15 @@ export function filePathHref(path: string, line: number | undefined, ctx?: FileP
 /** Reads a mention back out of a link the plugin minted, so a component can
  *  re-resolve it with context it has and the parser did not. */
 export function parseFilePathHref(href: string | undefined): { path: string; line?: number } | null {
-  if (!href || !href.startsWith("/files?") && !href.startsWith("/vault?")) return null;
+  if (!href) return null;
+  const absolute = ABS_HREF_RE.exec(href);
+  if (absolute) {
+    const encoded = absolute[1].replace(/\+/g, "%2B").replace(/&/g, "%26");
+    const path = new URLSearchParams(`path=${encoded}`).get("path")!;
+    const line = Number(absolute[2]);
+    return { path, ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) };
+  }
+  if (!href.startsWith("/files?") && !href.startsWith("/vault?")) return null;
   const params = new URLSearchParams(href.slice(href.indexOf("?") + 1));
   const path = params.get("path");
   if (!path) return null;

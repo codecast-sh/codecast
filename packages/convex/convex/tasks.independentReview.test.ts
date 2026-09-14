@@ -4,7 +4,7 @@
 // (cast task done / handoff / verdict), so the rule lives there.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { update } from "./tasks";
+import { update, webUpdate } from "./tasks";
 import { hashToken } from "./apiTokens";
 
 const OWNER = "users_owner";
@@ -20,6 +20,8 @@ const CONVERSATIONS = [
   { _id: "conversations_standing_r", session_id: "standing-r", user_id: OWNER, status: "active", standing_role_id: ROLE_R },
   { _id: "conversations_hand_s", session_id: "hand-s", user_id: OWNER, status: "active", org_role_id: ROLE_S },
   { _id: "conversations_free", session_id: "free", user_id: OWNER, status: "active" },
+  // The line's review station: stamped by the spawn route, filed under no role.
+  { _id: "conversations_reviewer", session_id: "reviewer", user_id: OWNER, status: "active", review_of_task_id: "tasks_1" },
 ];
 
 async function makeCtx(task: any) {
@@ -33,7 +35,7 @@ async function makeCtx(task: any) {
   };
   const db = makeFakeDb(tables);
   const ctx = {
-    auth: { async getUserIdentity() { return null; } },
+    auth: { async getUserIdentity() { return { subject: `${OWNER}|session` }; } },
     db,
     scheduler: { runAfter: async () => null },
     async runMutation() { return null; },
@@ -71,8 +73,9 @@ describe("tasks.update independent review (the-line.md L3)", () => {
     await expect(done(ctx, "standing-r")).rejects.toThrow(/same role/);
   });
 
-  test("a hand cannot close on its own approve, even written in the same call", async () => {
-    const { ctx } = await makeCtx(task());
+  test("a hand cannot close its own bound work on its own approve, even written in the same call", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
     await expect(done(ctx, "hand-r1", { review_verdict: "approve" })).rejects.toThrow(/session doing the work/);
   });
 
@@ -160,10 +163,107 @@ describe("tasks.update independent review (the-line.md L3)", () => {
     expect(tables.tasks[1].status).toBe("in_progress");
   });
 
+  // Final product review: a role that runs the line spawns its review
+  // station as the task's reviewer (review_of_task_id), never as its own
+  // hand. The reviewer approves and closes in one call while the role's
+  // hand is still bound to the task.
+  test("the review station approves and closes in one call while a hand of R is bound", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await done(ctx, "reviewer", { review_verdict: "approve", review_note: "all criteria met" });
+    expect(tables.tasks[0].status).toBe("done");
+    expect(tables.tasks[0].review_verdict).toMatchObject({ verdict: "approve", by_conversation_id: "conversations_reviewer" });
+  });
+
+  test("a reviewer that bound itself to the task is still the reviewer, not a session doing the work", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1", "conversations_reviewer"] }));
+    for (const id of ["conversations_hand_r1", "conversations_reviewer"]) {
+      tables.conversations.find((c: any) => c._id === id).active_task_id = "tasks_1";
+    }
+    await done(ctx, "reviewer", { review_verdict: "approve" });
+    expect(tables.tasks[0].status).toBe("done");
+  });
+
+  test("a roleless session approves and closes in one call while a hand of R is bound", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await done(ctx, "free", { review_verdict: "approve" });
+    expect(tables.tasks[0].status).toBe("done");
+  });
+
+  test("a hand of R approving R's bound work in one call is refused by role, even unbound itself", async () => {
+    const { ctx } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    ctx.db._tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await expect(done(ctx, "hand-r2", { review_verdict: "approve" })).rejects.toThrow(/same role/);
+  });
+
+  test("a hand of S approving R's bound work in one call passes", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await done(ctx, "hand-s", { review_verdict: "approve" });
+    expect(tables.tasks[0].status).toBe("done");
+  });
+
   test("a changes verdict sends the task back to in_progress", async () => {
     const { ctx, tables } = await makeCtx(task());
     await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1", status: "in_progress", conversation_id: "free", review_verdict: "changes" });
     expect(tables.tasks[0].status).toBe("in_progress");
     expect(tables.tasks[0].review_verdict.verdict).toBe("changes");
+  });
+});
+
+// The web board goes through the same rule (final product review). A web
+// write has a person behind it and no session, so its verdict is outside
+// every role; without one, role work is refused exactly as on the CLI.
+describe("tasks.webUpdate independent review", () => {
+  const webDone = (ctx: any, extra: Record<string, any> = {}) =>
+    (webUpdate as any)._handler(ctx, { short_id: "ct-1", status: "done", ...extra });
+
+  test("a board close of role work still in progress, with no verdict, is refused", async () => {
+    const { ctx, tables } = await makeCtx(task({ status: "in_progress", conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await expect(webDone(ctx)).rejects.toThrow(/Independent review required/);
+    expect(tables.tasks[0].status).toBe("in_progress");
+  });
+
+  test("dragging role work from In Review to Done is the person's approve, recorded as such", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await webDone(ctx);
+    expect(tables.tasks[0].status).toBe("done");
+    expect(tables.tasks[0].review_verdict).toMatchObject({ verdict: "approve", note: "closed from the board" });
+    expect(tables.tasks[0].review_verdict.by_conversation_id).toBeUndefined();
+  });
+
+  test("a board close with the person's approve records the verdict without a session and closes", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_hand_r1"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await webDone(ctx, { review_verdict: "approve", review_note: "checked on the board" });
+    const row = tables.tasks[0];
+    expect(row.status).toBe("done");
+    expect(row.review_verdict).toMatchObject({ verdict: "approve", note: "checked on the board" });
+    expect(row.review_verdict.by_conversation_id).toBeUndefined();
+    expect(tables.task_history.some((h: any) => h.field === "review_verdict" && h.new_value === "approve")).toBe(true);
+  });
+
+  test("a board close from in progress on a stored verdict from R's own hand is refused", async () => {
+    const { ctx, tables } = await makeCtx(task({ status: "in_progress", conversation_ids: ["conversations_hand_r1"], review_verdict: approveBy("conversations_hand_r2") }));
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r1").active_task_id = "tasks_1";
+    await expect(webDone(ctx)).rejects.toThrow(/same role/);
+  });
+
+  test("a board close of work with no role behind it is unaffected", async () => {
+    const { ctx, tables } = await makeCtx(task({ conversation_ids: ["conversations_free"] }));
+    tables.conversations.find((c: any) => c._id === "conversations_free").active_task_id = "tasks_1";
+    await webDone(ctx);
+    expect(tables.tasks[0].status).toBe("done");
+  });
+
+  test("a board cascade holds each open subtask to the rule", async () => {
+    const { ctx, tables } = await makeCtx(task({ review_verdict: { verdict: "approve", at: 1 } }));
+    tables.tasks.push({ _id: "tasks_2", short_id: "ct-2", title: "child", user_id: OWNER, status: "in_progress", parent_id: "tasks_1", conversation_ids: ["conversations_hand_r2"] });
+    tables.conversations.find((c: any) => c._id === "conversations_hand_r2").active_task_id = "tasks_2";
+    await expect(webDone(ctx, { subtask_resolution: "cascade" })).rejects.toThrow(/ct-2 to done without an approve verdict/);
+    expect(tables.tasks[1].status).toBe("in_progress");
   });
 });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { prepareTmuxDelivery, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -142,6 +142,7 @@ import {
   daemonPlistNeedsUpgrade,
   daemonLauncherMatchesCommand,
   daemonTickStale,
+  watchdogKillVerdict,
   DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
   EXIT_DO_NOT_RESTART,
@@ -150,10 +151,16 @@ import {
   watchdogHeartbeatStale,
   WATCHDOG_HEARTBEAT_FILENAME,
   WATCHDOG_PASS_STAMP_FILENAME,
+  WATCHDOG_LOG_FILENAME,
 } from "./supervision.js";
 import {
   clearDaemonExitStamp,
   consumeHangMarker,
+  peekHangMarker,
+  readWedgedPassStamp,
+  writeWedgedPassStamp,
+  clearWedgedPassStamp,
+  writeWatchdogKillMarker,
   createHangRecorder,
   noRestartReason,
   writeDaemonExitStamp,
@@ -203,6 +210,7 @@ export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
+import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -1066,6 +1074,7 @@ interface DaemonState {
   pendingSyncMessages?: number;
   pendingSyncConversations?: number;
   pendingSyncOldestMs?: number;
+  pendingSyncNoProgressMs?: number;
   timestamp?: number;
   authExpired?: boolean;
   authFailureCount?: number;
@@ -1527,6 +1536,17 @@ const messagesInFlight = new Map<string, { ts: number; conversationId: string }>
 // such an entry is vouched to the server (collectPastedInjectedIds, the
 // paste_verified stamp). A pre-paste entry exists solely for dedup.
 const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
+
+// The daemon's own clock at the newest delivery into a conversation, or null.
+// The escape handler compares it against the press time: an Escape pressed
+// before a paste was aimed at a turn the paste has since replaced.
+export function latestInjectionTsFor(conversationId: string): number | null {
+  let latest: number | null = null;
+  for (const entry of injectedMessageTs.values()) {
+    if (entry.conversationId === conversationId && (latest === null || entry.ts > latest)) latest = entry.ts;
+  }
+  return latest;
+}
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
 const INJECTION_DEDUP_TTL_MS = 60_000;
 const UNCONFIRMED_INJECTION_DEDUP_MAX_MS = 30 * 60_000;
@@ -2950,6 +2970,10 @@ async function syncHealthFields(): Promise<{
   oldest_pending_ms: number;
   pending_sync_messages: number;
   pending_sync_conversations: number;
+  // How long the sync has gone without completing anything. With the head's
+  // age this is what lets the web say "syncing" over a backlog that is
+  // draining and keep "stalled" for a queue that is stuck.
+  sync_no_progress_ms: number;
   daemon_started_at: number;
   loop_freeze_ms: number;
   loop_freeze_1h_ms: number;
@@ -2963,6 +2987,7 @@ async function syncHealthFields(): Promise<{
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
     pending_sync_messages: health?.messages ?? 0,
     pending_sync_conversations: health?.conversations ?? 0,
+    sync_no_progress_ms: health?.noProgressMs ?? 0,
     // Boot time and the loop freeze budget: the web reads these as "restarted,
     // catching up" and "under load" (see LoopFreezeLedger).
     daemon_started_at: daemonStartedAt,
@@ -3995,7 +4020,8 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
+    [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -5504,6 +5530,14 @@ async function executeRemoteCommand(
           error = "Missing conversation_id";
           break;
         }
+        // The web forwards every press and shows the interruption line at once;
+        // this handler holds the facts (see escapeInterrupt.ts) and decides.
+        const pressedAt = typeof parsed.pressed_at === "number" ? parsed.pressed_at : null;
+        const lastInjectedAt = latestInjectionTsFor(conversationId);
+        const skipEscape = (verdict: { action: "skip"; reason: string }, where: string): void => {
+          result = `escape_${verdict.reason}`;
+          log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
+        };
 
         const escapeThreadId = appServerConversations.get(conversationId) ?? persistedAppServerThreads.get(conversationId)?.threadId;
         if (escapeThreadId) {
@@ -5513,45 +5547,68 @@ async function executeRemoteCommand(
             persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
             persistAppServerThreadRegistrations();
           }
-          if (activeTurnId && codexAppServerInstance?.running) {
-            await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
-            result = "escape_interrupted";
-            log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
-          } else {
-            result = "escape_no_active_turn";
-            log(`[REMOTE] No active turn to interrupt on app-server thread ${escapeThreadId.slice(0, 8)}`);
+          // turn/start is the app-server's injection; its mark is this daemon's clock.
+          const turnStartedAt = turnStartedAtFor(escapeThreadId);
+          const verdict = decideEscape({
+            pressedAt,
+            now: Date.now(),
+            lastInjectedAt: Math.max(lastInjectedAt ?? 0, turnStartedAt ?? 0) || null,
+            turnActive: !!activeTurnId && !!codexAppServerInstance?.running,
+          });
+          if (verdict.action === "skip") {
+            skipEscape(verdict, `app-server thread ${escapeThreadId.slice(0, 8)}`);
+            break;
           }
+          await codexAppServerInstance!.turnInterrupt(escapeThreadId, activeTurnId!);
+          result = "escape_interrupted";
+          log(`[REMOTE] Interrupted app-server turn ${activeTurnId!.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
           break;
         }
 
-        const cache = readConversationCache();
-        const reverse = buildReverseConversationCache(cache);
-        const sessionId = reverse[conversationId];
+        const sessionId = await resolveCommandSessionId(conversationId);
         if (!sessionId) {
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        const agentType = detectSessionAgentType(sessionId);
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, agentType);
+        if (!tmuxTarget && !proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const hookStatus = lastHookStatus.get(sessionId)?.status;
+        let paneState: TmuxLiveState | null = null;
+        if (tmuxTarget) {
+          try {
+            ({ state: paneState } = await captureTmuxLiveState(tmuxTarget, glyphlessPromptPattern(agentType), 25));
+          } catch (captureErr) {
+            log(`[REMOTE] Escape: could not read pane ${tmuxTarget} (${captureErr instanceof Error ? captureErr.message : String(captureErr)}); judging by hook status ${hookStatus ?? "unknown"}`);
+          }
+        }
+        const verdict = decideEscape({
+          pressedAt,
+          now: Date.now(),
+          lastInjectedAt,
+          turnActive: turnLooksActive(hookStatus, paneState),
+        });
+        if (verdict.action === "skip") {
+          skipEscape(verdict, `session ${sessionId.slice(0, 8)} pane=${paneState ?? "none"} hook=${hookStatus ?? "unknown"}`);
+          break;
+        }
         if (tmuxTarget) {
           await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
           result = "escape_sent";
-          log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
-        } else if (!proc) {
-          error = `No running process for session ${sessionId.slice(0, 8)}`;
-        } else if (!MID_TURN_AGENT_STATUSES.has(lastHookStatus.get(sessionId)?.status ?? "")) {
-          // A SIGINT reaching claude at its prompt EXITS the process (observed
-          // 2026-08-28: pid 41092 died on an escape sent to an idle session). The
-          // signal is only an interrupt while a turn is running; otherwise there is
-          // nothing to interrupt and the honest answer is a no-op.
-          result = "escape_no_active_turn";
-          log(`[REMOTE] No active turn to interrupt for session ${sessionId.slice(0, 8)} (no tmux pane, skipping SIGINT)`);
+          log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget} (pane=${paneState ?? "unread"} hook=${hookStatus ?? "unknown"})`);
         } else {
+          // A SIGINT reaching claude at its prompt EXITS the process (observed
+          // 2026-08-28: pid 41092 died on an escape sent to an idle session), so
+          // the no-pane path only runs once the hook status proves a turn.
           try {
-            process.kill(proc.pid, "SIGINT");
+            process.kill(proc!.pid, "SIGINT");
             result = "escape_sent_sigint";
-            log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc.pid}`);
+            log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc!.pid}`);
           } catch (killErr) {
-            error = `Failed to send SIGINT to pid ${proc.pid}: ${killErr}`;
+            error = `Failed to send SIGINT to pid ${proc!.pid}: ${killErr}`;
           }
         }
         break;
@@ -13086,7 +13143,16 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // Nothing but the live footer renders below the box, so this can't pull in
     // scrollback (the reason the region is narrowed in the first place).
     const top = sepIdx[sepIdx.length - 2];
-    return tail.slice(top + 1).join("\n");
+    // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
+    // The running turn's only marker is now its own status line, rendered
+    // directly above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry
+    // that one line in when it is the nearest text above the box; it cannot be
+    // scrollback, because the finished form of the line reads differently and
+    // nothing else renders between the transcript and a live box.
+    let above = top - 1;
+    while (above >= 0 && !tail[above].trim()) above--;
+    const status = above >= 0 && CLAUDE_TURN_STATUS_LINE.test(tail[above]) ? [tail[above]] : [];
+    return [...status, ...tail.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
     // Modal or busy indicator: one separator, content lives below it.
@@ -13214,6 +13280,11 @@ function newestPaintedFrame(region: string): string {
   return region;
 }
 
+// Claude Code's running-turn status line: a cycling asterisk glyph, a verb, an
+// ellipsis, then the elapsed time in parentheses. The finished form ("✻ Churned
+// for 0s · done 9:52 AM") has no "… (" and does not match.
+const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\((?:\d+m\s*)?\d+s\b/m;
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -13231,6 +13302,14 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // running", and the type-ahead paste busy allows is exactly what is unsafe here.
   if (/^\s*Resuming session[.…]/mi.test(newestPaintedFrame(region))) return "starting";
   if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
+  // Claude Code's own turn status line: a cycling asterisk glyph, a verb, an
+  // ellipsis, then the elapsed time in parentheses — "✶ Perambulating… (50s ·
+  // ↓ 161 tokens)". v2.1.270 prints no "esc to interrupt" anywhere on such a
+  // pane (the footer says "← for agents"), so without this rule a running turn
+  // with its composer painted read as idle (2026-09-14: the daemon skipped a
+  // user's Escape as "no active turn" while the pane showed this line). The
+  // finished form, "✻ Churned for 0s · done 9:52 AM", has no "… (" and stays idle.
+  if (CLAUDE_TURN_STATUS_LINE.test(region)) return "busy";
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
   // is also unique to the Rewind option list.
@@ -14914,6 +14993,18 @@ function machineInputGuard(content: string, capture: () => Promise<string>): (()
   };
 }
 
+// One read of a pane's live state, no keys sent. ensureTmuxReady loops on
+// this and presses corrective keys; the escape handler reads it once to learn
+// whether there is a turn to interrupt.
+export async function captureTmuxLiveState(target: string, glyphlessPattern: RegExp | null, captureLines: number): Promise<{ stdout: string; region: string; state: TmuxLiveState }> {
+  const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+  const region = glyphlessPattern ? stdout : extractTmuxLiveRegion(stdout);
+  const state = glyphlessPattern
+    ? classifyGlyphlessClientPaneState(stdout, glyphlessPattern)
+    : classifyTmuxLiveState(region);
+  return { stdout, region, state };
+}
+
 export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines = inspectPane ? 80 : 25): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
@@ -14929,17 +15020,15 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
 
   while (true) {
     let stdout: string;
+    let region: string;
+    let state: TmuxLiveState;
     try {
-      ({ stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]));
+      ({ stdout, region, state } = await captureTmuxLiveState(target, glyphlessPattern, captureLines));
     } catch (err) {
       if (inspectPane) throw new MachineInputBlockedError(`terminal capture failed: ${String(err)}`);
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
     inspectPane?.(stdout);
-    const region = glyphlessPattern ? stdout : extractTmuxLiveRegion(stdout);
-    const state = glyphlessPattern
-      ? classifyGlyphlessClientPaneState(stdout, glyphlessPattern)
-      : classifyTmuxLiveState(region);
 
     if (state === "idle") return { busy: false };
     if (state === "exited") {
@@ -15620,7 +15709,7 @@ export async function awaitTmuxComposerPayload(
   throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
-type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number };
+type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
@@ -15716,11 +15805,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const sanitized = prepareInjectedContent(content, { bracketed });
   const delivery = opts?.delivery ? await prepareTmuxDelivery(
     target, opts.delivery, tmuxExec,
-    async id => (await syncServiceRef?.getPendingMessageStatus(id)) === "delivered",
+    async id => syncServiceRef ? pendingMessageFinished(syncServiceRef, id) : false,
     opts.journal,
+    { settleMs: opts.receiptSettleMs },
   ) : null;
   if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
-  if (delivery?.prior?.phase === "verified") return;
+  if (delivery?.prior?.phase === "verified" && !delivery.unacknowledged) return;
+  let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const beforeInput = machineInputGuard(content, async () =>
@@ -15754,9 +15845,11 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // text counts: a collapsed "[Pasted text #1]" chip could be anyone's draft,
   // and submitting that would ack a message the agent never saw.
   let alreadyAtPrompt = false;
+  let liveState: TmuxLiveState = "unknown";
   try {
     const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
     alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
+    liveState = classifyTmuxLiveState(extractTmuxLiveRegion(stdout));
   } catch {}
 
   const paneTitleOf = async (): Promise<string | null> => {
@@ -15777,7 +15870,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // clock is both the knowable one and the strict one. An older turn mark is
   // someone else's either way.
   const paneTitleBefore = await paneTitleOf();
-  const pasteAt = delivery?.prior?.pasteAt ?? Date.now();
+  let pasteAt = prior?.pasteAt ?? Date.now();
 
   // The pane before the paste, for the post-submit verifier's before/after
   // comparison; empty when nothing was pasted, which is honest — every frame it
@@ -15788,18 +15881,42 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   if (alreadyAtPrompt) {
     delivery?.journal.begin(opts!.delivery!, delivery.generation, sanitized);
     log(`Composer in ${target} already holds this payload from an earlier attempt; submitting it instead of pasting again`);
-  } else if (delivery?.prior) {
-    if (delivery.prior.phase === "paste") {
-      gate = await awaitTmuxComposerPayload(target, sanitized, {
-        multiline: bracketed && sanitized.includes("\n"),
-        rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
-        allowRePaste: false,
-        budgetMs: opts?.gateBudgetMs,
-        exec,
-      });
-      if (gate !== "matched") throw new TmuxDeliveryUncertainError("the earlier paste is not visible");
+  } else if (prior && delivery) {
+    // An earlier attempt wrote this payload and it is not at the prompt. Wait
+    // for it while it may still be flushing. Once the receipt has settled with
+    // no echo, a prompt that renders without the payload proves it never
+    // reached the agent (2026-09-14: one paste lost under load held its pane
+    // for hours), so the receipt is dropped and the payload written again. A
+    // prompt we cannot see proves nothing and keeps the hold. After an Enter
+    // (a submit, or a verification the server never confirmed) the message
+    // may sit in a busy agent's queue, which echoes only when the turn takes
+    // it, so only an idle agent proves it is gone.
+    const settled = receiptSettled(prior, opts?.receiptSettleMs);
+    if (settled && prior.phase !== "paste" && liveState !== "idle") {
+      throw new TmuxDeliveryUncertainError("an unacknowledged submit waits for the agent to go idle");
     }
-  } else {
+    if (prior.phase === "paste" || settled) {
+      try {
+        gate = await awaitTmuxComposerPayload(target, sanitized, {
+          multiline: bracketed && sanitized.includes("\n"),
+          rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
+          allowRePaste: false,
+          budgetMs: opts?.gateBudgetMs,
+          exec,
+        });
+        if (gate !== "matched") throw new TmuxDeliveryUncertainError("the earlier paste is not visible");
+        if (prior.phase !== "paste") alreadyAtPrompt = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!settled || !/paste has not appeared intact|^AGENT_STDIN_NOT_READY: composer never showed/.test(message)) throw error;
+        log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript; writing it again`);
+        delivery.journal.release(opts!.delivery!.messageId);
+        prior = null;
+        pasteAt = Date.now();
+      }
+    }
+  }
+  if (!alreadyAtPrompt && !prior) {
     // Clear any stale input before pasting to prevent draft text from being
     // prepended to the injected message or submitted by the trailing Enter —
     // see drainTmuxComposer for why C-a/C-k cycles, and why an empty composer
@@ -15829,7 +15946,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       exec,
     });
   }
-  const retryingSubmit = delivery?.prior?.phase === "submit" && !alreadyAtPrompt;
+  const retryingSubmit = prior?.phase === "submit" && !alreadyAtPrompt;
   let pasteConfirmed = gate === "matched";
   const sendEnter = async () => {
     delivery?.journal.advance(opts!.delivery!.messageId, "submit");
@@ -25764,6 +25881,7 @@ async function main(): Promise<void> {
       pendingSyncMessages: health.messages,
       pendingSyncConversations: health.conversations,
       pendingSyncOldestMs: health.oldestPendingMs,
+      pendingSyncNoProgressMs: health.noProgressMs,
     });
   };
 
@@ -28233,8 +28351,11 @@ export async function runWatchdog(): Promise<void> {
 
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   const version = getVersion();
+  // The watchdog's own lines go to its own file, never daemon.log: daemon.log's
+  // mtime is the busy-grace evidence that the DAEMON ran JS, and a pass that
+  // wrote there refreshed the very stamp its next pass judged by.
   const logLine = (msg: string) => {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
+    try { fs.appendFileSync(path.join(CONFIG_DIR, WATCHDOG_LOG_FILENAME), `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
   };
   const daemonPlist = path.join(process.env.HOME || "", "Library", "LaunchAgents", `${DAEMON_LAUNCHD_LABEL}.plist`);
   const supervised = platform === "darwin" && fs.existsSync(daemonPlist);
@@ -28281,6 +28402,21 @@ export async function runWatchdog(): Promise<void> {
     }
   }
 
+  const sendWatchdogLog = async (level: string, message: string) => {
+    await fetch(`${siteUrl}/cli/log`, {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        level,
+        message,
+        cli_version: `${version}-watchdog`,
+        platform: process.platform,
+      }),
+    }).catch(() => {});
+  };
+
   // 2b. If process is alive, check if event loop is actually responsive.
   // The tick freezes during system sleep exactly like a wedged loop, and this
   // pass usually runs before the woken daemon's 30s stamp interval fires — so a
@@ -28293,26 +28429,56 @@ export async function runWatchdog(): Promise<void> {
   try { prevPass = parseInt(fs.readFileSync(passStampPath, "utf-8").trim(), 10) || 0; } catch {}
   try { fs.writeFileSync(passStampPath, String(passNow)); } catch {}
   const passGap = prevPass > 0 ? passNow - prevPass : null;
+  // A wedged verdict on ONE pass only arms; the kill needs the next pass to
+  // agree and the hang marker to show no self recovery in between (see
+  // watchdogKillVerdict in supervision.ts for why: three recorded stalls of 50
+  // to 138s that all resumed on their own). Any pass that is not wedged clears
+  // the arm, which is what keeps a sleep wake from ever counting as one of the two.
   if (daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = passNow - lastTick;
+      let logAgeMs: number | null = null;
+      let wedged = false;
       if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
-        let logAgeMs: number | null = null;
         try { logAgeMs = passNow - fs.statSync(path.join(CONFIG_DIR, "daemon.log")).mtimeMs; } catch {}
-        if (daemonTickStale(staleness, passGap, logAgeMs)) {
-          logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
-          try { process.kill(daemonPid, 9); } catch {}
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          daemonAlive = false;
-        } else if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
-          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
-        } else {
-          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+        wedged = daemonTickStale(staleness, passGap, logAgeMs);
+      }
+      const verdict = watchdogKillVerdict({
+        wedged,
+        pid: daemonPid,
+        tick: lastTick,
+        now: passNow,
+        armed: readWedgedPassStamp(CONFIG_DIR),
+        marker: peekHangMarker(CONFIG_DIR),
+      });
+      if (verdict.action === "kill") {
+        clearWedgedPassStamp(CONFIG_DIR);
+        writeWatchdogKillMarker({ pid: daemonPid, unresponsiveMs: staleness, rule: verdict.rule, now: passNow }, CONFIG_DIR);
+        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s: ${verdict.rule} (${verdict.reason}), killing`);
+        await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_kill: pid=${daemonPid} frozen=${Math.round(staleness / 1000)}s rule="${verdict.rule}" ${verdict.reason}`);
+        try { process.kill(daemonPid, 9); } catch {}
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        daemonAlive = false;
+      } else if (verdict.action === "arm") {
+        writeWedgedPassStamp(verdict.stamp, CONFIG_DIR);
+        logLine(`Daemon PID ${daemonPid} tick stale ${Math.round(staleness / 1000)}s: ${verdict.reason}`);
+      } else {
+        clearWedgedPassStamp(CONFIG_DIR);
+        if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
+          if (logAgeMs !== null && logAgeMs <= DAEMON_HEARTBEAT_STALE_MS) {
+            logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but daemon.log written ${Math.round(logAgeMs / 1000)}s ago — busy, not wedged`);
+          } else {
+            logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+          }
         }
       }
     } catch {}
+  } else {
+    // No live daemon means no stall to count; a stale arm must not carry over
+    // to the pid that replaces it.
+    clearWedgedPassStamp(CONFIG_DIR);
   }
 
   // 3. Send heartbeat (keeps server aware even if daemon is dead)
@@ -28340,21 +28506,6 @@ export async function runWatchdog(): Promise<void> {
 
   // 3b. Check min_cli_version -- if daemon binary is outdated, update it
   // This catches cases where the daemon's own checkForForcedUpdate failed or killed the daemon
-  const sendWatchdogLog = async (level: string, message: string) => {
-    await fetch(`${siteUrl}/cli/log`, {
-      method: "POST",
-      signal: AbortSignal.timeout(10_000),
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_token: config.auth_token,
-        level,
-        message,
-        cli_version: `${version}-watchdog`,
-        platform: process.platform,
-      }),
-    }).catch(() => {});
-  };
-
   if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);

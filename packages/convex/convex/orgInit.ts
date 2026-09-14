@@ -37,7 +37,7 @@ import {
 //
 // The analyzer never writes: it proposes as a decision stack, and nothing is
 // created until a person answers. `applyDecision` is the one writer; it is
-// idempotent per decision (applied_at) and per role (handle, provision).
+// idempotent per decision (applied_at); a handle already live is a refusal, never an adoption.
 
 type Ctx = { db: any };
 
@@ -339,20 +339,20 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
   return { project_ids, plan_ids };
 }
 
-async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean }): Promise<ApplyResult> {
+async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string }): Promise<ApplyResult> {
   const handle = p.handle.trim().toLowerCase();
   const charter = [p.charter?.trim(), note ? `Changes asked for by the person who approved this role:\n${note}` : undefined].filter(Boolean).join("\n\n") || undefined;
-  // Idempotent per role: a crash between create and applied_at leaves a live
-  // role with this handle; adopt it rather than refusing the decision forever.
-  let role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle) ?? null;
-  let created = false;
-  if (!role) {
-    const scope = await resolveProposalScope(ctx, boundary, p.scope);
-    const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
-    role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter });
-    created = true;
-  }
-  if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day });
+  // A live role with this handle is never adopted: it may be one the person
+  // made by hand with its own scope and charter, and the proposal would be
+  // silently discarded. The mutation is atomic, so a crash between create and
+  // the applied_at stamp cannot leave a half-applied role behind; the only way
+  // to get here is a real clash, and the person picks another handle or skips.
+  const taken = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle);
+  if (taken) return { status: "error", error: `@${handle} is already ${taken.short_id} (${taken.name}); answer with changes to pick another handle, or skip` };
+  const scope = await resolveProposalScope(ctx, boundary, p.scope);
+  const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
+  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter });
+  if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
   let provisioned = false;
   if (opts.provision) {
     const firstProject = role.scope?.project_ids?.[0] ? await ctx.db.get(role.scope.project_ids[0]) : null;
@@ -361,7 +361,7 @@ async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: O
   }
   return {
     status: "applied",
-    note: `${created ? "created" : "adopted existing"} @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : ""}`,
+    note: `created @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : ""}`,
     role: { id: String(role._id), short_id: role.short_id, handle: role.handle },
   };
 }
@@ -409,14 +409,14 @@ async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, 
   return { status: "applied", note: done.join("; ") || "nothing to change" };
 }
 
-async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[] }): Promise<ApplyResult> {
+async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[] }, humanDecision: string): Promise<ApplyResult> {
   const handle = p.handle.replace(/^@/, "").toLowerCase();
   const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle);
   if (!role) throw new Error(`No live role @${handle} in this workspace`);
   const did: string[] = [];
   if (p.scope_add?.length || p.scope_remove?.length) {
     const toRef = (s: string) => (/^(project|plan):/.test(s) ? s : /^pl-\d+$/.test(s) ? `plan:${s}` : `project:${s}`);
-    await performSetRoleScope(ctx, userId, { role_id: String(role._id), add: (p.scope_add ?? []).map(toRef), remove: (p.scope_remove ?? []).map(toRef) });
+    await performSetRoleScope(ctx, userId, { role_id: String(role._id), add: (p.scope_add ?? []).map(toRef), remove: (p.scope_remove ?? []).map(toRef), human_decision: humanDecision });
     did.push(`scope ${[...(p.scope_add ?? []).map((s) => `+${s}`), ...(p.scope_remove ?? []).map((s) => `-${s}`)].join(" ")}`);
   }
   if (p.reports_to) {
@@ -448,6 +448,12 @@ export async function performApplyDecision(ctx: Ctx, userId: Id<"users">, ref: s
   if (decision.status !== "answered") return { status: decision.status === "pending" ? "unanswered" : "skipped", note: decision.status, decision: id } as any;
   const verdict = orgProposalVerdict(decision.answer_index);
   if (!verdict) return { status: "error", error: `${id}: answer index ${decision.answer_index} is not one of the three proposal options`, decision: id };
+  // Reshaping the org is a person's act (org-roles-standing.md T4): scope,
+  // caps and charters are human only, and the answer is the human act this
+  // apply carries. A role's delegated answer or a policy default is not one.
+  const by = (decision as any).answered_by;
+  if (by?.kind !== "user") return { status: "error", error: `${id}: an org proposal applies only when a person answered it (answered by ${by?.kind ?? "nobody"})`, decision: id };
+  const humanDecision = String(decision._id);
 
   // The boundary is the stack's; a lone decision falls back to the asking
   // session's workspace. The caller must be able to reshape the stack.
@@ -468,9 +474,9 @@ export async function performApplyDecision(ctx: Ctx, userId: Id<"users">, ref: s
   const p: OrgProposal = changed.proposal;
   try {
     let result: ApplyResult;
-    if (p.kind === "role") result = await applyRole(ctx, userId, boundary, p, changed.note, { provision: opts.provision ?? true });
+    if (p.kind === "role") result = await applyRole(ctx, userId, boundary, p, changed.note, { provision: opts.provision ?? true, human_decision: humanDecision });
     else if (p.kind === "projects") result = await applyProjects(ctx, userId, boundary, p.changes, changed.note);
-    else if (p.kind === "move") result = await applyMove(ctx, userId, boundary, p);
+    else if (p.kind === "move") result = await applyMove(ctx, userId, boundary, p, humanDecision);
     else result = await applyRetire(ctx, userId, boundary, p.handle);
     if (result.status === "applied") await stamp(result.note);
     return { ...result, decision: id };

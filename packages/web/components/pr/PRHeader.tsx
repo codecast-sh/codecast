@@ -327,6 +327,7 @@ export function PRHeader({
           </Chip>
           {merge && <Chip accent={merge.accent}>{merge.label}</Chip>}
           {decision && <Chip accent={decision.accent}>{decision.label}</Chip>}
+          <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
           {actions && <span className="ml-1 flex items-center gap-1.5">{actions}</span>}
         </div>
       </div>
@@ -342,7 +343,6 @@ export function PRHeader({
         </span>
         {pr.head_ref && pr.base_ref && <CopyRef text={`${pr.head_ref} -> ${pr.base_ref}`} />}
         <MetaChips pr={pr} />
-        <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
       </div>
 
       <div

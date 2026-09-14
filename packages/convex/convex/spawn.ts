@@ -6,11 +6,12 @@ import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { UNATTENDED_MANDATE, fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
+import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, trustOf } from "./orgEvents";
 
 async function getAuthenticatedUserId(
@@ -256,6 +257,10 @@ export const createSessionFromCli = mutation({
     spawner_session: v.optional(v.string()),
     // `cast spawn --as <name>`: a definition in the caller's workspace.
     definition: v.optional(v.string()),
+    // The line's review station (the-line.md L3): a task short id. The new
+    // session is stamped review_of_task_id, never org_role_id, and counts
+    // against the caps of the role doing the task's work.
+    review_for_task: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -289,6 +294,13 @@ export const createSessionFromCli = mutation({
     // A role's standing session, or one of its hands, starting a hand: the
     // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
     const roleGate = await gateHandStart(ctx, spawner);
+    // A review hand is gated by the role whose work it judges, not filed
+    // under it: the verdict must come from outside the role.
+    const review = args.review_for_task ? await resolveReviewTarget(ctx, userId, args.review_for_task) : null;
+    if (review?.role) await gateRoleCaps(review.role);
+    // A hand's first turn opens with the unattended mandate and the hand
+    // briefing (the-line.md L2): who it works for and how it ends its turn.
+    const prompt = roleGate ? handBriefing(roleGate, asDef.prompt, spawner?.active_task_id ? await taskShortIdOf(ctx, spawner.active_task_id) : undefined) : asDef.prompt;
 
     const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
       agentType: asDef.agentType ?? args.agent_type,
@@ -307,9 +319,13 @@ export const createSessionFromCli = mutation({
       targetDeviceId,
       subagentFields,
       spawnerConversationId: spawner?._id,
-      prompt: asDef.prompt,
+      prompt,
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
+    if (review) {
+      await ctx.db.patch(conversationId, { review_of_task_id: review.task._id });
+      if (review.role) await countHand(ctx, review.role);
+    }
 
     return {
       conversation_id: conversationId,
@@ -331,6 +347,25 @@ export const createSessionFromCli = mutation({
 export async function gateHandStart(ctx: { db: any }, spawner: any | null): Promise<any | null> {
   const role = spawner ? await roleOfConversation(ctx, spawner) : null;
   if (!role) return null;
+  await gateRoleCaps(role);
+  return role;
+}
+
+// The task a review hand judges and the role doing its work: the role of the
+// first session still bound to the task (active_task_id) that carries one.
+async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortId: string): Promise<{ task: any; role: any | null }> {
+  const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
+  if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error(`Task not found: ${shortId}`);
+  for (const id of task.conversation_ids ?? []) {
+    const conv = await ctx.db.get(id);
+    if (!conv || String(conv.active_task_id) !== String(task._id)) continue;
+    const role = await roleOfConversation(ctx, conv);
+    if (role) return { task, role };
+  }
+  return { task, role: null };
+}
+
+export async function gateRoleCaps(role: any): Promise<void> {
   if (role.status === "paused") throw new Error(`${role.name} (@${role.handle}) is paused: no new hands until a person resumes it`);
   if (role.status === "retired") throw new Error(`${role.name} (@${role.handle}) is retired`);
   const trust = trustOf(role);
@@ -346,12 +381,36 @@ export async function gateHandStart(ctx: { db: any }, spawner: any | null): Prom
   if (counters.tokens >= caps.tokens_per_day) {
     throw new Error(`${role.name} (@${role.handle}) reached its cap of ${caps.tokens_per_day} tokens today; no new hands until it resets`);
   }
-  return role;
 }
 
-export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">): Promise<void> {
+async function countHand(ctx: { db: any }, role: any): Promise<void> {
   const now = Date.now();
   const counters = countersFor(role, now);
   await ctx.db.patch(role._id, { counters: { ...counters, hands: counters.hands + 1 }, updated_at: now });
+}
+
+export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">): Promise<void> {
+  await countHand(ctx, role);
   await ctx.db.patch(conversationId, { org_role_id: role._id });
+}
+
+async function taskShortIdOf(ctx: { db: any }, taskId: any): Promise<string | undefined> {
+  const task = await ctx.db.get(taskId);
+  return task?.short_id ?? undefined;
+}
+
+// The briefing a hand starts with (org-roles-standing.md T4, the-line.md L2):
+// the unattended mandate, who the hand works for, and the structured ending.
+// Written where the hand pointer is written, so no hand can start without it.
+export function handBriefing(role: { name: string; handle: string; short_id?: string }, prompt: string | undefined, taskShortId?: string): string {
+  const ct = taskShortId ?? "<ct-id>";
+  const header = [
+    `## You are a hand of ${role.name} (@${role.handle})`,
+    `You work for that role, not for a person. It reads your handoff, not your transcript.`,
+    `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
+    `- A question you cannot answer yourself goes to your role, attached to the task: \`cast decide --task ${ct} "<question>" -o ... -o ...\`, then end your turn.`,
+    `- If you review another hand's work, end with \`cast task verdict ${ct} approve|changes|reject --note -\`.`,
+    `- End EVERY turn with a handoff, never a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
+  ].join("\n");
+  return `${UNATTENDED_MANDATE}\n\n${header}\n\n${(prompt ?? "").trim()}`.trim();
 }

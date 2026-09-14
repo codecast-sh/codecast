@@ -45,18 +45,20 @@ export const THREAD_STATE_PIN_CLASS: Record<ThreadStateView["freshness"], string
 };
 
 /** Everything a surface needs to mark a status: the chip on the panel, the dot
- * on the card, the tint on the row. One table so the three never disagree on
- * what color "blocked" is. Amber deliberately matches the needs-input bucket's
+ * on the card, the tint on the row, and `color`, the same hue as a --sol token
+ * for surfaces that paint with inline styles (the org cards). One table so
+ * none of them can disagree on what color "blocked" is. Amber deliberately matches the needs-input bucket's
  * accent — both mean "ball in the human's court". */
 export const THREAD_STATE_STATUS_META: Record<
   ThreadStateStatus,
-  { label: string; dot: string; chip: string; bar: string; row: string }
+  { label: string; color: string; dot: string; chip: string; bar: string; row: string }
 > = {
   // Working green, done teal — the same colors as their inbox section headers,
   // so a chip and the bucket it files under can't disagree. Green also matches
   // the liveness pulse ("running right now").
   working: {
     label: THREAD_STATE_STATUS_LABEL.working,
+    color: "var(--sol-green)",
     dot: "text-sol-green/80",
     chip: "bg-sol-green/10 text-sol-green/90 border-sol-green/30",
     bar: "border-l-sol-green/70",
@@ -64,6 +66,7 @@ export const THREAD_STATE_STATUS_META: Record<
   },
   blocked: {
     label: THREAD_STATE_STATUS_LABEL.blocked,
+    color: "var(--sol-yellow)",
     dot: "text-sol-yellow/90",
     chip: "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30",
     bar: "border-l-sol-yellow/80",
@@ -71,6 +74,7 @@ export const THREAD_STATE_STATUS_META: Record<
   },
   done: {
     label: THREAD_STATE_STATUS_LABEL.done,
+    color: "var(--sol-cyan)",
     dot: "text-sol-cyan/90",
     chip: "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30",
     bar: "border-l-sol-cyan/70",
@@ -80,6 +84,7 @@ export const THREAD_STATE_STATUS_META: Record<
   // the human until it lands.
   dormant: {
     label: THREAD_STATE_STATUS_LABEL.dormant,
+    color: "var(--sol-blue)",
     dot: "text-sol-blue/80",
     chip: "bg-sol-blue/10 text-sol-blue/90 border-sol-blue/30",
     bar: "border-l-sol-blue/60",

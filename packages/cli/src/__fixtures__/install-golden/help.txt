@@ -22,6 +22,7 @@ Snippets:
   decide        Hand your human one well-formed decision (cast decide)
   limits        Keep working through usage limits (codecast recovers parked sessions)
   orchestration Multi-agent plan execution (/orchestrate)
+  skills        Slash commands over the team's shared state (/cast-pickup, /cast-why, /cast-ship, …)
   stable        Inject recent session history into every new conversation
 
 Examples:

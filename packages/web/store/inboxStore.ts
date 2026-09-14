@@ -236,6 +236,7 @@ export type {
   ChatReactionRow,
   ChatRailRow,
   ChatRailChannel,
+  ChatRailScope,
   ChatNotifyLevel,
   ChatSendOptions,
 } from "./chatSlice";
@@ -1499,6 +1500,14 @@ export type ClientUI = {
   // Files the reader has marked viewed on a pull request, by pull request id.
   // A reading mark, so it follows the person to every device.
   pr_viewed_files?: Record<string, string[]>;
+  // Where a new line note goes on a pull request: held for the review, or out
+  // at once. A reading habit, so it follows the person.
+  pr_note_mode?: "review" | "now";
+  pr_merge_method?: "squash" | "merge" | "rebase";
+  pr_delete_branch?: boolean;
+  // When the person last had a pull request open, by pull request id: what
+  // the timeline draws its "since you last looked" line from.
+  pr_last_seen?: Record<string, number>;
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
@@ -8689,10 +8698,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   convCommand: asyncAction(function (this: Draft, convId: string, command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
-    if (command === "sendEscapeToSession" && this.sessions[convId]) {
-      this.sessions[convId].agent_status = "idle";
-      this.sessions[convId].is_idle = true;
-      appendOptimisticMessage(this, convId, this.sessions[convId].agent_type === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+    if (command === "sendEscapeToSession") {
+      // The interruption line paints off whichever row the view holds. The
+      // sessions row is the inbox's windowed copy and is absent for a subagent
+      // or stashed conversation the user is looking at; the conversations row
+      // is seeded by the view itself. A press with no line was the bug
+      // (2026-09-14), so the line never waits on the sessions row.
+      const session = this.sessions[convId];
+      const agentType = session?.agent_type ?? this.conversations[convId]?.agent_type;
+      if (session) {
+        session.agent_status = "idle";
+        session.is_idle = true;
+      }
+      if (session || this.conversations[convId]) {
+        appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+      }
     }
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),

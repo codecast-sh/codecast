@@ -1,6 +1,7 @@
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate } from "./notificationGate";
 import { PANE_EMBED } from "./browserPane";
+import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandoff";
 
 declare global {
   interface Window {
@@ -1077,6 +1078,16 @@ export function conversationIdFromPath(path: string): string | null {
   return path.match(/^\/conversation\/([^/?#]+)/)?.[1] ?? null;
 }
 
+// The token a share link carries (`/conversation/<id>?share=<token>`). Access
+// through a link requires PRESENTING the token on every read (issue #27), and
+// only the conversation route knows how to present and redeem it, so a path
+// that carries one must reach that route rather than the in-place inbox
+// shortcut a plain session link takes.
+export function shareTokenInPath(path: string): string | null {
+  const q = path.indexOf("?");
+  return q === -1 ? null : new URLSearchParams(path.slice(q + 1)).get("share");
+}
+
 // --- Desktop user-activity tracker -----------------------------------------
 // An auto handoff may move the desktop's view only when the user is NOT in the
 // middle of using it: a background tab (often automation — agents drive Chrome
@@ -1153,6 +1164,34 @@ const AUTO_DEEPLINK_QUIET_MS = 30_000;
 // that moving the view cannot interrupt anything.
 export function shouldApplyAutoDeepLink(now: number = Date.now(), lastInputAt: number = lastDesktopInputAt): boolean {
   return now - lastInputAt > AUTO_DEEPLINK_QUIET_MS;
+}
+
+// What to do with a codecast:// link the shell delivered. Pure so the whole
+// policy is unit-testable; the provider only wires the three outcomes.
+//  - navigate: move the view. A link the user clicked always does; an auto
+//    handoff (the browser page redirecting itself) does only once the desktop
+//    has been quiet (see shouldApplyAutoDeepLink).
+//  - offer: the browser handed off while the user was working here. Raise the
+//    handoff card so the switch is theirs to make. This is the ONLY notice the
+//    link gets, so the caller must show it through a path that cannot fail
+//    quietly (a static import, not a lazy chunk).
+//  - ignore: the link names nothing navigable, or the user is already looking
+//    at the target.
+export type DeepLinkArrival = { kind: "navigate" | "offer"; path: string } | { kind: "ignore" };
+
+export function planDeepLinkArrival(
+  url: string,
+  currentSessionId: string | null,
+  now: number = Date.now(),
+  lastInputAt: number = lastDesktopInputAt,
+): DeepLinkArrival {
+  const raw = parseDesktopDeepLinkPath(url);
+  if (!raw) return { kind: "ignore" };
+  const { path, auto } = extractDeepLinkIntent(raw);
+  if (!auto || shouldApplyAutoDeepLink(now, lastInputAt)) return { kind: "navigate", path };
+  const convId = conversationIdFromPath(path);
+  if (convId && currentSessionId === convId) return { kind: "ignore" };
+  return { kind: "offer", path };
 }
 
 export function hasBrowserNotificationPermission(): boolean {

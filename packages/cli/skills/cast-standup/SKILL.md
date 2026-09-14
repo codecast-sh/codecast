@@ -1,5 +1,5 @@
 ---
-name: codecast-standup
+name: cast-standup
 description: Build a standup or digest for a time window from the team's agent sessions, commits, tasks, pull requests, calls and chat. Use for a daily standup, a weekly retro, or when asked what happened since yesterday.
 argument-hint: "[1d|3d|1w] [--mine | -m <member>] [post]"
 ---

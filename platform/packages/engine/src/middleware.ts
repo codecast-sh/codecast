@@ -615,6 +615,13 @@ export function mutativeMiddleware(
     // retirement waits for the enqueue to settle, then deletes the row. While
     // an id is in this set, drainOutbox must not re-dispatch it.
     const retiredOutboxIds = new Set<string>();
+    // Outbox ids whose DIRECT dispatch is still on the wire. The row is parked
+    // before the send, so a drain that runs mid-flight (reconnect, foreground,
+    // or a connection-state tick from the send itself) would deliver the same
+    // command a second time before its receipt has settled. The server only
+    // replays a settled receipt; a running one runs again, which for a chat
+    // message means two agent turns. Skip these until the send resolves.
+    const inFlightOutboxIds = new Set<string>();
     // coalesceKey → newest enqueued row for that key (by entry ts — enqueue
     // COMPLETIONS can invert order under slow storage). A newer row retires
     // the older one; an older row that completes late retires itself.
@@ -880,6 +887,7 @@ export function mutativeMiddleware(
             void retireOutboxEntry(entry.id, null);
             return false;
           }
+          if (inFlightOutboxIds.has(entry.id)) return false;
           if (entry.coalesceKey && newestByKey.get(entry.coalesceKey)?.id !== entry.id) {
             void retireOutboxEntry(entry.id, null);
             return false;
@@ -1161,7 +1169,8 @@ export function mutativeMiddleware(
             // for the enqueue before deleting the row; a crash in that window
             // merely replays a command the server dedups (client id for
             // content writes, commandId for receipt actions, LWW for patches).
-            const dispatched = dispatchNow();
+            inFlightOutboxIds.add(outboxId);
+            const dispatched = dispatchNow().finally(() => inFlightOutboxIds.delete(outboxId));
             const enqueueDurable = () =>
               enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
             if (usesReceiptEnvelope && receiptWaiter) {

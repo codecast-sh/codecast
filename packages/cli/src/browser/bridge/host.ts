@@ -59,7 +59,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, spawnSync } from "../../proc.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
-import type { CdpEndpoint } from "../cdp.js";
+import { withSession, type CdpEndpoint } from "../cdp.js";
 import {
   BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
@@ -168,18 +168,17 @@ export async function grantTab(
   session: string,
   targetId: string,
   opts: { own?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   const url = new URL(`http://127.0.0.1:${state.port}/grant`);
   url.searchParams.set("token", state.token);
   url.searchParams.set("session", session);
   url.searchParams.set("target", targetId);
-  // `own`: the tab is this session's pinned tab, from the binding file the
-  // engine keeps (pinnedTab.ts). The host takes that as proof the tab is an
-  // agent's even when it has no memory of it — a restarted host, or an
-  // extension that lost its ownership marks — where a share would be refused.
   if (opts.own) url.searchParams.set("own", "1");
-  const res = await fetch(url, { method: "POST", signal: AbortSignal.timeout(5000) });
-  if (res.ok) return;
+  // Every real-mode verb passes through here; a host starved on a loaded
+  // machine answers late, not never, and 5 s read that as "timed out".
+  const res = await fetch(url, { method: "POST", signal: AbortSignal.timeout(20_000) });
+  if (res.ok) return true;
+  if (opts.own && res.status === 404) return false;
   let detail = "";
   try {
     detail = String(((await res.json()) as { error?: string }).error ?? "");
@@ -291,9 +290,12 @@ const respawnDetached: BridgeHostStarter = () => {
  * separate process. An impostor on the port is named rather than raced: a
  * host we start could not bind anyway.
  */
+/** How long a freshly started host gets to bind and answer: a bun parsing the whole CLI from source took 65 s at load 400. */
+export const HOST_START_WAIT_MS = 90_000;
+
 export async function ensureBridgeHost(
   start: BridgeHostStarter = respawnDetached,
-  deps: { staleHostPids?: (port: number) => number[]; kill?: (pid: number) => void } = {},
+  deps: { staleHostPids?: (port: number) => number[]; kill?: (pid: number) => void; note?: (line: string) => void } = {},
 ): Promise<ProvenBridge & { started: boolean }> {
   const state = ensureBridgeConfig();
   // Patient on purpose: a host whose loop is starved on a loaded machine
@@ -326,19 +328,27 @@ export async function ensureBridgeHost(
   await start(state);
 
   // Generous on purpose: run from source, the detached host is a fresh bun
-  // parsing the whole CLI, which on a loaded machine takes longer than the
-  // host itself needs to bind; and a host that has bound but answers late
-  // ("busy") is up, not absent. Each probe gets a few seconds, so a late
-  // answer still counts within the budget.
-  const deadline = Date.now() + 30_000;
+  // parsing the whole CLI, which on a loaded machine takes far longer than
+  // the host itself needs to bind; and a host that has bound but answers
+  // late ("busy") is up, not absent. Each probe gets a few seconds, so a
+  // late answer still counts within the budget. Waiting beats failing: a
+  // verb that gives up here hands the human a problem the next second
+  // would have solved.
+  const startedAt = Date.now();
+  const deadline = startedAt + HOST_START_WAIT_MS;
+  let noted = false;
   while (Date.now() < deadline) {
     const p = await probeHost(state, 3_000);
     if (p === "alive") return { ...(readBridgeState() ?? state), proven: true, started: true };
     if (p === "impostor") return { ...(await proveBridgeHost(state)), started: false };
     if (p === "down") await sleep(150);
+    if (!noted && deps.note && Date.now() - startedAt > 5_000) {
+      noted = true;
+      deps.note(`waiting for the bridge host to start (a fresh cast process, slow on a loaded machine; up to ${HOST_START_WAIT_MS / 1000}s)…`);
+    }
   }
   throw new Error(
-    `the bridge host did not come up on 127.0.0.1:${state.port} within 30s — ` +
+    `the bridge host did not come up on 127.0.0.1:${state.port} within ${HOST_START_WAIT_MS / 1000}s — ` +
       `its log is ${bridgeHostLogPath()}; is another process on that port? Set CAST_BRIDGE_PORT to move it.`,
   );
 }
@@ -580,15 +590,6 @@ export function startBridgeHost(opts: {
   // the extension stamps ownership a beat after Chrome fires the created event,
   // so the event alone can arrive looking like the human's.
   const castTabs = new Set<number>();
-  // Which agent tabs each session may see: the tabs its sockets created or
-  // attached, plus what /grant handed it. Every engine attaches to every tab
-  // it discovers before it does anything (see discoverableTabs), so a session
-  // that could discover another session's tab would put its debugger on it
-  // for every command, and one frozen tab of theirs would stall every command
-  // of its own. Sessions are isolated at the face; sharing is an explicit
-  // grant. Host memory only: a session re-grants its pinned tab on every
-  // command (pinnedTab.ts), so a restarted host learns the partition again
-  // as sessions run.
   // Persisted through `onSessionTabs`, restored from `opts.sessionTabs`: an
   // engine daemon outlives the host and reconnects on its own, and one that
   // discovers no tab of its own pins a fresh one — so the partition must be
@@ -619,7 +620,7 @@ export function startBridgeHost(opts: {
   };
   const sessionsOf = (tabId: number): string[] => [...sessionTabs].filter(([, tabs]) => tabs.has(tabId)).map(([k]) => k);
   const isCast = (t: BridgeTab) => castTabs.has(t.tabId) || (t.owned ?? !!t.group) || sessionsOf(t.tabId).length > 0;
-  const canSee = (client: Client, tabId: number): boolean => !client.session || grantedTo(client.session).has(tabId);
+  const canSee = (client: Pick<Client, "session">, tabId: number): boolean => !client.session || grantedTo(client.session).has(tabId);
   const remember = (session: string, t: { tabId: number; url: string }): void => {
     const tabs = grantedTo(session);
     if (tabs.get(t.tabId) === t.url) return;
@@ -811,6 +812,14 @@ export function startBridgeHost(opts: {
 
   // --------------------------------------------------------------- clients
 
+  const grantedTarget = async (client: Client, targetId: unknown): Promise<BridgeTab> => {
+    const tabId = tabIdOfTarget(String(targetId ?? ""));
+    const tab = (await listTabs()).find(t => t.tabId === tabId);
+    if (!tab) throw new Error("No target with given id found");
+    if (!canSee(client, tab.tabId)) throw new Error(`tab ${targetIdOfTab(tab.tabId)} is not granted to this session`);
+    return tab;
+  };
+
   /** Browser-scope CDP, emulated. Returns the `result` or throws. */
   const browserMethod = async (client: Client, method: string, params: any): Promise<unknown> => {
     switch (method) {
@@ -837,21 +846,15 @@ export function startBridgeHost(opts: {
         return {};
       }
       case "Target.getTargetInfo": {
-        const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
-        const t = (await listTabs()).find((x) => x.tabId === tabId);
-        if (!t) throw new Error("No target with given id found");
+        const t = await grantedTarget(client, params?.targetId);
         return { targetInfo: targetInfo(t) };
       }
       case "Target.attachToTarget": {
-        const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
-        if (tabId === null) throw new Error("No target with given id found");
-        await extCall("attach", { tabId }, 20_000);
+        const t = await grantedTarget(client, params?.targetId);
+        const tabId = t.tabId;
+        await extCall("attach", { tabId, owned: !!t && isCast(t) }, 40_000);
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
-        // Attaching by id is deliberate (a pinned tab restored from its
-        // binding file, or an explicit --tab), so the session may see it.
-        const t = (await listTabs()).find((x) => x.tabId === tabId);
-        if (client.session) remember(client.session, { tabId, url: t?.url ?? "" });
         // Attaching to a grouped tab adopts its group. The extension reports
         // a group only for groups it created itself (background.js
         // ownedGroups), so a human's tab, grouped by the human or not, never
@@ -895,15 +898,13 @@ export function startBridgeHost(opts: {
         return { targetId: targetIdOfTab(tabId) };
       }
       case "Target.closeTarget": {
-        const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
-        if (tabId === null) throw new Error("No target with given id found");
+        const { tabId } = await grantedTarget(client, params?.targetId);
         dropTab(tabId, "target closed");
         await extCall("tabs.close", { tabId }, 10_000);
         return { success: true };
       }
       case "Target.activateTarget": {
-        const tabId = tabIdOfTarget(String(params?.targetId ?? ""));
-        if (tabId === null) throw new Error("No target with given id found");
+        const { tabId } = await grantedTarget(client, params?.targetId);
         await extCall("tabs.activate", { tabId }, 10_000);
         return {};
       }
@@ -1002,7 +1003,7 @@ export function startBridgeHost(opts: {
             Browser: `Chrome (cast bridge, extension ${extMeta.version ?? "?"})`,
             "Protocol-Version": "1.3",
             "User-Agent": extMeta.userAgent ?? "",
-            webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/${token}`,
+            webSocketDebuggerUrl: withSession(`ws://127.0.0.1:${port}/devtools/browser/${token}`, { port, session: url.searchParams.get("session") || undefined }),
           });
           return;
         case "/json":
@@ -1010,7 +1011,7 @@ export function startBridgeHost(opts: {
         case "/json/list/":
           json(
             200,
-            (await listTabs()).map((t) => ({
+            (await listTabs()).filter(t => canSee({ session: url.searchParams.get("session") || null }, t.tabId)).map((t) => ({
               id: targetIdOfTab(t.tabId),
               type: "page",
               title: t.title,
@@ -1049,7 +1050,11 @@ export function startBridgeHost(opts: {
             json(404, { error: `no tab ${targetIdOfTab(tabId)} in the real Chrome` });
             return;
           }
-          if (!isCast(t) && url.searchParams.get("own") !== "1") {
+          if (url.searchParams.get("own") === "1" && !grantedTo(session).has(tabId)) {
+            json(403, { error: `saved tab ${targetIdOfTab(tabId)} ownership could not be verified for this session; no tab was adopted` });
+            return;
+          }
+          if (!isCast(t)) {
             json(403, { error: `tab ${targetIdOfTab(tabId)} is the human's, not an agent's — only agent tabs can be shared` });
             return;
           }

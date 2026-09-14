@@ -239,7 +239,7 @@ const portOf = (ep: CdpEndpoint): number => (typeof ep === "number" ? ep : ep.po
 export function cdpHttpUrl(ep: CdpEndpoint, path: string): string {
   const url = new URL(`http://127.0.0.1:${portOf(ep)}${path}`);
   if (typeof ep !== "number" && ep.token) url.searchParams.set("token", ep.token);
-  return url.toString();
+  return withSession(url.toString(), ep);
 }
 
 /**
