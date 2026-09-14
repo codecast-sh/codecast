@@ -30,7 +30,7 @@ import { clipFade } from "./CollapsibleBody";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
-import { AuthorAvatar, SessionSummaryBlock, DiffStat } from "./entityDisplay";
+import { AuthorAvatar, SessionSummaryBlock, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
 import {
   PRIORITY_CONFIG,
   STATUS_COLOR,
@@ -74,10 +74,6 @@ function commitBody(commit: any): string {
   return String(commit?.message ?? "").split("\n").slice(1).join("\n").trim();
 }
 
-function MetaDot() {
-  return <span className="text-[color-mix(in_srgb,var(--sol-text-dim)_60%,transparent)]">·</span>;
-}
-
 /**
  * The one-line, type-specific state row under the title. Each item is bundled
  * with its leading separator dot in one non-breaking span, so the line wraps
@@ -86,7 +82,7 @@ function MetaDot() {
  * author) truncate.
  */
 function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
-  const parts: { key: string; node: React.ReactNode; shrink?: boolean }[] = [];
+  const parts: DottedPart[] = [];
   const push = (node: React.ReactNode, key: string, shrink = false) => {
     parts.push({ key, node, shrink });
   };
@@ -170,17 +166,7 @@ function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
     push(<span className="font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>, "type");
   }
 
-  if (parts.length === 0) return null;
-  return (
-    <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-sol-text-muted">
-      {parts.map((p, i) => (
-        <span key={p.key} className={`inline-flex items-center gap-1.5 ${p.shrink ? "min-w-0" : "flex-shrink-0"}`}>
-          {i > 0 && <MetaDot />}
-          {p.node}
-        </span>
-      ))}
-    </div>
-  );
+  return <DottedRow parts={parts} className="mt-0.5" />;
 }
 
 function planProgress(plan: any): { done: number; total: number; pct: number } | null {
@@ -360,16 +346,6 @@ export function CardMarkdown({ content }: { content: string }) {
   );
 }
 
-function PersonChip({ label, person }: { label: string; person: { name?: string; image?: string | null } }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="text-[10px] text-sol-text-dim">{label}</span>
-      <AuthorAvatar name={person.name} avatar={person.image} size={12} />
-      <span className="max-w-[140px] truncate text-[10px] text-sol-text-muted">{person.name}</span>
-    </span>
-  );
-}
-
 function CommentRows({ comments }: { comments: any[] }) {
   const ordered = [...comments].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
   if (ordered.length === 0) return null;
@@ -423,8 +399,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
         )}
         {(creator || assignee || (entity.labels?.length ?? 0) > 0) && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-            {creator && <PersonChip label="Creator" person={creator} />}
-            {assignee && <PersonChip label="Assignee" person={assignee} />}
+            <TaskPeople task={entity} />
             {(entity.labels ?? []).map((l: string) => (
               <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-[10px] leading-[1.6] text-sol-magenta">
                 {l}

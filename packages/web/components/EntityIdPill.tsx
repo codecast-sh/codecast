@@ -26,7 +26,7 @@ import {
   type EntityType,
 } from "../lib/entityLinks";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
-import { AuthorAvatar, DiffStat } from "./entityDisplay";
+import { AuthorAvatar, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
 import {
   PRIORITY_CONFIG,
   STATUS_COLOR,
@@ -72,33 +72,6 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
 // implementation, so an object reads the same as a pill, a hover card, and a
 // shared-object card.
 
-// One labeled line of a hover card's metadata grid: a fixed-width label, then
-// the value. Every task fact (people, project, plan, dates, labels, source)
-// reads the same way, so the eye scans one column of labels.
-function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5 min-w-0">
-      <span className="text-[10px] text-gray-500 w-14 flex-shrink-0">{label}</span>
-      <span className="flex items-center gap-1.5 min-w-0 text-[10px] text-gray-400">{children}</span>
-    </div>
-  );
-}
-
-function PersonRow({ label, person }: { label: string; person: { name?: string; image?: string | null } | null }) {
-  return (
-    <MetaRow label={label}>
-      {person ? (
-        <>
-          <AuthorAvatar name={person.name} avatar={person.image} size={12} />
-          <span className="truncate">{person.name}</span>
-        </>
-      ) : (
-        <span className="text-gray-500">Unassigned</span>
-      )}
-    </MetaRow>
-  );
-}
-
 function TaskHoverContent({ task }: { task: any }) {
   const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
   const priority = PRIORITY_CONFIG[task.priority];
@@ -109,6 +82,39 @@ function TaskHoverContent({ task }: { task: any }) {
   const labels: string[] = task.labels ?? [];
   const commentCount = task.comments?.length ?? 0;
   const sessionCount = task.conversation_ids?.length ?? 0;
+
+  // Where the task lives and when, one wrapping line: no label column, each
+  // fact carries its own glyph.
+  const facts: DottedPart[] = [];
+  if (project) {
+    facts.push({
+      key: "project",
+      shrink: true,
+      node: (
+        <span className="inline-flex min-w-0 items-center gap-1">
+          <Folder className="w-2.5 h-2.5 flex-shrink-0" />
+          <span className="truncate">{project.title}</span>
+        </span>
+      ),
+    });
+  }
+  if (task.plan) {
+    facts.push({
+      key: "plan",
+      shrink: true,
+      node: (
+        <span className="inline-flex min-w-0 items-center gap-1 text-sol-cyan">
+          <Target className="w-2.5 h-2.5 flex-shrink-0" />
+          <span className="truncate">{task.plan.title}</span>
+        </span>
+      ),
+    });
+  }
+  if (task.created_at) facts.push({ key: "dates", node: <DocDates doc={task} variant="full" className="gap-2" /> });
+  if (task.closed_at) {
+    facts.push({ key: "closed", node: <span>Closed <TimeAgo ts={task.closed_at} /></span> });
+  }
+  if (source) facts.push({ key: "source", node: <span className="capitalize">{source.replace(/_/g, " ")}</span> });
 
   return (
     <div className="space-y-2">
@@ -146,45 +152,16 @@ function TaskHoverContent({ task }: { task: any }) {
       )}
 
       <div className="space-y-1 pl-[22px]">
-        <PersonRow label="Creator" person={creator} />
-        <PersonRow label="Assignee" person={assignee} />
-        {project && (
-          <MetaRow label="Project">
-            <Folder className="w-2.5 h-2.5 flex-shrink-0" />
-            <span className="truncate">{project.title}</span>
-          </MetaRow>
-        )}
-        {task.plan && (
-          <MetaRow label="Plan">
-            <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
-            <span className="text-sol-cyan truncate">{task.plan.title}</span>
-          </MetaRow>
-        )}
-        {task.created_at && (
-          <MetaRow label="Dates">
-            <DocDates doc={task} variant="full" className="gap-2" />
-          </MetaRow>
-        )}
-        {task.closed_at && (
-          <MetaRow label="Closed">
-            <TimeAgo ts={task.closed_at} />
-          </MetaRow>
-        )}
+        <TaskPeople task={task} />
+        <DottedRow parts={facts} />
         {labels.length > 0 && (
-          <MetaRow label="Labels">
-            <span className="flex flex-wrap gap-1">
-              {labels.map((l) => (
-                <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-[10px] leading-[1.6] text-sol-magenta">
-                  {l}
-                </span>
-              ))}
-            </span>
-          </MetaRow>
-        )}
-        {source && (
-          <MetaRow label="Source">
-            <span className="capitalize">{source.replace(/_/g, " ")}</span>
-          </MetaRow>
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            {labels.map((l) => (
+              <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-[10px] leading-[1.6] text-sol-magenta">
+                {l}
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
@@ -960,10 +937,11 @@ export function EntityIdPill({
         </Link>
       </PopoverAnchor>
       <PopoverContent
-        className={`${type === "doc" ? "w-80" : isPr || isCommit ? "w-72" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        className={`${type === "doc" ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
+        collisionPadding={8}
         onMouseEnter={openSoon}
         onMouseLeave={closeSoon}
         onOpenAutoFocus={(e) => e.preventDefault()}

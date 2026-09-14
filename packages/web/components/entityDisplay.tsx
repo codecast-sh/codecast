@@ -1,3 +1,4 @@
+import type React from "react";
 import { AvatarImg } from "../lib/avatarCache";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AlertTriangle, ArrowUp, Minus, ArrowDown } from "lucide-react";
@@ -12,6 +13,7 @@ import {
 } from "../lib/entityLinks";
 import { repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { findEntityInStore, resolveAssigneeInfo } from "../lib/liveEntities";
+import { taskPeople } from "../lib/entityDisplay";
 import { useInboxStore } from "../store/inboxStore";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
@@ -44,6 +46,65 @@ export function DiffStat({
       {files != null && <span className="text-sol-text-dim">{files} file{files === 1 ? "" : "s"}</span>}
       {additions != null && additions > 0 && <span className="text-sol-green">+{additions}</span>}
       {deletions != null && deletions > 0 && <span className="text-sol-red">-{deletions}</span>}
+    </span>
+  );
+}
+
+/** The separator between facts on one line. */
+export function MetaDot() {
+  return <span className="text-[color-mix(in_srgb,var(--sol-text-dim)_60%,transparent)]">·</span>;
+}
+
+export type DottedPart = { key: string; node: React.ReactNode; shrink?: boolean };
+
+/**
+ * Facts on one wrapping line, dot-separated. Each item is bundled with its
+ * leading dot in one non-breaking span, so the line wraps BETWEEN items and a
+ * dot can never dangle at a line end; a `shrink` item truncates, every other
+ * item keeps its width.
+ */
+export function DottedRow({ parts, className = "" }: { parts: DottedPart[]; className?: string }) {
+  if (parts.length === 0) return null;
+  return (
+    <div className={`flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-sol-text-muted ${className}`}>
+      {parts.map((p, i) => (
+        <span key={p.key} className={`inline-flex items-center gap-1.5 ${p.shrink ? "min-w-0" : "flex-shrink-0"}`}>
+          {i > 0 && <MetaDot />}
+          {p.node}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function Person({ person, size }: { person: { name?: string; image?: string | null }; size: number }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <AuthorAvatar name={person.name} avatar={person.image} size={size} />
+      <span className="truncate">{person.name}</span>
+    </span>
+  );
+}
+
+/**
+ * Who holds a task and who filed it, on one line: the assignee first, then
+ * "filed by" the creator. One person who filed a task for themselves is named
+ * once (the tooltip says both roles), never twice. Nothing when nobody is known.
+ */
+export function TaskPeople({ task, size = 12, className = "" }: { task: any; size?: number; className?: string }) {
+  const { creator, assignee, samePerson } = taskPeople(task);
+  if (!creator && !assignee) return null;
+  const title = samePerson
+    ? `Filed by and assigned to ${assignee?.name}`
+    : [assignee ? `Assigned to ${assignee.name}` : "Unassigned", creator ? `filed by ${creator.name}` : null].filter(Boolean).join(", ");
+  return (
+    <span className={`inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-sol-text-muted ${className}`} title={title}>
+      {assignee ? <Person person={assignee} size={size} /> : <span className="text-sol-text-dim">Unassigned</span>}
+      {creator && !samePerson && (
+        <span className="inline-flex min-w-0 items-center gap-1 text-sol-text-dim">
+          filed by <Person person={creator} size={size} />
+        </span>
+      )}
     </span>
   );
 }
