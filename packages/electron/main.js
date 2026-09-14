@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
+const { app, BrowserWindow, WebContentsView, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -71,6 +71,7 @@ const {
 } = require("./meetingDetector");
 const { createOsPermissions } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
+const { createBrowserPanes } = require("./browserPanes");
 
 let notificationRefs = [];
 
@@ -2996,6 +2997,12 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
     return trustedPermissions().has(permission) && (!webContents || isTrustedOriginOrExtended(webContents));
   });
+  // Browser panes: the native half of the web app's /browser route
+  // (browserPanes.js). It manages its own views, its own session and its own
+  // lifecycle — the shell hands it the pieces of Electron it needs and the
+  // origin policy above, so only a first-party page can ask for a view.
+  createBrowserPanes({ WebContentsView, session, ipcMain, BrowserWindow, isTrusted: isTrustedOrigin }).install();
+
   // The web layer extends host policy: {permissions?: string[], hosts?: string[]}.
   // Reads back the effective policy so the web can gate on what the shell
   // will actually grant.

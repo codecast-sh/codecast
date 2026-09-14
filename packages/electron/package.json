@@ -38,6 +38,7 @@
       "notificationRouter.js",
       "osPermissions.js",
       "computerPermissions.js",
+      "browserPanes.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",
