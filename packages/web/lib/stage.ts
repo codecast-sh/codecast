@@ -12,6 +12,7 @@
 import { useInboxStore, type AppTab } from "../store/inboxStore";
 import {
   countLeaves,
+  MAX_STAGE_LEAVES,
   leavesOf,
   type DropZone,
   type SplitEdge,
@@ -335,10 +336,16 @@ export function openBeside(path: string): boolean {
  * second pane, false when the stage could not take one (a narrow window, the
  * four-pane cap) and the tab navigated to it instead, which is the honest
  * fallback: the page still opens, just not beside.
+ *
+ * `beside: "only"` removes that fallback: no pane, no navigation, false. It
+ * exists for gestures NOBODY CLICKED — an agent's pane offer opening itself
+ * under a preference. Navigating there would move what the reader is looking
+ * at without them asking, which is the move store/viewNav.ts refuses for
+ * every other machine-initiated change of view.
  */
 export function openBrowserPane(
   source: BrowserSource,
-  opts?: { beside?: boolean; native?: boolean },
+  opts?: { beside?: boolean | "only"; native?: boolean },
 ): boolean {
   const path = browserRoutePath(source, { native: opts?.native });
   // Every gesture funnels through here, so this is the one place that knows
@@ -349,6 +356,7 @@ export function openBrowserPane(
     return false;
   }
   if (openBeside(path)) return true;
+  if (opts?.beside === "only") return false;
   tabNavigate(path, "push");
   return false;
 }
@@ -358,6 +366,22 @@ export function openBrowserPane(
  *  cap and the route's eligibility are openBeside's own answer. */
 export function canOpenBeside(): boolean {
   return typeof window !== "undefined" && window.innerWidth >= 900 && !isDetachedTabWindow();
+}
+
+/**
+ * True when the stage would really take another pane right now: wide enough,
+ * a real tab shell, AND under the four-pane cap.
+ *
+ * canOpenBeside answers the first two only, which is enough for a gesture that
+ * can fall back to navigating. It is NOT enough for one that must stay silent
+ * when there is no room: a full stage passes the width test, so a caller
+ * reading width alone believes it has a pane coming and acts as if it did.
+ */
+export function stageHasRoom(): boolean {
+  if (!canOpenBeside()) return false;
+  const tab = activeTab();
+  if (!tab) return false;
+  return countLeaves(tab.layout) < MAX_STAGE_LEAVES;
 }
 
 /** The layout to render for a tab: its tree when it really is a split. */
