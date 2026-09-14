@@ -10,6 +10,7 @@ import {
   Zap,
   GitPullRequest,
   GitCommitHorizontal,
+  ChevronDown,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
@@ -1013,6 +1014,11 @@ export function EntityIdPill({
             )}
           </span>
           <span>{pillLabel}</span>
+          {/* The reveal affordance: a caret that shows on hover and points
+              down while the band is closed, up while it is open, so the pill
+              says what a click will do before the reader commits to it. Only
+              where a click can reveal, never on a plain link. */}
+          {revealHost && entity && <ChevronDown aria-hidden className="entity-ref__caret w-[0.9em] h-[0.9em] flex-shrink-0" />}
         </Link>
       </PopoverAnchor>
       <PopoverContent

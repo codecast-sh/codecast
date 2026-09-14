@@ -147,6 +147,7 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
+    CLAUDE_TURN_STATUS_LINE: /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\((?:\d+m\s*)?\d+s\b/m,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
     tmuxTargetLocks: new Map(), TMUX_LOCK_WAIT_MS: 60000, hibernationInFlight: new Map(),
     Date: class extends Date {
@@ -193,11 +194,12 @@ function fixture(transport = "tmux", cached = true) {
     const names = [
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
-      "assertMachinePromptAbsent", "machineInputGuard", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "assertMachinePromptAbsent", "machineInputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
       "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
-      "deliverIntoPane", "paneInteractiveQuestion", "injectViaTmux", "injectViaTmuxInner",
+      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
+      "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
       "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
@@ -464,6 +466,48 @@ describe("machine prompt delivery safety", () => {
     expect(redriven).toBe(1);
     await f.scan([{ _id: "held", content }]);
     expect(f.bodies).toEqual([content]);
+  });
+
+  // Claude Code 2.1.270's effort recommendation: an unnumbered select list
+  // with no key hint footer (real capture, 2026-09-14). Its ❯ read as an idle
+  // composer, so every delivery pasted into it and wrote the message again.
+  const selectDialog = (onSecond = false) => [
+    "─".repeat(80),
+    " We recommend Opus 5 at medium effort",
+    "",
+    "   Opus 5 at medium effort is faster and uses fewer tokens. Run /effort to toggle.",
+    "",
+    `${onSecond ? "     " : "   ❯ "}Keep high`,
+    `${onSecond ? "   ❯ " : "     "}Switch Opus 5 to medium effort`,
+    "",
+  ].join("\n");
+
+  test("a human message waits behind an unnumbered select dialog instead of being pasted into it", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = selectDialog();
+    await f.scan([{ _id: "typed", content: "please continue" }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:typed"]);
+    expect(promptHoldRemainingMs("conv", true)).toBeGreaterThan(0);
+    // The re-pended row re-fires the scan at once; the hold keeps it off the pane.
+    const captures = f.state.captures;
+    await f.scan([{ _id: "typed", content: "please continue" }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:typed"]);
+  });
+
+  test("a card answer walks the highlight of an unnumbered select dialog, then confirms", async () => {
+    const f = fixture();
+    f.prompt.options = [{ label: "Keep high" }, { label: "Switch Opus 5 to medium effort" }];
+    f.state.menu = selectDialog();
+    // Digits do nothing in this widget; only the arrows move its highlight.
+    f.hooks.input = (event: string) => { if (event === "Down" && f.state.menu) f.state.menu = selectDialog(true); };
+    const answer = JSON.stringify({ __cc_poll: true, keys: ["2"], display: "Switch Opus 5 to medium effort" });
+    await expect(f.deliver(answer, "answer")).resolves.toBe(true);
+    expect(f.events).toEqual(["Down", "Enter"]);
+    expect(f.state.menu).toBeNull();
+    expect(f.closed).toHaveLength(1);
   });
 
   test("historical menu above ready composer still rejects stale human poll keys", async () => {

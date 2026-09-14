@@ -142,7 +142,7 @@
       "orch_enabled": true,
       "orch_version": "9"
     },
-    "stdout": "* Orchestration — updated in ~/.claude/CLAUDE.md\n",
+    "stdout": "* Orchestration — updated in ~/.claude/skills/, ~/.claude/agents/, and ~/.claude/settings.json (hooks)\n",
     "wroteClaudeMd": false,
     "otherFiles": {
       ".claude/agents/critic.md": "bd99e7786ce5b525",
@@ -152,6 +152,38 @@
       ".claude/skills/codecast-orchestrate/SKILL.md": "2ed98decaba83c2e",
       ".codecast/orchestration/scripts/agent-complete.sh": "02834fb294e9cb68",
       ".codecast/orchestration/scripts/reground.sh": "0032a90b8d285b09"
+    }
+  },
+  "skills": {
+    "config": {
+      "skills_enabled": true,
+      "skills_version": "1"
+    },
+    "stdout": "* Skills — installed in ~/.claude/skills/cast-*/SKILL.md\n",
+    "wroteClaudeMd": false,
+    "otherFiles": {
+      ".claude/skills/cast-ask-team/SKILL.md": "3eb017d168f57a2e",
+      ".claude/skills/cast-bakeoff/SKILL.md": "239dea95d76a77ba",
+      ".claude/skills/cast-conflicts/SKILL.md": "4a63a90a825ac77c",
+      ".claude/skills/cast-eod/SKILL.md": "6af05f0d09b5b709",
+      ".claude/skills/cast-from-call/SKILL.md": "5da5a05929cb06a2",
+      ".claude/skills/cast-handoff/SKILL.md": "45536cde03679f2d",
+      ".claude/skills/cast-learn/SKILL.md": "abad9d0bbef66b20",
+      ".claude/skills/cast-lessons/SKILL.md": "0a7b06647136ecc4",
+      ".claude/skills/cast-loop/SKILL.md": "45281d9e9adc4bd3",
+      ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
+      ".claude/skills/cast-pass/SKILL.md": "a2f0deecd382bf8d",
+      ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
+      ".claude/skills/cast-plan/SKILL.md": "a830b8850214b8aa",
+      ".claude/skills/cast-rethink/SKILL.md": "4a911ffb2d682a85",
+      ".claude/skills/cast-review/SKILL.md": "cd57a6e1b6ccde85",
+      ".claude/skills/cast-second-opinion/SKILL.md": "6712e76233059c8f",
+      ".claude/skills/cast-ship/SKILL.md": "e7c3443217252acb",
+      ".claude/skills/cast-standup/SKILL.md": "63b9d144fe22eb8f",
+      ".claude/skills/cast-triage/SKILL.md": "26cf440cf55b47d1",
+      ".claude/skills/cast-verify/SKILL.md": "e03ca536c88c7af9",
+      ".claude/skills/cast-why/SKILL.md": "1eed9db337c5e209",
+      ".claude/skills/cast-worktree/SKILL.md": "c5afe246fdf91699"
     }
   }
 }

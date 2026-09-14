@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planTrustPromptStep } from "./daemon.js";
+import { parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { CODEX_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
@@ -206,8 +206,10 @@ describe("extractTmuxLiveRegion", () => {
     const region = extractTmuxLiveRegion(BUSY_WITH_INPUT_BOX_PANE);
     expect(region).toContain("❯");
     expect(region).toContain("esc to interrupt");
-    // Still no scrollback bleed — the spinner line above the box stays out.
-    expect(region).not.toContain("Dilly-dallying");
+    // The turn's own status line directly above the box rides in (since
+    // v2.1.270 it is the only busy marker on the pane); the transcript above
+    // it is scrollback and stays out.
+    expect(region).toContain("Dilly-dallying");
     expect(region).not.toContain("Reading the delivery path");
   });
 });
@@ -236,6 +238,26 @@ describe("classifyTmuxLiveState", () => {
   test("busy: spinner glyph or 'esc to interrupt'", () => {
     const region = extractTmuxLiveRegion(BUSY_SPINNER_PANE);
     expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  // Claude Code v2.1.270: no "esc to interrupt" anywhere, the footer says
+  // "← for agents", and the only sign of the running turn is its own status
+  // line above the composer. Read as idle, the daemon skipped a user's Escape
+  // (2026-09-14). The finished form of that line must still read idle.
+  test("busy on Claude Code's own turn status line with no 'esc to interrupt'", () => {
+    const running = `⏺ Bash(until [ -f /tmp/never ]; do sleep 2; done)
+
+✶ Perambulating… (50s · ↓ 161 tokens)
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  claude2 · session 14%, resets in 4h 55m · week 53%, resets in 4d 19h
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(running))).toBe("busy");
+    const finished = running.replace("✶ Perambulating… (50s · ↓ 161 tokens)", "✻ Churned for 1s · done 10:22 AM");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
   });
 
   test("busy even when the input box is visible (the storm bug)", () => {
@@ -733,6 +755,46 @@ describe("planTrustPromptStep", () => {
   test("walks upward when the affirmative option is above the highlight", () => {
     expect(planTrustPromptStep(["   Yes, I trust this folder", " \u276f No, exit"]))
       .toEqual({ action: "move", key: "Up", times: 1 });
+  });
+});
+
+// Claude Code 2.1.270's effort recommendation (real capture, 2026-09-14). Its
+// highlight is the composer's ❯ glyph, which read as "idle", so delivery pasted
+// into the dialog and rewrote the message every few seconds.
+const EFFORT_DIALOG_TAIL = [
+  "✻ Cooked for 1s · done 3:48 PM",
+  "",
+  "─".repeat(214),
+  " We recommend Opus 5 at medium effort",
+  "",
+  "   Opus 5 at medium effort is faster and uses fewer tokens so that you can get more tasks done. Run /effort to toggle.",
+  "",
+  "   ❯ Keep high",
+  "     Switch Opus 5 to medium effort",
+  "",
+  "",
+].join("\n");
+
+describe("unnumbered select dialog", () => {
+  test("classifies as a menu only a human can answer, not idle", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(EFFORT_DIALOG_TAIL))).toBe("menu");
+  });
+
+  test("a composer holding a draft stays idle", () => {
+    const composer = ["─".repeat(80), "❯ Keep high", "─".repeat(80), "  ? for shortcuts"].join("\n");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(composer))).toBe("idle");
+  });
+
+  test("the highlight walks to the chosen label, then confirms", () => {
+    const lines = EFFORT_DIALOG_TAIL.split("\n");
+    const target = (line: string) => selectRowHasLabel(line, "Switch Opus 5 to medium effort");
+    expect(planHighlightStep(lines, target)).toEqual({ action: "move", key: "Down", times: 1 });
+    const moved = lines.map((l) => l === "   ❯ Keep high" ? "     Keep high" : l === "     Switch Opus 5 to medium effort" ? "   ❯ Switch Opus 5 to medium effort" : l);
+    expect(planHighlightStep(moved, target)).toEqual({ action: "confirm", option: "❯ Switch Opus 5 to medium effort" });
+  });
+
+  test("a label that is only in the title is never confirmed", () => {
+    expect(planHighlightStep(EFFORT_DIALOG_TAIL.split("\n"), (l) => selectRowHasLabel(l, "Medium")).action).toBe("none");
   });
 });
 

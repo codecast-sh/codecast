@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { setSessionError, switchSessionAgent } from "./conversations";
+import { _continueFork, setSessionError, switchSessionAgent } from "./conversations";
 import { makeFakeDb } from "./testDb";
 import { AGENT_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
 
@@ -75,6 +75,48 @@ describe("switchSessionAgent", () => {
       agent_type: "codex",
     });
     expect(db._tables.conversations).toHaveLength(1);
+  });
+
+  test.each([false, true])("does not lose a switch behind an earlier fork resume (claimed: %s)", async claimed => {
+    const db = seedConv();
+    await db.insert("daemon_commands", {
+      user_id: USER,
+      command: "resume_session",
+      args: JSON.stringify({ conversation_id: CONV, agent_type: "claude", fork: true }),
+      created_at: Date.now(),
+      ...(claimed ? { claimed_by: "daemon-boot" } : {}),
+    });
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, agent_type: "codex" });
+    const commands = db._tables.daemon_commands;
+    expect(commands.map((row: any) => row.command)).toEqual(["resume_session", "kill_session", "resume_session"]);
+    expect(JSON.parse(commands.at(-1).args)).toMatchObject({ agent_type: "codex", switch_agent: true });
+  });
+
+  test.each([0, 500])("switching during fork copy waits for all history (%s messages copied)", async messageCount => {
+    const db = seedConv();
+    Object.assign(db._tables.conversations[0], {
+      message_count: messageCount,
+      fork_status: "copying",
+      forked_from: "conversations_parent",
+      fork_copy_cursor: messageCount,
+      fork_daemon_args: JSON.stringify({ conversation_id: CONV, agent_type: "claude", fork: true, _target_device_id: "mac" }),
+    });
+    await db.insert("messages", { conversation_id: "conversations_parent", role: "assistant", content: "Last inherited message", timestamp: messageCount + 1 });
+    const ctx = ctxFor(db);
+    await (switchSessionAgent as any)._handler(ctx, { conversation_id: CONV, agent_type: "codex" });
+    expect(db._tables.daemon_commands).toHaveLength(0);
+    expect(db._tables.conversations[0].agent_type).toBe("codex");
+    await (_continueFork as any)._handler(ctx, { forkId: CONV });
+    const commands = db._tables.daemon_commands;
+    expect(commands.map((row: any) => row.command)).toEqual(["kill_session", "resume_session"]);
+    expect(JSON.parse(commands[1].args)).toMatchObject({ conversation_id: CONV, agent_type: "codex", switch_agent: true, force_reconstitute: true });
+    expect(commands.every((row: any) => row.target_device_id === "mac")).toBe(true);
+    expect(commands[0].created_at).toBeLessThan(commands[1].created_at);
+    expect(db._tables.conversations[0].fork_status).toBe("complete");
+    expect(db._tables.conversations[0].fork_daemon_args).toBeUndefined();
+    expect(db._tables.messages.filter((row: any) => row.conversation_id === CONV).map((row: any) => row.content)).toContain("Last inherited message");
+    await (_continueFork as any)._handler(ctx, { forkId: CONV });
+    expect(commands).toHaveLength(2);
   });
 
   test("rejects a no-op", async () => {
@@ -203,6 +245,14 @@ test("queues a fresh switch after the daemon already claimed the earlier selecti
 // under the wrong label — hiding fork and the model rail behind grok's
 // capabilities on a Claude session (2026-09-05). Refuse before any write.
 describe("switchSessionAgent refuses agents that cannot rebuild history", () => {
+  test("a fork with zero messages copied still requires history import support", async () => {
+    const db = seedConv();
+    Object.assign(db._tables.conversations[0], { message_count: 0, fork_status: "copying" });
+    await expect((switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, agent_type: "cursor" })).rejects.toThrow(/Cursor cannot take over/);
+    expect(db._tables.daemon_commands).toHaveLength(0);
+    expect(db._tables.conversations[0].agent_type).toBe("claude_code");
+  });
+
   test("cursor on a session with messages: no patch, no divider, no daemon command", async () => {
     const db = seedConv();
     await expect(

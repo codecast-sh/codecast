@@ -32,12 +32,22 @@ function usePaneOffer(conversationId: string): BrowserPaneOffer | null {
   });
 }
 
+/** The agent session's uuid, carried on the pane's route so the desktop's
+ *  native view knows which session may drive it (lib/browserPane.ts). */
+function usePaneOfferSession(conversationId: string): string | undefined {
+  return useInboxStore((s) => {
+    const row: any = s.conversations[conversationId] ?? s.sessions[conversationId];
+    return typeof row?.session_id === "string" && row.session_id ? row.session_id : undefined;
+  });
+}
+
 /**
  * The header chip. Renders nothing at all for the great majority of sessions,
  * which is why it subscribes to one field rather than the row.
  */
 export function BrowserPaneOfferChip({ conversationId }: { conversationId: string }) {
   const offer = usePaneOffer(conversationId);
+  const session = usePaneOfferSession(conversationId);
   const attended = useInboxStore((s) => s.currentSessionId === conversationId);
   const autoOpenPref = useInboxStore((s) => s.clientState.ui?.auto_open_browser_panes === true);
   const dismiss = useInboxStore((s) => s.dismissBrowserPaneOffer);
@@ -65,9 +75,9 @@ export function BrowserPaneOfferChip({ conversationId }: { conversationId: strin
   // when the stage has room, and in this tab when it does not.
   const open = useCallback(() => {
     if (!offer) return;
-    openBrowserPane({ kind: "url", url: offer.url });
+    openBrowserPane({ kind: "url", url: offer.url, session });
     dismiss(conversationId, Date.now());
-  }, [offer, conversationId, dismiss]);
+  }, [offer, session, conversationId, dismiss]);
 
   // The preference. Nobody clicked, so a pane is the only acceptable outcome:
   // `beside: "only"` refuses the navigation fallback, and an offer that could
@@ -76,10 +86,10 @@ export function BrowserPaneOfferChip({ conversationId }: { conversationId: strin
   // a re-render or a second window from opening the same pane twice.
   useWatchEffect(() => {
     if (!decision.autoOpen || !offer) return;
-    if (openBrowserPane({ kind: "url", url: offer.url }, { beside: "only" })) {
+    if (openBrowserPane({ kind: "url", url: offer.url, session }, { beside: "only" })) {
       dismiss(conversationId, Date.now());
     }
-  }, [decision.autoOpen, offer, conversationId, dismiss]);
+  }, [decision.autoOpen, offer, session, conversationId, dismiss]);
 
   if (!decision.show || !offer) return null;
 

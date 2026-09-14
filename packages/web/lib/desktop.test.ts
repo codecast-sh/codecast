@@ -6,6 +6,8 @@ import {
   shouldAttemptHandoff,
   extractDeepLinkIntent,
   shouldApplyAutoDeepLink,
+  planDeepLinkArrival,
+  shareTokenInPath,
   shouldAttemptPreBootHandoff,
   conversationIdFromPath,
   isDesktopShell,
@@ -241,6 +243,55 @@ describe("auto-handoff deep-link intent", () => {
     const now = 1_000_000;
     expect(shouldApplyAutoDeepLink(now, now - 5_000)).toBe(false);  // user mid-work
     expect(shouldApplyAutoDeepLink(now, now - 60_000)).toBe(true);  // idle desktop
+  });
+});
+
+describe("planDeepLinkArrival", () => {
+  const now = 1_000_000;
+  const busy = now - 5_000;
+  const idle = now - 60_000;
+  const share = "/conversation/abc?share=tok";
+
+  test("a clicked link navigates even while the user is mid-work", () => {
+    const url = buildDesktopDeepLink("/conversation/abc");
+    expect(planDeepLinkArrival(url, null, now, busy)).toEqual({ kind: "navigate", path: "/conversation/abc" });
+  });
+
+  test("an auto handoff navigates once the desktop has been quiet", () => {
+    const url = buildDesktopDeepLink(share, { auto: true });
+    expect(planDeepLinkArrival(url, null, now, idle)).toEqual({ kind: "navigate", path: share });
+  });
+
+  test("an auto handoff into a busy desktop is offered, with the share token intact", () => {
+    const url = buildDesktopDeepLink(share, { auto: true });
+    expect(planDeepLinkArrival(url, "other", now, busy)).toEqual({ kind: "offer", path: share });
+  });
+
+  test("an auto handoff to the conversation already on screen is ignored", () => {
+    const url = buildDesktopDeepLink(share, { auto: true });
+    expect(planDeepLinkArrival(url, "abc", now, busy)).toEqual({ kind: "ignore" });
+  });
+
+  test("a non-conversation page is offered while busy, never ignored", () => {
+    const url = buildDesktopDeepLink("/tasks", { auto: true });
+    expect(planDeepLinkArrival(url, "abc", now, busy)).toEqual({ kind: "offer", path: "/tasks" });
+  });
+
+  test("a link with nothing navigable is ignored", () => {
+    expect(planDeepLinkArrival("codecast://open/", null, now, idle)).toEqual({ kind: "ignore" });
+    expect(planDeepLinkArrival("not a url", null, now, idle)).toEqual({ kind: "ignore" });
+  });
+});
+
+describe("shareTokenInPath", () => {
+  test("reads the token a share link carries", () => {
+    expect(shareTokenInPath("/conversation/abc?share=tok")).toBe("tok");
+    expect(shareTokenInPath("/conversation/abc?m=5&share=tok")).toBe("tok");
+  });
+
+  test("a plain session link carries none", () => {
+    expect(shareTokenInPath("/conversation/abc")).toBeNull();
+    expect(shareTokenInPath("/conversation/abc?m=5")).toBeNull();
   });
 });
 
@@ -642,6 +693,55 @@ import {
   HANDOFF_SKIP_KEY,
   HANDOFF_PERSIST_KEY,
 } from "./desktop";
+import { afterDocumentParsed } from "./desktopHandoff";
+
+// Starting the codecast:// navigation stops the parser. The pre-boot gate runs
+// from the top of <head>, so a launch while the document was still loading
+// left the handoff screen at the end of <body> unparsed: a blank tab.
+describe("afterDocumentParsed", () => {
+  const g = globalThis as Record<string, unknown>;
+  let saved: PropertyDescriptor | undefined;
+  let dom: JSDOM;
+  let readyState = "loading";
+
+  beforeEach(() => {
+    saved = Object.getOwnPropertyDescriptor(g, "document");
+    dom = new JSDOM("<!doctype html><html><head></head><body></body></html>");
+    readyState = "loading";
+    Object.defineProperty(dom.window.document, "readyState", { get: () => readyState, configurable: true });
+    Object.defineProperty(g, "document", { value: dom.window.document, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    if (saved) Object.defineProperty(g, "document", saved);
+    else delete g.document;
+    dom.window.close();
+  });
+
+  const fire = () => dom.window.document.dispatchEvent(new dom.window.Event("readystatechange"));
+
+  test("waits while the document is still loading, then runs once", async () => {
+    const launch = mock(() => {});
+    afterDocumentParsed(launch);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(launch).not.toHaveBeenCalled();
+    readyState = "interactive";
+    fire();
+    expect(launch).toHaveBeenCalledTimes(1);
+    readyState = "complete";
+    fire();
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  test("runs on the next task when the document is already parsed", async () => {
+    readyState = "interactive";
+    const launch = mock(() => {});
+    afterDocumentParsed(launch);
+    expect(launch).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("preBootVerdict", () => {
   const PRE: PreBootHandoffContext = {

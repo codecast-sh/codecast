@@ -620,6 +620,83 @@ describe("parseInteractivePrompt rejects prose when the live composer is below i
   });
 });
 
+// Real capture (session 9d308f48, Claude Code 2.1.270, 2026-09-14): after the
+// session moved to Opus 5, Claude Code raised its own effort recommendation as
+// an UNNUMBERED select list with no key hint footer. Nothing parsed it, so no
+// card reached the web and every delivery pasted into the dialog in a loop.
+const EFFORT_DIALOG_PANE = [
+  "❯ whats the per hour rate like we did for other preschool options",
+  "  ⎿  You've hit your monthly spend limit. Run /usage-credits to manage your limit.",
+  "",
+  "✻ Cooked for 1s · done 3:48 PM",
+  "",
+  "─".repeat(214),
+  " We recommend Opus 5 at medium effort",
+  "",
+  "   Opus 5 at medium effort is faster and uses fewer tokens so that you can get more tasks done. Opus 5 at medium effort solves the large majority of coding tasks as well as high. Run /effort to toggle.                 ",
+  " ".repeat(218),
+  "   ❯ Keep high",
+  "     Switch Opus 5 to medium effort",
+  "",
+  "",
+  "",
+].join("\n");
+
+describe("parseInteractivePrompt unnumbered select dialogs", () => {
+  test("the effort recommendation parses with its title, body and options", () => {
+    const prompt = parseInteractivePrompt(EFFORT_DIALOG_PANE);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("We recommend Opus 5 at medium effort");
+    expect(prompt!.detail).toBe(
+      "Opus 5 at medium effort is faster and uses fewer tokens so that you can get more tasks done. Opus 5 at medium effort solves the large majority of coding tasks as well as high. Run /effort to toggle.",
+    );
+    expect(prompt!.options).toEqual([{ label: "Keep high" }, { label: "Switch Opus 5 to medium effort" }]);
+    expect(prompt!.unnumbered).toBe(true);
+    expect(prompt!.isConfirmation).toBeUndefined();
+  });
+
+  test("the machine input guard sees it too", () => {
+    expect(parseInteractivePrompt(EFFORT_DIALOG_PANE, true)?.question).toBe("We recommend Opus 5 at medium effort");
+  });
+
+  test("the same rows in scrollback, with the live composer below, are not a dialog", () => {
+    const scrolled = [
+      EFFORT_DIALOG_PANE.trimEnd(),
+      "",
+      "─".repeat(80),
+      "❯ ",
+      "─".repeat(80),
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    expect(parseInteractivePrompt(scrolled)).toBeNull();
+  });
+
+  test("an indented list with no rule above it is not a dialog", () => {
+    const prose = [
+      "⏺ The menu offers two choices:",
+      "",
+      "   ❯ Keep high",
+      "     Switch Opus 5 to medium effort",
+    ].join("\n");
+    expect(parseInteractivePrompt(prose)).toBeNull();
+  });
+
+  test("footer dialogs keep their existing confirmation shape", () => {
+    // The spend limit dialog is intercepted as a limit park by its
+    // confirmation shape; the select dialog path must not claim it.
+    const pane = [
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77",
+      "     Wait for limit to reset",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)?.isConfirmation).toBe(true);
+  });
+});
+
 // capture-pane -J fuses a full-width dialog rule onto the text row that follows it,
 // so the usage-limit dialog's question scraped as "▔▔▔…▔ What do you want to do?".
 describe("parseInteractivePrompt strips fused dialog rules from the question", () => {

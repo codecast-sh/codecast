@@ -50,6 +50,7 @@ import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import { useSqueezeToFit } from "../../hooks/useSqueezeToFit";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
+import { paneOfferOwner } from "../../lib/browserPaneOffer";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { PaneControls } from "../stage/PaneControls";
@@ -78,7 +79,21 @@ export function BrowserPane() {
     return window.location.pathname + window.location.search;
   }, [ctx]);
 
-  const source = useMemo(() => parseBrowserRoute(path), [path]);
+  // The route's `s=` names the session the pane was offered by, and a route
+  // is only a hint: a pasted link could name any session. Confirm it against
+  // the store's offer row for that session and this address (one read, at
+  // parse time), and strip it otherwise, so the desktop registry never stamps
+  // an owner nobody offered a pane to (lib/browserPaneOffer.ts paneOfferOwner).
+  const source = useMemo(() => {
+    const parsed = parseBrowserRoute(path);
+    if (!parsed || parsed.kind !== "url" || !parsed.session) return parsed;
+    const st = useInboxStore.getState();
+    const rows: any[] = [];
+    for (const r of Object.values(st.conversations)) if ((r as any)?.session_id === parsed.session) rows.push(r);
+    for (const r of Object.values(st.sessions)) if ((r as any)?.session_id === parsed.session) rows.push(r);
+    const owner = paneOfferOwner({ hinted: parsed.session, url: parsed.url, rows, now: Date.now() });
+    return owner ? parsed : { kind: "url" as const, url: parsed.url };
+  }, [path]);
   const wantsNative = prefersNativeRoute(path);
   const url = source?.kind === "url" ? source.url : null;
   const focused = ctx?.isActive ?? true;

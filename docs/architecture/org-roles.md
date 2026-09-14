@@ -82,11 +82,18 @@ OrgPerson = {
 }
 OrgRole = org_roles row + {
   counts: StateCounts, sessions: OrgSession[], total: number,   // sessions whose org_role_id = this role
+  standing: OrgStandingState & { conversation_id?, short_id? } | null,   // the role's standing agent, by the anchor naming the role or the role naming the anchor
   scope_names: { projects: {id, title, short_id?}[]; plans: {id, title, short_id}[] },
 }
-OrgAnchor = {
+OrgAnchor = OrgStandingState & {
   anchor_id, name, bot_user_id, host_user_id, scope_type, team_id?, scope_user_id?,
-  conversation_id?, short_id?, state?: WorkState, status,
+  conversation_id?, short_id?, status,
+}
+OrgStandingState = {           // the standing session's pinned state (cast state), one derivation with a brief's hands
+  state?: WorkState,           // observed; absent when the row fell outside the recency window
+  state_line: string | null,   // first line of the pinned state, label dropped: what it is working on
+  state_status: "working" | "blocked" | "done" | "dormant" | null,   // declared: who acts next. THE NODE'S COLOUR
+  state_at: number | null,
 }
 OrgSession = {
   _id, short_id, title, agent_type, state: WorkState, updated_at,

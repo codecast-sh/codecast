@@ -1267,6 +1267,24 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "orch_enabled",
     versionKey: "orch_version",
   },
+  {
+    slug: "skills",
+    aliases: ["skill", "commands"],
+    name: "Skills",
+    desc: "Slash commands over the team's shared state (/cast-pickup, /cast-why, /cast-ship, …)",
+    detail:
+      "Installs the cast-* skills: rituals that need what one session cannot see. " +
+      "/cast-pickup rehydrates from the board and the team's history, /cast-handoff and " +
+      "/cast-pass hand work on, /cast-plan writes a plan the team reviews, /cast-verify " +
+      "leaves evidence on the task, /cast-ship shepherds a pull request to merge, /cast-why " +
+      "traces a line to the session that wrote it, /cast-conflicts finds sessions on the same " +
+      "files, /cast-standup and /cast-morning digest the team's work, and more. Each loads " +
+      "only when invoked, so they cost nothing until used.",
+    writesTo: "~/.claude/skills/cast-*/SKILL.md",
+    shipped: "2026-09-14",
+    enabledKey: "skills_enabled",
+    versionKey: "skills_version",
+  },
 ];
 
 /**

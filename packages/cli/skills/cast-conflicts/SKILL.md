@@ -1,5 +1,5 @@
 ---
-name: codecast-conflicts
+name: cast-conflicts
 description: Before editing or fanning out work, find the live sessions on this repository that are changing the same files, show what they changed, and warn them. Use before starting a task that touches shared files, before spawning workers, or when asked who else is working on this.
 argument-hint: "[files or globs; defaults to the working tree and the bound task]"
 ---

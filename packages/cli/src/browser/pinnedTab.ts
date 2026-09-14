@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CdpConnection, cdpHttpUrl, listTargets, type CdpEndpoint } from "./cdp.js";
-import { engineSession, engineStateDir, isRealSession } from "./engine.js";
+import { CdpConnection, cdpHttpTimeout, listTargets, type CdpEndpoint } from "./cdp.js";
+import { engineSession, engineStateDir, isPaneSession, isRealSession } from "./engine.js";
+import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
 import { grantTab } from "./bridge/host.js";
@@ -28,6 +29,21 @@ export function readBoundTarget(session: string, stateDir = engineStateDir()): s
   }
 }
 
+/**
+ * Mark the binding as the one being driven now. The watch server follows the
+ * most recently pinned binding across a session's browsers (watchSource.ts
+ * resolveEngineTab); the engine writes a binding once, so without this a
+ * session that moved back from its desktop pane to its Chrome tab would keep
+ * streaming the pane.
+ */
+export function touchBoundTarget(session: string, stateDir = engineStateDir(), now = new Date()): void {
+  try {
+    fs.utimesSync(path.join(stateDir, `${session}.target`), now, now);
+  } catch {
+    /* no binding yet: the engine writes one at attach */
+  }
+}
+
 /** Write the binding the way tab_binding.rs does: atomic, owner-only. */
 export function writeBoundTarget(session: string, targetId: string, stateDir = engineStateDir(), url = "about:blank"): void {
   fs.mkdirSync(stateDir, { recursive: true });
@@ -44,11 +60,9 @@ export function writeBoundTarget(session: string, targetId: string, stateDir = e
  * created a fresh blank tab beside a live one on every slow check, orphaning
  * the old tab for good.
  */
-export async function targetLiveness(endpoint: CdpEndpoint, targetId: string, timeoutMs = 2_000): Promise<"alive" | "gone" | "unknown"> {
+export async function targetLiveness(endpoint: CdpEndpoint, targetId: string, timeoutMs = cdpHttpTimeout(endpoint, 2_000, 10_000)): Promise<"alive" | "gone" | "unknown"> {
   try {
-    const res = await fetch(cdpHttpUrl(endpoint, "/json/list"), { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return "unknown";
-    return ((await res.json()) as Array<{ id: string }>).some((t) => t.id === targetId) ? "alive" : "gone";
+    return (await listTargets(endpoint, timeoutMs)).some(t => t.targetId === targetId) ? "alive" : "gone";
   } catch {
     return "unknown";
   }
@@ -57,8 +71,10 @@ export async function targetLiveness(endpoint: CdpEndpoint, targetId: string, ti
 /** The browser a session's pinned tab lives in, and how to create it there. */
 export interface PinnedTabBrowser {
   endpoint: CdpEndpoint;
-  /** `Target.createTarget` params: always a background tab, never a raise. */
-  create: Record<string, unknown>;
+  /** `Target.createTarget` params: always a background tab, never a raise.
+   *  Null for a browser where this CLI may not create anything: the desktop
+   *  app, whose panes only the human opens (desktopPane.ts). */
+  create: Record<string, unknown> | null;
 }
 
 /**
@@ -70,6 +86,12 @@ export interface PinnedTabBrowser {
  * courtesy and never starts one.
  */
 export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowser | null> {
+  if (isPaneSession(session)) {
+    // The binding itself is written by desktopPaneCtx, to the pane's exact
+    // target; this only says where that target lives.
+    const reg = liveDesktopPaneRegistry();
+    return reg ? { endpoint: reg.port, create: null } : null;
+  }
   if (isRealSession(session)) {
     // Named on the socket, so the host files the tab under this session and
     // lets only this session's engine discover it.
@@ -88,14 +110,12 @@ export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowse
 export async function ensurePinnedTab(session = engineSession(), url?: string): Promise<boolean> {
   const browser = await pinnedTabBrowser(session);
   if (!browser) throw new Error("the browser is unavailable; no tab was opened");
-  const bound = readBoundTarget(session);
-  // Real mode: the host keeps the session → tab partition in memory only,
-  // so hand it the binding again on every command. Cheap (one loopback
-  // POST), and it is what brings a session's tab back into view after the
-  // host was restarted — without it the engine would see no tab of its
-  // own and pin a fresh one, orphaning this one.
+  let bound = readBoundTarget(session);
   if (bound && typeof browser.endpoint !== "number" && browser.endpoint.token && browser.endpoint.session) {
-    await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true }).catch(() => {});
+    if (!await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true })) {
+      fs.rmSync(path.join(engineStateDir(), `${session}.target`), { force: true });
+      bound = null;
+    }
   }
   if (bound && sessionDaemonPid(session)) return false;
   // Only a tab the browser says is gone is replaced; an unanswered check
@@ -109,9 +129,10 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
       return false;
     }
   }
+  if (!browser.create) throw new Error("this session's desktop pane is gone — offer one with `cast browser pane <url>` and wait for the human to open it; an agent never opens a pane itself");
   if (!url) throw new Error("this session has no open page; use `cast browser open <url>` first. No blank tab was created.");
 
-  const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);
+  const conn = await CdpConnection.fromPort(browser.endpoint, cdpHttpTimeout(browser.endpoint, 5_000, 20_000));
   try {
     const r = await conn.send<{ targetId: string }>("Target.createTarget", { ...browser.create, url, background: true }, undefined, 20_000);
     if (!r?.targetId) throw new Error("the browser did not return the requested tab");

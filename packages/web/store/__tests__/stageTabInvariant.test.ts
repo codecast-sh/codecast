@@ -93,6 +93,23 @@ describe("stageCloseLeaf", () => {
     expect(activeTab().path).toBe("/inbox?s=abc123");
     expect(activeTab().layout).toBeUndefined();
   });
+
+  // A desktop deep link or notification pushes /conversation/<id> into a plain
+  // tab. Held verbatim, the stage renders it as a bare session pane, which only
+  // reads rows already in the store: a teammate's session showed "This session
+  // is no longer available" instead of loading through the inbox.
+  it("a plain tab navigated to a conversation takes the /inbox?s= spelling", () => {
+    state().updateTab("t1", { path: "/conversation/abc123" });
+    expect(activeTab().path).toBe("/inbox?s=abc123");
+    expect(activeTab().layout).toBeUndefined();
+  });
+
+  it("a split tab's focused leaf keeps the pane spelling", () => {
+    state().stageInsertLeaf("root", "right", "/docs");
+    state().updateTab("t1", { path: "/conversation/abc123" });
+    const t = activeTab();
+    expect(findLeaf(t.layout!, t.focusedLeafId!)!.path).toBe("/conversation/abc123");
+  });
 });
 
 describe("the inbox tab's ?s= sync on a split stage", () => {
