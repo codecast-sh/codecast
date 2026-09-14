@@ -62,10 +62,10 @@ describe("snippet catalog", () => {
 
   // Specs and bodies moved into the catalog (ct-42804) so daemon, CLI and tests
   // read one table. These pin the shape that move promised.
-  it("carries each snippet's spec and body together (orchestration excepted)", () => {
+  it("carries each snippet's spec and body together (orchestration and skills excepted)", () => {
     for (const s of SNIPPET_CATALOG) {
-      if (s.slug === "orchestration") {
-        // Orchestration is files + hooks, not a markdown section.
+      if (s.slug === "orchestration" || s.slug === "skills") {
+        // Orchestration is files + hooks and skills are SKILL.md files, not a markdown section.
         expect(s.section).toBeUndefined();
         continue;
       }
