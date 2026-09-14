@@ -17,11 +17,10 @@ import {
   notifyNative,
   requestNotificationPermission,
   hasBrowserNotificationPermission,
-  parseDesktopDeepLinkPath,
-  extractDeepLinkIntent,
   installDesktopInputTracker,
-  shouldApplyAutoDeepLink,
+  planDeepLinkArrival,
   conversationIdFromPath,
+  shareTokenInPath,
   installWindowRoleTracker,
   reportDesktopWindowState,
   isDetachedTabWindow,
@@ -34,6 +33,7 @@ import { recordNotificationMiss } from "../lib/notificationNudge";
 import { useOsPermission } from "../hooks/useOsPermissions";
 import { soundChatMessage } from "../lib/sounds";
 import { useInboxStore } from "../store/inboxStore";
+import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
 
@@ -245,7 +245,10 @@ export function DesktopProvider() {
       if (!path) return;
       if (tabId) useInboxStore.getState().switchTab(tabId);
 
-      const convId = conversationIdFromPath(path);
+      // A share link never takes the in-place shortcut: its token must be
+      // presented and redeemed first (shareTokenInPath), and the conversation
+      // route is the one path that does that before the inbox reads by id.
+      const convId = shareTokenInPath(path) ? null : conversationIdFromPath(path);
       if (convId) {
         useInboxStore.getState().navigateToSession(convId, "deeplink");
 
@@ -259,27 +262,17 @@ export function DesktopProvider() {
       router.push(path);
     };
 
+    // The policy (navigate / offer the handoff card / ignore) is
+    // planDeepLinkArrival. The card is imported statically on purpose: an
+    // offer is the only notice an auto handoff gets, and a lazy chunk that
+    // failed to load (a dev server mid-reload, a renderer older than the
+    // deployed build) dropped the link with no trace: the desktop came to
+    // the front and nothing happened.
     onDeepLink((urls) => {
       for (const url of urls) {
-        const raw = parseDesktopDeepLinkPath(url);
-        if (!raw) continue;
-        const { path, auto } = extractDeepLinkIntent(raw);
-        // An auto handoff (the browser page redirecting itself, not a user
-        // clicking an "Open in desktop" button) may not move the view while
-        // the user is actively working in the desktop — agent-driven Chrome
-        // tabs satisfy every browser-side gate and used to yank the app to
-        // whatever the agent had open. Offer it instead, unless the user is
-        // already looking at the target.
-        if (auto && !shouldApplyAutoDeepLink()) {
-          const convId = conversationIdFromPath(path);
-          if (!convId || useInboxStore.getState().currentSessionId !== convId) {
-            void import("./BrowserHandoffToast").then(({ showBrowserHandoffToast }) => {
-              showBrowserHandoffToast(path, goTo);
-            });
-          }
-          continue;
-        }
-        goTo(path);
+        const arrival = planDeepLinkArrival(url, useInboxStore.getState().currentSessionId);
+        if (arrival.kind === "navigate") goTo(arrival.path);
+        else if (arrival.kind === "offer") showBrowserHandoffToast(arrival.path, goTo);
       }
     });
 
