@@ -44,6 +44,7 @@ import {
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_SPACING_MS,
   pickThrottleContinueBatch,
+  PACED_CONTINUE_KINDS,
   tokenBackedProfile,
   activeTokenProfile,
   continueTargetPin,
@@ -134,6 +135,30 @@ const BLOCKED_FLAG_CLEAR = { pending_api_error: false, pending_api_error_kind: u
 // carrying them as "blocked" only keeps the incident count (and the header
 // pill) inflated with rows nobody will act on. The web banner paints the
 // same clear on the click and says so on the button; the CLI prints it.
+// Whether this machine runs an automatic recovery at all: account rotation
+// (auto-switch) or same-account resume at window reset (auto-continue, on by
+// default). Both live on the primary device row (see loadPrimaryForToggle).
+function autoRecoveryEnabled(primary: Doc<"devices"> | undefined): boolean {
+  return !!primary && (primary.cc_auto_switch === true || isAutoContinueEnabled(primary));
+}
+
+// An automatic pass makes the same decision the revive button makes: the
+// workers it leaves out are dismissed. Without this, the loop revived the
+// top-level sessions of an incident and walked away from the workers parked
+// beside them — nothing else ever acts on a worker (a continue cannot reach an
+// in-process agent), so they sat in the fleet banner as "23 subagent workers
+// skipped" until a human clicked the button the loop exists to make
+// unnecessary (2026-09-13). Only with a recovery switched on: with both off
+// the human runs the incident by hand and keeps the opt-in checkbox.
+async function dismissSkippedWorkersAutomatically(
+  ctx: { db: any },
+  primary: Doc<"devices"> | undefined,
+  skipped: Doc<"conversations">[],
+): Promise<number> {
+  if (!autoRecoveryEnabled(primary)) return 0;
+  return dismissSkippedWorkers(ctx, skipped);
+}
+
 async function dismissSkippedWorkers(ctx: { db: any }, skipped: Doc<"conversations">[]): Promise<number> {
   for (const conv of skipped) await ctx.db.patch(conv._id, BLOCKED_FLAG_CLEAR);
   return skipped.length;
@@ -575,18 +600,22 @@ const BLOCKED_NOTIFY_DEBOUNCE_MS = 60 * 1000;
 const BLOCKED_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
 
 /** The single hook the message paths call when a conversation freshly parks on
- * a blocked-kind banner (auth/limit/connection/fatal — never self-retrying "error").
- * Fans out to both reactions: the auto-switch check (limit and auth parks —
- * the check itself gates auth on the opt-in flag) and the debounced incident
- * notification (all blocked kinds). Both are idempotent and self-gating, so
- * over-scheduling is harmless. */
+ * a blocked-kind banner (auth/limit/throttle/connection/fatal — never
+ * self-retrying "error"). Fans out to every reaction: the auto-switch check
+ * (limit and auth parks — the check itself gates auth on the opt-in flag),
+ * the paced plain continue (throttle and connection parks — the account is
+ * not spent, the turn just needs retrying), and the debounced incident
+ * notification (all blocked kinds). All are idempotent and self-gating, so
+ * over-scheduling is harmless. "fatal" (a terminal 4xx) gets no automatic
+ * retry: the same request would fail the same way, and each retry would
+ * re-park the session into a fresh banner forever. */
 export async function onFreshApiErrorPark(
   ctx: { db?: any; scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
   userId: Id<"users">,
   kind: string,
 ): Promise<void> {
   if (kind === "limit" || kind === "auth") await scheduleAutoSwitchCheck(ctx, userId);
-  if (kind === "throttle") await scheduleThrottleContinue(ctx, userId);
+  if (PACED_CONTINUE_KINDS.has(kind)) await scheduleThrottleContinue(ctx, userId);
   await ctx.scheduler.runAfter(BLOCKED_NOTIFY_DEBOUNCE_MS, internal.accountSwitch.blockedNotifyCheck, {
     user_id: userId,
   });
@@ -1042,17 +1071,18 @@ export const throttleContinueCheck = internalMutation({
       await ctx.scheduler.runAt(at, internal.accountSwitch.throttleContinueCheck, { user_id: args.user_id });
       if (primary) await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: at } });
     };
-    const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
+    const { blocked, skipped } = await listBlockedConversations(ctx, args.user_id, false);
+    const dismissed = await dismissSkippedWorkersAutomatically(ctx, primary, skipped);
     const { batch, remaining, waiting, nextDueAt } = pickThrottleContinueBatch(blocked, now);
     if (batch.length === 0) {
       if (nextDueAt !== null) {
         await book(Math.max(nextDueAt, now + 1000));
-        return { acted: "wait", waiting, next_check_at: nextDueAt };
+        return { acted: "wait", waiting, dismissed, next_check_at: nextDueAt };
       }
       if (primary && state.throttle_check_at) {
         await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: undefined } });
       }
-      return { acted: "nothing_throttled" };
+      return { acted: "nothing_throttled", dismissed };
     }
     const res = await insertSwitchCommands(ctx, args.user_id, {
       profile: undefined,
@@ -1065,12 +1095,12 @@ export const throttleContinueCheck = internalMutation({
     if (remaining > 0 || waiting > 0) {
       const at = remaining > 0 ? now + THROTTLE_CONTINUE_SPACING_MS : Math.max(nextDueAt ?? now, now + THROTTLE_CONTINUE_SPACING_MS);
       await book(at);
-      return { acted: "continued", continued: res.messaged + res.restarted, remaining, waiting, next_check_at: at };
+      return { acted: "continued", continued: res.messaged + res.restarted, dismissed, remaining, waiting, next_check_at: at };
     }
     if (primary && state.throttle_check_at) {
       await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: undefined } });
     }
-    return { acted: "continued", continued: res.messaged + res.restarted, remaining: 0, waiting: 0 };
+    return { acted: "continued", continued: res.messaged + res.restarted, dismissed, remaining: 0, waiting: 0 };
   },
 });
 
@@ -1366,7 +1396,10 @@ export const autoSwitchCheck = internalMutation({
 
     const state = primary.cc_auto_switch_state ?? {};
     const attempts = state.attempts ?? [];
-    const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
+    const { blocked, skipped } = await listBlockedConversations(ctx, args.user_id, false);
+    // Before any account decision: the workers this pass will not act on leave
+    // the blocked set now, whatever the pass decides about the rest.
+    const dismissed = await dismissSkippedWorkersAutomatically(ctx, primary, skipped);
     // Continue-only mode acts on the current incident alone: a park older than
     // a full session window has already sat through a reset the user could
     // have used — resuming it now spends the fresh window on abandoned work.
@@ -1409,7 +1442,7 @@ export const autoSwitchCheck = internalMutation({
           cc_auto_switch_state: { ...state, exhausted_at: undefined },
         });
       }
-      return { acted: "nothing_blocked" };
+      return { acted: "nothing_blocked", dismissed };
     }
     if (state.last_action_at && now - state.last_action_at < AUTO_SWITCH_COOLDOWN_MS) {
       // A recent action is still settling — but don't just drop this check: a
