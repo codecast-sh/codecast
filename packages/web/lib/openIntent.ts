@@ -131,8 +131,10 @@ export function openIn(target: OpenTarget, path: string): void {
     // from inside a store action's draft. When the stage can't take a pane
     // (narrow window, pane cap, a route with no pane form) the click still
     // means "go there": navigate the tab instead of dropping the gesture.
+    // `reuse`: one stable target pane per tab, re-pointed by each Option-click,
+    // opened unfocused so the page clicked in does not move (lib/stage).
     queueMicrotask(() => {
-      if (!openBeside(panePath(path))) navigateHere(path);
+      if (!openBeside(panePath(path), { reuse: true })) navigateHere(path);
     });
     return;
   }

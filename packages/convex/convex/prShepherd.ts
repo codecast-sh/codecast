@@ -504,10 +504,12 @@ function outstandingThreads(
 }
 
 async function gatherWakeContext(ctx: Ctx, pr: PR) {
-  const comments = await ctx.db
+  // A note still pending in someone's review has not been said; the agent
+  // hears it when the review goes out, not before.
+  const comments = (await ctx.db
     .query("review_comments")
     .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pr._id))
-    .collect();
+    .collect()).filter((c: any) => !c.pending_review);
 
   const reviews = await ctx.db
     .query("reviews")

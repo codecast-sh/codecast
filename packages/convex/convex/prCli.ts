@@ -25,6 +25,7 @@ import { verifyApiToken } from "./apiTokens";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { bindShepherd } from "./prShepherd";
 import { submitReviewWithNotes } from "./reviews";
+import { withoutOthersPending } from "./codeComments";
 import { foldShepherdState, normalizeRepository, prUrl, PASSING_CONCLUSIONS, type CheckEntry } from "./lib/gitRefs";
 import { parsePrRef, codecastPrUrl } from "@codecast/shared/contracts";
 
@@ -334,12 +335,12 @@ export const show = query({
     const pr = await resolvePullRequest(ctx, userId, args);
     if (!pr) return { pull_request: null };
 
-    const comments = await ctx.db
+    const comments = withoutOthersPending(await ctx.db
       .query("review_comments")
       .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pr._id))
-      .collect();
+      .collect(), userId);
     const open = comments
-      .filter((comment: any) => !comment.resolved)
+      .filter((comment: any) => !comment.resolved && !comment.pending_review)
       .sort((a: any, b: any) => a.created_at - b.created_at)
       .slice(0, 20);
     const unresolved = [];
@@ -491,12 +492,12 @@ export const shepherd = mutation({
 /** The short form of a comment id: its last 8 characters, as triggers do. */
 const shortCommentId = (id: string) => String(id).slice(-8);
 
-async function commentRows(ctx: any, pr: PR): Promise<any[]> {
+async function commentRows(ctx: any, pr: PR, userId: Id<"users">): Promise<any[]> {
   const rows = await ctx.db
     .query("review_comments")
     .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pr._id))
     .collect();
-  return rows.sort((a: any, b: any) => a.created_at - b.created_at);
+  return withoutOthersPending(rows, userId).sort((a: any, b: any) => a.created_at - b.created_at);
 }
 
 /** Who wrote a comment: the GitHub login, or the session an agent wrote it from. */
@@ -531,7 +532,7 @@ export const threads = query({
     const pr = await resolvePullRequest(ctx, userId, args);
     if (!pr) return { pull_request: null, threads: [] };
 
-    const rows = await commentRows(ctx, pr);
+    const rows = await commentRows(ctx, pr, userId);
     const wanted = args.all ? rows : rows.filter((c: any) => !c.resolved);
     return {
       pull_request: await compactRow(ctx, pr),
@@ -569,7 +570,7 @@ export const findComment = query({
     const pr = await resolvePullRequest(ctx, userId, args);
     if (!pr) return { pull_request: null, comment_id: null, matches: [] };
 
-    const rows = await commentRows(ctx, pr);
+    const rows = await commentRows(ctx, pr, userId);
     const selector = args.selector.trim();
     const shaped = async (list: any[]) => await Promise.all(list.map((c: any) => threadRow(ctx, c)));
 

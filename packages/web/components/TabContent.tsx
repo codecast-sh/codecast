@@ -1,20 +1,21 @@
 import { isNonTabRoute } from "../lib/tabRoutes";
-import { lazy, Suspense, useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
 import { conversationTabPath, tabNeedsUrlRestore } from "../lib/pathLabel";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { tabStageLayout } from "../lib/stage";
-import { RoutePane } from "./RoutePane";
+import { stageRenderLayout } from "../lib/stage";
 import { useNarrowStage } from "../hooks/useNarrowStage";
 import { useStageShortcuts } from "../hooks/useStageShortcuts";
 import { StageDropLayer } from "./stage/StageDropLayer";
 import { StagePickLayer } from "./stage/StagePickLayer";
 
-// Only a tab that is actually split pays for the split renderer (and the
-// conversation pane it can host); a plain tab's import graph stays as it was.
-const StageSplitView = lazy(() => import("./stage/StageSplitView"));
+// Every tab renders through the flat stage, split or not (the conversation
+// pane it can host stays lazy inside it). One renderer for both is what makes
+// the first split a rect change on the existing cell rather than a swap of
+// renderers: the page on stage is never remounted.
+import StageSplitView from "./stage/StageSplitView";
 
 // -- Route map: path pattern → lazy component --
 //
@@ -78,10 +79,15 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
     }
   }, [isActive, tab.path, pathname]);
 
-  // The stage: one route, or a split of them. A narrow screen renders the
-  // focused pane only — the layout survives untouched for a wider window.
+  // The stage: one route, or a split of them, always as a tree (a plain tab
+  // is a single leaf under the id its first split keeps). A narrow screen
+  // renders the focused pane only — the layout survives untouched for a wider
+  // window.
   const narrow = useNarrowStage();
-  const layout = narrow ? null : tabStageLayout(tab);
+  const layout = useMemo(
+    () => stageRenderLayout(tab, narrow),
+    [tab.id, tab.path, tab.layout, tab.focusedLeafId, narrow],
+  );
 
   return (
     <div
@@ -90,13 +96,7 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
       style={{ display: isActive ? "block" : "none" }}
     >
       <StageDropLayer tab={tab} enabled={isActive && !narrow}>
-        {layout ? (
-          <Suspense fallback={null}>
-            <StageSplitView tab={tab} layout={layout} isTabActive={isActive} />
-          </Suspense>
-        ) : (
-          <RoutePane tabId={tab.id} path={tab.path} isActive={isActive} />
-        )}
+        <StageSplitView tab={tab} layout={layout} isTabActive={isActive} />
         <StagePickLayer tab={tab} enabled={isActive && !narrow} />
       </StageDropLayer>
       {children}

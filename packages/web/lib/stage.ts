@@ -11,9 +11,12 @@
 
 import { useInboxStore, type AppTab } from "../store/inboxStore";
 import {
+  besideLeafId,
   countLeaves,
+  findLeaf,
   MAX_STAGE_LEAVES,
   leavesOf,
+  seedLeafId,
   type DropZone,
   type SplitEdge,
   type StageNode,
@@ -306,12 +309,13 @@ export function placeStagePick(target: { leafId: string } | "newTab") {
  * the stage can't host another pane (narrow screen, cap) — callers navigate
  * instead.
  */
-export function openBeside(path: string): boolean {
+export function openBeside(path: string, opts?: { reuse?: boolean }): boolean {
   if (!isNonTabRoute(path) && postToPaneHost({ type: "codecast:open-beside", path })) return true;
   if (!canOpenBeside()) return false;
   const st = useInboxStore.getState();
   const tab = activeTab();
   if (!tab || isNonTabRoute(path)) return false;
+  if (opts?.reuse) return openBesideReused(tab, path);
   if (tab.layout) {
     const existing = leavesOf(tab.layout).find((l) => l.path === path);
     if (existing) {
@@ -323,6 +327,35 @@ export function openBeside(path: string): boolean {
   const leafId = st.stageInsertLeaf("root", "right", path);
   if (!leafId) return false;
   syncUrl();
+  firstSplitMilestone();
+  return true;
+}
+
+/**
+ * The Option-click form of "beside": ONE stable target pane per tab, and
+ * what is on stage does not move. The first gesture opens the target pane
+ * (besideLeafId) beside the stage; every later one re-points that same pane.
+ * The pane opens UNFOCUSED, so the focused leaf, `tab.path` and the URL stay
+ * exactly as they were: the page the reader clicked in neither re-renders
+ * for a focus change nor sees its address rewritten. A path already on
+ * stage is left where it is — nothing to open, nothing to move.
+ */
+function openBesideReused(tab: AppTab, path: string): boolean {
+  const st = useInboxStore.getState();
+  const targetId = besideLeafId(tab.id);
+  const target = findLeaf(tab.layout, targetId);
+  if (target) {
+    if (target.path !== path) {
+      st.stageSetLeafPath(targetId, path);
+      // Re-pointing the focused pane moves `tab.path`; mirror it (a no-op
+      // when the target is unfocused, the ordinary case).
+      syncUrl();
+    }
+    return true;
+  }
+  if (leavesOf(tab.layout).some((l) => l.path === path)) return true;
+  const leafId = st.stageInsertLeaf("root", "right", path, { id: targetId, focus: false });
+  if (!leafId) return false;
   firstSplitMilestone();
   return true;
 }
@@ -397,6 +430,21 @@ export function stageHasRoom(): boolean {
 /** The layout to render for a tab: its tree when it really is a split. */
 export function tabStageLayout(tab: Pick<AppTab, "layout">): StageNode | null {
   return tab.layout && countLeaves(tab.layout) > 1 ? tab.layout : null;
+}
+
+/**
+ * What the stage renders for a tab, ALWAYS as a tree: a plain tab is a single
+ * leaf under the seed id the first split will keep (stageInsertLeaf), so the
+ * split changes that cell's rect and nothing else — the page in it is never
+ * remounted, never reloaded, and keeps its scroll. A narrow stage renders the
+ * focused leaf alone, under its own id, so widening again keeps that cell too.
+ */
+export function stageRenderLayout(tab: Pick<AppTab, "id" | "path" | "layout" | "focusedLeafId">, narrow: boolean): StageNode {
+  const split = tabStageLayout(tab);
+  if (!split) return { type: "leaf", id: seedLeafId(tab.id), path: tab.path };
+  if (!narrow) return split;
+  const focused = (tab.focusedLeafId && findLeaf(split, tab.focusedLeafId)) || leavesOf(split)[0];
+  return focused;
 }
 
 export type { DropZone, SplitEdge };

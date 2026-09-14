@@ -77,8 +77,10 @@ export type OrgUpdateRoleInput = {
 };
 
 export type OrgSliceActions = {
-  /** Move a session under a person (ownership) or a role (org_role_id). */
-  reparentOrgSession: (conversationId: string, target: OrgParentRef) => void;
+  /** Move a session under a person (ownership) or a role (org_role_id).
+   *  `row` is the session when the caller holds it outside the tree's top N
+   *  (a page loaded through org.sessionsUnder); the slice cannot find it otherwise. */
+  reparentOrgSession: (conversationId: string, target: OrgParentRef, row?: OrgSession | null) => void;
   /** Change a role's reports_to. */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef) => void;
   createOrgRole: (input: OrgCreateRoleInput) => void;
