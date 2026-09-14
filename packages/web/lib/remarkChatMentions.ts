@@ -102,7 +102,10 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
                 // data-mention marks it as an ADDRESS, so remarkEntityCards
                 // leaves it an inline pill rather than promoting it to a card:
                 // "@jx7abcd" asks the session something, a bare id shares it.
-                data: { hProperties: { "data-mention": lower, className: "ch-mention-session" } },
+                // Tree-level only: EntityAwareLink renders the pill from the
+                // text payload and forwards no props, so nothing here reaches
+                // the DOM — the pill wears the session pill's own dress.
+                data: { hProperties: { "data-mention": lower } },
                 children: [{ type: "text", value: lower }],
               };
             }

@@ -5,7 +5,8 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { create, listForPR, pendingReview, discardPendingReview, recordSubmittedReview } from "./codeComments";
-import { submitPending } from "./reviews";
+import { submitPending, getCommentsForPR } from "./reviews";
+import { threads, findComment } from "./prCli";
 
 const USER = "user_1" as any;
 const OTHER = "user_2" as any;
@@ -167,5 +168,30 @@ describe("submitting the batch", () => {
     const out = await (submitPending as any)._handler(ctx, { pull_request_id: PR, event: "APPROVE" });
     expect(out.error).toMatch(/own GitHub account/);
     expect(calls).toEqual([]);
+  });
+});
+
+
+describe("nobody else reads a pending note", () => {
+  // The CLI verbs take a signed in session too, so the reader is the session here.
+  const withToken = (user: string, seed: Record<string, any[]>) => context(user, seed);
+  const TOKEN = undefined;
+  const rows = [
+    { _id: "mine", pull_request_id: PR, repository: "codecast-sh/codecast", author_user_id: USER, pending_review: true, file_path: "src/foo.ts", line_number: 4, content: "secret", created_at: 1, resolved: false },
+    { _id: "said", pull_request_id: PR, repository: "codecast-sh/codecast", author_user_id: USER, file_path: "src/foo.ts", line_number: 9, content: "public", created_at: 2, resolved: false },
+  ];
+
+  test("the CLI thread list and the selector skip it", async () => {
+    const ctx = withToken(OTHER, { review_comments: rows });
+    const listed = await (threads as any)._handler(ctx, { api_token: TOKEN, repository: "codecast-sh/codecast", number: 12, all: true });
+    expect(listed.threads.map((t: any) => t.content ?? t.preview ?? t.id)).toHaveLength(1);
+    const found = await (findComment as any)._handler(ctx, { api_token: TOKEN, repository: "codecast-sh/codecast", number: 12, selector: "src/foo.ts:4" });
+    expect(found.comment_id).toBeNull();
+  });
+
+  test("the review module's pull request read skips it", async () => {
+    const ctx = context(OTHER, { review_comments: rows });
+    const out = await (getCommentsForPR as any)._handler(ctx, { pull_request_id: PR });
+    expect(out.map((c: any) => c._id)).toEqual(["said"]);
   });
 });

@@ -378,6 +378,7 @@ function PRContent({
                 onNavigate={jumpToComment}
                 open={reviewOpen}
                 onOpenChange={setReviewOpen}
+                sessionChoices={sessionChoices}
               />
               <MergeMenu pr={pr} />
               <MoreMenu pr={pr} />
