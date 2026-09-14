@@ -107,6 +107,13 @@ function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; fo
 // Memoized on primitive props: a resize drag re-renders the view per
 // pointermove, and without this every cell's whole page subtree re-ran even
 // when its own rect hadn't moved.
+//
+// `solo`: the cell IS the whole stage (a plain, unsplit tab). It draws no
+// strip, grip or focus ring and its route navigates the tab, not a leaf. The
+// element shape is the SAME as a split cell's — the strip and grip occupy
+// their slot as `false` — so when the tab splits, React keeps every element
+// beneath and the page is not remounted (the whole point of rendering a plain
+// tab through the stage).
 const StageCell = memo(function StageCell({
   tabId,
   leafId,
@@ -117,6 +124,7 @@ const StageCell = memo(function StageCell({
   height,
   focused,
   isTabActive,
+  solo,
 }: {
   tabId: string;
   leafId: string;
@@ -127,14 +135,18 @@ const StageCell = memo(function StageCell({
   height: number;
   focused: boolean;
   isTabActive: boolean;
+  solo: boolean;
 }) {
   const sessionId = paneSessionId(path);
   // Panes that draw their own 32px header get no PaneStrip stacked on top.
   const ownsHeader = isBrowserRoutePath(path);
-  const navigate = useCallback(
+  const leafNavigate = useCallback(
     (p: string, mode: "push" | "replace") => stageNavigateLeaf(leafId, p, mode),
     [leafId],
   );
+  const navigate = solo ? undefined : leafNavigate;
+  const paneLeafId = solo ? undefined : leafId;
+  const active = isTabActive && (solo || focused);
   const handleFocus = useCallback(() => {
     if (!focused) stageFocus(leafId);
   }, [focused, leafId]);
@@ -143,15 +155,15 @@ const StageCell = memo(function StageCell({
   return (
     <div
       data-stage-leaf={leafId}
-      className={`stage-cell${focused ? " stage-cell--focused" : ""}`}
+      className={`stage-cell${!solo && focused ? " stage-cell--focused" : ""}`}
       style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
-      onPointerDownCapture={handleFocus}
+      onPointerDownCapture={solo ? undefined : handleFocus}
     >
       {sessionId ? (
         <>
           {/* A conversation pane has no strip: its own header hosts close and
               expand, so the drag handle is a grip that surfaces on hover. */}
-          <PaneGrip leafId={leafId} path={path} />
+          {!solo && <PaneGrip leafId={leafId} path={path} />}
           <SessionPane sessionId={sessionId} onClose={handleClose} onExpand={handleExpand} />
         </>
       ) : ownsHeader ? (
@@ -159,19 +171,19 @@ const StageCell = memo(function StageCell({
           {/* Same duality for a browser pane: its 32px address strip IS the
               header, and it hosts PaneControls (leafId reaches it through
               TabParamsCtx). A strip above that would be two bars. */}
-          <PaneGrip leafId={leafId} path={path} />
+          {!solo && <PaneGrip leafId={leafId} path={path} />}
           <div className="h-full min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={isTabActive && focused} navigate={navigate} leafId={leafId} />
+              <RoutePane tabId={tabId} path={path} isActive={active} navigate={navigate} leafId={paneLeafId} />
             </ErrorBoundary>
           </div>
         </>
       ) : (
         <div className="h-full flex flex-col min-h-0">
-          <PaneStrip leafId={leafId} path={path} focused={focused} />
+          {!solo && <PaneStrip leafId={leafId} path={path} focused={focused} />}
           <div className="flex-1 min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={isTabActive && focused} navigate={navigate} leafId={leafId} />
+              <RoutePane tabId={tabId} path={path} isActive={active} navigate={navigate} leafId={paneLeafId} />
             </ErrorBoundary>
           </div>
         </div>
@@ -291,6 +303,7 @@ export default memo(function StageSplitView({
   const liveSizesRef = useRef<{ branchId: string; sizes: number[] } | null>(null);
   const effective = liveSizes ? setBranchSizes(layout, liveSizes.branchId, liveSizes.sizes) : layout;
   const geo = useMemo(() => stageGeometry(effective), [effective]);
+  const solo = geo.leaves.length === 1;
 
   return (
     <div
@@ -309,6 +322,7 @@ export default memo(function StageSplitView({
           height={l.rect.height}
           focused={tab.focusedLeafId === l.id}
           isTabActive={isTabActive}
+          solo={solo}
         />
       ))}
       {geo.handles.map((h) => (

@@ -138,3 +138,89 @@ test("a same-origin page that retitles itself is followed until it unloads", asy
     await act(() => pane.root.unmount());
   }
 });
+
+test("a codecast address is framed as a pane's page; every other address as it stands", async () => {
+  // The app inside the frame reads this flag once, at boot, and draws the
+  // route without its own nav rail, tab bar and session rail (PANE_EMBED).
+  answer = "refuse";
+  const app = mount("https://codecast.sh/inbox");
+  try {
+    await app.render();
+    await wait(50);
+    expect(app.container.querySelector("iframe")!.getAttribute("src")).toBe(
+      "https://codecast.sh/inbox?embed=1",
+    );
+  } finally {
+    await act(() => app.root.unmount());
+  }
+
+  const site = mount("https://github.com/codecast?tab=readme");
+  try {
+    await site.render();
+    await wait(50);
+    expect(site.container.querySelector("iframe")!.getAttribute("src")).toBe(
+      "https://github.com/codecast?tab=readme",
+    );
+  } finally {
+    await act(() => site.root.unmount());
+  }
+}, 10000);
+
+test("the probe runs once per address, however often the pane re-renders", async () => {
+  // A pane re-renders for reasons that have nothing to do with the page: a
+  // title arriving, a strip verb, the machine roster. If the probe keyed on
+  // the callbacks it reports through, a parent that hands over fresh ones on
+  // each render would loop: probe, report, re-render, new callback, probe.
+  answer = "answer";
+  fetched.length = 0;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const renderWith = (url: string) =>
+    act(() =>
+      root.render(
+        <FrameBackend
+          source={{ kind: "url", url }}
+          focused
+          reloadToken={0}
+          // Deliberately fresh on every render.
+          onTitle={() => {}}
+          onUrl={() => {}}
+          onState={() => {}}
+        />,
+      ),
+    );
+  try {
+    await renderWith("http://localhost:8770/");
+    await wait(50);
+    // The server answered HEAD: one request, no GET.
+    expect(fetched).toEqual(["http://localhost:8770/"]);
+    for (let i = 0; i < 5; i++) await renderWith("http://localhost:8770/");
+    await wait(50);
+    expect(fetched).toHaveLength(1);
+
+    await renderWith("http://localhost:8771/");
+    await wait(50);
+    expect(fetched).toEqual(["http://localhost:8770/", "http://localhost:8771/"]);
+  } finally {
+    await act(() => root.unmount());
+  }
+});
+
+test("the poll stops when the pane goes away", async () => {
+  answer = "refuse";
+  permissionState = "prompt";
+  fetched.length = 0;
+  const pane = mount("http://localhost:8772/");
+  await pane.render();
+  await wait(50);
+  expect(pane.states.at(-1)).toEqual({ kind: "unreachable", loopback: true });
+  const beforeUnmount = fetched.length;
+  const statesBefore = pane.states.length;
+  await act(() => pane.root.unmount());
+  // Two whole poll intervals: nothing asks, and nothing reports to a pane
+  // that no longer exists.
+  await wait(6500);
+  expect(fetched.length).toBe(beforeUnmount);
+  expect(pane.states.length).toBe(statesBefore);
+}, 12000);

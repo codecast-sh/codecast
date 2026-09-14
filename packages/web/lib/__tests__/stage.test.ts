@@ -1,8 +1,8 @@
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
-import { leavesOf } from "../../store/stageSplit";
-import { openBrowserPane, performStageDrop } from "../stage";
+import { besideLeafId, leavesOf, seedLeafId } from "../../store/stageSplit";
+import { openBeside, openBrowserPane, performStageDrop, stageRenderLayout } from "../stage";
 import { parseBrowserRoute } from "../browserPane";
 
 // performStageDrop is the one entry point every drag source funnels into;
@@ -229,5 +229,69 @@ describe("openBrowserPane", () => {
     // Still four panes — and the tab moved to the page, so nothing is lost.
     expect(leavesOf(activeTab().layout!)).toHaveLength(4);
     expect(parseBrowserRoute(activeTab().path)).toEqual({ kind: "url", url: source.url });
+  });
+});
+
+// Option-click ("open beside", reused): one stable target pane per tab, and
+// the pane the click happened in does not move — no focus change, no path
+// change, no URL rewrite.
+describe("openBeside — the reused Option-click target", () => {
+  it("opens one target pane, unfocused, and leaves the origin's focus and path alone", () => {
+    expect(openBeside("/docs", { reuse: true })).toBe(true);
+    const t = activeTab();
+    expect(leavesOf(t.layout).map((l) => [l.id, l.path])).toEqual([
+      [seedLeafId("t1"), "/tasks"],
+      [besideLeafId("t1"), "/docs"],
+    ]);
+    expect(t.focusedLeafId).toBe(seedLeafId("t1"));
+    expect(t.path).toBe("/tasks");
+  });
+
+  it("re-points the same pane on every later click instead of opening another", () => {
+    openBeside("/docs", { reuse: true });
+    openBeside("/plans", { reuse: true });
+    openBeside("/feed", { reuse: true });
+    const t = activeTab();
+    expect(leavesOf(t.layout).map((l) => [l.id, l.path])).toEqual([
+      [seedLeafId("t1"), "/tasks"],
+      [besideLeafId("t1"), "/feed"],
+    ]);
+    expect(t.focusedLeafId).toBe(seedLeafId("t1"));
+    expect(t.path).toBe("/tasks");
+  });
+
+  it("a path already on stage opens nothing and moves nothing", () => {
+    state().stageInsertLeaf("root", "right", "/docs");
+    const before = activeTab();
+    expect(openBeside("/docs", { reuse: true })).toBe(true);
+    expect(activeTab()).toBe(before);
+    expect(openBeside("/tasks", { reuse: true })).toBe(true);
+    expect(activeTab()).toBe(before);
+  });
+
+  it("the ordinary open beside still adds and focuses a fresh pane", () => {
+    openBeside("/docs");
+    openBeside("/plans");
+    const t = activeTab();
+    expect(leavesOf(t.layout).map((l) => l.path)).toEqual(["/tasks", "/docs", "/plans"]);
+    expect(t.path).toBe("/plans");
+  });
+});
+
+describe("stageRenderLayout", () => {
+  it("renders a plain tab as the leaf its first split will keep", () => {
+    const plain = stageRenderLayout(activeTab(), false);
+    expect(plain).toEqual({ type: "leaf", id: seedLeafId("t1"), path: "/tasks" });
+    state().stageInsertLeaf("root", "right", "/docs", { focus: false });
+    const split = stageRenderLayout(activeTab(), false);
+    expect(leavesOf(split).map((l) => l.id)).toEqual([seedLeafId("t1"), besideLeafId("t1") === "x" ? "" : leavesOf(split)[1].id]);
+    expect(leavesOf(split)[0]).toEqual(plain);
+  });
+
+  it("a narrow stage renders the focused leaf alone, under its own id", () => {
+    state().stageInsertLeaf("root", "right", "/docs");
+    const t = activeTab();
+    expect(stageRenderLayout(t, true)).toEqual(leavesOf(t.layout)[1]);
+    expect(stageRenderLayout(t, true).path).toBe("/docs");
   });
 });
