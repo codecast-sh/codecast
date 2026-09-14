@@ -1,3 +1,6 @@
+// The separate agent Chrome is an explicit last resort in ordinary commands
+// (browser/advanced.ts); this script verifies that Chrome's branding, so it
+// asks for it the sanctioned way: `browser advanced clone start`.
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -28,7 +31,7 @@ const run = (command: string, args: string[]) => {
 };
 async function start(fresh: boolean) {
   console.log(fresh ? "Starting the fresh browser" : "Restarting the saved browser");
-  console.log(run(binary, ["browser", "start", ...(fresh ? ["--fresh"] : [])]));
+  console.log(run(binary, ["browser", "advanced", "clone", "start", ...(fresh ? ["--fresh"] : [])]));
   state = JSON.parse(fs.readFileSync(path.join(root, "browser/instance.json"), "utf8"));
   assert.ok(state!.userDataDir.startsWith(`${root}/`));
   conn = await CdpConnection.fromPort(state!.port);
@@ -81,7 +84,7 @@ try {
   console.log("PASS: compiled CLI, native copy, signatures, browser navigation, screenshot, restart, app reuse, local storage and cookies");
 } catch (error) {
   const controlRoot = path.join(root, "stock-control");
-  const control = spawnSync(binary, ["browser", "start", "--fresh"], { env: { ...env, CODECAST_DIR: controlRoot, CODECAST_CHROMIUM: path.join(source, "Contents/MacOS/Google Chrome") }, encoding: "utf8", timeout: 90_000 });
+  const control = spawnSync(binary, ["browser", "advanced", "clone", "start", "--fresh"], { env: { ...env, CODECAST_DIR: controlRoot, CODECAST_CHROMIUM: path.join(source, "Contents/MacOS/Google Chrome") }, encoding: "utf8", timeout: 90_000 });
   console.error("Stock Chrome control:", control.status, control.stdout, control.stderr);
   const controlFile = path.join(controlRoot, "browser/instance.json");
   if (fs.existsSync(controlFile)) {
