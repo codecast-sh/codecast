@@ -4,6 +4,7 @@ import {
   collectDeliverableForOwner,
   claimPendingMessageForDaemon,
   markPendingDelivered,
+  updatePendingMessageStatusForDaemon,
   healAndNotifyStuckMessages,
   planCrossUserNotify,
   CROSS_USER_NOTIFY_DEADLINE_MS,
@@ -350,6 +351,50 @@ describe("delivery routing — backfill independence", () => {
     const forAlice = await collectDeliverableForOwner(ctx as any, "uAlice" as any, "devAlice");
     expect(forAlice).toHaveLength(0);
     void tables;
+  });
+});
+
+describe("settled recipient recovery end to end", () => {
+  test.each(["idle", "waiting", "dormant", "done"])("recovers an unacknowledged send to a %s recipient", async agentStatus => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    const originalContent = msg.content;
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", now);
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected" });
+    await db.patch(msg._id, { created_at: now - 6 * 60 * 60_000, retry_count: 6 });
+    await db.patch("msBob", { agent_status: agentStatus });
+
+    expect(await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).toHaveLength(0);
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 1, waiting: 0 });
+    const deliverable = await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob");
+    expect(deliverable.map(row => row._id)).toEqual([msg._id]);
+    expect(await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", now)).toMatchObject({ content: originalContent, status: "pending", retry_count: 0 });
+    await markPendingDelivered(ctx as any, await db.get(msg._id) as any);
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0 });
+    expect((await db.get(msg._id))?.status).toBe("delivered");
+    expect((await db.get("convBob"))?.has_pending_messages).toBe(false);
+  });
+
+  test.each(["working", "thinking", "compacting", "permission_blocked", "starting", "resuming", "stopped"])("preserves unacknowledged input while recipient is %s", async agentStatus => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "Preserve this" });
+    const msg = tables.pending_messages[0];
+    await db.patch(msg._id, { status: "injected", created_at: now - 600_000, retry_count: 6 });
+    await db.patch("msBob", { agent_status: agentStatus });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, waiting: 1 });
+    expect(msg).toMatchObject({ status: "injected", retry_count: 6 });
+  });
+
+  test("a dormant recipient without a live daemon stays pending recovery", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ bobLive: false, now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "Preserve this" });
+    await db.patch(tables.pending_messages[0]._id, { status: "injected", created_at: now - 600_000 });
+    await db.patch("msBob", { agent_status: "dormant" });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, waiting: 1 });
   });
 });
 
