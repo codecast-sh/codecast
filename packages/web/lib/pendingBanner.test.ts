@@ -1,5 +1,22 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+
+describe("session message queue labels", () => {
+  test.each([undefined, "idle", "waiting", "dormant", "done", "connected", "starting", "resuming"])("does not call a %s recipient busy", status => {
+    expect(sessionMessageQueueLabel("pending", undefined, status)).toBe("queued · awaiting delivery");
+  });
+  test.each(["working", "thinking", "compacting"])("reports observed %s activity", status => {
+    expect(sessionMessageQueueLabel("pending", undefined, status)).toBe("queued · recipient busy");
+  });
+  test("distinguishes a missing receipt, a stopped recipient, and a prompt hold", () => {
+    expect(sessionMessageQueueLabel("injected", undefined, "dormant")).toBe("queued · awaiting confirmation");
+    expect(sessionMessageQueueLabel("pending", undefined, "stopped")).toBe("queued · recipient offline");
+    expect(sessionMessageQueueLabel("pending", undefined, "permission_blocked")).toBe("queued · waiting for an answer");
+    expect(sessionMessageQueueLabel("injected", "waiting for terminal input confirmation", "thinking")).toBe("queued · waiting for terminal input confirmation");
+    expect(sessionMessageQueueLabel("failed", undefined, "dormant")).toBe("queued · retrying");
+    expect(sessionMessageQueueLabel(undefined, undefined, "thinking")).toBeNull();
+  });
+});
 
 const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean }> = {}) => ({
   retryEligible: true,

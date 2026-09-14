@@ -55,6 +55,17 @@ export const isAliveIdleStatus = (s?: LiveAgentStatus): boolean =>
 
 export type PendingBannerState = "none" | "queued" | "stuck";
 
+export function sessionMessageQueueLabel(status?: string, reason?: string, recipientStatus?: string): string | null {
+  if (!status) return null;
+  if (reason) return `queued · ${reason}`;
+  if (status === "failed" || status === "undeliverable") return "queued · retrying";
+  if (recipientStatus === "permission_blocked") return "queued · waiting for an answer";
+  if (recipientStatus === "stopped") return "queued · recipient offline";
+  if (status === "injected") return "queued · awaiting confirmation";
+  if (MID_TURN_AGENT_STATUSES.has(recipientStatus ?? "")) return "queued · recipient busy";
+  return "queued · awaiting delivery";
+}
+
 export function pendingMessageCanRetry(content: string): boolean {
   return !/^(?:\[Request (?:interrupted|cancelled)|<turn_aborted>)/.test(content.trimStart());
 }

@@ -13,6 +13,9 @@
 export type PollQuestion = {
   question: string;
   header?: string;
+  // Explanatory text a terminal dialog prints between its title and its
+  // options (scraped by the daemon's parseSelectDialog). Agent questions have none.
+  detail?: string;
   options: Array<{ label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
   isConfirmation?: boolean;

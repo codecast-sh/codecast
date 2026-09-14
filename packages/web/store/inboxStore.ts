@@ -236,6 +236,7 @@ export type {
   ChatReactionRow,
   ChatRailRow,
   ChatRailChannel,
+  ChatRailScope,
   ChatNotifyLevel,
   ChatSendOptions,
 } from "./chatSlice";
@@ -1499,6 +1500,14 @@ export type ClientUI = {
   // Files the reader has marked viewed on a pull request, by pull request id.
   // A reading mark, so it follows the person to every device.
   pr_viewed_files?: Record<string, string[]>;
+  // Where a new line note goes on a pull request: held for the review, or out
+  // at once. A reading habit, so it follows the person.
+  pr_note_mode?: "review" | "now";
+  pr_merge_method?: "squash" | "merge" | "rebase";
+  pr_delete_branch?: boolean;
+  // When the person last had a pull request open, by pull request id: what
+  // the timeline draws its "since you last looked" line from.
+  pr_last_seen?: Record<string, number>;
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
@@ -1740,7 +1749,10 @@ function withTabPath(tab: AppTab, path: string): AppTab {
   if (tab.layout && tab.focusedLeafId) {
     return { ...tab, path, layout: setStageLeafPath(tab.layout, tab.focusedLeafId, path) };
   }
-  return { ...tab, path };
+  // A plain tab never holds the pane spelling of a session: the stage would
+  // render it as a bare session pane, which cannot load a row the store lacks
+  // (a teammate's session from a deep link). The inbox spelling loads it.
+  return { ...tab, path: conversationTabPath(path) };
 }
 
 // The path to stamp onto a tab from the live browser URL when switching away.
@@ -4894,6 +4906,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
+  seedSession: (session: InboxSession) => void;
   preloadForkSessions: (forks: ForkChild[], forkedFrom?: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
   setSessionTargetDevice: (id: string, deviceId: string | null) => void;
@@ -6594,6 +6607,25 @@ function syncActiveInboxTabPath(draft: Draft, id: string | null) {
 // the new-divider anchor, moves the current pointer, drops any dismissed-peek,
 // mirrors the per-user pointer, and keeps the active inbox tab's param aligned.
 // Callers still own declareViewNav() — the view-nav source differs per path.
+// Put a session row in the store without moving the view. Never DOWNGRADE a
+// cached row: callers build payloads from narrow projections (deep link,
+// palette, a pane loading a teammate's session), so an existing row is the
+// richer record — keep its values and let the payload only fill gaps. Writing
+// the thin payload over a synced row is how a stashed/pinned session loses its
+// triage stamps and flashes into the inbox as an active card at boot
+// (ct-42666).
+function seedSessionRow(draft: Draft, session: InboxSession): InboxSession {
+  const existing = draft.sessions[session._id];
+  const merged: InboxSession = { ...session };
+  if (existing) {
+    for (const k of Object.keys(existing) as (keyof InboxSession)[]) {
+      if (existing[k] !== undefined) (merged as any)[k] = existing[k];
+    }
+  }
+  draft.sessions[session._id] = merged;
+  return merged;
+}
+
 function commitCurrentSession(draft: Draft, id: string) {
   recordSessionView(draft, id, draft.currentSessionId);
   draft.currentSessionId = id;
@@ -8689,10 +8721,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   convCommand: asyncAction(function (this: Draft, convId: string, command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
-    if (command === "sendEscapeToSession" && this.sessions[convId]) {
-      this.sessions[convId].agent_status = "idle";
-      this.sessions[convId].is_idle = true;
-      appendOptimisticMessage(this, convId, this.sessions[convId].agent_type === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+    if (command === "sendEscapeToSession") {
+      // The interruption line paints off whichever row the view holds. The
+      // sessions row is the inbox's windowed copy and is absent for a subagent
+      // or stashed conversation the user is looking at; the conversations row
+      // is seeded by the view itself. A press with no line was the bug
+      // (2026-09-14), so the line never waits on the sessions row.
+      const session = this.sessions[convId];
+      const agentType = session?.agent_type ?? this.conversations[convId]?.agent_type;
+      if (session) {
+        session.agent_status = "idle";
+        session.is_idle = true;
+      }
+      if (session || this.conversations[convId]) {
+        appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+      }
     }
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
@@ -9538,28 +9581,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // Dismiss/stash are absolute — never altered by viewing. If the injected
     // session arrived hidden, surface it through viewingDismissedId so the user
     // can read it without resurrecting it into the active inbox.
-    //
-    // Never DOWNGRADE a cached row: callers build inject payloads from narrow
-    // projections (deep link, palette), so an existing row is the richer
-    // record — keep its values and let the payload only fill gaps. Writing the
-    // thin payload over a synced row is how a stashed/pinned session loses its
-    // triage stamps and flashes into the inbox as an active card at boot
-    // (ct-42666). All callers currently guard on !sessions[id]; this makes the
-    // invariant hold regardless of caller discipline.
-    const existing = this.sessions[session._id];
-    const merged: InboxSession = { ...session };
-    if (existing) {
-      for (const k of Object.keys(existing) as (keyof InboxSession)[]) {
-        if (existing[k] !== undefined) (merged as any)[k] = existing[k];
-      }
-    }
-    this.sessions[session._id] = merged;
+    const merged = seedSessionRow(this, session);
     if (isSessionHidden(merged)) {
       this.viewingDismissedId = session._id;
     } else {
       declareViewNav("gesture");
       commitCurrentSession(this, session._id);
     }
+  }),
+
+  // Put one fetched row in the store without moving the view: a pane showing a
+  // session the store did not hold (a teammate's, from a deep link or a pill).
+  // Incoming data, so sync() like preloadForkSessions; a row killed locally
+  // stays out.
+  seedSession: sync(function (this: Draft, session: InboxSession) {
+    if (this.pending[`sessions:${session._id}`]?.type === "exclude") return;
+    seedSessionRow(this, session);
   }),
 
   // Seed branch (fork) sessions into the local cache WITHOUT navigating, so a

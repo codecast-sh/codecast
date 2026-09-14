@@ -4,7 +4,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useMutation } from "convex/react";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useSearchParams } from "next/navigation";
 import { useTabContext } from "../../lib/tabParams";
 import { urlSessionId } from "../../lib/pathLabel";
@@ -17,7 +17,7 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, sessionRowFromSummary, resolveInboxHome } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { SharePopover } from "../../components/SharePopover";
 import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
@@ -283,16 +283,8 @@ export function QueuePageClient() {
   const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number; nonce: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
-  const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
-
-  // Query conversation for sessions not in the queue. No-throw: the id comes
-  // straight from the `?s=` URL param, so a server rejection (bad id, wrong
-  // table) must degrade to the "unavailable" note, not crash the inbox into
-  // its ErrorBoundary.
-  const { data: directConv, error: directConvError } = useQueryNoThrow(
-    api.conversations.getConversation,
-    shouldQueryDirect ? { conversation_id: pendingInjectId, limit: 1 } : "skip"
-  );
+  // The row for a target the queue does not hold, fetched for injection.
+  const missingRow = useMissingSessionRow(pendingInjectId);
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
@@ -367,29 +359,22 @@ export function QueuePageClient() {
       paramProcessedRef.current = true;
       return;
     }
-    // directConv: undefined = still loading, null = not found/no access.
-    // A terminal server error resolves the same way as null — the target is
-    // unavailable, and the honest note beats an unmounted inbox.
-    if (directConv === undefined && !directConvError) return;
-    if (directConv == null) {
+    // undefined = still loading; null = not found, no access, or a terminal
+    // server error — the target is unavailable, and the honest note beats an
+    // unmounted inbox.
+    if (missingRow === undefined) return;
+    if (missingRow === null) {
       setUnavailableId(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
     }
-    // sessionRowFromSummary carries the triage stamps through (and derives
-    // is_pinned), so a stashed/dismissed deep-link target seeds hidden instead
-    // of flashing into the inbox as an active card at boot (ct-42666) — and
-    // injectSession's own hidden check routes the view through the peek path.
-    injectSession(sessionRowFromSummary({
-      ...directConv,
-      _id: pendingInjectId,
-      // Carry the author so a deep-linked teammate session shows whose it is.
-      author_name: directConv.user?.name ?? null,
-    }));
+    // A stashed/dismissed target arrives hidden (ct-42666), and injectSession's
+    // own hidden check routes the view through the peek path.
+    injectSession(missingRow);
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, directConv, directConvError, sessions, navigateToSession, injectSession]);
+  }, [pendingInjectId, missingRow, sessions, navigateToSession, injectSession]);
 
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
